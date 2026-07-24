@@ -44,18 +44,12 @@ function createCtx() {
       supportsReturning: true,
     })),
     selectOne,
-    insert: vi.fn(
-      async (table: string, row: Record<string, unknown>) => {
-        insertCalls.push({ table, row });
-        return row;
-      }
-    ),
+    insert: vi.fn(async (table: string, row: Record<string, unknown>) => {
+      insertCalls.push({ table, row });
+      return row;
+    }),
     update: vi.fn(
-      async (
-        table: string,
-        data: Record<string, unknown>,
-        where: unknown
-      ) => {
+      async (table: string, data: Record<string, unknown>, where: unknown) => {
         updateCalls.push({ table, data, where });
         // Return the merged row so the caller's deserializer doesn't blow up.
         return [{ ...data, slug: "posts" }];
@@ -155,12 +149,10 @@ describe("CollectionRegistryService.updateCollection — status persistence", ()
    * but a record for dynamic-collections existence.
    */
   function mockExisting(row: Record<string, unknown>) {
-    ctx.adapter.selectOne.mockImplementation(
-      async (table: string) => {
-        if (table === "dynamic_collections") return row;
-        return null;
-      }
-    );
+    ctx.adapter.selectOne.mockImplementation(async (table: string) => {
+      if (table === "dynamic_collections") return row;
+      return null;
+    });
   }
 
   it("writes status when caller sends status: true", async () => {
@@ -249,7 +241,9 @@ describe("CollectionRegistryService.deserializeRecord — status normalisation",
     // Why: deserializeRecord is `protected`; cast through a structural type
     // so the test reaches it without exposing a public surface no caller needs.
     type Internal = {
-      deserializeRecord: (r: Record<string, unknown>) => Record<string, unknown>;
+      deserializeRecord: (
+        r: Record<string, unknown>
+      ) => Record<string, unknown>;
     };
     return (ctx.service as unknown as Internal).deserializeRecord(record);
   }

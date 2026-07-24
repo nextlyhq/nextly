@@ -73,7 +73,10 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
-import { populateCompanionFields } from "../../i18n/companion-join";
+import {
+  populateCompanionFields,
+  populateCompanionFieldsAllLocales,
+} from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import {
@@ -109,6 +112,12 @@ import {
   getTableName,
   generateSlug,
 } from "./collection-utils";
+
+/** The Drizzle executor shape the companion-join readers accept (a transaction
+ * handle's `getDrizzle()` result, or the pooled `this.db`). */
+type CompanionReadDb = Parameters<
+  typeof populateCompanionFieldsAllLocales
+>[0]["db"];
 
 /**
  * Emit a post-commit `collection.<slug>.<action>` event (D8/D51). Observe-only,
@@ -752,6 +761,76 @@ export class CollectionMutationService extends BaseService {
       if (value !== undefined) values[field.name] = value;
     }
     return values;
+  }
+
+  /**
+   * Every distinct slug value across a localized collection's locales for one
+   * entry. A localized `slug` field can differ per locale, so a publish-all or a
+   * delete must bust each locale's URL, not just the default one. Returns [] for
+   * a non-localized collection, one whose `slug` is not localized, or one with no
+   * configured locales. Bound to the caller's transaction connection so the read
+   * does not re-enter the pool from inside the transaction.
+   *
+   * Never throws: this feeds cache invalidation, not the write itself. On the
+   * publish path it runs post-commit, so a thrown error would wrongly report a
+   * committed publish as failed; on the delete path it must not abort a delete.
+   * A read failure degrades to [] (the collection/id tags — and, since reads are
+   * id-tagged, every locale's page — still bust) and is logged rather than
+   * silently dropped.
+   */
+  private async readCompanionSlugsAllLocales(
+    db: CompanionReadDb,
+    collectionName: string,
+    entryId: string
+  ): Promise<string[]> {
+    try {
+      const companion = await this.fileManager.loadCompanionSchema(
+        collectionName,
+        db
+      );
+      if (!companion) return [];
+      // Only meaningful when `slug` itself is a translatable (companion) field.
+      const slugField = companion.localizedFields.filter(
+        f => f.name === "slug"
+      );
+      if (slugField.length === 0) return [];
+
+      const locales = this.localization?.locales.map(l => l.code) ?? [];
+      if (locales.length === 0) return [];
+
+      const row: Record<string, unknown> = { id: entryId };
+      // Project to the slug column only, so an unrelated translatable column
+      // that has not been migrated yet (or has drifted) cannot make the
+      // companion read fail and suppress the slug tags.
+      await populateCompanionFieldsAllLocales({
+        db,
+        companionTable: companion.table,
+        localizedFields: slugField,
+        rows: [row],
+        locales,
+      });
+
+      // row.slug is a `{ [locale]: slug | null }` map; collect the distinct
+      // non-blank values so each locale's URL tag busts once.
+      const byLocale = row.slug;
+      const slugs = new Set<string>();
+      if (byLocale && typeof byLocale === "object") {
+        for (const value of Object.values(
+          byLocale as Record<string, unknown>
+        )) {
+          if (typeof value === "string" && value.trim().length > 0) {
+            slugs.add(value);
+          }
+        }
+      }
+      return [...slugs];
+    } catch (error) {
+      this.logger.warn(
+        "Failed to read companion slugs for cache revalidation; localized slug tags may not be busted (collection/id tags still are)",
+        { collectionName, entryId, error }
+      );
+      return [];
+    }
   }
 
   /**
@@ -2449,6 +2528,14 @@ export class CollectionMutationService extends BaseService {
         // Reaction/event emission is non-critical; the publish already committed.
       }
 
+      // Publishing all locales makes every locale's slug public at once, so bust
+      // each localized slug's tag (read post-commit on the pool — publish only
+      // flips status, so the committed companion slugs are stable here).
+      const publishedLocalizedSlugs = await this.readCompanionSlugsAllLocales(
+        this.db,
+        params.collectionName,
+        params.entryId
+      );
       revalidationIntent = buildEntryRevalidationIntent(
         params.collectionName,
         readRevalidateConfig(publishCollection),
@@ -2462,6 +2549,7 @@ export class CollectionMutationService extends BaseService {
             (publishedParentRow ?? existingEntry) as Record<string, unknown>,
             "slug"
           ),
+          localizedSlugs: publishedLocalizedSlugs,
         }
       );
 
@@ -4286,6 +4374,19 @@ export class CollectionMutationService extends BaseService {
       // pre-transaction fetch, so a slug changed by a racing update or a
       // beforeDelete hook still busts the correct tag.
       let deletedSlugForRevalidation: string | undefined;
+      // Every locale's slug for a localized collection, read on the pool BEFORE
+      // the transaction opens (like webhookFields above). Reading it inside the
+      // transaction would either poison the transaction on error, or, on
+      // `this.db`, re-enter the pool and deadlock a single-connection/saturated
+      // pool. The companion rows are still committed here; if a slug shifts
+      // between this read and the delete, the always-busted id tag still covers
+      // every locale's page.
+      const deletedLocalizedSlugsForRevalidation =
+        await this.readCompanionSlugsAllLocales(
+          this.db,
+          params.collectionName,
+          params.entryId
+        );
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -4386,6 +4487,7 @@ export class CollectionMutationService extends BaseService {
           id: params.entryId,
           slug: deletedSlugForRevalidation,
           locale: deletedLocaleForRevalidation,
+          localizedSlugs: deletedLocalizedSlugsForRevalidation,
         }
       );
 
@@ -5543,6 +5645,12 @@ export class CollectionMutationService extends BaseService {
           fields: snapshotFields,
           locale: this.localization?.defaultLocale,
         });
+      // This runs inside the caller's transaction, so there is no safe place to
+      // read every locale's companion slug: reading on the tx connection would
+      // poison the transaction on error, and reading on the pool would re-enter
+      // it and deadlock a saturated pool. The always-busted id tag clears every
+      // locale's page (reads are id-tagged), so localized slug tags are omitted
+      // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
@@ -6879,6 +6987,12 @@ export class CollectionMutationService extends BaseService {
           fields: snapshotFields,
           locale: this.localization?.defaultLocale,
         });
+      // This runs inside the caller's transaction, so there is no safe place to
+      // read every locale's companion slug: reading on the tx connection would
+      // poison the transaction on error, and reading on the pool would re-enter
+      // it and deadlock a saturated pool. The always-busted id tag clears every
+      // locale's page (reads are id-tagged), so localized slug tags are omitted
+      // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {

@@ -60,6 +60,14 @@ export interface EntryRevalidationInput {
   previousSlug?: string;
   /** The locale this write applied to, for a localized collection. */
   locale?: string;
+  /**
+   * Additional slug values from a localized collection's other locales (the
+   * `slug` field is translatable, so each locale can have its own URL). Each
+   * distinct value adds a `nextly:{collection}:slug:{value}` tag so a publish or
+   * delete busts every locale's page, not just the default one. Blank/duplicate
+   * values are ignored.
+   */
+  localizedSlugs?: string[];
   /** Extra tags from the collection's `revalidate.tags` config, merged in verbatim. */
   extraTags?: string[];
 }

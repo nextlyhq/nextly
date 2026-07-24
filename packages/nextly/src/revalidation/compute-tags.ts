@@ -122,7 +122,15 @@ function normalizeExtraTags(extraTags?: string[]): string[] {
 export function computeEntryRevalidation(
   input: EntryRevalidationInput
 ): RevalidationIntent {
-  const { collection, id, slug, previousSlug, locale, extraTags } = input;
+  const {
+    collection,
+    id,
+    slug,
+    previousSlug,
+    locale,
+    localizedSlugs,
+    extraTags,
+  } = input;
 
   const tags = [collectionTag(collection), entryIdTag(collection, id)];
 
@@ -143,6 +151,15 @@ export function computeEntryRevalidation(
     previousSlug !== slug
   ) {
     tags.push(entrySlugTag(collection, previousSlug));
+  }
+
+  // Per-locale slug values (a localized `slug` field can differ by locale), so a
+  // publish or delete busts every locale's URL. `unique` dedupes against the
+  // slug tags already added above.
+  for (const localizedSlug of localizedSlugs ?? []) {
+    if (localizedSlug.trim().length > 0) {
+      tags.push(entrySlugTag(collection, localizedSlug));
+    }
   }
 
   tags.push(...normalizeExtraTags(extraTags));
