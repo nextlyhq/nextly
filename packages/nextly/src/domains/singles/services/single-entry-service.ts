@@ -18,6 +18,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { HookRegistry } from "../../../hooks/hook-registry";
+import type { CacheRevalidator } from "../../../revalidation/types";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
@@ -77,7 +78,12 @@ export class SingleEntryService extends BaseService {
      * trigger. Shared with the collection write path; absent when webhooks were
      * never registered.
      */
-    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
+    /**
+     * Flushes a single write's cache-revalidation intent post-commit. Shared
+     * with the collection write path; a no-op when no cache adapter is present.
+     */
+    private readonly cacheRevalidator?: CacheRevalidator
   ) {
     super(adapter, logger);
 
@@ -140,9 +146,29 @@ export class SingleEntryService extends BaseService {
     // committed its event but then failed a post-commit hook reports
     // `success:false` with `eventRecorded:true`, so key off either — otherwise a
     // committed event would miss its fast-drain and retention pass.
-    if (result.success || result.eventRecorded === true)
+    if (result.success || result.eventRecorded === true) {
+      this.flushRevalidation(result);
       await this.afterWrite();
+    }
     return result;
+  }
+
+  /**
+   * Flush a committed single write's cache-revalidation intent through the
+   * registered revalidator (a no-op when no cache adapter is present). Absorbs
+   * its own failure so revalidation never turns a committed write into an error.
+   */
+  private flushRevalidation(result: SingleResult): void {
+    if (!this.cacheRevalidator || !result.revalidationIntent) return;
+    try {
+      Promise.resolve(
+        this.cacheRevalidator.flush([result.revalidationIntent])
+      ).catch(error =>
+        this.logger.error("Cache revalidation failed after a write", { error })
+      );
+    } catch (error) {
+      this.logger.error("Cache revalidation failed after a write", { error });
+    }
   }
 
   /**
