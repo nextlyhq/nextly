@@ -291,17 +291,23 @@ describe("version capture on update (integration)", () => {
 
     // This outer first write touches only the shared `region`; it adopts the row
     // the concurrent writer just inserted.
-    await singles.update(
+    const outer = await singles.update(
       "preferences",
       { region: "us" },
       { overrideAccess: true, locale: "en" }
     );
+    // The adopting write itself must succeed and be captured, otherwise the
+    // assertions below would pass against the inner hook's write alone and never
+    // exercise the adopter branch this test targets.
+    expect(outer.success).toBe(true);
 
     const rows = await versions(current, "preferences");
-    // The adopting write must NOT have overlaid the schema default over the
-    // concurrently-written real translation.
     const last = rows[rows.length - 1];
     const snapshot = last.snapshot as { siteName?: string; region?: string };
+    // The latest snapshot is the outer (adopting) write, proving we captured it.
+    expect(snapshot.region).toBe("us");
+    // ...and it did NOT overlay the schema default over the concurrently-written
+    // real translation.
     expect(snapshot.siteName).not.toBe("My Site");
   });
 

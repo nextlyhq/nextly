@@ -75,6 +75,7 @@ import {
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
+import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -812,10 +813,19 @@ export class SingleQueryService extends BaseService {
       // localized field's default must reach the companion just the same.
       let value: unknown;
       if ("defaultValue" in field && field.defaultValue !== undefined) {
-        value =
-          shouldTreatAsJson(field) && typeof field.defaultValue === "object"
-            ? JSON.stringify(field.defaultValue)
+        // `defaultValue` may be a function `(data) => value`; evaluate it against
+        // the document built so far so the stored default is a real value, not a
+        // function object. A raw function would be bound as an SQL parameter for
+        // the companion/main upsert and fail or persist its stringified form —
+        // localized fields now flow through this block, so it must be resolved.
+        const resolved =
+          typeof field.defaultValue === "function"
+            ? field.defaultValue(defaults)
             : field.defaultValue;
+        value =
+          shouldTreatAsJson(field) && typeof resolved === "object"
+            ? JSON.stringify(resolved)
+            : resolved;
       } else if ("required" in field && field.required) {
         // `title` and `slug` are auto-injected system identity fields, required
         // and without a defaultValue, but already seeded above with the Single's
@@ -831,6 +841,26 @@ export class SingleQueryService extends BaseService {
       defaults[field.name] = value;
     }
 
+    // A field can be translatable/required yet emit NO storage column — a
+    // component or other layout-only ("skip") field type. Its default has nowhere
+    // to live: routing it to the main insert or the companion seed would target a
+    // column that does not exist and fail the auto-create upsert. Collect those
+    // field names so the split drops them from both buckets. System-seeded keys
+    // (id/title/slug/timestamps/status) are not user fields, so they are never in
+    // this set and always route to the main insert below.
+    const noColumnFieldNames = new Set<string>();
+    for (const field of singleMeta.fields) {
+      if (!("name" in field) || !field.name) continue;
+      if (
+        getColumnDescriptor(
+          field as unknown as FieldDefinition,
+          this.adapter.dialect
+        ) == null
+      ) {
+        noColumnFieldNames.add(field.name);
+      }
+    }
+
     // Split the resolved defaults: translatable ones (including localized
     // title/slug) go to `localizedDefaults` for the companion; everything else
     // is inserted on the main table. A localized column on the main insert would
@@ -838,6 +868,7 @@ export class SingleQueryService extends BaseService {
     const localizedDefaults: Record<string, unknown> = {};
     const insertDefaults: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(defaults)) {
+      if (noColumnFieldNames.has(key)) continue;
       if (localizedNames.has(key)) {
         localizedDefaults[key] = value;
       } else {

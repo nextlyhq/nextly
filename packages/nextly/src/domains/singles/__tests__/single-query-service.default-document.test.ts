@@ -104,6 +104,58 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(document.slug).toBe("site-settings");
   });
 
+  it("evaluates a function defaultValue before routing it to the companion", () => {
+    const service = createQueryService();
+    // A localized field may carry a function default `(data) => value`. It must
+    // be evaluated, not copied as a function object (which a companion upsert
+    // cannot bind), now that localized defaults flow through this path.
+    const meta = siteSettingsMeta({
+      localized: true,
+      fields: [
+        {
+          name: "siteName",
+          type: "text",
+          localized: true,
+          defaultValue: () => "Computed",
+        },
+      ],
+    });
+
+    const { document, localizedDefaults } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(localizedDefaults.siteName).toBe("Computed");
+    expect(document.siteName).toBe("Computed");
+  });
+
+  it("drops a localized field that emits no storage column from the defaults", () => {
+    const service = createQueryService();
+    // A `component` field is localized here but emits no companion column
+    // (its descriptor is "skip"). Its default must not be routed to a phantom
+    // companion or main column, which would fail the auto-create upsert.
+    const meta = siteSettingsMeta({
+      localized: true,
+      fields: [
+        {
+          name: "siteName",
+          type: "text",
+          localized: true,
+          defaultValue: "My Site",
+        },
+        { name: "hero", type: "component", localized: true, required: true },
+      ],
+    });
+
+    const { localizedDefaults, insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(localizedDefaults).toHaveProperty("siteName");
+    expect(localizedDefaults).not.toHaveProperty("hero");
+    expect(insertValues).not.toHaveProperty("hero");
+  });
+
   it("returns empty localizedDefaults for a non-localized single", () => {
     const service = createQueryService();
     const meta = siteSettingsMeta({
