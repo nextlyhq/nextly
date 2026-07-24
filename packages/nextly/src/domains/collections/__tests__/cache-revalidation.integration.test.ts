@@ -155,6 +155,26 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain("nextly:batch:slug:b");
   });
 
+  it("busts the old and new slug tags on a batch update rename", async () => {
+    const entries = await boot([openCollection("batchren")]);
+    const created = await entries.createEntry(
+      { collectionName: "batchren", overrideAccess: true },
+      { title: "R", slug: "before" }
+    );
+    const id = (created.data as { id: string }).id;
+    spy.flushed.length = 0;
+
+    await entries.updateEntries(
+      { collectionName: "batchren", overrideAccess: true },
+      [{ id, data: { slug: "after" } }]
+    );
+
+    // The batch update worker carries the previous slug, so a batch rename busts
+    // the stale slug tag too.
+    expect(spy.tags).toContain("nextly:batchren:slug:after");
+    expect(spy.tags).toContain("nextly:batchren:slug:before");
+  });
+
   it("flushes the entry tags on publishAllLocales", async () => {
     const entries = await boot([openCollection("pub")]);
     const created = await entries.createEntry(

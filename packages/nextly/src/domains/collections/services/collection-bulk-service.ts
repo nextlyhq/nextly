@@ -20,10 +20,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
-import {
-  buildEntryRevalidationIntent,
-  readStringField,
-} from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
@@ -1073,19 +1069,14 @@ export class CollectionBulkService extends BaseService {
 
               if (createResult.success && createResult.data) {
                 result.successful++;
-                const createdRow = createResult.data as Record<string, unknown>;
-                result.ids.push(createdRow.id as string);
-                // The created row carries the id and slug the derived tags need;
-                // the in-transaction worker records no event, so compute here.
-                const intent = buildEntryRevalidationIntent(
-                  params.collectionName,
-                  undefined,
-                  {
-                    id: createdRow.id as string,
-                    slug: readStringField(createdRow, "slug"),
-                  }
+                result.ids.push(
+                  (createResult.data as Record<string, unknown>).id as string
                 );
-                if (intent) collectedIntents.push(intent);
+                // The worker computed the intent (with config and slug); collect
+                // it, applied to the result only after the shared tx commits.
+                if (createResult.revalidationIntent) {
+                  collectedIntents.push(createResult.revalidationIntent);
+                }
               } else {
                 result.failed++;
                 result.errors.push({
@@ -1453,19 +1444,14 @@ export class CollectionBulkService extends BaseService {
 
               if (updateResult.success && updateResult.data) {
                 result.successful++;
-                const updatedRow = updateResult.data as Record<string, unknown>;
-                result.ids.push(updatedRow.id as string);
-                // The in-transaction worker records no event, so compute the
-                // intent here from the updated row's id and slug.
-                const intent = buildEntryRevalidationIntent(
-                  params.collectionName,
-                  undefined,
-                  {
-                    id: updatedRow.id as string,
-                    slug: readStringField(updatedRow, "slug"),
-                  }
+                result.ids.push(
+                  (updateResult.data as Record<string, unknown>).id as string
                 );
-                if (intent) collectedIntents.push(intent);
+                // The worker computed the intent (with the previous slug for a
+                // rename); collect it, applied after the shared tx commits.
+                if (updateResult.revalidationIntent) {
+                  collectedIntents.push(updateResult.revalidationIntent);
+                }
               } else {
                 result.failed++;
                 result.errors.push({

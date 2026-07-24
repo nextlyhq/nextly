@@ -6010,11 +6010,23 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
+      // Computed in the worker (like the delete worker) so the batch caller
+      // collects the intent directly rather than recomputing it.
+      const revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: (entry as Record<string, unknown>).id as string,
+          slug: readStringField(entry as Record<string, unknown>, "slug"),
+        }
+      );
+
       return {
         success: true,
         statusCode: 201,
         message: "Entry created successfully",
         data: entry,
+        revalidationIntent,
       };
     } catch (error: unknown) {
       // Pass dialect explicitly so the helper can normalise raw driver errors.
@@ -6516,11 +6528,25 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
+      // Computed in the worker (like the delete worker) so the batch caller
+      // collects a complete intent: the previous slug comes from the pre-update
+      // row, so a batch rename busts the old slug tag too.
+      const revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: entryId,
+          slug: readStringField(updated as Record<string, unknown>, "slug"),
+          previousSlug: readStringField(existingEntry, "slug"),
+        }
+      );
+
       return {
         success: true,
         statusCode: 200,
         message: "Entry updated successfully",
         data: updated,
+        revalidationIntent,
       };
     } catch (error: unknown) {
       // Pass dialect explicitly so the helper can normalise raw driver errors.
