@@ -555,6 +555,81 @@ describe("validation never throws on adversarial input", () => {
   });
 });
 
+describe("engine-owned node types", () => {
+  it("does not report a component instance as an unregistered block", () => {
+    // A registry holds authored blocks; the component-instance type is the
+    // engine's own and would never appear in one.
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "cmp-1" },
+        },
+      ],
+    };
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      registry: { has: () => false },
+    });
+    expect(issues).toEqual([]);
+  });
+});
+
+describe("dom id collisions", () => {
+  it("does not report one node as colliding with itself", () => {
+    // cssId and attributes.id on the SAME node render one id, not two.
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "hero",
+          attributes: { id: "hero" },
+        },
+      ],
+    };
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.filter(i => i.code === "duplicate-dom-id")).toEqual([]);
+  });
+});
+
+describe("byte measurement counts JSON escaping", () => {
+  it("measures escape-heavy strings at their serialized size", () => {
+    // 400 control characters serialize as \uXXXX (6 bytes each ≈ 2400), which
+    // must exceed a 1000-byte cap even though the raw string is only 400 chars.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: { text: "\u0001".repeat(400) },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { maxDepth: 12, maxNodes: 5000, maxBytes: 1000 },
+    });
+    expect(issues.some(i => i.code === "document-too-large")).toBe(true);
+  });
+});
+
 describe("unknown kind severity follows the mode", () => {
   it("errors in strict, warns in forgiving", () => {
     const doc = invalidDoc({ formatVersion: 1, kind: "widget", nodes: [] });
@@ -570,6 +645,20 @@ describe("unknown kind severity follows the mode", () => {
     expect(forgiving.find(i => i.code === "invalid-kind")?.severity).toBe(
       "warning"
     );
+  });
+
+  it("treats a missing or non-string kind as structural corruption in both modes", () => {
+    for (const badKind of [undefined, 5, null]) {
+      for (const mode of ["strict", "forgiving"] as const) {
+        const issues = validate(
+          invalidDoc({ formatVersion: 1, kind: badKind, nodes: [] }),
+          { breakpoints: FIXTURE_BREAKPOINTS, mode }
+        );
+        expect(issues.find(i => i.code === "invalid-kind")?.severity).toBe(
+          "error"
+        );
+      }
+    }
   });
 });
 

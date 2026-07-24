@@ -119,6 +119,13 @@ function pointer(parent: string, token: string | number): string {
 /** A node type is a namespaced slug, e.g. "core/heading". */
 const NODE_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/**
+ * Node types the engine defines itself rather than blocks a registry holds.
+ * They are structurally valid and resolved by their own machinery, so a
+ * registry miss on one of them is not an unknown type.
+ */
+const ENGINE_NODE_TYPES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -196,14 +203,16 @@ export function validate(
     });
   }
 
-  // An unknown kind is preserved in forgiving mode (a warning) and rejected in
-  // strict mode, matching the unknown-block-type policy.
+  // An unrecognized kind STRING is preserved in forgiving mode (a warning) and
+  // rejected in strict mode, matching the unknown-block-type policy. A missing
+  // or non-string kind is structural corruption, not a future value to
+  // preserve, so it is always an error.
   const kind = rawDoc.kind;
   if (!DOCUMENT_KINDS.includes(kind as (typeof DOCUMENT_KINDS)[number])) {
     issues.push({
       path: "/kind",
       code: "invalid-kind",
-      severity: unknownSeverity,
+      severity: typeof kind === "string" ? unknownSeverity : "error",
       message: `Unknown document kind "${describeValue(kind)}".`,
       suggestion: `Use one of: ${DOCUMENT_KINDS.join(", ")}.`,
     });
@@ -363,8 +372,14 @@ function utf8ByteLength(s: string, budget: number): number {
   let bytes = 0;
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
+    if (code < 0x80) {
+      // Serialized size counts JSON escaping: a control character becomes a
+      // six-byte \uXXXX escape and a quote or backslash becomes two bytes, so
+      // counting one byte each would under-measure an escape-heavy string.
+      if (code < 0x20) bytes += 6;
+      else if (code === 0x22 || code === 0x5c) bytes += 2;
+      else bytes += 1;
+    } else if (code < 0x800) bytes += 2;
     else if (code >= 0xd800 && code <= 0xdbff) {
       bytes += 4; // surrogate pair → one 4-byte code point
       i++;
@@ -529,12 +544,18 @@ function validateNode(
       severity: "error",
       message: `Node type "${describeValue(node.type)}" must be a namespaced slug like "core/heading".`,
     });
-  } else if (state.ctx.registry && !state.ctx.registry.has(node.type)) {
+  } else if (
+    state.ctx.registry &&
+    // Engine-owned synthetic types are not registrable blocks and so are never
+    // present in a block registry; exempt them from the registration check.
+    !ENGINE_NODE_TYPES.has(node.type) &&
+    !state.ctx.registry.has(node.type)
+  ) {
     issues.push({
       path: pointer(path, "type"),
       code: "unknown-node-type",
       severity: state.unknownSeverity,
-      message: `Node type "${node.type}" is not registered.`,
+      message: `Node type "${describeValue(node.type)}" is not registered.`,
       suggestion: "Register the block or remove the node.",
     });
   }
@@ -610,6 +631,10 @@ function validateDomIds(
   if (isPlainObject(node.attributes)) {
     for (const [key, value] of Object.entries(node.attributes)) {
       if (key.toLowerCase() === "id" && typeof value === "string" && value) {
+        // One node setting the same id through both `cssId` and `attributes.id`
+        // renders a single id, so it must not be reported as colliding with
+        // itself; only a second NODE claiming the id is a duplicate.
+        if (value === node.cssId) continue;
         report(value, pointer(pointer(path, "attributes"), key));
       }
     }
@@ -699,7 +724,7 @@ function validateAttributes(
         path: pointer(pointer(path, "attributes"), key),
         code: "invalid-attributes",
         severity: "error",
-        message: `Attribute "${key}" is an event handler; inline JavaScript is not allowed.`,
+        message: `Attribute "${describeValue(key)}" is an event handler; inline JavaScript is not allowed.`,
       });
     }
   }
