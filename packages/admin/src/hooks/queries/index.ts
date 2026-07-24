@@ -136,6 +136,8 @@ export {
   useCreateWebhook,
   useUpdateWebhook,
   useDeleteWebhook,
+  useRotateSecret,
+  useExpireOldSecrets,
   useRevealSecret,
   useTestEndpoint,
 } from "./useWebhooks";

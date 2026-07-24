@@ -50,6 +50,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
   CreateWebhookSchema,
+  RotateWebhookSchema,
   UpdateWebhookSchema,
 } from "../schemas/_zod/webhooks";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
@@ -132,7 +133,15 @@ async function requireWebhookPermission(
  * live in `logContext` for operator triage.
  */
 function denySessionOnly(
-  action: "create" | "update" | "delete" | "reveal" | "test" | "redeliver"
+  action:
+    | "create"
+    | "update"
+    | "delete"
+    | "reveal"
+    | "test"
+    | "redeliver"
+    | "rotate"
+    | "expire-secrets"
 ): never {
   throw NextlyError.forbidden({
     logContext: { reason: "session-only", action },
@@ -660,5 +669,94 @@ export function revealWebhookSecret(
     const secrets = await service.revealSecrets(id);
 
     return respondData({ secrets }, { headers: PRIVATE_NO_STORE_HEADERS });
+  })(req);
+}
+
+/**
+ * Rotate an endpoint's signing secret with an overlap window.
+ *
+ * A fresh secret becomes the primary; the previous one stays valid for
+ * `overlapSeconds` (default when omitted, 0 to retire it at once) so a receiver
+ * can switch over without dropping a delivery. Deliveries in the window carry a
+ * signature for both, so either secret verifies.
+ *
+ * Auth: **session only** + `update-webhooks` — rotation mints new key material.
+ *
+ * Response: `{ message, item: { doc, secret } }` via `respondMutation`. The new
+ * secret is returned here once, the same as on create, and is retrievable after
+ * through the reveal action until it is rotated away.
+ */
+export function rotateWebhookSecret(
+  req: Request,
+  id: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("rotate");
+
+    // The body is optional: a rotate with no body takes the default overlap. An
+    // empty body reads as `{}` rather than failing JSON parsing.
+    const raw = await request.text();
+    let body: unknown = {};
+    if (raw.trim() !== "") {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "",
+              code: "invalid_json",
+              message: "Request body is not valid JSON.",
+            },
+          ],
+          logContext: { reason: "invalid-json-body", entity: "webhook-rotate" },
+        });
+      }
+    }
+
+    let validated: z.infer<typeof RotateWebhookSchema>;
+    try {
+      validated = RotateWebhookSchema.parse(body);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
+    }
+
+    const service = await getWebhookService();
+    const { endpoint, secret } = await service.rotateSecret(id, validated);
+
+    return respondMutation("Webhook signing secret rotated.", {
+      doc: endpoint,
+      secret,
+    });
+  })(req);
+}
+
+/**
+ * Retire every overlapping (rotated-away) signing secret immediately, leaving
+ * only the primary. The way to cut a rotation's overlap short once the receiver
+ * has switched to the new secret.
+ *
+ * Auth: **session only** + `update-webhooks`.
+ *
+ * Response: `{ message, item: WebhookEndpointSummary }` via `respondMutation`.
+ */
+export function expireWebhookOldSecrets(
+  req: Request,
+  id: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("expire-secrets");
+
+    const service = await getWebhookService();
+    const updated = await service.expireOldSecrets(id);
+
+    return respondMutation("Old signing secrets expired.", updated);
   })(req);
 }

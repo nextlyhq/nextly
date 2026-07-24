@@ -67,6 +67,33 @@ describe("webhookApi", () => {
     );
   });
 
+  it("rotates the secret and unwraps doc + new secret", async () => {
+    fetcherSpy.mockResolvedValue({
+      message: "Rotated.",
+      item: { doc: summary, secret: "whsec_new" },
+    });
+    const result = await webhookApi.rotateSecret("wh_1", {
+      overlapSeconds: 3600,
+    });
+    expect(fetcherSpy).toHaveBeenCalledWith(
+      "/webhooks/wh_1/secret/rotate",
+      { method: "POST", body: JSON.stringify({ overlapSeconds: 3600 }) },
+      true
+    );
+    expect(result).toEqual({ doc: summary, secret: "whsec_new" });
+  });
+
+  it("expires old secrets and unwraps the updated endpoint", async () => {
+    fetcherSpy.mockResolvedValue({ message: "Expired.", item: summary });
+    const result = await webhookApi.expireOldSecrets("wh_1");
+    expect(fetcherSpy).toHaveBeenCalledWith(
+      "/webhooks/wh_1/secret/expire-old",
+      { method: "POST" },
+      true
+    );
+    expect(result).toBe(summary);
+  });
+
   it("reveals the signing secrets", async () => {
     fetcherSpy.mockResolvedValue({ secrets: ["whsec_a", "whsec_b"] });
     const result = await webhookApi.revealSecret("wh_1");

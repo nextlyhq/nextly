@@ -40,6 +40,19 @@ export type WebhookEventSubscription =
 export const REDACTED_HEADER_VALUE = "<redacted>";
 
 /**
+ * One signing secret described without revealing it. `isPrimary` marks the
+ * secret new deliveries are prefixed by; `expiresAt` is when an overlapping
+ * (rotated-away) secret stops signing, or null for the primary. Timestamps are
+ * ISO strings on the wire.
+ */
+export interface WebhookSecretInfo {
+  prefix: string;
+  isPrimary: boolean;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+/**
  * Endpoint summary returned by list and get. Carries no secret or ciphertext;
  * static header values are redacted to `REDACTED_HEADER_VALUE` (names survive).
  */
@@ -50,11 +63,34 @@ export interface WebhookEndpointSummary {
   enabled: boolean;
   eventTypes: WebhookEventSubscription[];
   headers: Record<string, string> | null;
-  /** Display-only prefix of the signing secret. */
+  /** Display-only prefix of the current primary signing secret. */
   secretPrefix: string;
+  /** Non-sensitive lifecycle of every active signing secret, primary first. */
+  secrets: WebhookSecretInfo[];
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Overlap-window presets offered when rotating a signing secret, in seconds.
+ * "Expire immediately" is 0; the rest let the rotated-away secret keep signing
+ * for a while so a receiver can switch over. The default matches the backend.
+ */
+export const WEBHOOK_ROTATION_WINDOWS = [
+  { seconds: 0, label: "Expire immediately" },
+  { seconds: 24 * 60 * 60, label: "24 hours" },
+  { seconds: 48 * 60 * 60, label: "48 hours" },
+  { seconds: 7 * 24 * 60 * 60, label: "7 days" },
+  { seconds: 30 * 24 * 60 * 60, label: "30 days" },
+] as const;
+
+/** The default overlap window (48 hours), mirroring the backend default. */
+export const WEBHOOK_ROTATION_DEFAULT_OVERLAP_SECONDS = 48 * 60 * 60;
+
+export interface RotateWebhookInput {
+  /** How long the rotated-away secret stays valid, in seconds. */
+  overlapSeconds: number;
 }
 
 export interface CreateWebhookInput {

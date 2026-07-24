@@ -16,6 +16,7 @@ import type {
 import type {
   CreateWebhookInput,
   CreatedWebhook,
+  RotateWebhookInput,
   UpdateWebhookInput,
   WebhookEndpointSummary,
   WebhookTestResult,
@@ -70,6 +71,34 @@ export async function deleteWebhook(id: string): Promise<void> {
   );
 }
 
+/**
+ * Rotate the signing secret with an overlap window. Returns the new endpoint
+ * plus the fresh secret, shown once (same shape as create).
+ */
+export async function rotateSecret(
+  id: string,
+  input: RotateWebhookInput
+): Promise<CreatedWebhook> {
+  const result = await fetcher<MutationResponse<CreatedWebhook>>(
+    `/webhooks/${id}/secret/rotate`,
+    { method: "POST", body: JSON.stringify(input) },
+    true
+  );
+  return result.item;
+}
+
+/** Retire every overlapping (rotated-away) secret now, leaving only the primary. */
+export async function expireOldSecrets(
+  id: string
+): Promise<WebhookEndpointSummary> {
+  const result = await fetcher<MutationResponse<WebhookEndpointSummary>>(
+    `/webhooks/${id}/secret/expire-old`,
+    { method: "POST" },
+    true
+  );
+  return result.item;
+}
+
 /** Reveal the active signing secret(s) — rotation can keep more than one alive. */
 export async function revealSecret(id: string): Promise<string[]> {
   const result = await fetcher<{ secrets: string[] }>(
@@ -102,6 +131,8 @@ export const webhookApi = {
   createWebhook,
   updateWebhook,
   deleteWebhook,
+  rotateSecret,
+  expireOldSecrets,
   revealSecret,
   testEndpoint,
 } as const;
