@@ -140,6 +140,39 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain(`nextly:docs:id:${id}`);
   });
 
+  it("flushes tags for every entry in a batch create", async () => {
+    const entries = await boot([openCollection("batch")]);
+    await entries.createEntries(
+      { collectionName: "batch", overrideAccess: true },
+      [
+        { title: "A", slug: "a" },
+        { title: "B", slug: "b" },
+      ]
+    );
+    // A batch create records no outbox event, but the content changed, so its
+    // tags must still be busted.
+    expect(spy.tags).toContain("nextly:batch:slug:a");
+    expect(spy.tags).toContain("nextly:batch:slug:b");
+  });
+
+  it("flushes the entry tags on publishAllLocales", async () => {
+    const entries = await boot([openCollection("pub")]);
+    const created = await entries.createEntry(
+      { collectionName: "pub", overrideAccess: true },
+      { title: "Draft", slug: "draft-doc", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    spy.flushed.length = 0;
+
+    await entries.publishAllLocales({
+      collectionName: "pub",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    expect(spy.tags).toContain(`nextly:pub:id:${id}`);
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(

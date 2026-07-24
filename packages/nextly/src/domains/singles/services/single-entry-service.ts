@@ -147,7 +147,7 @@ export class SingleEntryService extends BaseService {
     // `success:false` with `eventRecorded:true`, so key off either — otherwise a
     // committed event would miss its fast-drain and retention pass.
     if (result.success || result.eventRecorded === true) {
-      this.flushRevalidation(result);
+      await this.flushRevalidation(result);
       await this.afterWrite();
     }
     return result;
@@ -155,17 +155,14 @@ export class SingleEntryService extends BaseService {
 
   /**
    * Flush a committed single write's cache-revalidation intent through the
-   * registered revalidator (a no-op when no cache adapter is present). Absorbs
-   * its own failure so revalidation never turns a committed write into an error.
+   * registered revalidator (a no-op when no cache adapter is present). Awaited so
+   * an async revalidator is not left detached; absorbs its own failure so
+   * revalidation never turns a committed write into an error.
    */
-  private flushRevalidation(result: SingleResult): void {
+  private async flushRevalidation(result: SingleResult): Promise<void> {
     if (!this.cacheRevalidator || !result.revalidationIntent) return;
     try {
-      Promise.resolve(
-        this.cacheRevalidator.flush([result.revalidationIntent])
-      ).catch(error =>
-        this.logger.error("Cache revalidation failed after a write", { error })
-      );
+      await this.cacheRevalidator.flush([result.revalidationIntent]);
     } catch (error) {
       this.logger.error("Cache revalidation failed after a write", { error });
     }

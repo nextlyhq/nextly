@@ -20,6 +20,10 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  buildEntryRevalidationIntent,
+  readStringField,
+} from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
@@ -1039,6 +1043,9 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // The revalidation intents of every committed create, applied to the result
+    // only after the shared transaction commits — a rollback undoes every insert.
+    const collectedIntents: RevalidationIntent[] = [];
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1066,9 +1073,19 @@ export class CollectionBulkService extends BaseService {
 
               if (createResult.success && createResult.data) {
                 result.successful++;
-                result.ids.push(
-                  (createResult.data as Record<string, unknown>).id as string
+                const createdRow = createResult.data as Record<string, unknown>;
+                result.ids.push(createdRow.id as string);
+                // The created row carries the id and slug the derived tags need;
+                // the in-transaction worker records no event, so compute here.
+                const intent = buildEntryRevalidationIntent(
+                  params.collectionName,
+                  undefined,
+                  {
+                    id: createdRow.id as string,
+                    slug: readStringField(createdRow, "slug"),
+                  }
                 );
+                if (intent) collectedIntents.push(intent);
               } else {
                 result.failed++;
                 result.errors.push({
@@ -1101,6 +1118,11 @@ export class CollectionBulkService extends BaseService {
           }
         }
       });
+      // Reached only when the transaction committed, so the collected intents
+      // describe rows that actually persist.
+      if (collectedIntents.length > 0) {
+        result.revalidationIntents = collectedIntents;
+      }
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case)
       // Reset successful count since transaction rolled back
@@ -1400,6 +1422,9 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // The revalidation intents of every committed update, applied only after the
+    // shared transaction commits — a rollback undoes every update.
+    const collectedIntents: RevalidationIntent[] = [];
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1428,9 +1453,19 @@ export class CollectionBulkService extends BaseService {
 
               if (updateResult.success && updateResult.data) {
                 result.successful++;
-                result.ids.push(
-                  (updateResult.data as Record<string, unknown>).id as string
+                const updatedRow = updateResult.data as Record<string, unknown>;
+                result.ids.push(updatedRow.id as string);
+                // The in-transaction worker records no event, so compute the
+                // intent here from the updated row's id and slug.
+                const intent = buildEntryRevalidationIntent(
+                  params.collectionName,
+                  undefined,
+                  {
+                    id: updatedRow.id as string,
+                    slug: readStringField(updatedRow, "slug"),
+                  }
                 );
+                if (intent) collectedIntents.push(intent);
               } else {
                 result.failed++;
                 result.errors.push({
@@ -1463,6 +1498,11 @@ export class CollectionBulkService extends BaseService {
           }
         }
       });
+      // Reached only when the transaction committed, so the collected intents
+      // describe rows that actually persist.
+      if (collectedIntents.length > 0) {
+        result.revalidationIntents = collectedIntents;
+      }
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case)
       // Reset successful count since transaction rolled back

@@ -280,6 +280,13 @@ export class CollectionEntryService extends BaseService {
       | BulkOperationResult<unknown>
       | BatchOperationResult
   ): Promise<void> {
+    // Revalidation flushes whenever a committed write produced intents. It is
+    // NOT tied to the outbox-event gate below: an intent is only ever set after
+    // a write commits, so its presence is the "content changed" signal, and a
+    // publish-all-locales or a batch create (which record no outbox event) still
+    // bust their tags.
+    await this.flushRevalidation(result);
+
     const recorded =
       "success" in result
         ? result.eventRecorded === true
@@ -287,7 +294,6 @@ export class CollectionEntryService extends BaseService {
           ? result.successCount > 0 || result.eventRecorded === true
           : result.successful > 0 || result.eventRecorded === true;
     if (recorded) {
-      this.flushRevalidation(result);
       await this.afterWrite();
     }
   }
@@ -297,13 +303,15 @@ export class CollectionEntryService extends BaseService {
    * revalidator (a no-op when no cache adapter is present). Runs on the same
    * gate as the drain — a write that recorded nothing revalidates nothing — and
    * absorbs its own failure so it never turns a committed write into an error.
+   * Awaited (like the retention pass) so an async revalidator's work is not left
+   * detached, where a serverless response could cut it off before it completes.
    */
-  private flushRevalidation(
+  private async flushRevalidation(
     result:
       | CollectionServiceResult<unknown>
       | BulkOperationResult<unknown>
       | BatchOperationResult
-  ): void {
+  ): Promise<void> {
     if (!this.cacheRevalidator) return;
     const intents =
       "revalidationIntents" in result && result.revalidationIntents
@@ -313,12 +321,9 @@ export class CollectionEntryService extends BaseService {
           : [];
     if (intents.length === 0) return;
     try {
-      // Tolerate a sync (revalidateTag) or async revalidator, and catch either a
-      // synchronous throw or an async rejection so revalidation never surfaces as
-      // a write error. Not awaited: marking tags stale must not add write latency.
-      Promise.resolve(this.cacheRevalidator.flush(intents)).catch(error =>
-        this.logger.error("Cache revalidation failed after a write", { error })
-      );
+      // Await so a Promise-returning revalidator finishes here; `revalidateTag`
+      // is synchronous, so this adds no latency for the common case.
+      await this.cacheRevalidator.flush(intents);
     } catch (error) {
       this.logger.error("Cache revalidation failed after a write", { error });
     }

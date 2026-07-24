@@ -2139,6 +2139,10 @@ export class CollectionMutationService extends BaseService {
     // it: the adapter re-wraps the thrown sentinel in a DatabaseError as the
     // transaction rolls back, so `instanceof` no longer identifies it.
     let publishDocDenied: CollectionServiceResult | undefined;
+    // The tags this publish invalidates, set before the success return so a
+    // publish busts the entry's cached reads. Publishing every locale, so no
+    // single locale tag — the locale-less id tag covers them all.
+    let revalidationIntent: RevalidationIntent | undefined;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
       const schema = await this.fileManager.loadDynamicSchema(
@@ -2445,11 +2449,24 @@ export class CollectionMutationService extends BaseService {
         // Reaction/event emission is non-critical; the publish already committed.
       }
 
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(publishCollection),
+        {
+          id: params.entryId,
+          slug: readStringField(
+            existingEntry as Record<string, unknown>,
+            "slug"
+          ),
+        }
+      );
+
       return {
         success: true,
         statusCode: 200,
         message: "All languages published.",
         data: { id: params.entryId, status: "published" },
+        revalidationIntent,
       };
     } catch (error) {
       // A publish refused by the under-lock document-rule re-check aborts the
