@@ -506,6 +506,9 @@ export class SingleMutationService extends BaseService {
       // (including any publish) is authorized.
       let autoCreated = false;
       let pendingAutoCreateValues: Record<string, unknown> | null = null;
+      // Translatable defaults to seed onto the default-locale companion when the
+      // auto-create actually inserts a row (they cannot live on the main table).
+      let pendingLocalizedDefaults: Record<string, unknown> = {};
       if (!existingDoc) {
         this.logger.info("Preparing default Single document before update", {
           slug,
@@ -513,6 +516,7 @@ export class SingleMutationService extends BaseService {
         const built = this.queryService.buildDefaultDocument(singleMeta);
         existingDoc = built.document;
         pendingAutoCreateValues = built.insertValues;
+        pendingLocalizedDefaults = built.localizedDefaults;
         autoCreated = true;
       }
 
@@ -836,12 +840,30 @@ export class SingleMutationService extends BaseService {
               companion.companionTableName
             )
           : false;
+      // Same pre-transaction, pooled probe for the auto-create default seed: it
+      // is keyed on the DEFAULT locale (not the write locale), so it needs its
+      // own existence check rather than reusing `companionPhysicallyExists`.
+      const seedCompanionExists = autoCreated
+        ? await this.queryService.localizedDefaultsCompanionExists(
+            singleMeta,
+            pendingLocalizedDefaults
+          )
+        : false;
       let updatedRows: SingleDocument[];
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
         updatedRows = await withVersionConflictRetry(() =>
           this.adapter.transaction(async tx => {
+            // True only when THIS transaction inserted the row AND seeded the
+            // default-locale companion with the localized defaults. The version
+            // snapshot overlay below is gated on it, not on `autoCreated`: two
+            // first writes can race so that this request enters with
+            // `autoCreated === true` but then adopts a row another writer already
+            // inserted (the `committed` branch), in which case it did NOT seed —
+            // the companion may already hold that writer's real translations, and
+            // overlaying schema defaults would let a restore overwrite them.
+            let didSeedCompanionDefaults = false;
             // First-write auto-create, committed atomically with the update. A
             // failed update/component/companion/version write rolls the insert
             // back rather than orphaning a default row, and no compensating
@@ -854,13 +876,32 @@ export class SingleMutationService extends BaseService {
                 singleMeta.tableName,
                 {}
               );
-              existingDoc =
-                committed ??
-                (await tx.insert<SingleDocument>(
+              if (committed) {
+                existingDoc = committed;
+              } else {
+                existingDoc = await tx.insert<SingleDocument>(
                   singleMeta.tableName,
                   pendingAutoCreateValues,
                   { returning: "*" }
-                ));
+                );
+                // Seed the default-locale companion with the localized defaults
+                // in the same transaction as the insert, so a localized field's
+                // default is not stranded as null. The caller's companion write
+                // for the write locale (below) then overlays only the fields it
+                // supplied. No-op for a non-localized single.
+                await this.queryService.seedLocalizedDefaultsCompanion(
+                  tx,
+                  singleMeta,
+                  existingDoc.id,
+                  pendingLocalizedDefaults,
+                  (existingDoc as { status?: string }).status,
+                  seedCompanionExists
+                );
+                // The seed persists defaults only when the companion physically
+                // exists; track that this transaction actually seeded so the
+                // snapshot overlay records defaults that were really written.
+                didSeedCompanionDefaults = seedCompanionExists;
+              }
             }
             // Unreachable: the pre-transaction step always resolves `existingDoc`
             // to a loaded or in-memory default, and the block above only replaces
@@ -1404,6 +1445,55 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
+              // First-write auto-create: the companion was seeded with the
+              // localized field defaults for fields this update did not supply
+              // (queryService.seedLocalizedDefaultsCompanion). Those values are
+              // committed but absent from both `rows[0]` (main row omits
+              // translatable columns) and `companionData` (only this write's
+              // fields), so overlay them for any field this update did not write —
+              // otherwise v1 omits persisted content and restoring it drops the
+              // seeded defaults. This write's explicit values (overlaid above) win
+              // over a default. Gated on the seed having actually run, so a
+              // snapshot never records defaults the absent-companion seed skipped.
+              //
+              // The seed wrote ONLY to the DEFAULT-locale companion row, so these
+              // defaults belong to the default-locale snapshot alone. Overlay them
+              // only when this first write IS the default locale; a non-default
+              // first write must not copy them in, or restoring it would
+              // materialize the defaults as real translations in the wrong locale.
+              // Gated on `didSeedCompanionDefaults` (set only when THIS
+              // transaction inserted and seeded), never `autoCreated`: a request
+              // that lost the auto-create race and adopted another writer's row
+              // must not overlay schema defaults over that writer's real
+              // translations.
+              const isDefaultLocaleWrite =
+                writeLocale === undefined ||
+                writeLocale === this.localization?.defaultLocale;
+              let seededDefaultsOverlaid = false;
+              if (
+                didSeedCompanionDefaults &&
+                companion &&
+                isDefaultLocaleWrite
+              ) {
+                const writtenFieldNames = new Set(
+                  companion.localizedFields
+                    .filter(f =>
+                      Object.prototype.hasOwnProperty.call(
+                        companionData,
+                        f.column
+                      )
+                    )
+                    .map(f => f.name)
+                );
+                for (const [name, value] of Object.entries(
+                  pendingLocalizedDefaults
+                )) {
+                  if (!writtenFieldNames.has(name)) {
+                    parentRow[name] = value;
+                    seededDefaultsOverlaid = true;
+                  }
+                }
+              }
               // Never let password hashes into durable version history: the row
               // carries bcrypt hashes (hashPasswordFieldValues ran before the
               // write), and a later password change would otherwise leave the
@@ -1554,10 +1644,17 @@ export class SingleMutationService extends BaseService {
                 // holds no translations and keeps the MAIN row's status, so
                 // calling it that locale's would let a restore publish a
                 // language from state that was never its own.
+                // `seededDefaultsOverlaid` forces the default-locale tag for a
+                // shared-fields-only first write that seeded default-locale
+                // translations: without it `companionData` is empty, the locale
+                // resolves null, and a restore treats the snapshot as shared-only
+                // and drops the seeded defaults. The overlay only runs on a
+                // default-locale write, so `snapshotLocale` is the default locale.
                 locale:
                   Object.keys(companionData).length > 0 ||
                   companionStatus !== undefined ||
-                  capturedLocalizedComponents
+                  capturedLocalizedComponents ||
+                  seededDefaultsOverlaid
                     ? (snapshotLocale ?? null)
                     : null,
                 sourceVersionNo: options.sourceVersionNo ?? null,

@@ -466,26 +466,53 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * Insert a random token before a filename's extension so any destination
+   * derived from it is unique: `photo.jpg` -> `photo-<token>.jpg` (a name with
+   * no extension gets the token appended). Used to guarantee regenerated
+   * focal-crop variants never reuse the item's existing storage keys, even on a
+   * storage adapter that maps a filename to a fixed path.
+   */
+  private uniqueVariantBaseName(filename: string): string {
+    const token = crypto.randomUUID();
+    const lastDot = filename.lastIndexOf(".");
+    if (lastDot > 0) {
+      return `${filename.slice(0, lastDot)}-${token}${filename.slice(lastDot)}`;
+    }
+    return `${filename}-${token}`;
+  }
+
+  /**
    * Regenerate a media item's image size variants for a changed crop point,
-   * writing `sizes`/`thumbnailUrl` onto `updateData`. No-op unless the crop
-   * actually changed and the item is an image on a readable storage adapter.
+   * writing `sizes`/`thumbnailUrl` onto `updateData` and returning the newly
+   * generated sizes (or null when nothing was regenerated). No-op unless the
+   * crop actually changed and the item is an image on a readable storage
+   * adapter.
    *
-   * Called from inside the update transaction, under the media row lock, so its
-   * shared-path storage writes are serialized with the row commit: two
-   * concurrent focal edits of the same item cannot interleave their variant
-   * writes, so the committed row never points at another crop's bytes.
+   * The new variants are written to fresh storage keys — a random token is
+   * injected into the destination filename here so they can NEVER land on the
+   * item's existing variant keys, even on a storage adapter that derives a
+   * deterministic path from the filename rather than prefixing its own random
+   * id. This never overwrites the item's existing variant bytes and never
+   * deletes them: content-addressing plus a delete-after-commit in `updateMedia`
+   * is what makes this safe. Deleting the old paths here — before the row commits
+   * — was the previous bug: a rollback or a concurrent edit left the committed
+   * row pointing at bytes that were already gone. The old paths are now cleaned
+   * up by the caller only after the row durably points at the new ones. Kept
+   * OUTSIDE the write transaction on purpose: it must not hold the row lock (or a
+   * single-connection pool) across slow storage I/O.
+   *
    * Best-effort: a regeneration failure is swallowed (the crop point is still
-   * saved) rather than failing the whole update.
+   * saved against the existing variants) rather than failing the whole update.
    */
   private async regenerateFocalPointSizes(
     media: Media,
     changes: UpdateMediaInput,
     updateData: Record<string, unknown>
-  ): Promise<void> {
+  ): Promise<Record<string, unknown> | null> {
     const focalPointChanged =
       changes.focalX !== undefined || changes.focalY !== undefined;
     if (!focalPointChanged || !isImageMimeType(media.mimeType)) {
-      return;
+      return null;
     }
 
     const adapter = this.storage.getAdapterForCollection("media");
@@ -494,25 +521,16 @@ export class MediaService extends BaseService {
         `[MediaService] Crop point saved for media ${media.id}. ` +
           `Size regeneration requires local storage or adapter with read support.`
       );
-      return;
+      return null;
     }
 
     try {
       const originalBuffer = await adapter.read(media.filename);
-      if (!originalBuffer) return;
+      if (!originalBuffer) return null;
 
       const imageSizeService = new ImageSizeService(this.adapter, this.logger);
       const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
-      if (sizeConfigs.length === 0) return;
-
-      const oldSizes = (media as unknown as Record<string, unknown>).sizes;
-      if (oldSizes) {
-        const parsed =
-          typeof oldSizes === "string" ? JSON.parse(oldSizes) : oldSizes;
-        await deleteImageSizes(parsed, path =>
-          this.storage.delete(path, "media")
-        );
-      }
+      if (sizeConfigs.length === 0) return null;
 
       const uploadFn = async (
         buffer: Buffer,
@@ -524,9 +542,19 @@ export class MediaService extends BaseService {
           collection: "media",
         });
       };
+      // Force a unique destination base so the regenerated variant keys cannot
+      // collide with the item's existing ones on a deterministic (filename ->
+      // fixed path) storage adapter. On a collision, an overwrite-disallowing
+      // adapter would fail the upload (saving the crop without new thumbnails)
+      // and an overwrite-allowing one would mutate the bytes the committed row
+      // still points at before this transaction commits — both break the
+      // content-addressed delete-after-commit contract updateMedia relies on.
+      const uniqueBase = this.uniqueVariantBaseName(
+        media.originalFilename || media.filename
+      );
       const newSizes = await generateImageSizes(
         originalBuffer,
-        media.originalFilename || media.filename,
+        uniqueBase,
         sizeConfigs,
         uploadFn,
         { focalX: changes.focalX, focalY: changes.focalY }
@@ -542,13 +570,84 @@ export class MediaService extends BaseService {
       console.log(
         `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${media.id}`
       );
+      return newSizes;
     } catch (error) {
       console.warn(
         "[MediaService] Crop point size regeneration failed:",
         error
       );
       // Continue without regeneration - crop point is still saved.
+      return null;
     }
+  }
+
+  /**
+   * Best-effort deletion of a set of variant storage paths. Used to clean up
+   * either the superseded old variants (after a rotation commits) or the
+   * freshly-written new variants (when the commit did not happen), so neither a
+   * successful regeneration nor a failed one leaks storage. Never throws: a
+   * failed delete is logged, because the durable DB state is already correct and
+   * an orphaned file is not worth failing or reversing the write over.
+   */
+  private async deleteVariantPaths(paths: string[]): Promise<void> {
+    if (paths.length === 0) return;
+    const results = await Promise.allSettled(
+      paths.map(path => this.storage.delete(path, "media"))
+    );
+    const failed = results.filter(r => r.status === "rejected").length;
+    if (failed > 0) {
+      console.warn(
+        `[MediaService] Failed to delete ${failed} of ${paths.length} old media variant(s).`
+      );
+    }
+  }
+
+  /**
+   * Extract the storage paths from a `sizes` value (an object keyed by size name,
+   * each holding `{ path, ... }`), tolerating the DB's JSON-string form. Used to
+   * decide which variant files to delete after a rotation without touching any
+   * that the new set reuses.
+   */
+  /**
+   * Delete the variant paths in `candidateSizes` that are NOT among the paths
+   * `keepSizes` references. Used for every variant cleanup so a deterministic-key
+   * adapter (where a regenerated variant can reuse an existing path) never
+   * deletes a file the surviving row still points at: after commit `keepSizes`
+   * is the new sizes and `candidateSizes` the superseded old ones; on a failed or
+   * void write it is the reverse — the old sizes survive on the un-updated row,
+   * so only the genuinely-orphaned new uploads are removed.
+   */
+  private async deleteSupersededVariants(
+    candidateSizes: unknown,
+    keepSizes: unknown
+  ): Promise<void> {
+    const keep = new Set(this.collectVariantPaths(keepSizes));
+    await this.deleteVariantPaths(
+      this.collectVariantPaths(candidateSizes).filter(path => !keep.has(path))
+    );
+  }
+
+  private collectVariantPaths(sizes: unknown): string[] {
+    let parsed: unknown = sizes;
+    if (typeof sizes === "string") {
+      try {
+        parsed = JSON.parse(sizes);
+      } catch {
+        return [];
+      }
+    }
+    if (!parsed || typeof parsed !== "object") return [];
+    const paths: string[] = [];
+    for (const value of Object.values(parsed as Record<string, unknown>)) {
+      if (
+        value &&
+        typeof value === "object" &&
+        typeof (value as { path?: unknown }).path === "string"
+      ) {
+        paths.push((value as { path: string }).path);
+      }
+    }
+    return paths;
   }
 
   /**
@@ -579,16 +678,18 @@ export class MediaService extends BaseService {
         updateData.folderId = changes.folderId;
 
       // Regenerate focal-point image variants when the crop changed, before the
-      // write transaction opens. Storage is not transactional, so regenerating
-      // shared variant paths can never be made atomic with the DB write: doing
-      // it inside the transaction would hold the row lock (and, on a
-      // single-connection pool, the only connection) across slow storage I/O
-      // without removing the underlying dual-write inconsistency (a rollback or
-      // a concurrent edit still overwrites the shared paths). Keeping it here
-      // preserves the existing behavior; a content-addressed variant scheme
-      // (new unique paths per generation, old paths cleaned up after commit) is
-      // the real fix and is tracked as a separate image-pipeline follow-up.
-      await this.regenerateFocalPointSizes(existing.data!, changes, updateData);
+      // write transaction opens (storage I/O must not hold the row lock). The
+      // new variants go to fresh, unique keys and the OLD ones are left in place;
+      // the row is then committed pointing at the new keys and the superseded old
+      // ones are deleted only AFTER the commit. So a rollback or a lost update
+      // race never leaves the committed row referencing bytes that were already
+      // deleted — the previous, now-fixed dual-write bug. Returns the new sizes
+      // (or null) so a failed/void write can clean up its own orphaned uploads.
+      const regeneratedSizes = await this.regenerateFocalPointSizes(
+        existing.data!,
+        changes,
+        updateData
+      );
 
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
@@ -599,8 +700,15 @@ export class MediaService extends BaseService {
       // MySQL's repeatable read), and a field another request committed after
       // our first read is not shipped stale. The transaction returns the
       // post-update document (or null when the row is already gone).
-      const updatedRow = await this.adapter.transaction<Media | null>(
-        async tx => {
+      //
+      // The superseded variant paths are captured from the locked row here, not
+      // from the pre-transaction read, so two concurrent focal edits each delete
+      // exactly the paths their own commit replaced rather than one clobbering
+      // the other's fresh variants.
+      let replacedSizes: unknown = null;
+      let updatedRow: Media | null;
+      try {
+        updatedRow = await this.adapter.transaction<Media | null>(async tx => {
           await tx.lockRow("media", mediaId);
           const currentRows = await tx.select<Media>("media", {
             where: this.whereEq("id", mediaId),
@@ -610,6 +718,11 @@ export class MediaService extends BaseService {
           // record nothing and let the not-found result below stand.
           if (!current) {
             return null;
+          }
+
+          if (regeneratedSizes) {
+            replacedSizes = (current as unknown as Record<string, unknown>)
+              .sizes;
           }
 
           await tx.update("media", updateData, this.whereEq("id", mediaId));
@@ -633,10 +746,39 @@ export class MediaService extends BaseService {
           });
 
           return nextRow;
+        });
+      } catch (error) {
+        // The write failed after new variants were uploaded to fresh keys: those
+        // uploads are orphaned. Delete them — but keep any that the un-updated
+        // row still references (a deterministic adapter can reuse an old path),
+        // so a failed regeneration never removes a live variant. Prefer
+        // `replacedSizes` (read UNDER THE LOCK, so it reflects a variant set a
+        // concurrent update committed after our pre-transaction read); fall back
+        // to the pre-transaction read only when the transaction failed before it
+        // reached the locked row. Then propagate.
+        if (regeneratedSizes) {
+          await this.deleteSupersededVariants(
+            regeneratedSizes,
+            replacedSizes ??
+              (existing.data as { sizes?: unknown } | null)?.sizes
+          );
         }
-      );
+        throw error;
+      }
 
       if (!updatedRow) {
+        // Concurrent delete: the row was not updated, so the freshly-uploaded
+        // variants are orphaned. Same guard as the failure path — keep anything
+        // the surviving row still references — before returning not-found. Here
+        // the locked read found no row (so `replacedSizes` stayed null) and the
+        // fallback to the pre-transaction read supplies the paths to keep.
+        if (regeneratedSizes) {
+          await this.deleteSupersededVariants(
+            regeneratedSizes,
+            replacedSizes ??
+              (existing.data as { sizes?: unknown } | null)?.sizes
+          );
+        }
         // Mirror getMediaById's not-found shape so the domain layer maps this to
         // a 404 instead of treating the no-op write as a successful update.
         return {
@@ -645,6 +787,12 @@ export class MediaService extends BaseService {
           message: "Media not found",
           data: null,
         };
+      }
+
+      // The row now durably references the new variants, so the superseded old
+      // ones can be deleted (keeping any path the new set reuses).
+      if (regeneratedSizes && replacedSizes) {
+        await this.deleteSupersededVariants(replacedSizes, regeneratedSizes);
       }
 
       // The update committed a media.updated outbox row; drain and prune it
