@@ -6,10 +6,20 @@
  * `rotateSecret`/`expireOldSecrets` were never run on the pooled Postgres/MySQL
  * drivers, whose transaction + JSON handling differs. This leg closes that gap.
  *
- * The webhook system tables are provisioned from the production table definitions
- * via drizzle-kit (never hand-copied DDL), dropped-then-recreated so a shared
- * test database starts clean for this file.
+ * Isolation: each dialect leg provisions the webhook system tables into a
+ * throwaway namespace it creates and drops itself — a dedicated SCHEMA on
+ * Postgres, a dedicated DATABASE on MySQL — instead of dropping and recreating
+ * production-named tables in the shared test database. So the suite never
+ * cascades through a shared `users` table (which would strip foreign keys other
+ * single-fork suites rely on), needs no `FOREIGN_KEY_CHECKS` toggling, and is
+ * safe against a misconfigured URL because it only ever drops the namespace it
+ * just created. The namespace name is random per run and the connection URL
+ * pins every pooled connection to it (Postgres `search_path` startup option;
+ * MySQL database in the URL path), so DDL and DML land in the throwaway
+ * namespace no matter which pooled connection serves the query.
  */
+import { randomBytes } from "node:crypto";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -34,7 +44,32 @@ import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { WebhookEndpointService } from "../services/webhook-endpoint-service";
 import type { WebhookEventType } from "../types";
 
+// Seed the process environment at module load, before any import can read the
+// lazily-cached `env` proxy. `??=` never clobbers a value the environment
+// already provides, and neither is ever mutated per dialect leg, so a leg can
+// never poison the cached env for a later one.
+//   - NEXTLY_SECRET: webhook signing secrets are encrypted under it, so
+//     `createEndpoint` throws without it.
+//   - DATABASE_URL: `createAdapter` reads validated env for pool defaults, and
+//     that validation requires a DATABASE_URL for any non-sqlite dialect. Each
+//     adapter here connects with its own explicit per-namespace URL, so this
+//     only has to be a syntactically valid placeholder for validation to pass.
+process.env.NEXTLY_SECRET ??= "integration-test-application-secret";
+process.env.DATABASE_URL ??=
+  process.env.TEST_POSTGRES_URL ??
+  process.env.TEST_MYSQL_URL ??
+  "postgres://placeholder:placeholder@localhost:5432/placeholder";
+
 type Dialect = "postgresql" | "mysql";
+
+type Adapter = Awaited<ReturnType<typeof createAdapter>>;
+
+interface Namespace {
+  /** Connection URL pinned to the throwaway namespace for every connection. */
+  scopedUrl: string;
+  /** Drops the throwaway namespace and closes the admin connection. */
+  drop: () => Promise<void>;
+}
 
 interface Leg {
   name: string;
@@ -45,6 +80,53 @@ interface Leg {
     generateDrizzleJson: (s: Record<string, unknown>) => Promise<unknown>;
     generateMigration: (a: unknown, b: unknown) => Promise<string[]>;
   }>;
+  isolate: (baseUrl: string) => Promise<Namespace>;
+}
+
+const makeAdapter = (dialect: Dialect, url: string): Promise<Adapter> =>
+  createAdapter({ type: dialect, url } as Parameters<typeof createAdapter>[0]);
+
+// A random, prefixed identifier is safe to interpolate directly (hex only), so
+// no external input ever reaches these DDL strings.
+const namespaceName = () => `test_wh_${randomBytes(8).toString("hex")}`;
+
+// Postgres: a dedicated schema whose name is pushed onto every connection's
+// `search_path` via the URL's `options` startup parameter. The space in
+// `-c search_path=…` must be percent-encoded as %20 — URLSearchParams would
+// emit `+`, which libpq passes through literally and would not set the path.
+async function isolatePostgres(baseUrl: string): Promise<Namespace> {
+  const schema = namespaceName();
+  const admin = await makeAdapter("postgresql", baseUrl);
+  await admin.executeQuery(`CREATE SCHEMA "${schema}"`);
+  const sep = baseUrl.includes("?") ? "&" : "?";
+  const scopedUrl = `${baseUrl}${sep}options=${encodeURIComponent(
+    `-c search_path=${schema}`
+  )}`;
+  return {
+    scopedUrl,
+    async drop() {
+      await admin.executeQuery(`DROP SCHEMA "${schema}" CASCADE`);
+      await admin.disconnect?.();
+    },
+  };
+}
+
+// MySQL: a dedicated database selected by the URL path, so every pooled
+// connection runs against it. Dropping the whole database is cheaper and safer
+// than per-table drops and never needs foreign-key checks disabled.
+async function isolateMysql(baseUrl: string): Promise<Namespace> {
+  const db = namespaceName();
+  const admin = await makeAdapter("mysql", baseUrl);
+  await admin.executeQuery(`CREATE DATABASE \`${db}\``);
+  const scopedUrl = new URL(baseUrl);
+  scopedUrl.pathname = `/${db}`;
+  return {
+    scopedUrl: scopedUrl.toString(),
+    async drop() {
+      await admin.executeQuery(`DROP DATABASE \`${db}\``);
+      await admin.disconnect?.();
+    },
+  };
 }
 
 const LEGS: Leg[] = [
@@ -59,6 +141,7 @@ const LEGS: Leg[] = [
       nextlyWebhookDeliveries: deliveriesPg,
     },
     kit: getPgDrizzleKit as never,
+    isolate: isolatePostgres,
   },
   {
     name: "mysql",
@@ -71,6 +154,7 @@ const LEGS: Leg[] = [
       nextlyWebhookDeliveries: deliveriesMysql,
     },
     kit: getMySQLDrizzleKit as never,
+    isolate: isolateMysql,
   },
 ];
 
@@ -85,51 +169,25 @@ const logger = {
   debug: () => {},
 };
 
-// Child-first so foreign keys never block a drop; `users` is referenced by
-// `nextly_webhooks.created_by`.
-const TABLES = [
-  "nextly_webhook_deliveries",
-  "nextly_webhooks",
-  "nextly_events",
-  "users",
-];
-
 for (const leg of LEGS) {
   const describeLeg = describe.skipIf(!leg.url);
 
   describeLeg(`webhook secret rotation (${leg.name})`, () => {
-    let adapter: Awaited<ReturnType<typeof createAdapter>>;
+    let adapter: Adapter;
+    let namespace: Namespace;
     let service: WebhookEndpointService;
 
     beforeAll(async () => {
       if (!leg.url) return;
-      process.env.DB_DIALECT = leg.dialect;
-      process.env.DATABASE_URL = leg.url;
-      process.env.NEXTLY_SECRET = "integration-test-application-secret";
 
-      adapter = await createAdapter({
-        type: leg.dialect,
-        url: leg.url,
-      } as Parameters<typeof createAdapter>[0]);
+      // Provision into a throwaway namespace this leg owns, so nothing in the
+      // shared test database is dropped or cascaded.
+      namespace = await leg.isolate(leg.url);
+      adapter = await makeAdapter(leg.dialect, namespace.scopedUrl);
 
-      const isMysql = leg.dialect === "mysql";
-      const quote = (t: string) => (isMysql ? `\`${t}\`` : `"${t}"`);
-
-      // Drop existing tables so the shared DB starts clean. MySQL cannot express
-      // a cross-table CASCADE on DROP, so foreign-key checks are disabled around
-      // the drops instead.
-      if (isMysql) {
-        await adapter.executeQuery("SET FOREIGN_KEY_CHECKS = 0");
-      }
-      for (const table of TABLES) {
-        await adapter.executeQuery(
-          `DROP TABLE IF EXISTS ${quote(table)}${isMysql ? "" : " CASCADE"}`
-        );
-      }
-      if (isMysql) {
-        await adapter.executeQuery("SET FOREIGN_KEY_CHECKS = 1");
-      }
-
+      // The webhook system tables come from the production table definitions via
+      // drizzle-kit (never hand-copied DDL). Generated unqualified, they land in
+      // the namespace the connection is pinned to.
       const kit = await leg.kit();
       const statements = await kit.generateMigration(
         await kit.generateDrizzleJson({}),
@@ -147,7 +205,9 @@ for (const leg of LEGS) {
     });
 
     afterAll(async () => {
+      // Close the pooled connections before dropping the namespace they used.
       await adapter?.disconnect?.();
+      await namespace?.drop();
     });
 
     // `created_by` is left null so the test needs no seeded user row.
