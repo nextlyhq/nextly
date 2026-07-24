@@ -126,6 +126,12 @@ export interface BlockNode {
   cssId?: string;
   /** Sanitized custom HTML attributes applied to the node's root element. */
   attributes?: Record<string, string>;
+  /**
+   * Set when upgrading this node to its block's current schema version failed
+   * (a missing migration step or a migration that threw). The node keeps its
+   * last-good props; a renderer shows a placeholder instead of crashing.
+   */
+  migrationFailed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
