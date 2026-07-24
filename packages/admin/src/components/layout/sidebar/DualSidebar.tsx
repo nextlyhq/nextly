@@ -435,13 +435,14 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       (id !== "media" || isFolderTreeVisible)) ||
     id.startsWith("standalone-");
 
-  // The Settings icon lands on the first subpage the user can open: General
-  // (manage-settings), else API Keys, else Webhooks. Without this a user whose
-  // only settings access is a webhook/api-key grant would click Settings and be
-  // redirected away from the manage-settings-guarded /admin/settings.
+  // The Settings icon lands on the first subpage the user can actually OPEN —
+  // gated on each route's own guard, not the broader "can see the link" flag, so
+  // it never resolves to a page that would redirect. General needs
+  // manage-settings; the API Keys route needs update-api-keys; Webhooks accepts
+  // any webhook grant (its route's any-of).
   const settingsHref = hasPermission("manage-settings")
     ? ROUTES.SETTINGS
-    : canAccessApiKeys
+    : hasPermission("update-api-keys")
       ? ROUTES.SETTINGS_API_KEYS
       : canAccessWebhooks
         ? ROUTES.SETTINGS_WEBHOOKS
