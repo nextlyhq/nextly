@@ -135,6 +135,24 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(insertValues.title).toBe(0);
   });
 
+  it("drops the identity seed when title is an optional non-text localized field", () => {
+    const service = createQueryService();
+    // Redefining `title` as an OPTIONAL non-text localized field: the label
+    // string seed must not survive into the (numeric) companion column just
+    // because the field is not required and carries no explicit default.
+    const meta = siteSettingsMeta({
+      localized: true,
+      fields: [{ name: "title", type: "number", localized: true }],
+    });
+
+    const { document, localizedDefaults, insertValues } =
+      service.buildDefaultDocument(meta as unknown as SingleMeta);
+
+    expect(localizedDefaults).not.toHaveProperty("title");
+    expect(insertValues).not.toHaveProperty("title");
+    expect(document).not.toHaveProperty("title");
+  });
+
   it("evaluates a function defaultValue before routing it to the companion", () => {
     const service = createQueryService();
     // A localized field may carry a function default `(data) => value`. It must

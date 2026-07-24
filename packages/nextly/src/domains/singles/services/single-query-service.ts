@@ -819,7 +819,6 @@ export class SingleQueryService extends BaseService {
       // Resolve the field's default (explicit defaultValue, else a required
       // field's type-default) once, regardless of whether it is localized — a
       // localized field's default must reach the companion just the same.
-      let value: unknown;
       if ("defaultValue" in field && field.defaultValue !== undefined) {
         // `defaultValue` may be a function `(data) => value`; evaluate it against
         // the document built so far so the stored default is a real value, not a
@@ -830,34 +829,40 @@ export class SingleQueryService extends BaseService {
           typeof field.defaultValue === "function"
             ? field.defaultValue(defaults)
             : field.defaultValue;
-        value =
+        defaults[field.name] =
           shouldTreatAsJson(field) && typeof resolved === "object"
             ? JSON.stringify(resolved)
             : resolved;
-      } else if ("required" in field && field.required) {
-        // `title`/`slug` are reserved system identity keys, pre-seeded above with
-        // the Single's label/slug. Keep that seed (skip the empty type-default,
-        // which would persist an empty title/slug) ONLY when the identity column
-        // is text — or when this same-named field emits no column of its own (a
-        // component named `title` does not suppress the system text column, which
-        // still needs the label). A user field that redefines `title`/`slug` as a
-        // DIFFERENT column type (e.g. `number`) takes its own type default, so a
-        // label string is never inserted into a non-text column. An explicit
-        // user defaultValue is already handled by the branch above.
-        if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
-          const desc = getColumnDescriptor(
-            field as unknown as FieldDefinition,
-            this.adapter.dialect
-          );
-          if (!desc || desc.kind === "varchar" || desc.kind === "text") {
-            continue;
-          }
-        }
-        value = getDefaultValue(field);
-      } else {
         continue;
       }
-      defaults[field.name] = value;
+
+      // `title`/`slug` are reserved system identity keys, pre-seeded above with
+      // the Single's label/slug string. That seed is valid ONLY for a text
+      // identity column — or a same-named field that emits no column of its own
+      // (a component named `title` does not suppress the system text column,
+      // which still needs the label). When a Single redefines `title`/`slug` as a
+      // NON-text column, the string seed is invalid regardless of whether the
+      // field is required: use its type default when required, otherwise drop the
+      // seed so it is never inserted/seeded into (e.g.) a numeric column.
+      if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+        const desc = getColumnDescriptor(
+          field as unknown as FieldDefinition,
+          this.adapter.dialect
+        );
+        if (!desc || desc.kind === "varchar" || desc.kind === "text") {
+          continue; // keep the seeded label/slug
+        }
+        if ("required" in field && field.required) {
+          defaults[field.name] = getDefaultValue(field);
+        } else {
+          delete defaults[field.name];
+        }
+        continue;
+      }
+
+      if ("required" in field && field.required) {
+        defaults[field.name] = getDefaultValue(field);
+      }
     }
 
     // A field can be translatable/required yet emit NO storage column — a
