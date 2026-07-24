@@ -407,6 +407,32 @@ describe("validation never throws on adversarial input", () => {
     expect(Date.now() - start).toBeLessThan(2000);
   });
 
+  it("rejects an oversized string prop by byte size without materializing it", () => {
+    // A single node well under the node/depth caps but carrying a ~50MB string:
+    // the bounded byte counter must reject it quickly, not allocate a full copy.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: { text: "x".repeat(50_000_000) },
+        },
+      ],
+    });
+    const start = Date.now();
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { maxDepth: 12, maxNodes: 5000, maxBytes: 2 * 1024 * 1024 },
+    });
+    expect(issues.some(i => i.code === "document-too-large")).toBe(true);
+    // Bounded: aborts near the 2MiB cap rather than walking all 50MB.
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
   it("bounds the size of an untrusted string echoed into a message", () => {
     const huge = "x".repeat(5_000_000);
     const doc = invalidDoc({ formatVersion: huge, kind: "page", nodes: [] });

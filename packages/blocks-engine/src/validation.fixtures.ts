@@ -224,6 +224,36 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     expected: [{ path: "/nodes/0/classes", code: "invalid-classes" }],
   },
   {
+    name: "a non-string cssId is rejected",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, cssId: 5 }],
+    }),
+    expected: [{ path: "/nodes/0/cssId", code: "invalid-css-id" }],
+  },
+  {
+    name: "an event-handler attribute is rejected as inline JS",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          attributes: { onclick: "alert(1)" },
+        },
+      ],
+    },
+    expected: [
+      { path: "/nodes/0/attributes/onclick", code: "invalid-attributes" },
+    ],
+  },
+  {
     name: "attributes not a string map",
     mode: "strict",
     doc: invalid({

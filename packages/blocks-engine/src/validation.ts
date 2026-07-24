@@ -17,7 +17,7 @@ import {
   DOCUMENT_KINDS,
   STYLE_STATES,
 } from "./document";
-import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO, documentBytes } from "./limits";
+import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
@@ -88,6 +88,7 @@ export const ISSUE_CODES = {
   "invalid-slots": "A node slots field or one of its slot arrays is malformed.",
   "invalid-classes": "A node classes field is not an array of strings.",
   "invalid-attributes": "A node attributes field is not a string map.",
+  "invalid-css-id": "A node cssId is not a string.",
   "unknown-node-type": "A node type is not registered.",
   "invalid-style-state": "A style state key is not a known interactive state.",
   "invalid-style-values": "A style values entry is not an object.",
@@ -355,6 +356,64 @@ function measureForest(
   return { count, exceededDepth };
 }
 
+/**
+ * UTF-8 byte length of a string, counted code unit by code unit so a huge
+ * string is never materialized into a buffer, stopping once `budget` is passed.
+ */
+function utf8ByteLength(s: string, budget: number): number {
+  let bytes = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4; // surrogate pair → one 4-byte code point
+      i++;
+    } else bytes += 3;
+    if (bytes > budget) return bytes;
+  }
+  return bytes;
+}
+
+/**
+ * Estimate a document's serialized byte size, aborting as soon as `limit` is
+ * passed and WITHOUT materializing the full JSON string — so a document that
+ * stays under the node/depth caps but hides a huge string cannot force a giant
+ * allocation before being rejected. Iterative, so deep nesting cannot overflow.
+ * When the walk completes under the limit, `bytes` is an exact-enough estimate;
+ * when `exceeded` is true it stopped early.
+ */
+function measureBytes(
+  root: unknown,
+  limit: number
+): { bytes: number; exceeded: boolean } {
+  let bytes = 0;
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (typeof value === "string") {
+      bytes += 2 + utf8ByteLength(value, limit - bytes);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      bytes += String(value).length;
+    } else if (value === null || value === undefined) {
+      bytes += 4;
+    } else if (Array.isArray(value)) {
+      bytes += 2 + Math.max(0, value.length - 1); // brackets + commas
+      for (const item of value) stack.push(item);
+    } else if (typeof value === "object") {
+      bytes += 2; // braces
+      for (const [key, val] of Object.entries(
+        value as Record<string, unknown>
+      )) {
+        bytes += utf8ByteLength(key, limit) + 3; // quotes + colon + comma
+        stack.push(val);
+      }
+    }
+    if (bytes > limit) return { bytes, exceeded: true };
+  }
+  return { bytes, exceeded: false };
+}
+
 function checkLimits(
   doc: BlockDocument,
   limits: DocumentLimits,
@@ -381,31 +440,20 @@ function checkLimits(
       message: `Document exceeds the maximum of ${limits.maxNodes} nodes.`,
     });
   }
-  // A structurally over-cap document is already rejected; skip the O(n)
-  // serialization so an oversized forest never gets stringified in full.
+  // A structurally over-cap document is already rejected; skip the byte pass so
+  // an oversized forest is never measured in full.
   if (exceededDepth || count > limits.maxNodes) return;
 
-  // Serialization can throw on a document too deeply nested for JSON.stringify;
-  // a validator must return an issue, never propagate that as an exception.
-  let bytes: number;
-  try {
-    bytes = documentBytes(doc);
-  } catch {
+  // Measure serialized size with a bounded, non-materializing counter: a
+  // document that stays under the node/depth caps but hides a huge string must
+  // still be rejected without allocating a full JSON copy of it.
+  const { bytes, exceeded } = measureBytes(doc, limits.maxBytes);
+  if (exceeded) {
     issues.push({
       path: "",
       code: "document-too-large",
       severity: "error",
-      message:
-        "Document could not be serialized (too large or too deeply nested).",
-    });
-    return;
-  }
-  if (bytes > limits.maxBytes) {
-    issues.push({
-      path: "",
-      code: "document-too-large",
-      severity: "error",
-      message: `Document is ${bytes} bytes; the maximum is ${limits.maxBytes}.`,
+      message: `Document exceeds the maximum of ${limits.maxBytes} bytes.`,
     });
   } else if (bytes > limits.maxBytes * LIMIT_WARNING_RATIO) {
     issues.push({
@@ -544,7 +592,14 @@ function validateDomIds(
       state.seenDomIds.set(domId, at);
     }
   };
-  if (typeof node.cssId === "string" && node.cssId.length > 0) {
+  if (node.cssId !== undefined && typeof node.cssId !== "string") {
+    state.issues.push({
+      path: pointer(path, "cssId"),
+      code: "invalid-css-id",
+      severity: "error",
+      message: "A node cssId must be a string.",
+    });
+  } else if (typeof node.cssId === "string" && node.cssId.length > 0) {
     report(node.cssId, pointer(path, "cssId"));
   }
   if (isPlainObject(node.attributes)) {
@@ -619,6 +674,20 @@ function validateAttributes(
       severity: "error",
       message: "A node attributes field must be a string-to-string map.",
     });
+    return;
+  }
+  // Event-handler attributes are inline JS, which blocks never allow; reject
+  // them at the gate. The broader render-safe attribute allowlist is shared
+  // with the renderer (Plan 03) to avoid a divergent second list here.
+  for (const key of Object.keys(node.attributes)) {
+    if (/^on/i.test(key)) {
+      issues.push({
+        path: pointer(pointer(path, "attributes"), key),
+        code: "invalid-attributes",
+        severity: "error",
+        message: `Attribute "${key}" is an event handler; inline JavaScript is not allowed.`,
+      });
+    }
   }
 }
 
