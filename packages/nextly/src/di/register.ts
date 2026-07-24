@@ -1278,10 +1278,6 @@ async function syncCodeFirstCollections(
       // dynamic_collections.versions. `status: true` aliases to a versioned
       // config, so pass both to the resolver.
       versions: resolveVersionsConfig(collection.versions, collection.status),
-      // Forward the cache-revalidation config verbatim so it persists to
-      // dynamic_collections.revalidate; the write path reads it to honor
-      // `disable` and merge extra `tags`.
-      revalidate: collection.revalidate,
       // Forward the i18n master switch (mirrors status) so the boot sync persists
       // dynamic_collections.localized — the read path keys companion resolution off it.
       localized: collection.localized === true,
@@ -1840,10 +1836,6 @@ async function syncCodeFirstSingles(
       // Resolve + forward the versioning config so it persists to
       // dynamic_singles.versions (status:true aliases to a versioned config).
       versions: resolveVersionsConfig(single.versions, single.status),
-      // Forward the cache-revalidation config verbatim so it persists to
-      // dynamic_singles.revalidate; the write path reads it to honor `disable`
-      // and merge extra `tags`.
-      revalidate: single.revalidate,
     }));
 
   try {

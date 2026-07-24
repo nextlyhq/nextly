@@ -20,6 +20,6 @@
 "@nextlyhq/ui": patch
 ---
 
-Cache revalidation now honors a collection or single's `revalidate` config and covers every localized URL.
+Cache revalidation now covers every localized URL.
 
-The `revalidate: { disable: true }` and `revalidate: { tags: [...] }` options you set on a collection or single are now persisted and applied on every write: a disabled target busts nothing, and configured tags are merged into each invalidation. Previously the options were accepted but silently ignored. For localized collections whose `slug` differs per language, publishing all locales or deleting an entry now busts every locale's page, not just the default one.
+For a localized collection whose `slug` differs per language, publishing all locales or deleting an entry now busts every locale's page, not just the default one.
