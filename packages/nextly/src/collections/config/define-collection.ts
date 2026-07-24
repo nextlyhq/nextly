@@ -34,6 +34,7 @@
 import type { HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { FieldConfig } from "../fields/types";
@@ -827,6 +828,17 @@ export interface CollectionConfig {
    * Additional endpoints mounted on the collection's API namespace.
    */
   endpoints?: CustomEndpoint[];
+
+  /**
+   * Cache-revalidation configuration. When a Next cache adapter is registered,
+   * every write to this collection busts the derived `nextly:*` cache tags
+   * (collection, id, id+locale, slug), so tagged reads refresh on publish. Use
+   * `tags` to bust extra shared tags on every write, or `disable` to opt this
+   * collection out of automatic revalidation entirely.
+   *
+   * @default undefined (automatic revalidation on when a cache adapter exists)
+   */
+  revalidate?: RevalidateConfig;
 
   /**
    * Custom metadata for plugins and extensions.
