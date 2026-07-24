@@ -247,6 +247,74 @@ describe("validation never throws on adversarial input", () => {
     }).not.toThrow();
     expect(issues.filter(i => i.code === "invalid-node")).toHaveLength(3);
   });
+
+  it("reports a wholly-malformed document instead of dereferencing it", () => {
+    for (const bad of [null, undefined, 42, [1, 2, 3]]) {
+      let issues: ReturnType<typeof validate> = [];
+      expect(() => {
+        issues = validate(invalidDoc(bad), {
+          breakpoints: FIXTURE_BREAKPOINTS,
+          mode: "strict",
+        });
+      }).not.toThrow();
+      expect(issues).toEqual([
+        {
+          path: "",
+          code: "invalid-document",
+          severity: "error",
+          message: "The document must be an object.",
+        },
+      ]);
+    }
+  });
+
+  it("does not throw when a malformed field holds a deeply nested object", () => {
+    // formatVersion is rendered into a message; a deep object there must not
+    // make the message builder overflow via JSON.stringify.
+    let deep: Record<string, unknown> = {};
+    for (let i = 0; i < 20_000; i++) deep = { nested: deep };
+    const doc = invalidDoc({ formatVersion: deep, kind: "page", nodes: [] });
+    let issues: ReturnType<typeof validate> = [];
+    expect(() => {
+      issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      });
+    }).not.toThrow();
+    expect(issues.some(i => i.code === "invalid-format-version")).toBe(true);
+  });
+
+  it("counts malformed array elements toward the node cap", () => {
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [null, null, null],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { maxDepth: 12, maxNodes: 2, maxBytes: 1_000_000 },
+    });
+    expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
+  });
+});
+
+describe("unknown kind severity follows the mode", () => {
+  it("errors in strict, warns in forgiving", () => {
+    const doc = invalidDoc({ formatVersion: 1, kind: "widget", nodes: [] });
+    const strict = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(strict.find(i => i.code === "invalid-kind")?.severity).toBe("error");
+    const forgiving = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    expect(forgiving.find(i => i.code === "invalid-kind")?.severity).toBe(
+      "warning"
+    );
+  });
 });
 
 describe("limits", () => {

@@ -446,6 +446,67 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     ],
   },
   {
+    name: "document-level settings.styles are validated too",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [],
+      settings: { styles: { base: { wide: { color: "#000" } } } },
+    },
+    expected: [
+      { path: "/settings/styles/base/wide", code: "unknown-breakpoint" },
+    ],
+  },
+  {
+    name: "an expression-like binding path is rejected",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          bindings: { text: { $bind: "price * 2", source: "entry" } },
+        },
+      ],
+    }),
+    expected: [
+      { path: "/nodes/0/bindings/text/$bind", code: "invalid-binding" },
+    ],
+  },
+  {
+    name: "sourceKey on a non-single binding is rejected",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          bindings: {
+            text: { $bind: "title", source: "entry", sourceKey: "site" },
+          },
+        },
+      ],
+    }),
+    expected: [
+      { path: "/nodes/0/bindings/text/sourceKey", code: "invalid-binding" },
+    ],
+  },
+  {
+    name: "an unknown kind is a warning in forgiving mode",
+    mode: "forgiving",
+    doc: invalid({ ...validPage(), kind: "widget" }),
+    expected: [{ path: "/kind", code: "invalid-kind" }],
+  },
+  {
     name: "malformed binding ($bind not a string)",
     mode: "strict",
     doc: invalid({

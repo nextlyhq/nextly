@@ -75,6 +75,7 @@ export const ISSUE_CODES = {
   "invalid-format-version":
     "The document formatVersion is not the supported version.",
   "invalid-kind": "The document kind is not one of the known kinds.",
+  "invalid-document": "The document is not an object.",
   "nodes-not-array": "The document nodes field is not an array.",
   "invalid-node": "A node is not an object.",
   "depth-exceeded": "The node tree is nested deeper than the allowed maximum.",
@@ -129,9 +130,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * A safe string form of an untrusted value for issue messages. Validation
- * inspects data that may not match the declared types, so values are widened
- * to `unknown` at the point of reading and rendered here without risking
- * `[object Object]` or a throw.
+ * inspects data that may not match the declared types, so values are widened to
+ * `unknown` at the point of reading. Objects and arrays are rendered as a short
+ * label rather than serialized: a deeply nested value would make JSON.stringify
+ * overflow, and messages never need the full structure.
  */
 function describeValue(value: unknown): string {
   if (typeof value === "string") return value;
@@ -143,7 +145,7 @@ function describeValue(value: unknown): string {
   ) {
     return String(value);
   }
-  return JSON.stringify(value) ?? "";
+  return Array.isArray(value) ? "[array]" : "[object]";
 }
 
 /**
@@ -161,11 +163,25 @@ export function validate(
   const limits = ctx.limits ?? DEFAULT_LIMITS;
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
+
+  // A wholly-malformed document (null, an array, a primitive) is reported as a
+  // structural issue rather than crashing on the field reads below. `rawDoc`
+  // aliases the same value as `unknown`: reads through it are legitimately
+  // untrusted, while `doc` keeps its declared type for the typed helper calls.
+  const rawDoc: unknown = doc;
+  if (!isPlainObject(rawDoc)) {
+    issues.push({
+      path: "",
+      code: "invalid-document",
+      severity: "error",
+      message: "The document must be an object.",
+    });
+    return issues;
+  }
+
   const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
 
-  // Read fields validation must scrutinise as untrusted: the declared type says
-  // they are well-formed, but the whole job here is to catch when they are not.
-  const formatVersion: unknown = doc.formatVersion;
+  const formatVersion = rawDoc.formatVersion;
   if (formatVersion !== DOCUMENT_FORMAT_VERSION) {
     issues.push({
       path: "/formatVersion",
@@ -176,17 +192,20 @@ export function validate(
     });
   }
 
-  if (!DOCUMENT_KINDS.includes(doc.kind)) {
+  // An unknown kind is preserved in forgiving mode (a warning) and rejected in
+  // strict mode, matching the unknown-block-type policy.
+  const kind = rawDoc.kind;
+  if (!DOCUMENT_KINDS.includes(kind as (typeof DOCUMENT_KINDS)[number])) {
     issues.push({
       path: "/kind",
       code: "invalid-kind",
-      severity: "error",
-      message: `Unknown document kind "${String(doc.kind)}".`,
+      severity: unknownSeverity,
+      message: `Unknown document kind "${describeValue(kind)}".`,
       suggestion: `Use one of: ${DOCUMENT_KINDS.join(", ")}.`,
     });
   }
 
-  if (!Array.isArray(doc.nodes)) {
+  if (!Array.isArray(rawDoc.nodes)) {
     issues.push({
       path: "/nodes",
       code: "nodes-not-array",
@@ -206,6 +225,17 @@ export function validate(
     unknownSeverity,
     seenIds: new Map<string, string>(),
   };
+
+  // Document-level styles use the same envelope as node styles but have no
+  // owning node, so validate them here or they would go unchecked.
+  if (isPlainObject(rawDoc.settings) && rawDoc.settings.styles !== undefined) {
+    validateStyleEnvelope(
+      rawDoc.settings.styles,
+      "/settings/styles",
+      nodeState
+    );
+  }
+
   // Iterative breadth-first walk. It never recurses, so a document nested
   // arbitrarily deep cannot overflow the call stack — validation returns the
   // depth issue instead of throwing. It also stops after visiting maxNodes
@@ -492,17 +522,29 @@ function validateStyles(
   state: NodeCheckState
 ): void {
   if (node.styles === undefined) return;
-  if (!isPlainObject(node.styles)) {
+  validateStyleEnvelope(node.styles, pointer(path, "styles"), state);
+}
+
+/**
+ * Validate a `NodeStyles` envelope (states × breakpoints × values) at any path.
+ * Shared by node styles and document-level `settings.styles`, which use the
+ * same shape.
+ */
+function validateStyleEnvelope(
+  styles: unknown,
+  stylesPath: string,
+  state: NodeCheckState
+): void {
+  if (!isPlainObject(styles)) {
     state.issues.push({
-      path: pointer(path, "styles"),
+      path: stylesPath,
       code: "invalid-style-values",
       severity: "error",
-      message: "A node styles field must be an object.",
+      message: "A styles field must be an object.",
     });
     return;
   }
-  const stylesPath = pointer(path, "styles");
-  for (const [stateKey, byBreakpoint] of Object.entries(node.styles)) {
+  for (const [stateKey, byBreakpoint] of Object.entries(styles)) {
     const statePath = pointer(stylesPath, stateKey);
     if (!STYLE_STATES.includes(stateKey as (typeof STYLE_STATES)[number])) {
       state.issues.push({
@@ -624,6 +666,15 @@ function validateVisibility(
 
 const BINDING_SOURCES = ["entry", "item", "single", "site"];
 
+/**
+ * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
+ * "author.name". This rejects expression-like or otherwise malformed strings
+ * (never eval, per the binding design). The one-hop RELATION limit is semantic
+ * and needs the schema, so it is enforced in the binding-resolution plan, not
+ * here.
+ */
+const BIND_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+
 function validateBindings(
   node: BlockNode,
   path: string,
@@ -642,10 +693,8 @@ function validateBindings(
   const bindingsPath = pointer(path, "bindings");
   for (const [prop, binding] of Object.entries(node.bindings)) {
     const bPath = pointer(bindingsPath, prop);
-    if (
-      !isPlainObject(binding) ||
-      typeof (binding as { $bind?: unknown }).$bind !== "string"
-    ) {
+    const bindPath = (binding as { $bind?: unknown }).$bind;
+    if (!isPlainObject(binding) || typeof bindPath !== "string") {
       issues.push({
         path: bPath,
         code: "invalid-binding",
@@ -653,6 +702,14 @@ function validateBindings(
         message: "A binding must be an object with a string $bind path.",
       });
       continue;
+    }
+    if (!BIND_PATH_RE.test(bindPath)) {
+      issues.push({
+        path: pointer(bPath, "$bind"),
+        code: "invalid-binding",
+        severity: "error",
+        message: `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
+      });
     }
     const source: unknown = (binding as { source?: unknown }).source;
     if (
@@ -666,8 +723,8 @@ function validateBindings(
         message: `Binding source "${describeValue(source)}" is not one of: ${BINDING_SOURCES.join(", ")}.`,
       });
     }
+    const sourceKey = (binding as { sourceKey?: unknown }).sourceKey;
     if (source === "single") {
-      const sourceKey = (binding as { sourceKey?: unknown }).sourceKey;
       if (typeof sourceKey !== "string" || sourceKey.length === 0) {
         issues.push({
           path: pointer(bPath, "sourceKey"),
@@ -678,6 +735,15 @@ function validateBindings(
           suggestion: "Set sourceKey to the single's slug.",
         });
       }
+    } else if (sourceKey !== undefined) {
+      // sourceKey is reserved for single-sourced bindings; on any other source
+      // it is an ambiguous, unresolvable field.
+      issues.push({
+        path: pointer(bPath, "sourceKey"),
+        code: "invalid-binding",
+        severity: "error",
+        message: 'sourceKey is only allowed when source is "single".',
+      });
     }
   }
 }

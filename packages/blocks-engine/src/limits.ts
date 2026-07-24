@@ -35,16 +35,19 @@ export const DEFAULT_LIMITS: DocumentLimits = {
 /** Total node count across the forest, slots included. */
 export function countNodes(nodes: BlockNode[]): number {
   let count = 0;
-  const stack: BlockNode[] = [...nodes];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node) continue;
+  // Index-based walk so every array element is counted, including malformed
+  // ones (null, a primitive): the node cap must reflect the real element count
+  // so an array padded with junk cannot slip past it. Only well-formed objects
+  // are descended into.
+  const queue: BlockNode[] = [...nodes];
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i];
     count++;
-    if (node.slots) {
+    if (typeof node === "object" && node !== null && node.slots) {
       // Guard against malformed slots (a non-array value): these helpers run
       // over untrusted documents during validation and must not throw.
       for (const children of Object.values(node.slots)) {
-        if (Array.isArray(children)) stack.push(...children);
+        if (Array.isArray(children)) queue.push(...children);
       }
     }
   }
