@@ -21,6 +21,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { HookContext } from "../../../hooks/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
@@ -239,6 +240,69 @@ describe("version capture on update (integration)", () => {
     // ...but the default-locale seed is NOT leaked into the "de" snapshot.
     expect(snapshot.siteName).toBeUndefined();
     expect(v1.locale).toBe("de");
+  });
+
+  it("does not overlay defaults when a first update adopts a concurrently-inserted row", async () => {
+    // Race: this update enters with autoCreated=true (nothing existed at the
+    // pre-transaction read), but a concurrent first write inserts the row WITH a
+    // real translation before the transaction opens. The transaction then adopts
+    // that row instead of inserting, so it never seeds the defaults — overlaying
+    // them would let a restore overwrite the real translation with a schema
+    // default. A beforeUpdate hook stands in for the concurrent writer: it runs
+    // after autoCreated is resolved but before the transaction.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "region", localized: false }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    let raced = false;
+    current.hooks.register(
+      "beforeUpdate",
+      "*",
+      async (context: HookContext<Record<string, unknown>>) => {
+        if (!raced) {
+          raced = true;
+          // The concurrent writer persists the row with a REAL siteName.
+          await singles.update(
+            "preferences",
+            { siteName: "Real Name" },
+            { overrideAccess: true, locale: "en" }
+          );
+        }
+        return context.data;
+      }
+    );
+
+    // This outer first write touches only the shared `region`; it adopts the row
+    // the concurrent writer just inserted.
+    await singles.update(
+      "preferences",
+      { region: "us" },
+      { overrideAccess: true, locale: "en" }
+    );
+
+    const rows = await versions(current, "preferences");
+    // The adopting write must NOT have overlaid the schema default over the
+    // concurrently-written real translation.
+    const last = rows[rows.length - 1];
+    const snapshot = last.snapshot as { siteName?: string; region?: string };
+    expect(snapshot.siteName).not.toBe("My Site");
   });
 
   it("preserves an omitted component subtree in a scalar-only update snapshot", async () => {

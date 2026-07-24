@@ -846,6 +846,15 @@ export class SingleMutationService extends BaseService {
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
         updatedRows = await withVersionConflictRetry(() =>
           this.adapter.transaction(async tx => {
+            // True only when THIS transaction inserted the row AND seeded the
+            // default-locale companion with the localized defaults. The version
+            // snapshot overlay below is gated on it, not on `autoCreated`: two
+            // first writes can race so that this request enters with
+            // `autoCreated === true` but then adopts a row another writer already
+            // inserted (the `committed` branch), in which case it did NOT seed —
+            // the companion may already hold that writer's real translations, and
+            // overlaying schema defaults would let a restore overwrite them.
+            let didSeedCompanionDefaults = false;
             // First-write auto-create, committed atomically with the update. A
             // failed update/component/companion/version write rolls the insert
             // back rather than orphaning a default row, and no compensating
@@ -879,6 +888,10 @@ export class SingleMutationService extends BaseService {
                   (existingDoc as { status?: string }).status,
                   seedCompanionExists
                 );
+                // The seed persists defaults only when the companion physically
+                // exists; track that this transaction actually seeded so the
+                // snapshot overlay records defaults that were really written.
+                didSeedCompanionDefaults = seedCompanionExists;
               }
             }
             // Unreachable: the pre-transaction step always resolves `existingDoc`
@@ -1439,13 +1452,17 @@ export class SingleMutationService extends BaseService {
               // only when this first write IS the default locale; a non-default
               // first write must not copy them in, or restoring it would
               // materialize the defaults as real translations in the wrong locale.
+              // Gated on `didSeedCompanionDefaults` (set only when THIS
+              // transaction inserted and seeded), never `autoCreated`: a request
+              // that lost the auto-create race and adopted another writer's row
+              // must not overlay schema defaults over that writer's real
+              // translations.
               const isDefaultLocaleWrite =
                 writeLocale === undefined ||
                 writeLocale === this.localization?.defaultLocale;
               let seededDefaultsOverlaid = false;
               if (
-                autoCreated &&
-                seedCompanionExists &&
+                didSeedCompanionDefaults &&
                 companion &&
                 isDefaultLocaleWrite
               ) {
