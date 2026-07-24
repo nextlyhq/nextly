@@ -4278,6 +4278,10 @@ export class CollectionMutationService extends BaseService {
       // The locale the removed document represented, captured inside the
       // transaction so the post-commit intent can bust that locale's tag.
       let deletedLocaleForRevalidation: string | undefined;
+      // The slug of the row actually deleted (the locked re-read), not the
+      // pre-transaction fetch, so a slug changed by a racing update or a
+      // beforeDelete hook still busts the correct tag.
+      let deletedSlugForRevalidation: string | undefined;
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -4308,6 +4312,10 @@ export class CollectionMutationService extends BaseService {
             locale: this.localization?.defaultLocale,
           });
         deletedLocaleForRevalidation = deletedLocale;
+        deletedSlugForRevalidation = readStringField(
+          currentRow as Record<string, unknown>,
+          "slug"
+        );
 
         if (this.componentDataService) {
           await this.componentDataService.deleteComponentDataInTransaction(tx, {
@@ -4372,7 +4380,7 @@ export class CollectionMutationService extends BaseService {
         readRevalidateConfig(collection),
         {
           id: params.entryId,
-          slug: readStringField(deleted as Record<string, unknown>, "slug"),
+          slug: deletedSlugForRevalidation,
           locale: deletedLocaleForRevalidation,
         }
       );
