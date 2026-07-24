@@ -120,6 +120,21 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(insertValues.title).toBe("Site Settings");
   });
 
+  it("keeps the seed when title is a long-text column (textarea)", () => {
+    const service = createQueryService();
+    // A `textarea`/`code` identity field maps to a `longText` column — still
+    // textual storage, so the label/slug seed is valid and must be kept.
+    const meta = siteSettingsMeta({
+      fields: [{ name: "title", type: "textarea", required: true }],
+    });
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues.title).toBe("Site Settings");
+  });
+
   it("uses the field's own type default when title is redefined as a non-text column", () => {
     const service = createQueryService();
     // A user redefining `title` as a number column must get its numeric default,

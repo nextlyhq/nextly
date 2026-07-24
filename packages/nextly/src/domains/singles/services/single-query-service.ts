@@ -104,6 +104,15 @@ import {
  */
 const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
 
+/**
+ * Column-descriptor kinds that store text, so the label/slug string seed for a
+ * reserved identity field is valid for them. Covers plain text (text/email/
+ * password/select/radio) and long text (textarea/richText/code), plus explicit
+ * varchar. Non-text kinds (number, json, fkSingle, ...) fall through to the
+ * field's own default instead, so a label string never lands in them.
+ */
+const IDENTITY_TEXT_COLUMN_KINDS = new Set(["text", "varchar", "longText"]);
+
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
 
@@ -849,8 +858,8 @@ export class SingleQueryService extends BaseService {
           field as unknown as FieldDefinition,
           this.adapter.dialect
         );
-        if (!desc || desc.kind === "varchar" || desc.kind === "text") {
-          continue; // keep the seeded label/slug
+        if (!desc || IDENTITY_TEXT_COLUMN_KINDS.has(desc.kind)) {
+          continue; // keep the seeded label/slug for a text-storage column
         }
         if ("required" in field && field.required) {
           defaults[field.name] = getDefaultValue(field);
