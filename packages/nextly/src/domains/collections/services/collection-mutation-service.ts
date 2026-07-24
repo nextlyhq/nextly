@@ -788,22 +788,24 @@ export class CollectionMutationService extends BaseService {
         collectionName,
         db
       );
+      if (!companion) return [];
       // Only meaningful when `slug` itself is a translatable (companion) field.
-      if (
-        !companion ||
-        !companion.localizedFields.some(f => f.name === "slug")
-      ) {
-        return [];
-      }
+      const slugField = companion.localizedFields.filter(
+        f => f.name === "slug"
+      );
+      if (slugField.length === 0) return [];
 
       const locales = this.localization?.locales.map(l => l.code) ?? [];
       if (locales.length === 0) return [];
 
       const row: Record<string, unknown> = { id: entryId };
+      // Project to the slug column only, so an unrelated translatable column
+      // that has not been migrated yet (or has drifted) cannot make the
+      // companion read fail and suppress the slug tags.
       await populateCompanionFieldsAllLocales({
         db,
         companionTable: companion.table,
-        localizedFields: companion.localizedFields,
+        localizedFields: slugField,
         rows: [row],
         locales,
       });

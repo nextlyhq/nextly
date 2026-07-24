@@ -84,7 +84,9 @@ describe("cache revalidation — localized slugs (sqlite)", () => {
     return handle;
   }
 
-  // Companion tables are migration-owned; seed one with a per-locale slug.
+  // The companion table is created by the runtime's localization migration
+  // during boot; seed per-locale slug values into that real table (no
+  // hand-copied DDL, so the fixture cannot drift from the production schema).
   async function seedCompanionSlugs(
     t: TestNextly,
     parent: string,
@@ -93,9 +95,6 @@ describe("cache revalidation — localized slugs (sqlite)", () => {
     const adapter = t.adapter as unknown as {
       executeQuery: (sql: string) => Promise<unknown>;
     };
-    await adapter.executeQuery(
-      'CREATE TABLE IF NOT EXISTS "dc_locposts_locales" ("_parent" text, "_locale" text, "_status" text NOT NULL DEFAULT \'draft\', "slug" text, PRIMARY KEY ("_parent","_locale"))'
-    );
     for (const r of rows) {
       await adapter.executeQuery(
         `INSERT INTO "dc_locposts_locales" ("_parent","_locale","_status","slug") VALUES ('${parent}','${r.locale}','${r.status}','${r.slug}') ON CONFLICT ("_parent","_locale") DO UPDATE SET "_status" = excluded."_status", "slug" = excluded."slug"`

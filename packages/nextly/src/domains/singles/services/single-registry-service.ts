@@ -634,7 +634,10 @@ export class SingleRegistryService extends BaseRegistryService<
               locked: true,
               status: config.status === true,
               versions: config.versions,
-              revalidate: config.revalidate,
+              // Send explicit null (not undefined) when the config removed
+              // `revalidate`, so updateSingle actually clears the column instead
+              // of leaving the stale config persisted.
+              revalidate: config.revalidate ?? null,
               localized: config.localized === true,
             },
             { source: "code" }
