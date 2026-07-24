@@ -20,6 +20,7 @@ const superAdmin: AdminCapabilities = {
   canViewRoles: true,
   canViewMedia: true,
   canViewSettings: true,
+  canViewWebhooks: true,
   collections: {},
   canManageUsers: true,
   canManageRoles: true,

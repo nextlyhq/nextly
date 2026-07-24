@@ -36,6 +36,8 @@ export interface AdminCapabilities {
   canViewMedia: boolean;
   /** Has 'manage-settings' */
   canViewSettings: boolean;
+  /** Has 'read-webhooks' or the 'update-webhooks' management umbrella */
+  canViewWebhooks: boolean;
 
   // Per-collection visibility (keyed by collection slug)
   collections: Record<string, CollectionCapabilities>;
