@@ -44,6 +44,13 @@ export interface ReconcileCompanionArgs {
    * introspects it; omit it to leave `_status` untouched (backwards-compatible default).
    */
   companionHasStatus?: boolean;
+  /**
+   * Default locale code. When supplied, ADDing `_status` also back-fills the DEFAULT-locale
+   * companion row's `_status` from the main row's `status`, so the default locale (whose status
+   * IS the main row's) does not get stranded at the column default `'draft'` while the main row is
+   * already published. Omit to skip the back-fill (e.g. a migrate path with no live default locale).
+   */
+  defaultLocale?: string;
 }
 
 /**
@@ -128,6 +135,23 @@ export function buildCompanionReconcileStatements(
       stmts.push(
         `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT 'draft'`
       );
+      // The ADD COLUMN seeds EVERY existing companion row at 'draft', including
+      // the default-locale row — but the default locale's status IS the main
+      // row's, which may already be 'published'. Back-fill it from main so a
+      // later default-locale publish is a real draft→published transition (and
+      // fires its webhook) rather than a no-op against a wrongly-draft companion.
+      // Only the default-locale row: other locales are genuinely per-locale and
+      // correctly start at 'draft'. The subquery targets a different table (main)
+      // than the one updated, so it is valid on Postgres, MySQL and SQLite.
+      if (args.defaultLocale !== undefined) {
+        const literalLocale = args.defaultLocale.replace(/'/g, "''");
+        stmts.push(
+          `UPDATE ${q(companionTable, dialect)} SET ${q("_status", dialect)} = ` +
+            `(SELECT ${q("status", dialect)} FROM ${q(tableName, dialect)} ` +
+            `WHERE ${q(tableName, dialect)}.${q("id", dialect)} = ${q(companionTable, dialect)}.${q("_parent", dialect)}) ` +
+            `WHERE ${q(companionTable, dialect)}.${q("_locale", dialect)} = '${literalLocale}'`
+        );
+      }
     } else if (!status && args.companionHasStatus) {
       stmts.push(
         `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q("_status", dialect)}`
@@ -294,6 +318,9 @@ export function buildCompanionTransitionStatements(
         status,
         companionExists,
         companionHasStatus: args.companionHasStatus,
+        // Carry the default locale so a newly-added `_status` back-fills the
+        // default-locale companion row from the main row's status.
+        defaultLocale,
       }),
       needsArchive: false,
       companionDropped: false,

@@ -115,4 +115,61 @@ describe("buildCompanionReconcileSql", () => {
     });
     expect(sql).toBe("");
   });
+
+  it("back-fills the default-locale companion _status from main when adding _status", () => {
+    // Draft/Published toggled ON after the companion already existed: ADD COLUMN
+    // seeds every row at 'draft', so the default-locale row must be synced from
+    // the main row's status instead of being stranded at 'draft'.
+    const sql = buildCompanionReconcileSql({
+      slug: "posts",
+      tableName: "dc_posts",
+      oldLocalized: [text("body")],
+      newLocalized: [text("body")],
+      dialect: "postgres",
+      status: true,
+      companionExists: true,
+      companionHasStatus: false,
+      defaultLocale: "en",
+    });
+    expect(sql).toContain("ADD COLUMN");
+    expect(sql).toContain("_status");
+    expect(sql).toContain("UPDATE");
+    expect(sql).toContain('"dc_posts_locales"');
+    // Correlated subquery reads the main row's status for the default locale row.
+    expect(sql).toContain('SELECT "status" FROM "dc_posts"');
+    expect(sql).toContain("'en'");
+  });
+
+  it("skips the _status back-fill when no default locale is supplied", () => {
+    // A migrate/DDL path without a live default locale still adds the column but
+    // leaves the back-fill to the runtime path (backwards-compatible default).
+    const sql = buildCompanionReconcileSql({
+      slug: "posts",
+      tableName: "dc_posts",
+      oldLocalized: [text("body")],
+      newLocalized: [text("body")],
+      dialect: "postgres",
+      status: true,
+      companionExists: true,
+      companionHasStatus: false,
+    });
+    expect(sql).toContain("ADD COLUMN");
+    expect(sql).not.toContain("UPDATE");
+  });
+
+  it("does not back-fill when dropping _status (Draft/Published toggled off)", () => {
+    const sql = buildCompanionReconcileSql({
+      slug: "posts",
+      tableName: "dc_posts",
+      oldLocalized: [text("body")],
+      newLocalized: [text("body")],
+      dialect: "postgres",
+      status: false,
+      companionExists: true,
+      companionHasStatus: true,
+      defaultLocale: "en",
+    });
+    expect(sql).toContain("DROP COLUMN");
+    expect(sql).not.toContain("UPDATE");
+  });
 });

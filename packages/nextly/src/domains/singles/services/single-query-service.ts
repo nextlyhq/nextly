@@ -69,7 +69,11 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
-import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
+import {
+  buildCompanionSchema,
+  splitLocalizedWrite,
+  upsertCompanionRow,
+} from "../../i18n/runtime/companion-io";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -756,6 +760,14 @@ export class SingleQueryService extends BaseService {
   buildDefaultDocument(singleMeta: DynamicSingleRecord): {
     document: SingleDocument;
     insertValues: Record<string, unknown>;
+    /**
+     * Default values for the single's TRANSLATABLE fields, keyed by field name
+     * (includes localized `title`/`slug`). These belong on the default-locale
+     * companion row, not the main table; the auto-create path persists them
+     * there so a localized field's default is not stranded as null until it is
+     * first written.
+     */
+    localizedDefaults: Record<string, unknown>;
   } {
     const now = new Date();
     const id = crypto.randomUUID();
@@ -779,9 +791,9 @@ export class SingleQueryService extends BaseService {
     }
 
     // i18n: a localized single's main table omits translatable columns (they live in the
-    // companion `single_<slug>_locales`), so a required/defaulted translatable value must
-    // not be inserted here — it would target a column that only exists on the companion and
-    // fail the auto-create insert.
+    // companion `single_<slug>_locales`). Their defaults are still resolved here (onto the
+    // in-memory `document` and the returned `localizedDefaults`) but are kept OFF the main
+    // insert below — inserting one would target a column that only exists on the companion.
     const localizedNames = new Set(
       singleMeta.localized === true
         ? resolveLocalizedFieldNames(
@@ -793,31 +805,37 @@ export class SingleQueryService extends BaseService {
 
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
-      if (localizedNames.has(field.name)) continue;
 
+      // Resolve the field's default (explicit defaultValue, else a required
+      // field's type-default) once, regardless of whether it is localized — a
+      // localized field's default must reach the companion just the same.
+      let value: unknown;
       if ("defaultValue" in field && field.defaultValue !== undefined) {
-        if (shouldTreatAsJson(field)) {
-          defaults[field.name] =
-            typeof field.defaultValue === "object"
-              ? JSON.stringify(field.defaultValue)
-              : field.defaultValue;
-        } else {
-          defaults[field.name] = field.defaultValue;
-        }
+        value =
+          shouldTreatAsJson(field) && typeof field.defaultValue === "object"
+            ? JSON.stringify(field.defaultValue)
+            : field.defaultValue;
       } else if ("required" in field && field.required) {
-        defaults[field.name] = getDefaultValue(field);
+        value = getDefaultValue(field);
+      } else {
+        continue;
       }
+      defaults[field.name] = value;
     }
 
-    // title and slug are auto-injected system columns, but a Single may opt to
-    // localize them (define-single.ts). When it does, their column lives on the
-    // companion `_locales` table, not the main table, so they must be dropped
-    // from the main-table auto-create insert like any other localized field —
-    // otherwise the insert targets a non-existent main column. They stay on the
-    // in-memory `document` (the read path resolves the localized value).
-    const insertDefaults = { ...defaults };
-    if (localizedNames.has("title")) delete insertDefaults.title;
-    if (localizedNames.has("slug")) delete insertDefaults.slug;
+    // Split the resolved defaults: translatable ones (including localized
+    // title/slug) go to `localizedDefaults` for the companion; everything else
+    // is inserted on the main table. A localized column on the main insert would
+    // target a non-existent column and fail the auto-create.
+    const localizedDefaults: Record<string, unknown> = {};
+    const insertDefaults: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(defaults)) {
+      if (localizedNames.has(key)) {
+        localizedDefaults[key] = value;
+      } else {
+        insertDefaults[key] = value;
+      }
+    }
 
     const snakeCaseDefaults = keysToSnakeCase(insertDefaults) as Record<
       string,
@@ -827,28 +845,121 @@ export class SingleQueryService extends BaseService {
     return {
       document: defaults as SingleDocument,
       insertValues: snakeCaseDefaults,
+      localizedDefaults,
     };
+  }
+
+  /**
+   * Seed a localized single's DEFAULT-locale companion row with its translatable
+   * field defaults on auto-create, so a localized field's default (including a
+   * localized `title`/`slug`) resolves to that default instead of null until it
+   * is first written. Runs on the caller's transaction (`tx.execute`) so the
+   * companion seed commits atomically with the main-row insert.
+   *
+   * No-op when localization is off, the single is not localized, it has no
+   * translatable defaults, or it has no companion. The default-locale companion
+   * `_status` is seeded to the main row's status so the two agree from the start.
+   */
+  async seedLocalizedDefaultsCompanion(
+    tx: {
+      execute<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    },
+    singleMeta: DynamicSingleRecord,
+    parentId: string,
+    localizedDefaults: Record<string, unknown>,
+    status: string | undefined
+  ): Promise<void> {
+    if (!this.localization || singleMeta.localized !== true) return;
+    if (Object.keys(localizedDefaults).length === 0) return;
+
+    const companion = buildCompanionSchema({
+      slug: singleMeta.slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+    if (!companion) return;
+
+    const { companion: companionData } = splitLocalizedWrite(
+      localizedDefaults,
+      companion.localizedFields
+    );
+    const companionStatus = companion.hasStatus
+      ? (status ?? "draft")
+      : undefined;
+    const writeAdapter = {
+      dialect: this.adapter.dialect,
+      executeQuery: <T = unknown>(sql: string, params?: unknown[]) =>
+        tx.execute<T>(sql, params),
+    };
+    await upsertCompanionRow(
+      writeAdapter,
+      companion.companionTableName,
+      parentId,
+      this.localization.defaultLocale,
+      companionData,
+      companionStatus
+    );
   }
 
   async createDefaultDocument(
     singleMeta: DynamicSingleRecord,
     options?: { captureInitialVersion?: boolean }
   ): Promise<SingleDocument> {
-    const { insertValues: snakeCaseDefaults } =
-      this.buildDefaultDocument(singleMeta);
+    const {
+      insertValues: snakeCaseDefaults,
+      document,
+      localizedDefaults,
+    } = this.buildDefaultDocument(singleMeta);
     const id = snakeCaseDefaults.id as string;
+    const status = (document as { status?: string }).status;
 
     const versionsConfig = singleMeta.versions;
     const shouldCapture =
       options?.captureInitialVersion === true &&
       versionsConfig?.enabled === true;
 
-    if (!shouldCapture) {
+    // A localized single needs its translatable defaults seeded onto the
+    // default-locale companion, which must commit atomically with the main
+    // insert — so this forces the transactional path even when versioning is off.
+    const needsCompanionSeed =
+      !!this.localization &&
+      singleMeta.localized === true &&
+      Object.keys(localizedDefaults).length > 0;
+
+    if (!shouldCapture && !needsCompanionSeed) {
       const inserted = await this.adapter.insert<SingleDocument>(
         singleMeta.tableName,
         snakeCaseDefaults,
         { returning: "*" }
       );
+      this.logger.debug("Created default Single document", {
+        slug: singleMeta.slug,
+        id,
+      });
+      return inserted;
+    }
+
+    // Non-versioned but localized: insert the main row and seed the companion in
+    // one transaction, so a failed companion seed rolls the insert back rather
+    // than leaving a main row without its localized defaults.
+    if (!shouldCapture) {
+      const inserted = await this.adapter.transaction(async tx => {
+        const row = await tx.insert<SingleDocument>(
+          singleMeta.tableName,
+          snakeCaseDefaults,
+          { returning: "*" }
+        );
+        await this.seedLocalizedDefaultsCompanion(
+          tx,
+          singleMeta,
+          id,
+          localizedDefaults,
+          status
+        );
+        return row;
+      });
       this.logger.debug("Created default Single document", {
         slug: singleMeta.slug,
         id,
@@ -904,6 +1015,15 @@ export class SingleQueryService extends BaseService {
           locale: null,
           maxPerDoc: versionsConfig.maxPerDoc,
         });
+        // Seed the default-locale companion with the localized defaults in the
+        // same transaction as the insert and version snapshot.
+        await this.seedLocalizedDefaultsCompanion(
+          tx,
+          singleMeta,
+          id,
+          localizedDefaults,
+          status
+        );
         return row;
       })
     );
