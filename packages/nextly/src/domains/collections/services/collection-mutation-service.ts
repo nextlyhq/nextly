@@ -4374,9 +4374,19 @@ export class CollectionMutationService extends BaseService {
       // pre-transaction fetch, so a slug changed by a racing update or a
       // beforeDelete hook still busts the correct tag.
       let deletedSlugForRevalidation: string | undefined;
-      // Every locale's slug for a localized collection, read before the cascade
-      // delete removes the companion rows, so each locale's URL tag busts.
-      let deletedLocalizedSlugsForRevalidation: string[] | undefined;
+      // Every locale's slug for a localized collection, read on the pool BEFORE
+      // the transaction opens (like webhookFields above). Reading it inside the
+      // transaction would either poison the transaction on error, or, on
+      // `this.db`, re-enter the pool and deadlock a single-connection/saturated
+      // pool. The companion rows are still committed here; if a slug shifts
+      // between this read and the delete, the always-busted id tag still covers
+      // every locale's page.
+      const deletedLocalizedSlugsForRevalidation =
+        await this.readCompanionSlugsAllLocales(
+          this.db,
+          params.collectionName,
+          params.entryId
+        );
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -4411,18 +4421,6 @@ export class CollectionMutationService extends BaseService {
         // companion locale values, so a user-localized slug (absent from the
         // main row) still busts the correct tag.
         deletedSlugForRevalidation = readStringField(deletedDocument, "slug");
-        // Collect every locale's slug before the cascade delete removes the
-        // companion rows, so a localized collection busts each locale's URL.
-        // Read on the pool, not the write transaction: a failed read on the
-        // tx-bound connection would poison the transaction and roll the delete
-        // back, and the companion rows are committed (still present) until the
-        // delete commits.
-        deletedLocalizedSlugsForRevalidation =
-          await this.readCompanionSlugsAllLocales(
-            this.db,
-            params.collectionName,
-            params.entryId
-          );
 
         if (this.componentDataService) {
           await this.componentDataService.deleteComponentDataInTransaction(tx, {
@@ -5647,16 +5645,12 @@ export class CollectionMutationService extends BaseService {
           fields: snapshotFields,
           locale: this.localization?.defaultLocale,
         });
-      // Every locale's slug, read before the cascade removes the companion rows,
-      // so a localized collection busts each locale's URL on delete. Read on the
-      // pool, not the write transaction, so a failed read cannot poison the
-      // transaction and roll the delete back (the companion rows stay committed
-      // until the delete commits).
-      const deletedLocalizedSlugs = await this.readCompanionSlugsAllLocales(
-        this.db,
-        params.collectionName,
-        params.entryId
-      );
+      // This runs inside the caller's transaction, so there is no safe place to
+      // read every locale's companion slug: reading on the tx connection would
+      // poison the transaction on error, and reading on the pool would re-enter
+      // it and deadlock a saturated pool. The always-busted id tag clears every
+      // locale's page (reads are id-tagged), so localized slug tags are omitted
+      // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
@@ -5715,7 +5709,6 @@ export class CollectionMutationService extends BaseService {
           id: params.entryId,
           slug: readStringField(deletedDocument, "slug"),
           locale: deletedLocale,
-          localizedSlugs: deletedLocalizedSlugs,
         }
       );
 
@@ -6994,16 +6987,12 @@ export class CollectionMutationService extends BaseService {
           fields: snapshotFields,
           locale: this.localization?.defaultLocale,
         });
-      // Every locale's slug, read before the cascade removes the companion rows,
-      // so a localized collection busts each locale's URL on delete. Read on the
-      // pool, not the write transaction, so a failed read cannot poison the
-      // transaction and roll the delete back (the companion rows stay committed
-      // until the delete commits).
-      const deletedLocalizedSlugs = await this.readCompanionSlugsAllLocales(
-        this.db,
-        params.collectionName,
-        entryId
-      );
+      // This runs inside the caller's transaction, so there is no safe place to
+      // read every locale's companion slug: reading on the tx connection would
+      // poison the transaction on error, and reading on the pool would re-enter
+      // it and deadlock a saturated pool. The always-busted id tag clears every
+      // locale's page (reads are id-tagged), so localized slug tags are omitted
+      // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
       // Cascade delete component data before deleting the main entry
       if (this.componentDataService) {
@@ -7063,7 +7052,6 @@ export class CollectionMutationService extends BaseService {
           id: entryId,
           slug: readStringField(deletedDocument, "slug"),
           locale: deletedLocale,
-          localizedSlugs: deletedLocalizedSlugs,
         }
       );
 
