@@ -11,6 +11,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const deleteSpy = vi.fn(async () => {});
 const calls: string[] = [];
+// The path the regenerated variant lands on. Mutable so a test can simulate a
+// deterministic-key adapter that reuses the existing path (new === old).
+const regen = { thumbPath: "NEW/thumb.webp" };
 
 const storageMock = {
   getAdapterForCollection: () => ({
@@ -28,10 +31,12 @@ vi.mock("@nextly/storage", () => ({
   getImageProcessor: () => ({}),
   withRetry: (fn: () => unknown) => fn(),
   isTransientError: () => false,
-  // The regenerated variants land on a fresh, unique key.
+  // The regenerated variants land on the configured key (fresh/unique by
+  // default; a test can point it at the existing path to model a deterministic
+  // adapter that overwrites in place).
   generateImageSizes: async () => ({
     thumbnail: {
-      path: "NEW/thumb.webp",
+      path: regen.thumbPath,
       url: "http://x/new",
       width: 100,
       height: 100,
@@ -114,6 +119,7 @@ describe("MediaService focal-point regeneration ordering", () => {
   beforeEach(() => {
     calls.length = 0;
     deleteSpy.mockClear();
+    regen.thumbPath = NEW_PATH;
   });
 
   it("deletes the old variant only AFTER the row commits, and never the new one", async () => {
@@ -147,6 +153,18 @@ describe("MediaService focal-point regeneration ordering", () => {
 
     expect(res.statusCode).toBe(404);
     expect(deleteSpy).toHaveBeenCalledWith(NEW_PATH);
+    expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  it("does not delete a shared path on rollback for a deterministic-key adapter", async () => {
+    // A deterministic adapter regenerates onto the SAME path the row already
+    // references. On a failed write the un-updated row still points there, so the
+    // rollback cleanup must not delete it (which would drop the live variant).
+    regen.thumbPath = OLD_PATH;
+    const service = makeService("throw");
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(false);
     expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
   });
 });

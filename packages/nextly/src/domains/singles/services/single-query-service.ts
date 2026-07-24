@@ -851,15 +851,59 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * The companion schema for a localized single's default seeding, or null when
+   * seeding does not apply (localization off, not localized, no translatable
+   * defaults, or no companion). Shared by the pre-transaction existence probe
+   * and the in-transaction write so both agree on the same table.
+   */
+  private companionForDefaultsSeed(
+    singleMeta: DynamicSingleRecord,
+    localizedDefaults: Record<string, unknown>
+  ) {
+    if (!this.localization || singleMeta.localized !== true) return null;
+    if (Object.keys(localizedDefaults).length === 0) return null;
+    return buildCompanionSchema({
+      slug: singleMeta.slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+  }
+
+  /**
+   * Whether the default-locale companion should be seeded AND its `_locales`
+   * table physically exists. MUST be called BEFORE the write transaction opens:
+   * it probes on the pooled connection, and on a `max: 1` pool a probe issued
+   * while the transaction holds the only connection would deadlock until the
+   * pool timeout and then be misread as "table missing". A missing table (for
+   * example dev-before-migrate) reads as false so the seed is skipped rather
+   * than throwing and rolling the main-row insert back.
+   */
+  async localizedDefaultsCompanionExists(
+    singleMeta: DynamicSingleRecord,
+    localizedDefaults: Record<string, unknown>
+  ): Promise<boolean> {
+    const companion = this.companionForDefaultsSeed(
+      singleMeta,
+      localizedDefaults
+    );
+    if (!companion) return false;
+    return companionTableExists(this.adapter, companion.companionTableName);
+  }
+
+  /**
    * Seed a localized single's DEFAULT-locale companion row with its translatable
    * field defaults on auto-create, so a localized field's default (including a
    * localized `title`/`slug`) resolves to that default instead of null until it
    * is first written. Runs on the caller's transaction (`tx.execute`) so the
    * companion seed commits atomically with the main-row insert.
    *
-   * No-op when localization is off, the single is not localized, it has no
-   * translatable defaults, or it has no companion. The default-locale companion
-   * `_status` is seeded to the main row's status so the two agree from the start.
+   * `companionExists` MUST be resolved by the caller via
+   * `localizedDefaultsCompanionExists` BEFORE the transaction opens (see that
+   * method for why the probe cannot happen here). No-op when it is false or when
+   * seeding does not apply. The default-locale companion `_status` is seeded to
+   * the main row's status so the two agree from the start.
    */
   async seedLocalizedDefaultsCompanion(
     tx: {
@@ -868,31 +912,15 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord,
     parentId: string,
     localizedDefaults: Record<string, unknown>,
-    status: string | undefined
+    status: string | undefined,
+    companionExists: boolean
   ): Promise<void> {
-    if (!this.localization || singleMeta.localized !== true) return;
-    if (Object.keys(localizedDefaults).length === 0) return;
-
-    const companion = buildCompanionSchema({
-      slug: singleMeta.slug,
-      tableName: singleMeta.tableName,
-      fields: singleMeta.fields as { name: string; type: string }[],
-      dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
-    });
-    if (!companion) return;
-
-    // Skip the seed when the companion `_locales` table has not been created yet
-    // (dev-before-migrate, or a best-effort boot companion creation that failed):
-    // the read path already treats a missing companion as optional, so an
-    // unconditional upsert here would throw and roll the main-row insert back.
-    // Probed on the pooled connection, NOT the transaction: a missing-table probe
-    // on the transaction connection would abort the whole transaction on Postgres.
-    const exists = await companionTableExists(
-      this.adapter,
-      companion.companionTableName
+    if (!companionExists || !this.localization) return;
+    const companion = this.companionForDefaultsSeed(
+      singleMeta,
+      localizedDefaults
     );
-    if (!exists) return;
+    if (!companion) return;
 
     const { companion: companionData } = splitLocalizedWrite(
       localizedDefaults,
@@ -947,6 +975,15 @@ export class SingleQueryService extends BaseService {
     const seedLocale = needsCompanionSeed
       ? (this.localization?.defaultLocale ?? null)
       : null;
+    // Probe companion existence BEFORE opening the transaction (a probe issued
+    // while the tx holds a max:1-pool connection would deadlock); the seed calls
+    // below are gated on this rather than probing inside the transaction.
+    const companionExists = needsCompanionSeed
+      ? await this.localizedDefaultsCompanionExists(
+          singleMeta,
+          localizedDefaults
+        )
+      : false;
 
     if (!shouldCapture && !needsCompanionSeed) {
       const inserted = await this.adapter.insert<SingleDocument>(
@@ -976,7 +1013,8 @@ export class SingleQueryService extends BaseService {
           singleMeta,
           id,
           localizedDefaults,
-          status
+          status,
+          companionExists
         );
         return row;
       });
@@ -1049,7 +1087,8 @@ export class SingleQueryService extends BaseService {
           singleMeta,
           id,
           localizedDefaults,
-          status
+          status,
+          companionExists
         );
         return row;
       })

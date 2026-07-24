@@ -579,6 +579,25 @@ export class MediaService extends BaseService {
    * decide which variant files to delete after a rotation without touching any
    * that the new set reuses.
    */
+  /**
+   * Delete the variant paths in `candidateSizes` that are NOT among the paths
+   * `keepSizes` references. Used for every variant cleanup so a deterministic-key
+   * adapter (where a regenerated variant can reuse an existing path) never
+   * deletes a file the surviving row still points at: after commit `keepSizes`
+   * is the new sizes and `candidateSizes` the superseded old ones; on a failed or
+   * void write it is the reverse — the old sizes survive on the un-updated row,
+   * so only the genuinely-orphaned new uploads are removed.
+   */
+  private async deleteSupersededVariants(
+    candidateSizes: unknown,
+    keepSizes: unknown
+  ): Promise<void> {
+    const keep = new Set(this.collectVariantPaths(keepSizes));
+    await this.deleteVariantPaths(
+      this.collectVariantPaths(candidateSizes).filter(path => !keep.has(path))
+    );
+  }
+
   private collectVariantPaths(sizes: unknown): string[] {
     let parsed: unknown = sizes;
     if (typeof sizes === "string") {
@@ -701,23 +720,26 @@ export class MediaService extends BaseService {
         });
       } catch (error) {
         // The write failed after new variants were uploaded to fresh keys: those
-        // uploads are now orphaned. Delete them so a failed regeneration does not
-        // leak storage; the old variants are untouched and the row still points
-        // at them. Then let the error propagate to the outer handler.
+        // uploads are orphaned. Delete them — but keep any that the un-updated
+        // row still references (a deterministic adapter can reuse an old path),
+        // so a failed regeneration never removes a live variant. Then propagate.
         if (regeneratedSizes) {
-          await this.deleteVariantPaths(
-            this.collectVariantPaths(regeneratedSizes)
+          await this.deleteSupersededVariants(
+            regeneratedSizes,
+            (existing.data as { sizes?: unknown } | null)?.sizes
           );
         }
         throw error;
       }
 
       if (!updatedRow) {
-        // Concurrent delete: the row is gone, so the freshly-uploaded variants
-        // are orphaned — clean them up before returning not-found.
+        // Concurrent delete: the row was not updated, so the freshly-uploaded
+        // variants are orphaned. Same guard as the failure path — keep anything
+        // the pre-write row still referenced — before returning not-found.
         if (regeneratedSizes) {
-          await this.deleteVariantPaths(
-            this.collectVariantPaths(regeneratedSizes)
+          await this.deleteSupersededVariants(
+            regeneratedSizes,
+            (existing.data as { sizes?: unknown } | null)?.sizes
           );
         }
         // Mirror getMediaById's not-found shape so the domain layer maps this to
@@ -731,16 +753,9 @@ export class MediaService extends BaseService {
       }
 
       // The row now durably references the new variants, so the superseded old
-      // ones can be deleted. Filtered against the new paths so a deterministic-
-      // key adapter (where a regenerated variant can reuse a path) never deletes
-      // a file the committed row still points at.
+      // ones can be deleted (keeping any path the new set reuses).
       if (regeneratedSizes && replacedSizes) {
-        const keep = new Set(this.collectVariantPaths(regeneratedSizes));
-        await this.deleteVariantPaths(
-          this.collectVariantPaths(replacedSizes).filter(
-            path => !keep.has(path)
-          )
-        );
+        await this.deleteSupersededVariants(replacedSizes, regeneratedSizes);
       }
 
       // The update committed a media.updated outbox row; drain and prune it

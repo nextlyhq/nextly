@@ -831,6 +831,15 @@ export class SingleMutationService extends BaseService {
               companion.companionTableName
             )
           : false;
+      // Same pre-transaction, pooled probe for the auto-create default seed: it
+      // is keyed on the DEFAULT locale (not the write locale), so it needs its
+      // own existence check rather than reusing `companionPhysicallyExists`.
+      const seedCompanionExists = autoCreated
+        ? await this.queryService.localizedDefaultsCompanionExists(
+            singleMeta,
+            pendingLocalizedDefaults
+          )
+        : false;
       let updatedRows: SingleDocument[];
       try {
         // Retry the whole update+capture transaction on a version_no allocation
@@ -867,7 +876,8 @@ export class SingleMutationService extends BaseService {
                   singleMeta,
                   existingDoc.id,
                   pendingLocalizedDefaults,
-                  (existingDoc as { status?: string }).status
+                  (existingDoc as { status?: string }).status,
+                  seedCompanionExists
                 );
               }
             }
