@@ -228,7 +228,13 @@ export function moveNode(
     if (!findNode(nodes, to.parentId)) return nodes;
   }
   const without = removeNode(nodes, id);
-  return insertNode(without, moving, to);
+  const next = insertNode(without, moving, to);
+  // The move must be atomic. If the re-insert refused — which happens only when
+  // the moving subtree is itself already malformed (an internal duplicate id) —
+  // `insertNode` returns the `without` forest unchanged; committing that would
+  // drop the subtree. Fall back to the original forest so a bad document is
+  // left as-is rather than losing content.
+  return next === without ? nodes : next;
 }
 
 /** Deep-clone a subtree, assigning fresh ids to every node (copy/paste, patterns). */
@@ -238,9 +244,19 @@ export function reidSubtree(node: BlockNode): BlockNode {
   const { slots, ...own } = node;
   const copy: BlockNode = { ...structuredClone(own), id: newId() };
   // A re-id'd node is a distinct element: it must not carry the original's DOM
-  // id, or the two would emit duplicate HTML `id` attributes. Drop it so the
-  // copy has no cssId until the author sets a new one.
+  // id, or the two would emit duplicate HTML `id` attributes. The id can arrive
+  // two ways — the dedicated `cssId` field and the custom-attributes escape
+  // hatch (`attributes.id`, matched case-insensitively) — so drop both.
   delete copy.cssId;
+  if (copy.attributes) {
+    const attributes = Object.fromEntries(
+      Object.entries(copy.attributes).filter(
+        ([key]) => key.toLowerCase() !== "id"
+      )
+    );
+    if (Object.keys(attributes).length > 0) copy.attributes = attributes;
+    else delete copy.attributes;
+  }
   if (slots) {
     const newSlots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(slots)) {

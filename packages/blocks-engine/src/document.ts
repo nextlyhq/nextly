@@ -148,6 +148,13 @@ export interface Binding {
    * - `site`  — site-level settings
    */
   source?: BindingSource;
+  /**
+   * Which specific source document the path reads from. REQUIRED when
+   * `source` is `"single"` (its slug), since a site can define many singles
+   * and `$bind` alone would be ambiguous. Unused for `entry`/`item`/`site`,
+   * which each have exactly one resolution context.
+   */
+  sourceKey?: string;
   /** Rendered when the bound value is empty or the path cannot resolve. */
   fallback?: unknown;
   /** Locale-aware display formatting applied after resolution. */

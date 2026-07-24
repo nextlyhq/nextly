@@ -79,6 +79,12 @@ describe("JSON round-trip", () => {
                       fallback: "Untitled",
                       format: { type: "date", options: { dateStyle: "long" } },
                     },
+                    // A single-sourced binding names which single via sourceKey.
+                    subtitle: {
+                      $bind: "tagline",
+                      source: "single",
+                      sourceKey: "site-settings",
+                    },
                   },
                   styles: {
                     base: { base: { color: { $token: "color.text" } } },

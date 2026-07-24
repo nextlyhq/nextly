@@ -237,6 +237,30 @@ describe("moveNode", () => {
     expect(findNode(next, footer.id)).toBeDefined();
     expect(countNodes(next)).toBe(countNodes(nodes));
   });
+
+  it("leaves an already-malformed subtree in place rather than losing it on move", () => {
+    // A document whose moving subtree carries an internal duplicate id: the
+    // re-insert would refuse, so the move must be atomic and change nothing.
+    const dup = makeNode("core/text", 1);
+    const bad = makeNode(
+      "core/section",
+      1,
+      {},
+      {
+        children: [dup, { ...makeNode("core/text", 1), id: dup.id }],
+      }
+    );
+    const host = makeNode("core/section", 1, {}, { children: [] });
+    const nodes = [bad, host];
+    const next = moveNode(nodes, bad.id, {
+      parentId: host.id,
+      slot: "children",
+      index: 0,
+    });
+    expect(next).toBe(nodes);
+    expect(findNode(next, bad.id)).toBeDefined();
+    expect(countNodes(next)).toBe(countNodes(nodes));
+  });
 });
 
 describe("reidSubtree / duplicateNode", () => {
@@ -292,6 +316,20 @@ describe("reidSubtree / duplicateNode", () => {
     const nestedCopy = reidSubtree(withNested);
     expect(nestedCopy.cssId).toBeUndefined();
     expect(nestedCopy.slots?.children?.[0]?.cssId).toBeUndefined();
+  });
+
+  it("strips an id from custom attributes (case-insensitively) when re-iding", () => {
+    const original = {
+      ...makeNode("core/section", 1),
+      attributes: { id: "hero", "data-role": "banner" },
+    };
+    const copy = reidSubtree(original);
+    expect(copy.attributes).toEqual({ "data-role": "banner" });
+
+    // A capitalized "ID" is the same DOM-id vector and must also go; when it is
+    // the only attribute, the now-empty attributes object is dropped entirely.
+    const upper = { ...makeNode("core/text", 1), attributes: { ID: "x" } };
+    expect(reidSubtree(upper).attributes).toBeUndefined();
   });
 });
 
