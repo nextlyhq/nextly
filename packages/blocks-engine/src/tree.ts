@@ -130,15 +130,32 @@ function clampIndex(index: number, length: number): number {
   return Math.max(0, Math.min(index, length));
 }
 
+/** True if any id in `node`'s subtree already appears in `nodes`. */
+function subtreeCollidesWith(nodes: BlockNode[], node: BlockNode): boolean {
+  const incoming = new Set<string>();
+  walkNodes([node], n => incoming.add(n.id));
+  let collides = false;
+  walkNodes(nodes, n => {
+    if (incoming.has(n.id)) collides = true;
+  });
+  return collides;
+}
+
 /**
- * Insert a node at a position. Inserting under an unknown parent id returns
- * the forest unchanged rather than silently dropping the node somewhere else.
+ * Insert a node at a position. Returns the forest unchanged (the no-op contract
+ * used across these primitives) when the target is invalid: an unknown parent
+ * id, a slot position missing its slot, or a node whose id — or any id in its
+ * subtree — already lives in the forest. The last guard is what makes the
+ * primitive safe: re-inserting an existing node would corrupt id-addressing
+ * and, for a self/descendant target, make `mapForest` recurse into the object
+ * just inserted. Callers duplicating content pass a `reidSubtree` clone.
  */
 export function insertNode(
   nodes: BlockNode[],
   node: BlockNode,
   at: TreePosition
 ): BlockNode[] {
+  if (subtreeCollidesWith(nodes, node)) return nodes;
   if (at.parentId === undefined) {
     const next = [...nodes];
     next.splice(clampIndex(at.index, next.length), 0, node);
@@ -157,8 +174,13 @@ export function insertNode(
   });
 }
 
-/** Remove a node (and its subtree) wherever it lives, including the top level. */
+/**
+ * Remove a node (and its subtree) wherever it lives, including the top level.
+ * Returns the original forest reference untouched when the id is absent, so a
+ * no-op delete never produces a spurious new tree for change-tracking callers.
+ */
 export function removeNode(nodes: BlockNode[], id: string): BlockNode[] {
+  if (!findNode(nodes, id)) return nodes;
   const withoutTop = nodes.filter(node => node.id !== id);
   return mapForest(withoutTop, node => {
     if (!node.slots) return node;
@@ -183,6 +205,9 @@ export function moveNode(
   const moving = findNode(nodes, id);
   if (!moving) return nodes;
   if (to.parentId !== undefined) {
+    // A slot position must name its slot; without this guard the remove below
+    // would succeed and the re-insert would no-op, silently losing the node.
+    if (to.slot === undefined) return nodes;
     // Cycle guard: the destination parent must not be the node or inside it.
     if (to.parentId === id || findNode([moving], to.parentId)) return nodes;
     if (!findNode(nodes, to.parentId)) return nodes;
@@ -193,13 +218,16 @@ export function moveNode(
 
 /** Deep-clone a subtree, assigning fresh ids to every node (copy/paste, patterns). */
 export function reidSubtree(node: BlockNode): BlockNode {
-  const copy: BlockNode = { ...structuredClone(node), id: newId() };
-  if (node.slots) {
-    const slots: Record<string, BlockNode[]> = {};
-    for (const [name, children] of Object.entries(node.slots)) {
-      slots[name] = children.map(reidSubtree);
+  // Clone only this node's own fields; descendants are cloned by the recursive
+  // calls below, so cloning `slots` here too would deep-copy them twice.
+  const { slots, ...own } = node;
+  const copy: BlockNode = { ...structuredClone(own), id: newId() };
+  if (slots) {
+    const newSlots: Record<string, BlockNode[]> = {};
+    for (const [name, children] of Object.entries(slots)) {
+      newSlots[name] = children.map(reidSubtree);
     }
-    copy.slots = slots;
+    copy.slots = newSlots;
   }
   return copy;
 }

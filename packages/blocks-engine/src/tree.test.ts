@@ -113,6 +113,32 @@ describe("insertNode", () => {
       nodes
     );
   });
+
+  it("rejects re-inserting a node whose id already lives in the forest", () => {
+    const { nodes, footer, heading } = fixture();
+    // Same node object re-inserted, and a fresh node carrying an existing id:
+    // both collide and must no-op rather than corrupt id-addressing.
+    expect(insertNode(nodes, footer, { index: 0 })).toBe(nodes);
+    const clash = { ...makeNode("core/text", 1), id: heading.id };
+    expect(
+      insertNode(nodes, clash, {
+        parentId: footer.id,
+        slot: "children",
+        index: 0,
+      })
+    ).toBe(nodes);
+  });
+
+  it("rejects inserting a node into itself without overflowing", () => {
+    const { nodes, section } = fixture();
+    expect(
+      insertNode(nodes, section, {
+        parentId: section.id,
+        slot: "children",
+        index: 0,
+      })
+    ).toBe(nodes);
+  });
 });
 
 describe("removeNode", () => {
@@ -128,6 +154,11 @@ describe("removeNode", () => {
     const next = removeNode(nodes, section.id);
     expect(next).toHaveLength(1);
     expect(findNode(next, heading.id)).toBeUndefined();
+  });
+
+  it("returns the original forest reference when the id is absent", () => {
+    const { nodes } = fixture();
+    expect(removeNode(nodes, "missing")).toBe(nodes);
   });
 });
 
@@ -180,6 +211,15 @@ describe("moveNode", () => {
         index: 0,
       })
     ).toBe(nodes);
+  });
+
+  it("never loses a node when a slot position omits its slot", () => {
+    const { nodes, footer, section } = fixture();
+    // parentId set without a slot: must no-op, not remove-then-fail-to-insert.
+    const next = moveNode(nodes, footer.id, { parentId: section.id, index: 0 });
+    expect(next).toBe(nodes);
+    expect(findNode(next, footer.id)).toBeDefined();
+    expect(countNodes(next)).toBe(countNodes(nodes));
   });
 });
 

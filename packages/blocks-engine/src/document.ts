@@ -320,11 +320,11 @@ export function isComponentInstance(node: BlockNode): boolean {
  * translation was made from, so staleness ("the base text changed since this
  * was translated") is detectable automatically.
  *
- * `content_mode` reserves the door to a full per-locale fork of the tree;
+ * `contentMode` reserves the door to a full per-locale fork of the tree;
  * only "overlay" is produced today.
  */
 export interface LocaleOverlay {
-  content_mode: "overlay" | "fork";
+  contentMode: "overlay" | "fork";
   props: Record<string, Record<string, LocaleOverlayValue>>;
 }
 
