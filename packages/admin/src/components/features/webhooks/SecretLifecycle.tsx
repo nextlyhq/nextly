@@ -42,11 +42,15 @@ export interface SecretLifecycleProps {
 }
 
 export const SecretLifecycle: React.FC<SecretLifecycleProps> = ({
-  secrets,
+  secrets = [],
   canManage,
   onExpireOld,
   isExpiring,
 }) => {
+  // Default to an empty list so a summary that arrived without `secrets` — for
+  // example an admin bundle newer than the backend it is talking to, before the
+  // `secrets` field was added to the endpoint response — degrades to an empty
+  // state instead of crashing the whole edit page on `.some`/`.map`.
   const hasOverlap = secrets.some(secret => !secret.isPrimary);
 
   return (
@@ -70,6 +74,11 @@ export const SecretLifecycle: React.FC<SecretLifecycleProps> = ({
       </div>
 
       <ul className="divide-y divide-foreground/10 rounded-md border border-input bg-card">
+        {secrets.length === 0 && (
+          <li className="px-4 py-3 text-sm text-muted-foreground">
+            No active signing secrets to show.
+          </li>
+        )}
         {secrets.map(secret => (
           <li
             key={`${secret.prefix}-${secret.createdAt}`}
