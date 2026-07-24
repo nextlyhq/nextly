@@ -25,9 +25,9 @@ jobs:
     environment: Production
 
     permissions:
-      contents: write       # create git tags + GitHub Releases
-      pull-requests: write  # open "Version Packages" PR
-      id-token: write       # OIDC token for npm Trusted Publishing (also covers provenance)
+      contents: write # create git tags + GitHub Releases
+      pull-requests: write # open "Version Packages" PR
+      id-token: write # OIDC token for npm Trusted Publishing (also covers provenance)
 
     steps:
       - name: Checkout
@@ -89,16 +89,25 @@ jobs:
           commit: "chore: version packages"
           title: "chore: version packages"
           # Disabled: per-package GitHub Releases (one for every published
-          # package, 12 per cycle: nextly + create-nextly-app + 10 @nextlyhq/*)
-          # made the Releases sidebar noisy and put whichever package
-          # timestamped last as "Latest". The consolidated release step below
-          # creates ONE `vX.Y.Z` release per cycle that matches our `fixed[]`
-          # lockstep model and Payload's release style.
+          # package in the train) made the Releases sidebar noisy and put
+          # whichever package timestamped last as "Latest". The consolidated
+          # release step below creates ONE `vX.Y.Z` release per cycle that
+          # matches our `fixed[]` lockstep model and Payload's release style.
           createGithubReleases: false
 
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
           TURBO_CACHE_DIR: .turbo
+
+      # `changeset publish` pushes packages one at a time and reports success
+      # even when some of them failed, so the only way to know a release is
+      # whole is to ask the registry afterwards. Failing here stops the tag and
+      # the GitHub Release from being created, which is what keeps npm, git and
+      # the Releases page describing the same release. Publishing is resumable:
+      # re-running skips versions the registry already has.
+      - name: Verify every package reached the registry
+        if: steps.changesets.outputs.published == 'true'
+        run: pnpm release:verify
 
       - name: Create consolidated GitHub Release
         if: steps.changesets.outputs.published == 'true'
@@ -108,17 +117,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          # All 12 packages share a version via `fixed[]`, so the first
+          # Published packages share a version via `fixed[]`, so the first
           # entry's version is the canonical monorepo version.
           VERSION=$(echo "$PUBLISHED" | jq -r '.[0].version')
           TAG="v${VERSION}"
+          # Count the packages that actually published rather than restating a
+          # number in prose: hand-maintained counts drift as packages join the
+          # release train.
+          PKG_COUNT=$(echo "$PUBLISHED" | jq -r 'length')
 
           # Build the release notes by extracting each package's CHANGELOG
           # section for this version and concatenating them under one
           # "What's changed" heading.
           NOTES_FILE=$(mktemp)
           {
-            echo "Released all 12 packages at \`${VERSION}\` in lockstep (\`nextly\`, \`create-nextly-app\`, and 10 \`@nextlyhq/*\` packages)."
+            echo "Released ${PKG_COUNT} packages at \`${VERSION}\` in lockstep."
             echo
             echo "## What's changed"
             echo

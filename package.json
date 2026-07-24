@@ -64,7 +64,9 @@
     "_comment_release": "=== Release & Versioning ===",
     "changeset": "changeset",
     "release:version": "changeset version && pnpm install --no-frozen-lockfile",
-    "release:publish": "turbo build --filter='./packages/*' && changeset publish",
+    "release:preflight": "node scripts/release/preflight.mjs",
+    "release:verify": "node scripts/release/verify.mjs",
+    "release:publish": "pnpm release:preflight && turbo build --filter='./packages/*' && changeset publish",
     "release:status": "changeset status",
     "release:dry-run": "changeset publish --dry-run"
   },
