@@ -42,6 +42,10 @@ import type { DynamicCollectionService } from "../../domains/dynamic-collections
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
+import type {
+  CacheRevalidator,
+  RevalidationIntent,
+} from "../../revalidation/types";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
@@ -101,7 +105,13 @@ export class CollectionEntryService extends BaseService {
      * the first delivery attempt does not wait for the next scheduled trigger.
      * Wired at the same seam as `retentionRunner` for the same reason.
      */
-    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
+    /**
+     * Flushes a write's cache-revalidation intent post-commit. Wired at the same
+     * seam as `fastDrainScheduler` because every event-appending write runs
+     * through this service. Defaults to a no-op when no cache adapter is present.
+     */
+    private readonly cacheRevalidator?: CacheRevalidator
   ) {
     super(adapter, logger);
 
@@ -273,13 +283,63 @@ export class CollectionEntryService extends BaseService {
       | BulkOperationResult<unknown>
       | BatchOperationResult
   ): Promise<void> {
+    // Revalidation flushes whenever a committed write produced intents. It is
+    // NOT tied to the outbox-event gate below: an intent is only ever set after
+    // a write commits, so its presence is the "content changed" signal, and a
+    // publish-all-locales or a batch create (which record no outbox event) still
+    // bust their tags.
+    await this.flushRevalidation(result);
+
     const recorded =
       "success" in result
         ? result.eventRecorded === true
         : "successCount" in result
           ? result.successCount > 0 || result.eventRecorded === true
           : result.successful > 0 || result.eventRecorded === true;
-    if (recorded) await this.afterWrite();
+    if (recorded) {
+      await this.afterWrite();
+    }
+  }
+
+  /**
+   * Flush a committed write's cache-revalidation intents through the registered
+   * revalidator (a no-op when no cache adapter is present). Runs on the same
+   * gate as the drain — a write that recorded nothing revalidates nothing — and
+   * absorbs its own failure so it never turns a committed write into an error.
+   * Awaited (like the retention pass) so an async revalidator's work is not left
+   * detached, where a serverless response could cut it off before it completes.
+   */
+  private async flushRevalidation(
+    result:
+      | CollectionServiceResult<unknown>
+      | BulkOperationResult<unknown>
+      | BatchOperationResult
+  ): Promise<void> {
+    const intents =
+      "revalidationIntents" in result && result.revalidationIntents
+        ? result.revalidationIntents
+        : "revalidationIntent" in result && result.revalidationIntent
+          ? [result.revalidationIntent]
+          : [];
+    await this.flushRevalidationIntents(intents);
+  }
+
+  /**
+   * Flush an explicit set of revalidation intents collected by a caller-owned
+   * transaction (for example the `CollectionService` transaction wrappers, whose
+   * return values carry only the entry). Shares the automatic post-write path:
+   * a no-op when no cache adapter is registered, and self-absorbing on error so
+   * a revalidator fault never turns a committed write into a failure.
+   */
+  async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
+    if (!this.cacheRevalidator || intents.length === 0) return;
+    try {
+      // Await so a Promise-returning revalidator finishes here; `revalidateTag`
+      // is synchronous, so this adds no latency for the common case.
+      await this.cacheRevalidator.flush(intents);
+    } catch (error) {
+      this.logger.error("Cache revalidation failed after a write", { error });
+    }
   }
 
   async createEntry(

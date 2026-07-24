@@ -35,6 +35,11 @@ import {
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
 import {
+  buildSingleRevalidationIntent,
+  readRevalidateConfig,
+} from "../../../revalidation/intent-builders";
+import type { RevalidationIntent } from "../../../revalidation/types";
+import {
   AccessControlService,
   type CollectionAccessRules,
   isSuperAdminContext,
@@ -426,6 +431,10 @@ export class SingleMutationService extends BaseService {
     // return report a committed-but-post-hook-failed write as `eventRecorded`
     // even when `success` is false. Declared out here so every return sees it.
     let eventRecorded = false;
+    // The tags this write invalidates (`nextly:single:{slug}`), computed after
+    // the event is recorded and carried on every post-event return so a
+    // committed-but-hook-failed write still flushes its revalidation.
+    let revalidationIntent: RevalidationIntent | undefined;
     // Set when the in-transaction transition check refuses the write against the
     // row-locked status. Declared out here (not in `try`) so the catch can read
     // it: the adapter wraps the thrown sentinel in a DatabaseError as the
@@ -1680,6 +1689,13 @@ export class SingleMutationService extends BaseService {
       // written row: the empty-rows path returns from the tx before recording
       // anything, so it owes no delivery.
       eventRecorded = updatedRows.length > 0;
+      if (eventRecorded) {
+        // A single is consumed sitewide, so its one tag is the whole cascade.
+        revalidationIntent = buildSingleRevalidationIntent(
+          slug,
+          readRevalidateConfig(singleMeta)
+        );
+      }
 
       if (updatedRows.length === 0) {
         return {
@@ -1764,6 +1780,7 @@ export class SingleMutationService extends BaseService {
         statusCode: 200,
         data: updatedDoc,
         eventRecorded,
+        revalidationIntent,
       };
     } catch (error) {
       // A publish-transition refused against the row-locked status aborts the
@@ -1780,6 +1797,7 @@ export class SingleMutationService extends BaseService {
       return {
         ...buildSingleErrorResult(error, "Failed to update Single document"),
         eventRecorded,
+        revalidationIntent,
       };
     }
   }

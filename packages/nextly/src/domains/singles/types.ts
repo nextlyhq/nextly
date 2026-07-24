@@ -12,6 +12,7 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
+import type { RevalidationIntent } from "../../revalidation/types";
 
 /**
  * User context for Single operations.
@@ -204,4 +205,11 @@ export interface SingleResult<T = SingleDocument> {
    * `CollectionServiceResult.eventRecorded`.
    */
   eventRecorded?: boolean;
+  /**
+   * The cache tags this write invalidates (`nextly:single:{slug}` plus any
+   * configured extra tags), flushed post-commit through the registered
+   * revalidator. Absent when the write recorded nothing or revalidation is
+   * disabled for the single.
+   */
+  revalidationIntent?: RevalidationIntent;
 }

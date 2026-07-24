@@ -58,6 +58,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 // NextlyErrors at this boundary so callers see the new error model.
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
+import type { RevalidationIntent } from "../../../revalidation/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type {
@@ -170,6 +171,82 @@ export class CollectionService extends BaseService {
     private readonly entryService: CollectionEntryService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Revalidation intents produced by createEntryInTransaction /
+   * updateEntryInTransaction / deleteEntryInTransaction calls made during an
+   * owned transaction, keyed by the transaction handle so concurrent
+   * transactions (one pooled client each on Postgres/MySQL) never share a
+   * collector. The wrappers push into it; `withTransaction` drains it once the
+   * transaction commits.
+   */
+  private readonly pendingTxIntents = new Map<unknown, RevalidationIntent[]>();
+
+  /**
+   * Run work inside a database transaction, then flush the cache-revalidation
+   * intents produced by any createEntryInTransaction / updateEntryInTransaction /
+   * deleteEntryInTransaction calls made against the same `tx`. The flush happens
+   * after the transaction commits, so a rolled-back write busts nothing. Because
+   * the wrappers return only the entry (or void), this is the supported way to
+   * coordinate atomic multi-writes with correct revalidation — without it the
+   * committed writes' intents would have nowhere to go.
+   *
+   * Unlike the base helper, this yields the adapter's `TransactionContext` (the
+   * handle the *InTransaction wrappers expect), not a raw driver transaction.
+   *
+   * @example
+   * ```typescript
+   * await service.withTransaction(async (tx) => {
+   *   const entry = await service.createEntryInTransaction(tx, 'posts', data, context);
+   *   await service.updateEntryInTransaction(tx, 'posts', entry.id, moreData, context);
+   * });
+   * ```
+   */
+  override async withTransaction<T>(
+    work: (tx: TransactionContext) => Promise<T>
+  ): Promise<T> {
+    let ownsFlush = false;
+    let collector: RevalidationIntent[] | undefined;
+    const result = await this.adapter.transaction(async tx => {
+      collector = this.pendingTxIntents.get(tx);
+      if (!collector) {
+        collector = [];
+        this.pendingTxIntents.set(tx, collector);
+        ownsFlush = true;
+      }
+      try {
+        return await work(tx);
+      } finally {
+        // Drop the per-tx binding on both commit and rollback, so a throwing or
+        // failed-to-commit transaction never leaks its collector in
+        // pendingTxIntents. Only the frame that created the collector removes
+        // it, so a nested withTransaction sharing the handle leaves the outer's
+        // binding intact.
+        if (ownsFlush) this.pendingTxIntents.delete(tx);
+      }
+    });
+    // Reached only on a successful commit; a rejected transaction throws above
+    // and flushes nothing. The captured `collector` outlives the map binding.
+    if (ownsFlush && collector && collector.length > 0) {
+      await this.entryService.flushRevalidationIntents(collector);
+    }
+    return result;
+  }
+
+  /**
+   * Record a wrapper's revalidation intent against the active owned transaction,
+   * if one is in progress, so `withTransaction` can flush it after commit. A
+   * no-op when the caller obtained `tx` some other way (there is nowhere to defer
+   * the flush to); such callers should use the lower-level
+   * `CollectionEntryService.*InTransaction`, whose results carry the intent.
+   */
+  private collectTxIntent(
+    tx: TransactionContext,
+    intent: RevalidationIntent | undefined
+  ): void {
+    if (!intent) return;
+    this.pendingTxIntents.get(tx)?.push(intent);
   }
 
   /**
@@ -741,6 +818,13 @@ export class CollectionService extends BaseService {
       data
     );
 
+    // Collect before the success check. The mutation layer sets the intent only
+    // once the row is written and carries it even on a hook-failure result, so a
+    // caller that commits despite the failure still busts the tags; a genuine
+    // rollback drops the collector unflushed, so collecting here is always safe.
+    // withTransaction flushes what was collected once the transaction commits.
+    this.collectTxIntent(tx, result.revalidationIntent);
+
     if (!result.success) {
       this.logger.warn("Entry creation in transaction failed", {
         collectionName,
@@ -790,6 +874,10 @@ export class CollectionService extends BaseService {
       },
       data
     );
+
+    // Collect before the success check, so a caller that commits despite a
+    // post-write hook failure still busts the tags (see createEntryInTransaction).
+    this.collectTxIntent(tx, result.revalidationIntent);
 
     if (!result.success) {
       if (result.statusCode === 404) {
@@ -858,6 +946,10 @@ export class CollectionService extends BaseService {
       user: context.user,
       actor,
     });
+
+    // Collect before the success check, so a caller that commits despite a
+    // post-delete hook failure still busts the tags (see createEntryInTransaction).
+    this.collectTxIntent(tx, result.revalidationIntent);
 
     if (!result.success) {
       if (result.statusCode === 404) {

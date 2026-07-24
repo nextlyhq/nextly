@@ -24,6 +24,7 @@ import { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
+import type { CacheRevalidator } from "../../revalidation/types";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
@@ -185,6 +186,11 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       // services). Absent only when webhooks were never registered.
       container.has("webhookFastDrainScheduler")
         ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+        : undefined,
+      // Cache revalidator that flushes each write's revalidation intents
+      // post-commit (a no-op unless a Next cache adapter registered one).
+      container.has("cacheRevalidator")
+        ? container.get<CacheRevalidator>("cacheRevalidator")
         : undefined
     );
 

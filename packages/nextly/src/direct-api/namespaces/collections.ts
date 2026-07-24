@@ -417,7 +417,16 @@ export async function bulkDelete(
     context: config.context,
   });
 
-  return bulkResult;
+  // Project to the public shape so internal post-commit signals (eventRecorded,
+  // revalidationIntents) — already consumed by the write path — never reach a
+  // Direct API caller.
+  return {
+    successes: bulkResult.successes,
+    failures: bulkResult.failures,
+    total: bulkResult.total,
+    successCount: bulkResult.successCount,
+    failedCount: bulkResult.failedCount,
+  };
 }
 
 /**

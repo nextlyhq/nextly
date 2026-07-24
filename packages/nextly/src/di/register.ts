@@ -144,6 +144,7 @@ import {
   registerEmailServices,
   registerMediaServices,
   registerMetaServices,
+  registerRevalidationServices,
   registerSingleServices,
   registerUserServices,
   registerVersionServices,
@@ -741,6 +742,9 @@ export async function registerServices(
   registerEmailServices(ctx);
   registerDashboardServices(ctx);
   registerAuthServices(ctx);
+  // Before the collection/single services, which resolve the cacheRevalidator
+  // lazily when a write flushes its intents.
+  registerRevalidationServices(ctx);
   registerCollectionServices(ctx);
   registerMediaServices(ctx);
   registerMetaServices(ctx);
