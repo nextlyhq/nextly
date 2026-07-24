@@ -350,6 +350,45 @@ describe("cache revalidation — write path (sqlite)", () => {
     }
   });
 
+  it("flushes nothing when the collection's revalidate config is disabled", async () => {
+    // The `revalidate: { disable: true }` config must round-trip through the
+    // registry and reach the write site, so a disabled collection busts nothing.
+    const entries = await boot([
+      defineCollection({
+        slug: "noreval",
+        status: true,
+        access: { create: () => true },
+        revalidate: { disable: true },
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+    ]);
+    await entries.createEntry(
+      { collectionName: "noreval", overrideAccess: true },
+      { title: "T", slug: "hidden" }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("includes the collection's configured extra revalidate tags", async () => {
+    // The `revalidate: { tags: [...] }` config must round-trip and be merged into
+    // every write's intent.
+    const entries = await boot([
+      defineCollection({
+        slug: "tagged",
+        status: true,
+        access: { create: () => true },
+        revalidate: { tags: ["navigation"] },
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+    ]);
+    await entries.createEntry(
+      { collectionName: "tagged", overrideAccess: true },
+      { title: "T", slug: "y" }
+    );
+    expect(spy.tags).toContain("navigation");
+    expect(spy.tags).toContain("nextly:tagged:slug:y");
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
@@ -384,5 +423,30 @@ describe("cache revalidation — write path (sqlite)", () => {
       { overrideAccess: true }
     );
     expect(spy.tags).toContain("nextly:single:header");
+  });
+
+  it("flushes nothing when the single's revalidate config is disabled", async () => {
+    // Singles persist + read `revalidate` through their own registry
+    // deserialize path, so verify a disabled single busts nothing.
+    const adapter = await memoryAdapter();
+    handle = await createTestNextly({
+      adapter,
+      singles: [
+        defineSingle({
+          slug: "footer",
+          access: { read: () => true, update: () => true },
+          revalidate: { disable: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singleEntry =
+      handle.getService<SingleEntryService>("singleEntryService");
+    await singleEntry.update(
+      "footer",
+      { title: "Site" },
+      { overrideAccess: true }
+    );
+    expect(spy.flushed).toHaveLength(0);
   });
 });

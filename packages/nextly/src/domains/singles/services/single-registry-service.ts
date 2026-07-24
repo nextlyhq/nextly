@@ -108,6 +108,9 @@ export interface CodeFirstSingleConfig {
   /** Resolved content-versioning config (or null when unversioned). */
   versions?: DynamicSingleInsert["versions"];
 
+  /** Cache-revalidation config (or null when the single sets none). */
+  revalidate?: DynamicSingleInsert["revalidate"];
+
   /** Admin UI configuration */
   admin?: DynamicSingleInsert["admin"];
 
@@ -429,6 +432,12 @@ export class SingleRegistryService extends BaseRegistryService<
         ? JSON.stringify(data.versions)
         : null;
     }
+    // Cache-revalidation config: same explicit-provide semantics as `versions`.
+    if (data.revalidate !== undefined) {
+      updateData.revalidate = data.revalidate
+        ? JSON.stringify(data.revalidate)
+        : null;
+    }
 
     try {
       const results = await this.adapter.update<DynamicSingleRecord>(
@@ -590,6 +599,8 @@ export class SingleRegistryService extends BaseRegistryService<
             status: config.status === true,
             // Forward the resolved versioning config on first sync.
             versions: config.versions,
+            // Forward the cache-revalidation config on first sync.
+            revalidate: config.revalidate,
             localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
@@ -603,6 +614,9 @@ export class SingleRegistryService extends BaseRegistryService<
           // normalized JSON, so a stable string compare detects a real change).
           JSON.stringify(config.versions ?? null) !==
             JSON.stringify(existing.versions ?? null) ||
+          // Re-sync when the cache-revalidation config changed.
+          JSON.stringify(config.revalidate ?? null) !==
+            JSON.stringify(existing.revalidate ?? null) ||
           (config.localized === true) !== (existing.localized === true)
         ) {
           // Either fields changed or the status toggle flipped — both warrant
@@ -620,6 +634,7 @@ export class SingleRegistryService extends BaseRegistryService<
               locked: true,
               status: config.status === true,
               versions: config.versions,
+              revalidate: config.revalidate,
               localized: config.localized === true,
             },
             { source: "code" }
@@ -672,6 +687,7 @@ export class SingleRegistryService extends BaseRegistryService<
     const fields = r.fields as string | object;
     const admin = r.admin as string | object | null;
     const versions = r.versions as string | object | null;
+    const revalidate = r.revalidate as string | object | null;
     const accessRules = (r.access_rules ?? r.accessRules) as
       | string
       | object
@@ -717,6 +733,14 @@ export class SingleRegistryService extends BaseRegistryService<
         ? typeof versions === "string"
           ? JSON.parse(versions)
           : versions
+        : null,
+      // Parse the cache-revalidation config (JSON string on SQLite / raw
+      // inserts; already an object on pg/mysql). null when unset or on rows
+      // written before this column existed.
+      revalidate: revalidate
+        ? typeof revalidate === "string"
+          ? JSON.parse(revalidate)
+          : revalidate
         : null,
       localized: Boolean(r.localized),
       configPath,
@@ -797,6 +821,8 @@ export class SingleRegistryService extends BaseRegistryService<
       // Persist the resolved versioning config (JSON-serialized like admin) so
       // the mutation service can read it back and capture version snapshots.
       versions: data.versions ? JSON.stringify(data.versions) : null,
+      // Persist the cache-revalidation config (JSON-serialized like `versions`).
+      revalidate: data.revalidate ? JSON.stringify(data.revalidate) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,

@@ -59,6 +59,7 @@ import { resolveCollectionTableName } from "../domains/schema/utils/resolve-tabl
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { ComponentSchemaService } from "../services/components/component-schema-service";
@@ -101,6 +102,8 @@ type CollectionDef = {
   localized?: boolean;
   /** Content-versioning option; persisted (resolved) to dynamic_collections.versions. */
   versions?: boolean | VersionsConfig;
+  /** Cache-revalidation config; persisted to dynamic_collections.revalidate. */
+  revalidate?: RevalidateConfig;
 };
 
 type SingleDef = {
@@ -115,6 +118,8 @@ type SingleDef = {
   localized?: boolean;
   /** Content-versioning option; persisted (resolved) to dynamic_singles.versions. */
   versions?: boolean | VersionsConfig;
+  /** Cache-revalidation config; persisted to dynamic_singles.revalidate. */
+  revalidate?: RevalidateConfig;
 };
 
 type ComponentDef = {
@@ -218,6 +223,9 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
       // reload and desyncing the registry from the companion table.
       localized: c.localized === true,
       versions: resolveVersionsConfig(c.versions, c.status),
+      // Forward the cache-revalidation config verbatim (no resolver — the
+      // authored `{ tags?, disable? }` shape is persisted as-is).
+      revalidate: c.revalidate,
     }));
 }
 
@@ -244,6 +252,8 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
         status: s.status === true,
         localized: s.localized === true,
         versions: resolveVersionsConfig(s.versions, s.status),
+        // Forward the cache-revalidation config verbatim (no resolver).
+        revalidate: s.revalidate,
       };
     });
 }
