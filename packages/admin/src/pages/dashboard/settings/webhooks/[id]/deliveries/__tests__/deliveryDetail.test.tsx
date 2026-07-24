@@ -87,9 +87,10 @@ describe("DeliveryDetailContent", () => {
     ).toBeTruthy();
   });
 
-  it("shows the recorded-history length, not the reset attemptCount, after a redelivery", () => {
-    // A redelivery resets attemptCount to 0 but keeps the attempt history, so
-    // the Attempts stat must reflect the history (2), never the counter (0).
+  it("scopes the attempt counter to the current cycle without hiding prior history", () => {
+    // A redelivery resets attemptCount to 0 for the new cycle but keeps the
+    // attempt history. The counter is labelled "this cycle" so 0 is not a
+    // contradiction, and the prior attempts still render in the timeline.
     useDelivery.mockReturnValue({
       data: { ...DELIVERY, attemptCount: 0 },
       isLoading: false,
@@ -97,11 +98,27 @@ describe("DeliveryDetailContent", () => {
     });
     render(<DeliveryDetailContent webhookId="wh_1" deliveryId="dlv_1" />);
 
-    // Both recorded attempts still render in the timeline...
+    expect(screen.getByText("Attempts (this cycle)")).toBeInTheDocument();
     expect(screen.getByText("retrying")).toBeInTheDocument();
     expect(screen.getByText("failed")).toBeInTheDocument();
-    // ...and the reset counter value is not surfaced as the attempt count.
-    expect(screen.queryByText("0")).not.toBeInTheDocument();
+  });
+
+  it("notes truncation when the attempt log is at its cap", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      at: `2026-07-24T09:${String(i).padStart(2, "0")}:00.000Z`,
+      outcome: "retrying",
+    }));
+    useDelivery.mockReturnValue({
+      data: { ...DELIVERY, attemptCount: 25, attempts: many },
+      isLoading: false,
+      isError: false,
+    });
+    render(<DeliveryDetailContent webhookId="wh_1" deliveryId="dlv_1" />);
+
+    // The scalar reflects the true cycle counter (25), and the timeline is
+    // honest that only the most recent 20 records are shown.
+    expect(screen.getByText("25")).toBeInTheDocument();
+    expect(screen.getByText(/most recent 20 attempts/i)).toBeInTheDocument();
   });
 
   it("fires a redelivery when the button is clicked", async () => {

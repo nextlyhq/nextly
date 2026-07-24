@@ -25,6 +25,13 @@ import { useCan } from "@admin/hooks/useCan";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
+/**
+ * The engine keeps only the most recent attempts on each delivery row (the
+ * `MAX_ATTEMPT_LOG` cap in the webhook deliver pipeline). Mirrored here so the
+ * timeline can say so when the log is full and older attempts are truncated.
+ */
+const ATTEMPT_LOG_LIMIT = 20;
+
 /** One read-only label/value row in a metadata card. */
 const MetaRow: React.FC<{ label: string; children: React.ReactNode }> = ({
   label,
@@ -145,13 +152,15 @@ const DeliveryDetailContent: React.FC<{
                 {delivery.eventId}
               </code>
             </MetaRow>
-            <MetaRow label="Attempts">
-              {/* Count the recorded history, not the row's `attemptCount`: a
-                  redelivery resets that counter to zero for the fresh cycle
-                  while the prior attempts stay in the log, so the counter would
-                  read 0 above a non-empty timeline. The history length always
-                  matches the attempts shown below. */}
-              <span className="tabular-nums">{delivery.attempts.length}</span>
+            <MetaRow label="Attempts (this cycle)">
+              {/* `attemptCount` is the counter for the current delivery cycle;
+                  a redelivery resets it to 0 for the fresh cycle. It is scoped
+                  ("this cycle") precisely so a 0 here does not read as a
+                  contradiction of the retained history below — the two are
+                  different metrics. It is preferred over `attempts.length`
+                  because the stored log is capped (see the timeline note), so
+                  the log length would under-count once the cap is reached. */}
+              <span className="tabular-nums">{delivery.attemptCount}</span>
             </MetaRow>
             <MetaRow label="Last response">
               {delivery.lastStatusCode === null ? (
@@ -192,6 +201,13 @@ const DeliveryDetailContent: React.FC<{
         <p className="text-[11px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">
           Attempts
         </p>
+        {/* The stored log is capped, so once it is full older attempts are
+            dropped; say so rather than implying this is the whole history. */}
+        {attempts.length >= ATTEMPT_LOG_LIMIT && (
+          <p className="text-xs text-muted-foreground">
+            Showing the most recent {ATTEMPT_LOG_LIMIT} attempts.
+          </p>
+        )}
         {attempts.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No attempts have been recorded yet.
