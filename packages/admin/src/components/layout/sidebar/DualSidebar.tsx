@@ -435,8 +435,20 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       (id !== "media" || isFolderTreeVisible)) ||
     id.startsWith("standalone-");
 
+  // The Settings icon lands on the first subpage the user can open: General
+  // (manage-settings), else API Keys, else Webhooks. Without this a user whose
+  // only settings access is a webhook/api-key grant would click Settings and be
+  // redirected away from the manage-settings-guarded /admin/settings.
+  const settingsHref = hasPermission("manage-settings")
+    ? ROUTES.SETTINGS
+    : canAccessApiKeys
+      ? ROUTES.SETTINGS_API_KEYS
+      : canAccessWebhooks
+        ? ROUTES.SETTINGS_WEBHOOKS
+        : ROUTES.SETTINGS;
+
   const resolveItemHref = (item: MainMenuItem): string =>
-    resolveItemHrefHelper(item, visibleStandalonePlugins);
+    resolveItemHrefHelper(item, visibleStandalonePlugins, settingsHref);
 
   // Resolve collections for the active standalone plugin section
   const pluginCollectionsForSection = useMemo(() => {
