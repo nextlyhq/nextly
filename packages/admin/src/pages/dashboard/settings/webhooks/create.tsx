@@ -12,6 +12,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateWebhook } from "@admin/hooks/queries/useWebhooks";
+import { useCan } from "@admin/hooks/useCan";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import { toCreateInput } from "@admin/lib/webhook-validation";
@@ -19,6 +20,9 @@ import { toCreateInput } from "@admin/lib/webhook-validation";
 const CreateWebhookContent: React.FC = () => {
   const { mutate: doCreate, isPending } = useCreateWebhook();
   const [secret, setSecret] = useState<string | null>(null);
+  // Only an updater can reveal the secret later; a create-only user cannot, so
+  // the one-time dialog tells them to copy it now.
+  const canRevealLater = useCan("update-webhooks");
 
   const handleSubmit = useCallback(
     (values: Parameters<typeof toCreateInput>[0]) => {
@@ -55,6 +59,7 @@ const CreateWebhookContent: React.FC = () => {
         open={secret !== null}
         secrets={secret !== null ? [secret] : null}
         oneTime
+        canRevealLater={canRevealLater}
         onClose={handleDismissSecret}
       />
     </>

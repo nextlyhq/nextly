@@ -30,6 +30,12 @@ export interface WebhookSecretModalProps {
   secrets: string[] | null;
   /** Create flow: shown once, dismiss blocked until confirmed. */
   oneTime: boolean;
+  /**
+   * Create flow only: whether this user can retrieve the secret later via the
+   * reveal action (requires update-webhooks). A create-only user cannot, so the
+   * copy is strict "copy now" rather than promising a later reveal.
+   */
+  canRevealLater?: boolean;
   onClose: () => void;
 }
 
@@ -37,14 +43,17 @@ const SecretRow: React.FC<{ secret: string }> = ({ secret }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
+    // `navigator.clipboard` is undefined in non-secure/policy-restricted
+    // contexts; accessing writeText on it would throw synchronously. The secret
+    // stays on screen for manual selection when copy isn't available.
+    if (!navigator.clipboard?.writeText) return;
     navigator.clipboard.writeText(secret).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
       },
       () => {
-        // Clipboard unavailable (permissions/insecure context); the secret is
-        // still on screen for the operator to select and copy manually.
+        // Clipboard write rejected (permissions); manual selection still works.
       }
     );
   }, [secret]);
@@ -76,9 +85,14 @@ export const WebhookSecretModal: React.FC<WebhookSecretModalProps> = ({
   open,
   secrets,
   oneTime,
+  canRevealLater = false,
   onClose,
 }) => {
   const list = secrets ?? [];
+
+  const createMessage = canRevealLater
+    ? "Copy your signing secret now. After you close this dialog you can retrieve it again from the endpoint's Reveal signing secret action. Use it to verify the webhook-signature header on every delivery."
+    : "Copy your signing secret now — it will not be shown again. Use it to verify the webhook-signature header on every delivery.";
 
   return (
     <Dialog open={open} onOpenChange={oneTime ? undefined : onClose}>
@@ -98,7 +112,7 @@ export const WebhookSecretModal: React.FC<WebhookSecretModalProps> = ({
                 <Info className="h-4 w-4" />
                 <AlertDescription>
                   {oneTime
-                    ? "Copy your signing secret now. After you close this dialog you can retrieve it again from the endpoint's Reveal signing secret action. Use it to verify the webhook-signature header on every delivery."
+                    ? createMessage
                     : "Use this to verify the webhook-signature header on each delivery. Keep it secret; treat it like a password."}
                 </AlertDescription>
               </Alert>

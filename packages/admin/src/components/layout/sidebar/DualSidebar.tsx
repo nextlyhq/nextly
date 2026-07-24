@@ -446,7 +446,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       ? ROUTES.SETTINGS_API_KEYS
       : canAccessWebhooks
         ? ROUTES.SETTINGS_WEBHOOKS
-        : ROUTES.SETTINGS;
+        : hasPermission("manage-email-providers")
+          ? ROUTES.SETTINGS_EMAIL_PROVIDERS
+          : hasPermission("manage-email-templates")
+            ? ROUTES.SETTINGS_EMAIL_TEMPLATES
+            : ROUTES.SETTINGS;
 
   const resolveItemHref = (item: MainMenuItem): string =>
     resolveItemHrefHelper(item, visibleStandalonePlugins, settingsHref);
