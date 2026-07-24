@@ -2,13 +2,12 @@
  * Document validation. Produces machine-readable issues so both humans and
  * agents can locate and fix problems: every issue carries a JSON-Pointer into
  * the document, a stable code from {@link ISSUE_CODES}, a message, and an
- * optional suggestion. This is the contract the AI repair loop (the
- * `validate_page` tool) wraps unchanged, and the same issue shape the style
- * compiler and custom-CSS validator emit in later plans.
+ * optional suggestion. The issue shape is the stable contract external tools
+ * consume to locate and repair problems.
  *
  * Runtime-free like the rest of the engine: it reads the document and a caller-
- * supplied context (breakpoints, mode, and — once it exists — a block-type
- * lookup); it never touches storage or a framework.
+ * supplied context (breakpoints, mode, and an optional block-type lookup); it
+ * never touches storage or a framework.
  */
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
@@ -40,9 +39,9 @@ export interface ValidationIssue {
 }
 
 /**
- * A minimal block-type lookup. The boot registry (a later PR) satisfies this;
- * until then callers omit it and node-type existence is not checked (structure
- * still is). Keeping it an interface avoids coupling validation to the registry.
+ * A minimal block-type lookup so validation is not coupled to a concrete
+ * registry. When a caller supplies one, unregistered node types are reported;
+ * when omitted, node-type existence is not checked but structure still is.
  */
 export interface BlockTypeLookup {
   has(type: string): boolean;
@@ -62,8 +61,8 @@ export interface ValidationContext {
 
 /**
  * The stable issue-code vocabulary, each with a one-line description. Tests
- * assert that every code emitted appears here and vice versa, so the repair-
- * loop vocabulary cannot drift silently.
+ * assert that every code emitted appears here and vice versa, so the emitted
+ * vocabulary cannot drift silently.
  */
 export const ISSUE_CODES = {
   "invalid-format-version":
@@ -300,8 +299,8 @@ function collectBreakpointIds(
     const defs = isPlainObject(set) ? set[axis] : undefined;
     if (!Array.isArray(defs)) return;
     defs.forEach((def, index) => {
-      // A malformed definition (null, missing id) is skipped rather than
-      // dereferenced; the settings layer validates the breakpoint set on save.
+      // A malformed definition (null, missing id) contributes no usable
+      // breakpoint id, so it is skipped rather than dereferenced.
       const rawDef: unknown = def;
       if (!isPlainObject(rawDef) || typeof rawDef.id !== "string") return;
       const id = rawDef.id;
@@ -310,7 +309,7 @@ function collectBreakpointIds(
           path: pointer(pointer("/breakpoints", axis), index),
           code: "breakpoint-id-not-unique",
           severity: "error",
-          message: `Breakpoint id "${id}" is defined more than once.`,
+          message: `Breakpoint id "${describeValue(id)}" is defined more than once.`,
           suggestion: "Give every breakpoint a unique id across both axes.",
         });
       }
@@ -398,14 +397,20 @@ function measureBytes(
     } else if (value === null || value === undefined) {
       bytes += 4;
     } else if (Array.isArray(value)) {
-      bytes += 2 + Math.max(0, value.length - 1); // brackets + commas
+      // Count the array's own structural bytes (brackets + commas) and bail
+      // BEFORE enqueuing elements: a huge array's comma count alone can exceed
+      // the cap, so millions of entries must never be pushed first.
+      bytes += 2 + Math.max(0, value.length - 1);
+      if (bytes > limit) return { bytes, exceeded: true };
       for (const item of value) stack.push(item);
     } else if (typeof value === "object") {
       bytes += 2; // braces
+      if (bytes > limit) return { bytes, exceeded: true };
       for (const [key, val] of Object.entries(
         value as Record<string, unknown>
       )) {
         bytes += utf8ByteLength(key, limit) + 3; // quotes + colon + comma
+        if (bytes > limit) return { bytes, exceeded: true };
         stack.push(val);
       }
     }
@@ -508,7 +513,7 @@ function validateNode(
         path: pointer(path, "id"),
         code: "duplicate-node-id",
         severity: "error",
-        message: `Node id "${node.id}" is already used at ${firstSeenAt}.`,
+        message: `Node id "${describeValue(node.id)}" is already used at ${firstSeenAt}.`,
         suggestion: "Give every node a unique id.",
       });
     } else {
@@ -585,7 +590,7 @@ function validateDomIds(
         path: at,
         code: "duplicate-dom-id",
         severity: state.unknownSeverity,
-        message: `HTML id "${domId}" is already used at ${firstAt}.`,
+        message: `HTML id "${describeValue(domId)}" is already used at ${firstAt}.`,
         suggestion: "Give each element a unique id.",
       });
     } else {
@@ -632,7 +637,7 @@ function validateSlots(
         path: pointer(pointer(path, "slots"), slot),
         code: "invalid-slots",
         severity: "error",
-        message: `Slot "${slot}" must be an array of nodes.`,
+        message: `Slot "${describeValue(slot)}" must be an array of nodes.`,
       });
     }
     // Child nodes themselves are validated by the recursive walk in validate().
@@ -645,10 +650,18 @@ function validateClasses(
   issues: ValidationIssue[]
 ): void {
   if (node.classes === undefined) return;
-  if (
-    !Array.isArray(node.classes) ||
-    !node.classes.every(c => typeof c === "string")
-  ) {
+  // Index-based, not `.every` (which skips array holes), so a sparse classes
+  // array — which serializes to `[null, …]` — is rejected, not accepted.
+  let valid = Array.isArray(node.classes);
+  if (valid) {
+    for (let i = 0; i < node.classes.length; i++) {
+      if (typeof node.classes[i] !== "string") {
+        valid = false;
+        break;
+      }
+    }
+  }
+  if (!valid) {
     issues.push({
       path: pointer(path, "classes"),
       code: "invalid-classes",
@@ -677,8 +690,9 @@ function validateAttributes(
     return;
   }
   // Event-handler attributes are inline JS, which blocks never allow; reject
-  // them at the gate. The broader render-safe attribute allowlist is shared
-  // with the renderer (Plan 03) to avoid a divergent second list here.
+  // them at the gate. The broader render-safe attribute allowlist is owned by
+  // the renderer; validation does not duplicate it here to avoid two lists
+  // drifting apart.
   for (const key of Object.keys(node.attributes)) {
     if (/^on/i.test(key)) {
       issues.push({
@@ -726,7 +740,7 @@ function validateStyleEnvelope(
         path: statePath,
         code: "invalid-style-state",
         severity: "error",
-        message: `"${stateKey}" is not a known style state.`,
+        message: `"${describeValue(stateKey)}" is not a known style state.`,
         suggestion: `Use one of: ${STYLE_STATES.join(", ")}.`,
       });
       continue;
@@ -736,7 +750,7 @@ function validateStyleEnvelope(
         path: statePath,
         code: "invalid-style-values",
         severity: "error",
-        message: `Style state "${stateKey}" must map breakpoint ids to values.`,
+        message: `Style state "${describeValue(stateKey)}" must map breakpoint ids to values.`,
       });
       continue;
     }
@@ -747,7 +761,7 @@ function validateStyleEnvelope(
           path: bpPath,
           code: "unknown-breakpoint",
           severity: state.unknownSeverity,
-          message: `Breakpoint "${breakpointId}" is not defined for this site.`,
+          message: `Breakpoint "${describeValue(breakpointId)}" is not defined for this site.`,
         });
       }
       if (!isPlainObject(values)) {
@@ -755,7 +769,7 @@ function validateStyleEnvelope(
           path: bpPath,
           code: "invalid-style-values",
           severity: "error",
-          message: `Style values at "${breakpointId}" must be an object.`,
+          message: `Style values at "${describeValue(breakpointId)}" must be an object.`,
         });
       }
     }
@@ -810,7 +824,7 @@ function validateVisibility(
             path: devicePath,
             code: "unknown-breakpoint",
             severity: state.unknownSeverity,
-            message: `Breakpoint "${breakpointId}" is not defined for this site.`,
+            message: `Breakpoint "${describeValue(breakpointId)}" is not defined for this site.`,
           });
         }
         // The stored shape is Record<breakpointId, boolean>; a truthy string or
@@ -820,7 +834,7 @@ function validateVisibility(
             path: devicePath,
             code: "invalid-visibility",
             severity: "error",
-            message: `visibility.devices["${breakpointId}"] must be a boolean.`,
+            message: `visibility.devices["${describeValue(breakpointId)}"] must be a boolean.`,
           });
         }
       }
@@ -856,10 +870,9 @@ const BINDING_SOURCES = ["entry", "item", "single", "site"];
 
 /**
  * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
- * "author.name". This rejects expression-like or otherwise malformed strings
- * (never eval, per the binding design). The one-hop RELATION limit is semantic
- * and needs the schema, so it is enforced in the binding-resolution plan, not
- * here.
+ * "author.name". This rejects expression-like or otherwise malformed strings so
+ * nothing evaluable is ever stored. The one-hop RELATION limit is semantic and
+ * needs the schema, so it is enforced where bindings are resolved, not here.
  */
 const BIND_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 

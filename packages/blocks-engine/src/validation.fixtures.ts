@@ -4,8 +4,8 @@
  * assert precise (path, code) pairs, not just pass/fail, so a change in what
  * validation accepts is a visible change here.
  *
- * Not a test file itself; consumed by validation.test.ts. Kept as data so the
- * same corpus can seed the renderer and repair-loop suites in later plans.
+ * Not a test file itself; consumed by validation.test.ts. Kept as reusable
+ * data rather than inline test cases so other suites can share the corpus.
  */
 import type { BlockDocument, BreakpointSet } from "./document";
 

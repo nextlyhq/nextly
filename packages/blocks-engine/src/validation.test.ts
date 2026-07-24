@@ -407,6 +407,50 @@ describe("validation never throws on adversarial input", () => {
     expect(Date.now() - start).toBeLessThan(2000);
   });
 
+  it("rejects a huge array in props by byte size without enqueuing it all", () => {
+    // A 20M-element array under the node cap: its comma bytes alone exceed the
+    // 2MiB cap, so the byte counter must bail before pushing 20M stack entries.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: { items: new Array(20_000_000).fill(0) },
+        },
+      ],
+    });
+    const start = Date.now();
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { maxDepth: 12, maxNodes: 5000, maxBytes: 2 * 1024 * 1024 },
+    });
+    expect(issues.some(i => i.code === "document-too-large")).toBe(true);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("rejects a sparse classes array (holes are not skipped)", () => {
+    const classes: unknown[] = [];
+    classes[1] = "cls";
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(
+      issues.some(
+        i => i.code === "invalid-classes" && i.path === "/nodes/0/classes"
+      )
+    ).toBe(true);
+  });
+
   it("rejects an oversized string prop by byte size without materializing it", () => {
     // A single node well under the node/depth caps but carrying a ~50MB string:
     // the bounded byte counter must reject it quickly, not allocate a full copy.
