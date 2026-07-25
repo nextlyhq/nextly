@@ -1102,6 +1102,61 @@ describe("validateBlockPropValues skipped sentinels", () => {
   });
 });
 
+describe("validateBlockPropValues stored shapes", () => {
+  it("requires document ids to be strings", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        image: { type: "upload", relationTo: "media" },
+        ref: { type: "relationship", relationTo: ["posts", "pages"] },
+      },
+    };
+    // Every canonical contract types an id as a string.
+    expect(await validateBlockPropValues({ image: 42 }, source)).toHaveLength(
+      1
+    );
+    expect(
+      await validateBlockPropValues(
+        { ref: { relationTo: "posts", value: 42 } },
+        source
+      )
+    ).toHaveLength(1);
+    expect(await validateBlockPropValues({ image: "  " }, source)).toHaveLength(
+      1
+    );
+    expect(await validateBlockPropValues({ image: "m1" }, source)).toEqual([]);
+  });
+
+  it("requires a rich-text envelope to be a stored JSON shape", async () => {
+    const source: BlockPropsSource = { props: { body: { type: "richText" } } };
+    // A class instance with the right keys encodes to whatever its own toJSON
+    // decides, so the renderer would read back something else entirely.
+    const disguised = Object.assign(new Date("2026-01-01"), {
+      root: { type: "root", children: [] },
+    });
+    expect(
+      await validateBlockPropValues({ body: disguised }, source)
+    ).not.toEqual([]);
+    expect(
+      await validateBlockPropValues(
+        { body: { root: { type: "root", children: [] } } },
+        source
+      )
+    ).toEqual([]);
+  });
+
+  it("encodes an array through its own toJSON when it declares one", async () => {
+    const source: BlockPropsSource = { props: { data: { type: "json" } } };
+    // Stored as [null], so the declared elements are not what persists.
+    const lying = Object.assign([1, 2], { toJSON: () => [undefined] });
+    expect(await validateBlockPropValues({ data: lying }, source)).toHaveLength(
+      1
+    );
+    // The reverse: unsafe-looking elements, safe encoded output.
+    const safe = Object.assign([() => 1], { toJSON: () => [1] });
+    expect(await validateBlockPropValues({ data: safe }, source)).toEqual([]);
+  });
+});
+
 describe("plugin field types as block props", () => {
   afterEach(() => {
     clearFieldTypes();

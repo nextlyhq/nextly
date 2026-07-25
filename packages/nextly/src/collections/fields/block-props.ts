@@ -904,16 +904,19 @@ function countOption(
  * catalog into the field system.
  */
 function isEditorContent(value: unknown): string | true {
-  if (!isPlainObject(value)) return "must be editor content";
+  // Plain records, not merely objects: a class instance with the right keys
+  // encodes to whatever its own `toJSON` decides, so the renderer would read
+  // back something other than the envelope that was validated.
+  if (!isPlainRecord(value)) return "must be editor content";
   const root = value.root;
-  if (!isPlainObject(root) || root.type !== "root") {
+  if (!isPlainRecord(root) || root.type !== "root") {
     return "must be editor content with a root node";
   }
   if (!Array.isArray(root.children)) {
     return "must be editor content whose root has a list of children";
   }
   return root.children.every(
-    child => isPlainObject(child) && typeof child.type === "string"
+    child => isPlainRecord(child) && typeof child.type === "string"
   )
     ? true
     : "must be editor content whose root children are nodes";
@@ -927,10 +930,13 @@ function isTextList(value: unknown): string | true {
     : "must contain only text entries";
 }
 
-/** Whether a value is a document id. */
+/**
+ * Whether a value is a document id. The canonical contracts type ids as
+ * strings on both the single and polymorphic forms, so a number would reach
+ * reference consumers in a shape they do not accept.
+ */
 function isDocumentId(value: unknown): boolean {
-  if (typeof value === "string") return value.length > 0;
-  return typeof value === "number" && Number.isFinite(value);
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 /**
@@ -1074,20 +1080,21 @@ function containsUnserializable(value: unknown): boolean {
     ) {
       return true;
     }
-    if (Array.isArray(current)) {
-      pending.push(...current);
-      continue;
-    }
     if (current === null || typeof current !== "object") continue;
     if (seen.has(current)) continue;
     seen.add(current);
     // An object that defines `toJSON` chooses its own stored form, which is
     // how a Date becomes an ISO string. What it produces is what gets stored,
-    // so the walk follows that result rather than the object: a `toJSON`
-    // returning `undefined` makes the whole prop disappear on encode.
+    // so the walk follows that result rather than the value it was called on.
+    // Arrays are consulted here too: one carrying a `toJSON` is encoded from
+    // that result, not from its elements.
     const encoded = encodedForm(current);
     if (encoded !== current) {
       pending.push(encoded);
+      continue;
+    }
+    if (Array.isArray(current)) {
+      pending.push(...current);
       continue;
     }
     // Anything else that is not a plain record is reshaped rather than
