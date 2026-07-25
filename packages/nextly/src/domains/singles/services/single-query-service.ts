@@ -173,6 +173,43 @@ export function buildSingleHookContext<T>(
  *
  * @returns `null` if access is allowed, `SingleResult` if denied
  */
+/**
+ * Whether a loaded row satisfies an access constraint of the
+ * `{ field: { equals: value } }` shape the access service emits for reads.
+ *
+ * Reads are expected to fold that predicate into a LIST query, so a caller that
+ * holds a single row has to check it directly instead. An unrecognized
+ * constraint shape denies: a predicate that cannot be checked is not a
+ * predicate that has been satisfied.
+ */
+function documentSatisfiesConstraint(
+  document: Record<string, unknown>,
+  query: unknown
+): boolean {
+  if (!query || typeof query !== "object") return true;
+  for (const [field, condition] of Object.entries(
+    query as Record<string, unknown>
+  )) {
+    if (
+      condition === null ||
+      typeof condition !== "object" ||
+      !("equals" in condition)
+    ) {
+      return false;
+    }
+    const expected = condition.equals;
+    // Singles default their owner column to camelCase `createdBy` while the row
+    // may carry the snake_case column the database stores, so a constraint is
+    // matched against either spelling of the same column rather than missing it
+    // and denying a legitimate owner.
+    const camel = field.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+    const snake = field.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
+    const actual = document[field] ?? document[camel] ?? document[snake];
+    if (actual !== expected) return false;
+  }
+  return true;
+}
+
 export async function checkSingleAccess(params: {
   slug: string;
   operation: "read" | "update" | "publish" | "unpublish";
@@ -431,12 +468,24 @@ export class SingleQueryService extends BaseService {
     slug: string;
     accessRules: CollectionAccessRules | undefined;
     user?: UserContext;
-    document: Record<string, unknown>;
+    document: Record<string, unknown> | null;
   }): Promise<SingleResult | null> {
     const { slug, accessRules, user, document } = params;
     // Only reached for a document-dependent rule, so an absent rule set means
     // there is nothing left to judge.
     if (!accessRules) return null;
+
+    const denied: SingleResult = {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: read on single "${slug}" is not permitted`,
+    };
+
+    // No row means ownership cannot be established. Auto-create would otherwise
+    // materialize an unowned document for a caller the rule may not admit, so
+    // fail closed and leave the Single uncreated.
+    if (!document) return denied;
+
     const documentId =
       typeof document.id === "string" ? document.id : undefined;
     const result = await this.accessControlService.evaluateAccess(
@@ -455,14 +504,20 @@ export class SingleQueryService extends BaseService {
       documentId,
       document
     );
-    if (result.allowed) return null;
-    return {
-      success: false,
-      statusCode: 403,
-      message:
-        result.reason ??
-        `Access denied: read on single "${slug}" is not permitted`,
-    };
+
+    if (!result.allowed) {
+      return { ...denied, message: result.reason ?? denied.message };
+    }
+
+    // An owner-only read does not decide: it returns the predicate a LIST would
+    // have filtered by and reports `allowed: true` whoever owns the row. A
+    // Single is one document, so there is nothing to filter — the predicate has
+    // to be checked against the row itself or every authenticated caller reads
+    // it. Custom rules that return a constraint are held to the same check.
+    if (!documentSatisfiesConstraint(document, result.query)) {
+      return denied;
+    }
+    return null;
   }
 
   // ============================================================
@@ -532,6 +587,27 @@ export class SingleQueryService extends BaseService {
         return accessDenied;
       }
 
+      // 1.6. Settle a deferred document rule BEFORE any read side effect. Hooks
+      // are user code and auto-create permanently materializes the document
+      // (with its first version and localized defaults), so a caller the rule
+      // denies must not reach either by issuing a read it is not allowed to
+      // make. The row is loaded here rather than at step 5 so the decision has
+      // something to judge; step 5 reuses it.
+      let loadedDoc: SingleDocument | null = null;
+      if (deferDocumentRule && !options.overrideAccess) {
+        loadedDoc = await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        );
+        const documentRuleDenied = await this.evaluateReadDocumentRule({
+          slug,
+          accessRules: singleMeta.accessRules,
+          user: options.user,
+          document: loadedDoc,
+        });
+        if (documentRuleDenied) return documentRuleDenied;
+      }
+
       // 2. Build shared context for hooks (seed with caller-provided context)
       const sharedContext: Record<string, unknown> = { ...options.context };
       const hookCollection = getSingleHookCollection(slug);
@@ -563,10 +639,12 @@ export class SingleQueryService extends BaseService {
       }
 
       // 5. Fetch document from database
-      let doc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
+      let doc =
+        loadedDoc ??
+        (await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        ));
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -613,19 +691,6 @@ export class SingleQueryService extends BaseService {
         options.fallbackLocale,
         statusFilter ? statusFilter.value : undefined
       );
-
-      // 6.95. Re-judge a document-dependent read rule now that the row exists.
-      // Ownership and custom rules need the document the earlier gate could not
-      // supply; evaluating them there would have denied on the missing row.
-      if (deferDocumentRule && !options.overrideAccess) {
-        const documentRuleDenied = await this.evaluateReadDocumentRule({
-          slug,
-          accessRules: singleMeta.accessRules,
-          user: options.user,
-          document: doc,
-        });
-        if (documentRuleDenied) return documentRuleDenied;
-      }
 
       // 7. Deserialize JSON fields
       doc = this.deserializeJsonFields(doc, singleMeta.fields);

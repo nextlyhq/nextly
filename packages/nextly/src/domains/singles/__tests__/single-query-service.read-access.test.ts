@@ -36,7 +36,7 @@ const admin = { id: "user-2", roles: ["admin"] };
 
 function createService(
   evaluateAllowed: boolean,
-  accessRules: Record<string, unknown> = ROLE_BASED_READ
+  accessRules: Record<string, unknown> | undefined = ROLE_BASED_READ
 ) {
   const registry = createMockSingleRegistry();
   registry.registerSingle("site-settings", {
@@ -113,39 +113,15 @@ describe("SingleQueryService.get — stored read rules", () => {
     expect(context.user).toMatchObject({ id: "user-1", roles: ["editor"] });
   });
 
-  it("does not blanket-deny an owner-only read before the row is loaded", async () => {
-    // The gate runs before the document is fetched and fails an owner-only rule
-    // closed when it has no document, so evaluating it there would 403 every
-    // non-super-admin read. The rule has to be judged against the loaded row.
-    const { service, accessControlService } = createService(true, {
-      read: { type: "owner-only" as const },
-    });
+  it("leaves a Single with no read rule publicly readable", async () => {
+    // The standalone GET route is deliberately public (it serves public
+    // frontends) and forwards no caller, so an unrestricted Single has to keep
+    // reading anonymously. Enforcement must only bite where a rule exists.
+    const { service } = createService(true, undefined);
 
-    const result = await service.get("site-settings", {
-      user: editor,
-      routeAuthorized: true,
-    });
+    const result = await service.get("site-settings", {});
 
     expect(result.success).toBe(true);
-    const [, , , documentId, document] =
-      accessControlService.evaluateAccess.mock.calls[0];
-    // Judged against the real row, so ownership is actually comparable.
-    expect(documentId).toBe("doc1");
-    expect(document).toMatchObject({ id: "doc1" });
-  });
-
-  it("denies an owner-only read the rule rejects for this caller", async () => {
-    const { service } = createService(false, {
-      read: { type: "owner-only" as const },
-    });
-
-    const result = await service.get("site-settings", {
-      user: editor,
-      routeAuthorized: true,
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.statusCode).toBe(403);
   });
 
   it("lets a trusted read bypass the stored rule", async () => {
@@ -157,6 +133,117 @@ describe("SingleQueryService.get — stored read rules", () => {
 
     expect(result.success).toBe(true);
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Owner-only reads, against the REAL AccessControlService.
+ *
+ * These deliberately do not mock the evaluator. For a read it does not return a
+ * decision at all: `evaluateOwnerAccess` reports `allowed: true` whoever owns
+ * the row and hands back the predicate a LIST would have filtered by. A mocked
+ * `allowed: false` is a value the real evaluator never produces for this rule,
+ * so a test built on one proves nothing about ownership and hides a read path
+ * that admits everybody.
+ */
+describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
+  const OWNER_ONLY_READ = { read: { type: "owner-only" as const } };
+
+  function createOwnerOnlyService(row: Record<string, unknown> | null) {
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({ accessRules: OWNER_ONLY_READ }),
+      fields: [textField("siteName")],
+    });
+    const selectOne = vi.fn().mockResolvedValue(row);
+    const insert = vi.fn().mockResolvedValue({ id: "doc1" });
+
+    const service = new SingleQueryService(
+      createMockAdapter({ selectOne, insert }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      undefined,
+      createMockRBACService(true) as unknown as Ctor[5]
+      // No accessControlService override: the real one is constructed, which is
+      // the entire point of these tests.
+    );
+    return { service, selectOne, insert };
+  }
+
+  it("denies a caller who does not own the row", async () => {
+    const { service } = createOwnerOnlyService({
+      id: "doc1",
+      created_by: "someone-else",
+      siteName: "Nextly",
+    });
+
+    const result = await service.get("site-settings", {
+      user: { id: "not-the-owner" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("admits the owner", async () => {
+    const { service } = createOwnerOnlyService({
+      id: "doc1",
+      created_by: "owner-1",
+      siteName: "Nextly",
+    });
+
+    const result = await service.get("site-settings", {
+      user: { id: "owner-1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts the camelCase spelling of the owner column", async () => {
+    const { service } = createOwnerOnlyService({
+      id: "doc1",
+      createdBy: "owner-1",
+      siteName: "Nextly",
+    });
+
+    const result = await service.get("site-settings", {
+      user: { id: "owner-1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("denies without auto-creating when the row does not exist", async () => {
+    // Auto-create would permanently materialize an unowned document, plus its
+    // first version and localized defaults, for a caller the rule may not
+    // admit — a write triggered by a read that is about to be refused.
+    const { service, insert } = createOwnerOnlyService(null);
+
+    const result = await service.get("site-settings", {
+      user: { id: "someone" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("lets a trusted read through untouched", async () => {
+    const { service } = createOwnerOnlyService({
+      id: "doc1",
+      created_by: "someone-else",
+    });
+
+    const result = await service.get("site-settings", {
+      overrideAccess: true,
+    });
+
+    expect(result.success).toBe(true);
   });
 });
 
