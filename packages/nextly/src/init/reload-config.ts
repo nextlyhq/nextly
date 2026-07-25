@@ -423,15 +423,23 @@ function publishScopeRecording(
 
 /**
  * Republish the webhook recording policy from the reloaded config, so a live
- * `webhooks` opt-out/opt-in takes effect without a restart. Called AFTER a sync
- * path completes — never before it — so a reload whose schema apply fails does
- * not leave a recording OPT-IN ahead of the still-old runtime field tree.
+ * `webhooks` opt-out/opt-in takes effect without a restart.
+ *
+ * Called at two points, by design, with different `scopes`:
+ *   - BEFORE introspection with both scopes `false` — publishes only the
+ *     privacy-critical OPT-OUTS (which need no field tree) so they take effect
+ *     even if a later step of this reload (introspection, an unsafe diff, the
+ *     apply) aborts. Opt-INs are suppressed by the false flags.
+ *   - AFTER each scope's metadata sync succeeds with that scope `true` — adds
+ *     the OPT-INS (and removed-slug pruning), which DO read the field tree, so a
+ *     reload whose schema apply fails never leaves a recording opt-in ahead of
+ *     the still-old runtime field tree.
  *
  * Per-scope on purpose: `scopes` names the entity kinds whose metadata sync
  * actually succeeded, so a PARTIAL reload (collections synced, singles/component
  * failed) still activates the committed collections' opt-ins instead of holding
  * them hostage to an unrelated failure. Opt-OUTS ignore the gate entirely (see
- * {@link publishScopeRecording}).
+ * {@link publishScopeRecording}), which is what makes the pre-sync call safe.
  */
 function republishRecordingPolicies(
   newConfig: {
