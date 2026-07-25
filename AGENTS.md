@@ -101,6 +101,14 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Test-only, CI-only, or docs-only PRs get NO changeset.
 - Releases are CI-only: the Changesets bot opens a Version PR, and merging it
   publishes via npm trusted publishing. Never attempt to publish locally.
+- ONE narrow exception, for claiming a package name that does not exist on npm
+  yet: npm can only attach a Trusted Publisher to a package that already exists,
+  and OIDC cannot make a package's first publish, so a new package cannot
+  bootstrap itself from CI. `scripts/release/bootstrap-package.mjs` publishes a
+  `0.0.0` placeholder containing no code (`package.json` + `README` only) to
+  claim the name; it refuses to run when `CI` is set, so this never becomes a
+  long-lived npm token in a workflow. Every real version still publishes only
+  from CI. Details: the `release-and-changesets` skill.
 
 ## Git and PR rules
 
