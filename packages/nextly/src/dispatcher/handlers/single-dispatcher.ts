@@ -82,6 +82,7 @@ import {
   readAuthenticatedScope,
 } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -729,7 +730,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
           : "all";
+      // Forward the caller so the service can evaluate the Single's stored read
+      // rules for them. Without it those rules cannot run at all: a rule that
+      // asks who is reading has no one to judge, so the admin's read setting
+      // silently did nothing over HTTP. `routeAuthorized` attests the route
+      // already ran the coarse RBAC gate, so only that re-check is skipped.
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.entry.get(slug, {
+        user,
+        routeAuthorized: !!user,
+        // A scoped API key is judged on its own read grant rather than on the
+        // permissions of the account that issued it.
+        authenticatedScope: readAuthenticatedScope(p),
         depth: toNumber(p.depth),
         // `?locale=` selects the content language; `?fallback-locale=none`
         // disables fallback so an untranslated field reads empty (admin editor relies on

@@ -38,11 +38,12 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import type {
+import type { CollectionAccessRules } from "../../../services/access";
+import {
   AccessControlService,
-  CollectionAccessRules,
+  isSuperAdminContext,
 } from "../../../services/access";
-import { isSuperAdminContext } from "../../../services/access";
+import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
@@ -403,9 +404,71 @@ export class SingleQueryService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    accessControlService?: AccessControlService
   ) {
     super(adapter, logger);
+    // Evaluates the Single's stored access rules. Defaulted rather than
+    // required so every existing construction site keeps working, mirroring
+    // how the mutation service resolves the same dependency: without one the
+    // read gate would silently skip the stored rules it is handed.
+    this.accessControlService =
+      accessControlService ?? new AccessControlService();
+  }
+
+  /** Resolves stored `accessRules` for the read gate. */
+  private readonly accessControlService: AccessControlService;
+
+  /**
+   * Decide an `owner-only` read against the loaded row.
+   *
+   * `checkSingleAccess` runs before the row is fetched and fails an owner-only
+   * rule closed for lack of a document, so the rule is skipped there and
+   * settled here — the same split the mutation service uses for publish
+   * transitions.
+   *
+   * Ownership is compared directly rather than through the access service. For
+   * a read that service does not decide at all: it reports `allowed: true` for
+   * any authenticated caller and returns the predicate a LIST would have
+   * filtered by, which one document has no query to apply. Comparing the owner
+   * column here keeps the check to the one thing owner-only actually asserts,
+   * with no filter grammar to re-implement.
+   */
+  private evaluateOwnerOnlyRead(params: {
+    slug: string;
+    rule: { ownerField?: string } | undefined;
+    user?: UserContext;
+    document: Record<string, unknown> | null;
+  }): SingleResult | null {
+    const { slug, rule, user, document } = params;
+    const denied: SingleResult = {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: read on single "${slug}" is not permitted`,
+    };
+
+    // Ownership presupposes an identity.
+    if (!user?.id) return denied;
+
+    // No row means ownership cannot be established. Denying also stops
+    // auto-create from materializing an unowned document for a caller who may
+    // not be entitled to it — a write triggered by a read about to be refused.
+    if (!document) return denied;
+
+    // Singles default the owner column to camelCase `createdBy` while the row
+    // may carry the snake_case column the database stores, so both spellings of
+    // the same column are accepted rather than denying the real owner.
+    const ownerField = rule?.ownerField ?? GENERIC_DEFAULT_OWNER_FIELD;
+    const camel = ownerField.replace(/_([a-z])/g, (_m: string, c: string) =>
+      c.toUpperCase()
+    );
+    const snake = ownerField.replace(
+      /[A-Z]/g,
+      (c: string) => `_${c.toLowerCase()}`
+    );
+    const owner = document[ownerField] ?? document[camel] ?? document[snake];
+
+    return owner === user.id ? null : denied;
   }
 
   // ============================================================
@@ -436,18 +499,44 @@ export class SingleQueryService extends BaseService {
       }
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
-      // Stored read-rule enforcement is intentionally NOT wired here yet: the
-      // REST read handlers do not forward the authenticated user, so evaluating
-      // a `read: authenticated` / role-based rule would reject every REST caller
-      // as anonymous. It lands with read-path user forwarding in the follow-up
-      // read PR (hence no `accessRules` passed).
+      // The Single's stored read rule is evaluated here against the caller the
+      // route forwards. It is the same rule the admin configures and the same
+      // one the write paths already honor, so a `read: authenticated` or
+      // role-based rule now holds over HTTP instead of only inside the Direct
+      // API.
+      // An owner-only or custom read rule can only be judged against the row,
+      // and the row is not loaded yet. Defer those to the re-check below: the
+      // gate fails an owner-only rule closed when it has no document, which
+      // would deny every non-super-admin read of an owner-only Single.
+      const readRule = (singleMeta.accessRules as CollectionAccessRules)
+        ?.read as { type?: string } | undefined;
+      const isSuperAdminSession =
+        isSuperAdminContext(options.user) &&
+        options.authenticatedScope?.actorType !== "apiKey";
+      // Both kinds are skipped at the gate, which has no row to judge them
+      // against, but only owner-only is settled below. A `custom` function may
+      // return an arbitrary query constraint, and honouring that on one document
+      // means re-implementing the filter grammar a list read compiles in SQL —
+      // a second evaluator to drift from the first. Custom read rules on Singles
+      // are therefore left unenforced here rather than half-enforced.
+      const skipRuleAtGate =
+        !isSuperAdminSession &&
+        (readRule?.type === "owner-only" || readRule?.type === "custom");
+      const deferDocumentRule =
+        !isSuperAdminSession && readRule?.type === "owner-only";
+
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
+        accessRules: singleMeta.accessRules,
+        deferStoredRuleEval: skipRuleAtGate,
         user: options.user,
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        // Without this the gate has rules but nothing to evaluate them with, and
+        // silently skips them.
+        accessControlService: this.accessControlService,
         // A scoped API key is judged on its OWN read grant, so a super-admin-owned
         // key does not skip the read gate via the owner's roles.
         authenticatedScope: options.authenticatedScope,
@@ -455,6 +544,27 @@ export class SingleQueryService extends BaseService {
       });
       if (accessDenied) {
         return accessDenied;
+      }
+
+      // 1.6. Settle a deferred document rule BEFORE any read side effect. Hooks
+      // are user code and auto-create permanently materializes the document
+      // (with its first version and localized defaults), so a caller the rule
+      // denies must not reach either by issuing a read it is not allowed to
+      // make. The row is loaded here rather than at step 5 so the decision has
+      // something to judge; step 5 reuses it.
+      let loadedDoc: SingleDocument | null = null;
+      if (deferDocumentRule && !options.overrideAccess) {
+        loadedDoc = await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        );
+        const documentRuleDenied = this.evaluateOwnerOnlyRead({
+          slug,
+          rule: readRule as { ownerField?: string } | undefined,
+          user: options.user,
+          document: loadedDoc,
+        });
+        if (documentRuleDenied) return documentRuleDenied;
       }
 
       // 2. Build shared context for hooks (seed with caller-provided context)
@@ -488,10 +598,12 @@ export class SingleQueryService extends BaseService {
       }
 
       // 5. Fetch document from database
-      let doc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
+      let doc =
+        loadedDoc ??
+        (await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        ));
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -549,7 +661,12 @@ export class SingleQueryService extends BaseService {
       doc = await this.expandRelationshipFields(
         doc,
         singleMeta.fields,
-        options.depth
+        options.depth,
+        {
+          enforceFieldAccess: true,
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+        }
       );
 
       // 7.7. Populate component field data from comp_{slug} tables
@@ -1232,7 +1349,18 @@ export class SingleQueryService extends BaseService {
   async expandRelationshipFields(
     doc: SingleDocument,
     fields: FieldConfig[],
-    depth?: number
+    depth?: number,
+    // The caller a related row's own field rules are evaluated against, and
+    // whether to evaluate them at all. Expansion copies whole related rows into
+    // this document, and a Single's field list never describes a related
+    // collection's fields. Enforcement is opt-in because a caller that has not
+    // supplied a user is indistinguishable from an anonymous one here, and
+    // enforcing for the former strips protected fields from everybody.
+    access: {
+      enforceFieldAccess?: boolean;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    } = {}
   ): Promise<SingleDocument> {
     const relationshipService = this.resolveRelationshipService();
     if (!relationshipService) {
@@ -1258,7 +1386,15 @@ export class SingleQueryService extends BaseService {
         doc,
         "", // Singles don't belong to a collection
         fields as unknown as FieldDefinition[],
-        { depth: depth ?? 2 }
+        {
+          depth: depth ?? 2,
+          // Set by the read path, which forwards a real caller. The mutation
+          // path does not, so its response keeps the fields it already returned
+          // rather than having them stripped as if nobody were asking.
+          enforceFieldAccess: access.enforceFieldAccess,
+          user: access.user as Record<string, unknown> | undefined,
+          overrideAccess: access.overrideAccess,
+        }
       );
       return expandedDoc as SingleDocument;
     } catch (error) {

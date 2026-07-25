@@ -473,6 +473,14 @@ describe("needsResolvedRoles", () => {
     }
   });
 
+  it("resolves roles for the Single document read", () => {
+    // Singles evaluate their stored read rule against the caller too, so a
+    // role-based rule needs the resolved slugs the same way entry reads do.
+    expect(
+      _needsResolvedRolesForTest("singles", "getSingleDocument", "GET")
+    ).toBe(true);
+  });
+
   it("resolves roles for version reads", () => {
     for (const method of [
       "listEntryVersions",
