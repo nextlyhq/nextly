@@ -1117,5 +1117,33 @@ describe("reloadNextlyConfig", () => {
       expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
       resetWebhookRecordingPolicy();
     });
+
+    it("applies a new opt-out even when live introspection throws", async () => {
+      const { isWebhookRecordingEnabled, resetWebhookRecordingPolicy } =
+        await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // A live reload sets a nonempty collection to `webhooks: false`, but the
+      // batched `introspectLiveSnapshot` throws (a transient DB blip). The reload
+      // event is already consumed, so if the opt-out were published only after a
+      // successful sync it would never take effect until a restart. Opt-outs are
+      // published BEFORE introspection, so this one stops recording immediately.
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            { slug: "leads", tableName: "dc_leads", webhooks: false },
+          ],
+        },
+      });
+      introspectSpy.mockRejectedValue(new Error("connection reset"));
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // Introspection failed, so no schema was applied...
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+      // ...but the opt-out took effect anyway.
+      expect(isWebhookRecordingEnabled("collection", "leads")).toBe(false);
+      resetWebhookRecordingPolicy();
+    });
   });
 });

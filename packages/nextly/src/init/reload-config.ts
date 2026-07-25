@@ -423,15 +423,23 @@ function publishScopeRecording(
 
 /**
  * Republish the webhook recording policy from the reloaded config, so a live
- * `webhooks` opt-out/opt-in takes effect without a restart. Called AFTER a sync
- * path completes — never before it — so a reload whose schema apply fails does
- * not leave a recording OPT-IN ahead of the still-old runtime field tree.
+ * `webhooks` opt-out/opt-in takes effect without a restart.
+ *
+ * Called at two points, by design, with different `scopes`:
+ *   - BEFORE introspection with both scopes `false` — publishes only the
+ *     privacy-critical OPT-OUTS (which need no field tree) so they take effect
+ *     even if a later step of this reload (introspection, an unsafe diff, the
+ *     apply) aborts. Opt-INs are suppressed by the false flags.
+ *   - AFTER each scope's metadata sync succeeds with that scope `true` — adds
+ *     the OPT-INS (and removed-slug pruning), which DO read the field tree, so a
+ *     reload whose schema apply fails never leaves a recording opt-in ahead of
+ *     the still-old runtime field tree.
  *
  * Per-scope on purpose: `scopes` names the entity kinds whose metadata sync
  * actually succeeded, so a PARTIAL reload (collections synced, singles/component
  * failed) still activates the committed collections' opt-ins instead of holding
  * them hostage to an unrelated failure. Opt-OUTS ignore the gate entirely (see
- * {@link publishScopeRecording}).
+ * {@link publishScopeRecording}), which is what makes the pre-sync call safe.
  */
 function republishRecordingPolicies(
   newConfig: {
@@ -657,6 +665,16 @@ export async function reloadNextlyConfig(opts?: {
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
     return;
   }
+
+  // Apply recording OPT-OUTS now, before introspection and the schema apply.
+  // Turning recording off builds no payload and reads no field tree, so an
+  // opt-out is always safe to honor immediately — and every path from here can
+  // still bail early (introspection throwing, an unsafe diff deferring, the
+  // apply failing), each of which consumes the reload event. Publishing opt-outs
+  // up front means a reload that sets `webhooks: false` stops recording even when
+  // one of those later steps aborts; opt-INs (and pruning) still wait for a
+  // successful field-tree sync, applied by the per-scope republishes below.
+  republishRecordingPolicies(newConfig, { collections: false, singles: false });
 
   // Extracted once so the same list is passed to introspectLiveSnapshot
   // AND registered in the live-snapshot cache for the pipeline to reuse.
