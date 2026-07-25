@@ -92,6 +92,13 @@ type PerItemOutcome<T> =
   | {
       kind: "success";
       record: T;
+      /**
+       * Whether this item appended an outbox event. A normal write records; an
+       * opted-out (`webhooks: false`) collection does not. Aggregated into the
+       * batch result's `eventRecorded` so the wrapper drains only when at least
+       * one item actually recorded.
+       */
+      eventRecorded?: boolean;
       /** The item's cache-revalidation intent, aggregated for the post-commit flush. */
       revalidationIntent?: RevalidationIntent;
     }
@@ -171,6 +178,9 @@ function partitionOutcomes<T>(
       if (value.kind === "success") {
         result.successes.push(value.record);
         result.successCount++;
+        // Aggregate the outbox signal: a normal item records, an opted-out one
+        // does not — the wrapper drains only when at least one item recorded.
+        if (value.eventRecorded) result.eventRecorded = true;
         collectIntent(value.revalidationIntent);
       } else {
         result.failures.push(value.failure);
@@ -392,6 +402,7 @@ export class CollectionBulkService extends BaseService {
               return {
                 kind: "success",
                 record: { id: entryId },
+                eventRecorded: deleteResult.eventRecorded,
                 revalidationIntent: deleteResult.revalidationIntent,
               };
             }
@@ -491,6 +502,7 @@ export class CollectionBulkService extends BaseService {
               return {
                 kind: "success",
                 record: updateResult.data as Record<string, unknown>,
+                eventRecorded: updateResult.eventRecorded,
                 revalidationIntent: updateResult.revalidationIntent,
               };
             }
@@ -1132,6 +1144,10 @@ export class CollectionBulkService extends BaseService {
         const rolledBackCount = result.successful;
         result.successful = 0;
         result.ids = [];
+        // The outbox events of the rolled-back items were rolled back too, so
+        // clear the aggregated flag — otherwise the wrapper would drain for
+        // events that never committed.
+        result.eventRecorded = false;
         // Add rollback info to first error
         if (result.errors.length > 0) {
           result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
@@ -1519,6 +1535,10 @@ export class CollectionBulkService extends BaseService {
         const rolledBackCount = result.successful;
         result.successful = 0;
         result.ids = [];
+        // The outbox events of the rolled-back items were rolled back too, so
+        // clear the aggregated flag — otherwise the wrapper would drain for
+        // events that never committed.
+        result.eventRecorded = false;
         // Add rollback info to first error
         if (result.errors.length > 0) {
           result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
@@ -1895,6 +1915,9 @@ export class CollectionBulkService extends BaseService {
       result.successful = 0;
       result.ids = [];
       result.failed = ids.length;
+      // The rolled-back deletes recorded no committed events, so clear the
+      // aggregated flag to keep the wrapper from draining uncommitted events.
+      result.eventRecorded = false;
       const batchError = error instanceof Error ? error.message : String(error);
       const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
       // Rebuild errors as exactly one entry per requested id, in index order.

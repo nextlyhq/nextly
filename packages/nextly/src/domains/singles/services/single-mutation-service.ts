@@ -1787,12 +1787,16 @@ export class SingleMutationService extends BaseService {
       }
 
       // The transaction committed (a throw would have propagated above), so a
-      // real write is now durable together with its outbox event. Gate on the
-      // written row AND on whether recording actually happened: the empty-rows
-      // path returns from the tx before recording anything, and an opted-out
-      // Single records nothing — either way it owes no delivery.
-      eventRecorded = updatedRows.length > 0 && recorded;
-      if (eventRecorded) {
+      // real write is now durable. Cache revalidation follows the CONTENT write,
+      // so build its intent whenever a row was written — including an opted-out
+      // Single, whose committed content must still bust its ISR tag even though
+      // it records no outbox event.
+      const wroteRow = updatedRows.length > 0;
+      // `eventRecorded` additionally requires that recording actually happened:
+      // the empty-rows path returns before recording, and an opted-out Single
+      // records nothing — either way it owes no delivery/drain.
+      eventRecorded = wroteRow && recorded;
+      if (wroteRow) {
         // A single is consumed sitewide, so its one tag is the whole cascade.
         revalidationIntent = buildSingleRevalidationIntent(
           slug,

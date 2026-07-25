@@ -1100,23 +1100,36 @@ function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
   for (const collection of config.collections ?? []) {
     const slug = (collection as { slug?: string }).slug;
     if (!slug) continue;
+    // A plugin-contributed collection (form-builder submissions, etc.) is
+    // tagged `plugin` so a later code-first HMR reconcile never prunes its
+    // opt-out — plugins do not re-run on reload.
+    const source = (collection as { admin?: { isPlugin?: boolean } }).admin
+      ?.isPlugin
+      ? "plugin"
+      : "code";
     setWebhookRecording(
       "collection",
       slug,
       resolveWebhookRecording(
         (collection as { webhooks?: boolean | { record?: boolean } }).webhooks
-      ).record
+      ).record,
+      source
     );
   }
   for (const single of config.singles ?? []) {
     const slug = (single as { slug?: string }).slug;
     if (!slug) continue;
+    const source = (single as { admin?: { isPlugin?: boolean } }).admin
+      ?.isPlugin
+      ? "plugin"
+      : "code";
     setWebhookRecording(
       "single",
       slug,
       resolveWebhookRecording(
         (single as { webhooks?: boolean | { record?: boolean } }).webhooks
-      ).record
+      ).record,
+      source
     );
   }
 }

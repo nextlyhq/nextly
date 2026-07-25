@@ -2,8 +2,10 @@ import { afterEach, describe, it, expect } from "vitest";
 
 import {
   isWebhookRecordingEnabled,
+  pruneRemovedCodeFirstRecording,
   resetWebhookRecordingPolicy,
   setWebhookRecording,
+  webhookRecordingKey,
 } from "../recording-policy";
 
 // The recording policy is a process-level registry populated from code config
@@ -36,5 +38,24 @@ describe("webhook recording policy", () => {
     setWebhookRecording("collection", "submissions", false);
     resetWebhookRecordingPolicy();
     expect(isWebhookRecordingEnabled("collection", "submissions")).toBe(true);
+  });
+
+  it("prunes a removed code-first slug but preserves plugin and present slugs", () => {
+    setWebhookRecording("collection", "leads", false, "code"); // removed below
+    setWebhookRecording("collection", "posts", false, "code"); // still present
+    setWebhookRecording("collection", "form-submissions", false, "plugin");
+
+    // Reconcile against the config that no longer lists `leads`.
+    pruneRemovedCodeFirstRecording(
+      new Set([webhookRecordingKey("collection", "posts")])
+    );
+
+    // The removed code-first slug reverts to the default (record)...
+    expect(isWebhookRecordingEnabled("collection", "leads")).toBe(true);
+    // ...while a still-present code-first slug and the plugin slug keep opt-out.
+    expect(isWebhookRecordingEnabled("collection", "posts")).toBe(false);
+    expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
+      false
+    );
   });
 });

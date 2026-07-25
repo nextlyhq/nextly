@@ -59,7 +59,11 @@ import { resolveCollectionTableName } from "../domains/schema/utils/resolve-tabl
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
-import { setWebhookRecording } from "../domains/webhooks/recording-policy";
+import {
+  pruneRemovedCodeFirstRecording,
+  setWebhookRecording,
+  webhookRecordingKey,
+} from "../domains/webhooks/recording-policy";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";
@@ -259,11 +263,16 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
 // `if (!hasChanges) return` would otherwise skip persistence until a restart.
 // The registry syncs change-detect internally and no-op when nothing changed;
 // this runs only when nextly.config.ts changes (not on every HMR tick).
+// Returns whether BOTH registry syncs succeeded. The caller republishes the
+// recording policy only on success, so a failed metadata sync never leaves the
+// new recording decision active while the mutation services still read the old
+// field tree (which drives sensitive-field stripping).
 async function syncCodeFirstMetadataOnly(
   resolve: ServiceResolver,
   newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] },
   logger?: LoggerLike
-): Promise<void> {
+): Promise<boolean> {
+  let ok = true;
   try {
     const registry = (await resolve(
       "collectionRegistryService"
@@ -271,6 +280,7 @@ async function syncCodeFirstMetadataOnly(
     const payload = buildCollectionSyncPayload(newConfig.collections ?? []);
     if (payload.length > 0) await registry.syncCodeFirstCollections(payload);
   } catch (err) {
+    ok = false;
     logger?.warn(
       `[Nextly HMR] metadata-only collection sync failed: ${
         err instanceof Error ? err.message : String(err)
@@ -284,12 +294,14 @@ async function syncCodeFirstMetadataOnly(
     const payload = buildSingleSyncPayload(newConfig.singles ?? []);
     if (payload.length > 0) await singleReg.syncCodeFirstSingles(payload);
   } catch (err) {
+    ok = false;
     logger?.warn(
       `[Nextly HMR] metadata-only single sync failed: ${
         err instanceof Error ? err.message : String(err)
       }`
     );
   }
+  return ok;
 }
 
 /**
@@ -305,20 +317,41 @@ function republishRecordingPolicies(newConfig: {
   collections?: CollectionDef[];
   singles?: SingleDef[];
 }): void {
+  // Prune code-first decisions for slugs no longer in the config: a removed
+  // code-first collection can remain WRITABLE (the reload merges its registered
+  // DB table back into the desired schema), so a stale `false` would suppress
+  // its events until restart. Plugin-sourced decisions are preserved.
+  const presentKeys = new Set<string>();
+  for (const c of newConfig.collections ?? []) {
+    if (c.slug) presentKeys.add(webhookRecordingKey("collection", c.slug));
+  }
+  for (const s of newConfig.singles ?? []) {
+    if (s.slug) presentKeys.add(webhookRecordingKey("single", s.slug));
+  }
+  pruneRemovedCodeFirstRecording(presentKeys);
+
   for (const c of newConfig.collections ?? []) {
     if (!c.slug) continue;
+    const source = (c.admin as { isPlugin?: boolean } | undefined)?.isPlugin
+      ? "plugin"
+      : "code";
     setWebhookRecording(
       "collection",
       c.slug,
-      resolveWebhookRecording(c.webhooks).record
+      resolveWebhookRecording(c.webhooks).record,
+      source
     );
   }
   for (const s of newConfig.singles ?? []) {
     if (!s.slug) continue;
+    const source = (s.admin as { isPlugin?: boolean } | undefined)?.isPlugin
+      ? "plugin"
+      : "code";
     setWebhookRecording(
       "single",
       s.slug,
-      resolveWebhookRecording(s.webhooks).record
+      resolveWebhookRecording(s.webhooks).record,
+      source
     );
   }
 }
@@ -729,11 +762,17 @@ export async function reloadNextlyConfig(opts?: {
     // threw, syncing would persist `fields` that disagree with the physical
     // table, so skip and let a later clean reload / restart reconcile.
     if (!deferredSchemaChange) {
-      await syncCodeFirstMetadataOnly(resolve, newConfig, logger);
-      // Metadata-only sync succeeded; publish the (possibly toggled) recording
-      // policy now — a `webhooks` change surfaces as no schema diff, so this is
-      // the path a live opt-out/opt-in toggle flows through.
-      republishRecordingPolicies(newConfig);
+      const synced = await syncCodeFirstMetadataOnly(
+        resolve,
+        newConfig,
+        logger
+      );
+      // Publish the (possibly toggled) recording policy ONLY when the metadata
+      // sync actually succeeded — a `webhooks` change surfaces as no schema
+      // diff, so this is the path a live opt-out/opt-in toggle flows through,
+      // but a failed field-tree sync must not activate the new decision while
+      // the mutation services still strip against the old fields.
+      if (synced) republishRecordingPolicies(newConfig);
     }
     return;
   }
