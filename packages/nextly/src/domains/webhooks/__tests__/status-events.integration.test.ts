@@ -218,6 +218,52 @@ describe("collection status webhook events (integration)", () => {
     }
   });
 
+  it("a default-locale status update on a localized collection emits ONE published event", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { title: "hi", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Publish the DEFAULT locale: its status lives on BOTH the main row and its
+    // companion `_status`, so the naive wiring would emit the transition twice.
+    await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "en",
+      },
+      { status: "published" }
+    );
+
+    const published = (await events(current)).filter(
+      r => r.type === "entry.published"
+    );
+    expect(published).toHaveLength(1);
+    expect(
+      (envelopeOf(published[0]).resource as { locale?: string }).locale
+    ).toBe("en");
+    // And exactly one status_changed for the transition.
+    const changed = (await events(current)).filter(
+      r => r.type === "entry.status_changed"
+    );
+    expect(changed).toHaveLength(1);
+  });
+
   it("a webhooks:false collection emits no status events on publish", async () => {
     current = await createTestNextly({
       collections: [

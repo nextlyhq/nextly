@@ -4202,9 +4202,21 @@ export class CollectionMutationService extends BaseService {
                 ((updatePayload as { status?: unknown }).status as
                   | string
                   | undefined) ?? mainFrom;
+              // The main row's status is the DEFAULT locale's entry-level status
+              // on a localized collection (a default-locale write keeps `status`
+              // in the main payload; a non-default write strips it, so the main
+              // check no-ops for those). Tag it with the default locale so a
+              // localized publish is consistent with publishAllLocales; a
+              // non-localized collection has no locale.
+              const defaultLocale = localizedUpdate
+                ? this.localization?.defaultLocale
+                : undefined;
               const mainStatusRecorded = await this.recordStatusEvents(tx, {
                 collection: params.collectionName,
                 id: params.entryId,
+                ...(defaultLocale !== undefined
+                  ? { locale: defaultLocale }
+                  : {}),
                 from: mainFrom,
                 to: mainTo,
                 isCreate: false,
@@ -4214,11 +4226,17 @@ export class CollectionMutationService extends BaseService {
                 actor,
               });
 
-              // Per-locale delta (i18n M6): a localized write moves the companion
-              // `_status`, leaving the main row unchanged, so the main-row check
-              // above never fires for it. Tag the event with the write locale.
+              // Per-locale delta (i18n M6): a NON-default localized write moves
+              // only the companion `_status`, leaving the main row unchanged, so
+              // the main-row check above never fires for it — emit it here tagged
+              // with the write locale. The DEFAULT locale is skipped: its status
+              // lives in the main row too, so it is already covered above, and
+              // recording it here as well would duplicate the event.
               let localizedStatusRecorded = false;
-              if (localizedUpdate) {
+              if (
+                localizedUpdate &&
+                localizedUpdate.writeLocale !== this.localization?.defaultLocale
+              ) {
                 const localizedNext = localizedUpdate.companionData._status;
                 localizedStatusRecorded = await this.recordStatusEvents(tx, {
                   collection: params.collectionName,
