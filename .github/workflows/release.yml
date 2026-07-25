@@ -190,13 +190,36 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; nothing to finalize"
           else
-            # The tag is created separately from the release, so a previous run
-            # can have pushed it without getting as far as the release.
-            if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-              git tag "$TAG"
+            # The tag has to point at the commit whose packages were published.
+            # `gh release create` creates a missing tag from the default branch,
+            # so if `main` moved while this ran, letting it fall back would tag a
+            # commit that was never released. Push the tag first and require it.
+            HEAD_SHA=$(git rev-parse HEAD)
+            # Peeled ref first so an annotated tag resolves to its commit.
+            REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/${TAG}^{}" | awk '{print $1}')
+            if [[ -z "$REMOTE_TAG_SHA" ]]; then
+              REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/${TAG}" | awk '{print $1}')
             fi
-            git push origin "$TAG" || echo "Tag $TAG already on origin"
+
+            if [[ -n "$REMOTE_TAG_SHA" && "$REMOTE_TAG_SHA" != "$HEAD_SHA" ]]; then
+              echo "::error::${TAG} already exists on origin at ${REMOTE_TAG_SHA}," \
+                "but this release was built from ${HEAD_SHA}."
+              exit 1
+            fi
+
+            if [[ -z "$REMOTE_TAG_SHA" ]]; then
+              # A previous run can have created the tag locally without pushing.
+              if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+                git tag "$TAG"
+              fi
+              # No `|| true` here: pushing a tag that already matches the remote
+              # exits zero on its own, so a failure is a real failure (auth, tag
+              # protection, network) and must stop the release.
+              git push origin "refs/tags/${TAG}"
+            fi
+
             gh release create "$TAG" \
+              --verify-tag \
               --title "$TAG" \
               --notes-file "$NOTES_FILE" \
               $RELEASE_FLAG

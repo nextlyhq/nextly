@@ -48,9 +48,17 @@ function getPath(object, path) {
   );
 }
 
-/** True for a SemVer string carrying a prerelease component (`1.0.0-alpha.1`). */
-function isPrerelease(version) {
-  return version.includes("-");
+/**
+ * The first prerelease identifier of a SemVer string, or `undefined` for a
+ * stable version: `1.0.0-alpha.4` -> `"alpha"`, `1.0.0` -> `undefined`. Mirrors
+ * `semver.parse(v).prerelease[0]` for the shapes npm accepts, without pulling in
+ * a dependency for one field.
+ */
+function firstPrereleaseId(version) {
+  const withoutBuildMetadata = version.split("+")[0];
+  const separator = withoutBuildMetadata.indexOf("-");
+  if (separator === -1) return undefined;
+  return withoutBuildMetadata.slice(separator + 1).split(".")[0];
 }
 
 /**
@@ -119,17 +127,25 @@ export function findMissingPublishFields(pkg) {
 /**
  * The dist-tag `changeset publish` will move for a package, mirroring its
  * `getReleaseTag`: in prerelease mode the configured tag is used, EXCEPT for a
- * package whose published history is prereleases only, which Changesets sends to
- * `latest` instead "because there has not been a regular release of it yet".
- * Verification has to expect the same tag the publisher chose, or it reports
- * failures for correctly published packages.
+ * package classified `only-pre`, which goes to `latest` instead "because there
+ * has not been a regular release of it yet".
+ *
+ * `only-pre` is narrower than "has no stable version". Changesets requires EVERY
+ * published version to be a prerelease of the *active* tag, so a package
+ * carrying only `-beta.N` versions while the active tag is `alpha` is NOT
+ * only-pre and publishes to `alpha`. Approximating this with "no stable version"
+ * would expect `latest` for such a package and reject a correct publish on every
+ * retry, permanently blocking the consolidated tag.
  */
 export function getExpectedDistTag(registryState, preState) {
   if (!preState) return "latest";
-  const hasRegularRelease = (registryState?.versions ?? []).some(
-    version => !isPrerelease(version)
-  );
-  return hasRegularRelease ? preState.tag : "latest";
+
+  const versions = registryState?.versions ?? [];
+  const onlyPre =
+    versions.length > 0 &&
+    versions.every(version => firstPrereleaseId(version) === preState.tag);
+
+  return onlyPre ? "latest" : preState.tag;
 }
 
 /**
@@ -168,4 +184,4 @@ export async function fetchAllRegistryStates(manifest) {
   return new Map(states);
 }
 
-export { REPO_ROOT };
+export { REGISTRY, REPO_ROOT };

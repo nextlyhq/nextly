@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { fetchRegistryState, getReleaseManifest } from "./lib.mjs";
+import { REGISTRY, fetchRegistryState, getReleaseManifest } from "./lib.mjs";
 
 const PLACEHOLDER_VERSION = "0.0.0";
 
@@ -71,6 +71,13 @@ async function main() {
 
   // The placeholder carries identity only. Publishing real code by hand is what
   // the release workflow is for, and a 0.0.0 keeps the alpha line untouched.
+  //
+  // The registry is pinned to the same one the existence check queried. npm runs
+  // this publish from a temporary directory, so the repository's .npmrc is not in
+  // its config chain: a user-level or scope-level registry default would
+  // otherwise send the placeholder to a corporate registry while the check above
+  // looked at npmjs, claiming nothing and reporting success.
+  const registry = entry.pkg.publishConfig?.registry ?? `${REGISTRY}/`;
   const placeholder = {
     name: entry.name,
     version: PLACEHOLDER_VERSION,
@@ -79,7 +86,7 @@ async function main() {
     repository: entry.pkg.repository,
     homepage: entry.pkg.homepage,
     bugs: entry.pkg.bugs,
-    publishConfig: { access: "public" },
+    publishConfig: { access: "public", registry },
   };
 
   const readme =
@@ -93,6 +100,7 @@ async function main() {
 
   console.log(`Bootstrap ${entry.name}@${PLACEHOLDER_VERSION}`);
   console.log("  contents: package.json + README.md only (no code)");
+  console.log(`  registry: ${registry}`);
   console.log(`  workspace version (published later by CI): ${entry.version}`);
 
   if (!shouldPublish) {
@@ -112,10 +120,14 @@ async function main() {
 
   console.log(`\nPublishing from ${stageDir} ...`);
   try {
-    execFileSync("npm", ["publish", "--access", "public"], {
-      cwd: stageDir,
-      stdio: "inherit",
-    });
+    execFileSync(
+      "npm",
+      ["publish", "--access", "public", "--registry", registry],
+      {
+        cwd: stageDir,
+        stdio: "inherit",
+      }
+    );
   } catch {
     fail(
       "\nPublish failed. Common causes: not logged in (`npm login`), or the\n" +
