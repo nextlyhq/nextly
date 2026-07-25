@@ -465,6 +465,20 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * The route already ran the coarse RBAC gate, so skip only that redundant
+     * re-check while the stored read rules (owner-only scoping, role-based,
+     * custom) still run. The query service folds an owner-only rule into the SQL
+     * predicate rather than filtering rows afterwards, so pagination and totals
+     * stay correct.
+     */
+    routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its own
+     * read grant rather than on the permissions of the user that owns it, so a
+     * super-admin-owned key stays bound by a stored owner-only read rule.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
      * pass 'all' to see drafts too. Forwarded to query service as-is.
@@ -603,6 +617,19 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * The route already ran the coarse RBAC gate, so skip only that redundant
+     * re-check while the stored read rules (owner-only scoping, role-based,
+     * custom) still run. Forwarded to the query service, which counts under the
+     * same constraint listEntries filters by, so a total can never describe rows
+     * the caller may not read.
+     */
+    routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope, mirroring listEntries so a scoped key's
+     * count matches the rows it can list.
+     */
+    authenticatedScope?: AuthenticatedScope;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Same semantics as listEntries.

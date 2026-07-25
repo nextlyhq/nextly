@@ -478,6 +478,78 @@ describe("getOwnerConstraint — scoped API key", () => {
   });
 });
 
+describe("getAccessQueryConstraint — scoped API key", () => {
+  // The list/count reads fold their owner predicate in through this method
+  // rather than getOwnerConstraint, so the scoped-key carve-out has to hold here
+  // too. Without it a super-admin-owned key takes the session bypass and the
+  // predicate is lifted before it ever reaches SQL, returning every row in the
+  // collection to a key whose grant covers only its own.
+  const OWNER_QUERY = { created_by: { equals: "user-1" } };
+
+  function buildWithOwnerOnlyRead() {
+    const accessControlService = createMockAccessControlService();
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: true,
+      query: OWNER_QUERY,
+    });
+    const rbac = {
+      checkAccess: vi.fn().mockResolvedValue(true),
+      getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    };
+    const collectionService = {
+      getCollection: vi
+        .fn()
+        .mockResolvedValue({ accessRules: { read: { type: "owner-only" } } }),
+      generateId: vi.fn(),
+    };
+    return new CollectionAccessService(
+      createMockAdapter(createMockDb({ rows: [] })) as never,
+      silentLogger as never,
+      collectionService as never,
+      accessControlService as never,
+      rbac as never
+    );
+  }
+
+  it("emits the owner constraint for an ordinary caller", async () => {
+    const service = buildWithOwnerOnlyRead();
+    expect(
+      await service.getAccessQueryConstraint("posts", user, false)
+    ).toEqual(OWNER_QUERY);
+  });
+
+  it("lifts the constraint for a session super-admin (no scope)", async () => {
+    const service = buildWithOwnerOnlyRead();
+    expect(
+      await service.getAccessQueryConstraint("posts", superAdminUser, false)
+    ).toBeNull();
+  });
+
+  it("keeps the constraint for a super-admin-owned scoped API key", async () => {
+    const service = buildWithOwnerOnlyRead();
+    const constraint = await service.getAccessQueryConstraint(
+      "posts",
+      superAdminUser,
+      false,
+      { actorType: "apiKey", permissions: ["read-posts"] }
+    );
+    expect(constraint).toEqual(OWNER_QUERY);
+  });
+
+  it("still lifts the constraint for a session caller arriving with a scope", async () => {
+    const service = buildWithOwnerOnlyRead();
+    // A session caller gets a scope with an empty permission list, which must not
+    // be mistaken for a key: the super-admin bypass belongs to the session path.
+    const constraint = await service.getAccessQueryConstraint(
+      "posts",
+      superAdminUser,
+      false,
+      { actorType: "user", permissions: [] }
+    );
+    expect(constraint).toBeNull();
+  });
+});
+
 describe("checkCollectionAccess — deferStoredRuleEval", () => {
   it("skips the docless stored-rule eval when deferred (no cached denial)", async () => {
     const { service, accessControlService } = buildAccessService();

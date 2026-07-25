@@ -470,11 +470,22 @@ export class CollectionAccessService extends BaseService {
   async getAccessQueryConstraint(
     collectionName: string,
     user?: UserContext,
-    overrideAccess?: boolean
+    overrideAccess?: boolean,
+    // The caller's authenticated scope. A scoped API key is judged on its OWN
+    // grant, so the session super-admin bypass does not lift the owner predicate
+    // for a super-admin-owned key — mirrors checkCollectionAccess and
+    // getOwnerConstraint. Undefined for session/system callers.
+    authenticatedScope?: AuthenticatedScope
   ): Promise<Record<string, unknown> | null> {
     // Super-admin reads are unfiltered too, matching the write-side bypass so
-    // "super-admins bypass stored rules on every transport" holds for reads.
-    if (overrideAccess || !user || isSuperAdminContext(user)) {
+    // "super-admins bypass stored rules on every transport" holds for reads —
+    // except through a scoped key, which is authoritative only on its own scope.
+    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    if (
+      overrideAccess ||
+      !user ||
+      (!isScopedApiKey && isSuperAdminContext(user))
+    ) {
       return null;
     }
 

@@ -540,23 +540,55 @@ const SINGLE_DOCUMENT_METHODS = new Set([
  * Read methods that still need resolved role slugs, even though reads normally
  * skip the lookup.
  *
- * All four run the version access gate, which reads the live document through
- * `checkCollectionAccess`. That evaluates roles twice over: the super-admin
- * bypass is keyed on the role set (`isSuperAdminContext`), and stored
- * role-based access rules match against the roles forwarded in the request
- * context. A caller arriving without roles would therefore be treated as a
- * non-super-admin with no roles and wrongly denied — surfaced as a 404, since
- * the gate does not disclose existence.
+ * Every method here evaluates the caller's stored access rules through
+ * `checkCollectionAccess`, which reads roles twice over: the super-admin bypass
+ * is keyed on the role set (`isSuperAdminContext`), and stored role-based rules
+ * match against the roles forwarded in the request context. A caller arriving
+ * without roles is therefore treated as a non-super-admin holding no roles, so
+ * a role-based rule denies a legitimately permitted reader and a super-admin
+ * loses the bypass and gets owner-filtered instead.
  *
- * The two `get*` methods additionally return a snapshot that is redacted by
- * field-level `access.read`, which reads the same role set.
+ * The version methods surface that denial as a 404, since their gate does not
+ * disclose existence, and the two version `get*` methods additionally return a
+ * snapshot redacted by field-level `access.read`, which reads the same set.
+ *
+ * The three entry reads are here because they forward the caller into the query
+ * service, which evaluates the collection's stored read rules for them.
+ * Resolving roles costs a permissions lookup on every entry read; a read that
+ * silently ignores the rule it was configured with is the worse tradeoff.
  */
 const ROLE_AWARE_READ_METHODS = new Set([
+  "listEntries",
+  "getEntry",
+  "countEntries",
   "listEntryVersions",
   "getEntryVersion",
   "listSingleVersions",
   "getSingleVersion",
 ]);
+
+/**
+ * Decide whether a request needs its role slugs resolved before dispatch.
+ *
+ * Resolving roles costs a permissions query for session auth, so it is opt-in:
+ * collection and single mutations consume them for hook context and access
+ * rules, and the reads in {@link ROLE_AWARE_READ_METHODS} consume them to
+ * evaluate stored rules. Every other route reads no roles and must not pay for
+ * the lookup.
+ */
+function needsResolvedRoles(
+  service: string,
+  method: string,
+  httpMethod: string
+): boolean {
+  if (ROLE_AWARE_READ_METHODS.has(method)) return true;
+  if (service !== "collections" && service !== "singles") return false;
+  return (
+    httpMethod !== "GET" && httpMethod !== "HEAD" && httpMethod !== "OPTIONS"
+  );
+}
+
+export const _needsResolvedRolesForTest = needsResolvedRoles;
 
 /**
  * Centralized permission resolver for all API service endpoints.
@@ -972,18 +1004,11 @@ async function handleServiceRequest(
   // are silently skipped.
   // NOTE: We use _authenticatedUserId (not userId) to avoid colliding with
   // the existing routeParams.userId which is the target user ID from URL params.
-  // Roles are consumed only by collection and single mutation dispatch; skip
-  // the lookup for reads and every other service so they don't incur a
-  // permissions query.
-  const needsRoles =
-    ((service === "collections" || service === "singles") &&
-      httpMethod !== "GET" &&
-      httpMethod !== "HEAD" &&
-      httpMethod !== "OPTIONS") ||
-    // Version reads are GETs but still redact per field-level `access.read`,
-    // which needs the caller's roles to evaluate role-based rules.
-    ROLE_AWARE_READ_METHODS.has(method);
-  await setAuthenticatedRouteParams(routeParams, authorizedUser, needsRoles);
+  await setAuthenticatedRouteParams(
+    routeParams,
+    authorizedUser,
+    needsResolvedRoles(service, method, httpMethod)
+  );
 
   const dispatchRequest: DispatchRequest = {
     service,
@@ -1588,9 +1613,10 @@ export const _handleAdminMetaSidebarGroupsForTest =
 async function setAuthenticatedRouteParams(
   routeParams: Record<string, string> | undefined,
   authorizedUser: AuthContext | undefined,
-  // Only the collection mutation dispatch consumes `_authenticatedUserRoles`.
-  // Roles are resolved (a DB query for session auth) only when needed, so other
-  // authenticated routes don't pay for a permissions lookup they never read.
+  // Whether `_authenticatedUserRoles` is consumed downstream, per
+  // {@link needsResolvedRoles}. Roles are resolved (a DB query for session auth)
+  // only when needed, so routes that never read them don't pay for a
+  // permissions lookup.
   needsRoles: boolean
 ): Promise<void> {
   if (!routeParams) return;
