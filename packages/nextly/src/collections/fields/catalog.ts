@@ -563,11 +563,13 @@ export function isBindablePropType(prop: BindingEndpoint): boolean {
  * single-valued source cannot fill a prop that expects a list.
  *
  * Reference and media endpoints must also agree on the collections they point
- * at. Binding does not rewrite a reference, so a source that can yield a
- * document the prop does not relate to would put an unresolvable value in the
- * prop even though both ends are of kind `reference`. The check applies only
- * when both ends name their targets, since an endpoint that omits them is
- * saying nothing about collection identity rather than claiming to accept any.
+ * at, and on how a reference to them is stored. Binding does not rewrite a
+ * reference, so a source that can yield a document the prop does not relate
+ * to would put an unresolvable value in the prop even though both ends are of
+ * kind `reference`, and a source whose target arity differs stores a shape the
+ * prop cannot read. The checks apply only when both ends name their targets,
+ * since an endpoint that omits them is saying nothing about collection
+ * identity rather than claiming to accept any.
  */
 export function canBindFieldToProp(
   source: BindingEndpoint,
@@ -582,17 +584,29 @@ export function canBindFieldToProp(
 }
 
 /**
- * Whether every collection the source can yield is one the prop accepts. An
- * endpoint without declared targets is not checked.
+ * Whether every collection the source can yield is one the prop accepts, and
+ * whether both ends store a reference the same way. An endpoint without
+ * declared targets is not checked.
+ *
+ * Target arity decides the stored shape — a single target stores a bare id, a
+ * list of targets stores a `{ relationTo, value }` pair — so two endpoints
+ * that name the same collection still hold incompatible values when one
+ * declares it as a string and the other as a one-element array.
  */
 function targetsAreCompatible(
   source: BindingEndpoint,
   prop: BindingEndpoint
 ): boolean {
-  const sourceTargets = targetList(source.relationTo);
+  if (source.relationTo === undefined || prop.relationTo === undefined) {
+    return true;
+  }
+  if (Array.isArray(source.relationTo) !== Array.isArray(prop.relationTo)) {
+    return false;
+  }
   const propTargets = targetList(prop.relationTo);
-  if (sourceTargets.length === 0 || propTargets.length === 0) return true;
-  return sourceTargets.every(target => propTargets.includes(target));
+  return targetList(source.relationTo).every(target =>
+    propTargets.includes(target)
+  );
 }
 
 function targetList(relationTo: string | string[] | undefined): string[] {

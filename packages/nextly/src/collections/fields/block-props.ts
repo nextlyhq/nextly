@@ -147,18 +147,67 @@ export async function validateBlockPropValues(
   // Block props are always written whole: a stored node carries every prop it
   // has, so absent means unset rather than untouched, which is create mode.
   const issues = await validateEntryData(values, fields, { mode: "create" });
+  collectSerializationIssues(fields, values, issues);
   collectEmptyListIssues(fields, values, "", issues);
   return issues;
 }
 
 /**
- * Report an empty array supplied for a prop that holds a single value.
+ * Report a prop value that cannot be written into the block document.
  *
- * The shared validator classifies `[]` as an absent value and returns before
- * any type rule runs, including a field's own `validate`, so `[]` is the one
- * array shape the per-type checks never see. For an entry that is harmless —
- * the value is on its way to a typed column. A block prop is stored as JSON
- * exactly as given, so the empty array would reach a renderer expecting text.
+ * Every prop ends up inside one JSON document, so serializability is a
+ * property of the surface rather than of any one field type. Checking it once
+ * per prop covers the types whose own rules look only at shape — a rich-text
+ * envelope with a cyclic child is well formed by every structural measure and
+ * still cannot be stored — and it keeps future prop types covered without each
+ * having to remember the rule.
+ */
+function collectSerializationIssues(
+  fields: readonly WalkableField[],
+  values: Record<string, unknown>,
+  issues: ConversionIssue[]
+): void {
+  for (const field of fields) {
+    if (!field.name) continue;
+    const value = values[field.name];
+    if (value === undefined) continue;
+    // A prop that already failed a type rule does not need a second, vaguer
+    // issue: the specific one describes the same defect better.
+    if (alreadyReported(issues, field.name)) continue;
+    const result = isSerializable(value);
+    if (result !== true) {
+      issues.push({
+        path: field.name,
+        code: "NOT_SERIALIZABLE",
+        message: `${field.label ?? field.name} ${result}.`,
+      });
+    }
+  }
+}
+
+/** Whether any recorded issue already points at this prop or inside it. */
+function alreadyReported(
+  issues: readonly ConversionIssue[],
+  name: string
+): boolean {
+  return issues.some(
+    issue =>
+      issue.path === name ||
+      issue.path.startsWith(`${name}.`) ||
+      issue.path.startsWith(`${name}[`)
+  );
+}
+
+/**
+ * Report list-shaped values the shared validator skips.
+ *
+ * It classifies `[]` as an absent value and returns before any type rule runs,
+ * including a field's own `validate`, so an empty array is the one shape the
+ * per-type checks never see. Two cases follow from that: an empty array
+ * supplied for a prop that holds a single value, which for an entry is
+ * harmless because the value is on its way to a typed column but for a block
+ * prop reaches the renderer verbatim; and a `hasMany` text or number prop
+ * whose declared `minRows` an empty array violates.
  */
 function collectEmptyListIssues(
   fields: readonly WalkableField[],
@@ -171,12 +220,28 @@ function collectEmptyListIssues(
     const value = values[field.name];
     if (value === undefined) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
-    if (Array.isArray(value) && value.length === 0 && !holdsList(field)) {
-      issues.push({
-        path,
-        code: "INVALID_TYPE",
-        message: `${field.label ?? field.name} must not be a list.`,
-      });
+    if (Array.isArray(value) && value.length === 0) {
+      if (!holdsList(field)) {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${field.label ?? field.name} must not be a list.`,
+        });
+        continue;
+      }
+      // Repeaters and chips reach their own bounds rules even when empty;
+      // a hasMany scalar does not, so its minimum is enforced here.
+      if (
+        field.hasMany === true &&
+        field.minRows !== undefined &&
+        field.minRows > 0
+      ) {
+        issues.push({
+          path,
+          code: "TOO_FEW_ROWS",
+          message: `${field.label ?? field.name} must have at least ${field.minRows} entries.`,
+        });
+      }
       continue;
     }
     const nested = field.fields;
@@ -215,6 +280,7 @@ interface WalkableField {
   type: string;
   label?: string;
   hasMany?: boolean;
+  minRows?: number;
   fields?: readonly WalkableField[];
 }
 
@@ -424,10 +490,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       ...orderedPair(min, max, "min", "max", path, ctx),
       hasMany,
       ...rows,
-      validate: allOf(
-        finiteValidator(hasMany),
-        listBoundsValidator(rows.minRows, rows.maxRows)
-      ),
+      validate: listBoundsValidator(rows.minRows, rows.maxRows),
     };
   },
   code: (name, declaration, path, ctx) => ({
@@ -464,7 +527,6 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
   json: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "json",
-    validate: isSerializable,
   }),
   chips: (name, declaration, path, ctx) => {
     const minChips = countOption(declaration, "minChips", path, ctx);
@@ -592,6 +654,7 @@ function choiceOptions(
     return null;
   }
   const options: SelectOption[] = [];
+  const seen = new Set<string>();
   for (const entry of raw) {
     if (
       !isPlainObject(entry) ||
@@ -606,6 +669,30 @@ function choiceOptions(
       );
       return null;
     }
+    // An empty stored value is indistinguishable from no value at all: the
+    // shared rules read `""` as absent, so such an option could never be
+    // selected, and an empty label leaves nothing to select in the picker.
+    if (entry.label.length === 0 || entry.value.length === 0) {
+      record(
+        ctx,
+        path,
+        "INVALID_OPTIONS",
+        "Every entry in `options` must have a non-empty `label` and `value`."
+      );
+      return null;
+    }
+    // Two labels sharing one stored value make the choice ambiguous in both
+    // directions: the picker cannot tell which entry a stored value came from.
+    if (seen.has(entry.value)) {
+      record(
+        ctx,
+        path,
+        "DUPLICATE_OPTION",
+        `Two options declare the value "${entry.value}"; stored values must be unique.`
+      );
+      return null;
+    }
+    seen.add(entry.value);
     options.push({ label: entry.label, value: entry.value });
   }
   return options;
@@ -727,25 +814,6 @@ function isTextList(value: unknown): string | true {
     : "must contain only text entries";
 }
 
-/**
- * Finite-value check for a number prop, honoring its cardinality. The shared
- * number rules reject `NaN` but accept the infinities, which JSON writes as
- * `null` — so an accepted value would not survive being stored.
- */
-function finiteValidator(
-  hasMany: boolean | undefined
-): (value: unknown) => string | true {
-  const finite = (entry: unknown) =>
-    typeof entry === "number" && Number.isFinite(entry);
-  return value => {
-    if (!hasMany) {
-      return finite(value) ? true : "must be a finite number";
-    }
-    if (!Array.isArray(value)) return "must be a list of numbers";
-    return value.every(finite) ? true : "must contain only finite numbers";
-  };
-}
-
 /** Whether a value is a document id. */
 function isDocumentId(value: unknown): boolean {
   if (typeof value === "string") return value.length > 0;
@@ -786,19 +854,6 @@ function referenceValidator(
   };
 }
 
-/** Runs validators in order, reporting the first failure. */
-function allOf(
-  ...validators: Array<(value: unknown) => string | true>
-): (value: unknown) => string | true {
-  return value => {
-    for (const validator of validators) {
-      const result = validator(value);
-      if (result !== true) return result;
-    }
-    return true;
-  };
-}
-
 /**
  * Row-count check for a list-shaped scalar prop. The shared rules read row
  * bounds for repeaters and chips but not for a `hasMany` text or number field,
@@ -827,8 +882,7 @@ function listBoundsValidator(
  * the document is encoded — and a cyclic object, which makes encoding throw.
  */
 function isJsonRecord(value: unknown): string | true {
-  if (!isPlainRecord(value)) return "must be a plain object";
-  return isSerializable(value);
+  return isPlainRecord(value) ? true : "must be a plain object";
 }
 
 /**

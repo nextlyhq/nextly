@@ -632,6 +632,15 @@ describe("validateBlockPropValues structural shapes", () => {
     expect(
       await validateBlockPropValues({ scores: [1, 2] }, source)
     ).toHaveLength(1);
+    // An empty list never reaches the shared bounds rules for a hasMany
+    // scalar, so the declared minimum is enforced alongside the shape check.
+    expect(await validateBlockPropValues({ tags: [] }, source)).toEqual([
+      {
+        path: "tags",
+        code: "TOO_FEW_ROWS",
+        message: "tags must have at least 2 entries.",
+      },
+    ]);
   });
 
   it("requires structured props to hold plain JSON records", async () => {
@@ -732,6 +741,106 @@ describe("blockPropsToFieldConfigs relation targets", () => {
     });
     expect(configs[0]).toMatchObject({ relationTo: "media_files" });
     expect(configs[1]).toMatchObject({ relationTo: ["blog-posts", "pages"] });
+  });
+});
+
+describe("validateBlockPropValues serializability", () => {
+  it("rejects rich text that is well formed but cannot be stored", async () => {
+    const source: BlockPropsSource = { props: { body: { type: "richText" } } };
+    const child: Record<string, unknown> = { type: "paragraph" };
+    child.self = child;
+    const issues = await validateBlockPropValues(
+      { body: { root: { type: "root", children: [child] } } },
+      source
+    );
+    // Every structural rule passes; the value still cannot reach the document.
+    expect(issues).toEqual([
+      {
+        path: "body",
+        code: "NOT_SERIALIZABLE",
+        message: expect.stringContaining("body"),
+      },
+    ]);
+  });
+
+  it("covers every prop type from one place", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        title: { type: "text" },
+        image: { type: "upload", relationTo: "media" },
+      },
+    };
+    // An upload reference carrying an unserializable extra still fails.
+    const reference: Record<string, unknown> = { relationTo: "media" };
+    reference.self = reference;
+    expect(
+      await validateBlockPropValues({ image: reference }, source)
+    ).not.toEqual([]);
+  });
+
+  it("does not add a second issue where a type rule already spoke", async () => {
+    const source: BlockPropsSource = { props: { count: { type: "number" } } };
+    const issues = await validateBlockPropValues({ count: Number.NaN }, source);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("INVALID_TYPE");
+  });
+});
+
+describe("blockPropsToFieldConfigs choices", () => {
+  it("rejects an empty label or stored value", () => {
+    // The shared rules read "" as absent, so such an option could never be
+    // selected and would be indistinguishable from leaving the prop unset.
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: {
+            level: { type: "select", options: [{ label: "None", value: "" }] },
+          },
+        })
+      )
+    ).toEqual([{ path: "level", code: "INVALID_OPTIONS" }]);
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: {
+            level: { type: "radio", options: [{ label: "", value: "h1" }] },
+          },
+        })
+      )
+    ).toEqual([{ path: "level", code: "INVALID_OPTIONS" }]);
+  });
+
+  it("rejects two options sharing a stored value", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: {
+            level: {
+              type: "select",
+              options: [
+                { label: "Heading", value: "h1" },
+                { label: "Title", value: "h1" },
+              ],
+            },
+          },
+        })
+      )
+    ).toEqual([{ path: "level", code: "DUPLICATE_OPTION" }]);
+  });
+
+  it("accepts distinct non-empty choices", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: {
+        level: {
+          type: "select",
+          options: [
+            { label: "H1", value: "h1" },
+            { label: "H2", value: "h2" },
+          ],
+        },
+      },
+    });
+    expect(configs[0]).toMatchObject({ type: "select" });
   });
 });
 

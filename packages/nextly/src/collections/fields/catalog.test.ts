@@ -287,12 +287,27 @@ describe("binding kinds", () => {
         { type: "relationship", relationTo: "posts" }
       )
     ).toBe(false);
+    // Same collection, different storage shape: a single target stores a bare
+    // id while a list of targets stores a { relationTo, value } pair, and
+    // binding does not rewrite the value it moves.
     expect(
       canBindFieldToProp(
         { type: "relationship", relationTo: "posts" },
         { type: "relationship", relationTo: ["posts", "pages"] }
       )
+    ).toBe(false);
+    expect(
+      canBindFieldToProp(
+        { type: "relationship", relationTo: ["posts"] },
+        { type: "relationship", relationTo: ["posts", "pages"] }
+      )
     ).toBe(true);
+    expect(
+      canBindFieldToProp(
+        { type: "relationship", relationTo: ["posts"] },
+        { type: "relationship", relationTo: "posts" }
+      )
+    ).toBe(false);
     // A source that can yield pages cannot fill a posts-only prop.
     expect(
       canBindFieldToProp(
