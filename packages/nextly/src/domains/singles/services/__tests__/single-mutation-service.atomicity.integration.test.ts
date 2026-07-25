@@ -102,6 +102,9 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
       { overrideAccess: true }
     );
     expect(first.success).toBe(true);
+    // A committed write carries the explicit `committed` flag (the write-path
+    // retention signal), set the moment the row is written.
+    expect(first.committed).toBe(true);
 
     // Drop the component's table so the next update's component save fails
     // from inside the same transaction as the scalar update.
@@ -116,6 +119,9 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     // update() never throws — every error is caught and mapped to a
     // { success: false } result (see single-mutation-service.ts's catch).
     expect(second.success).toBe(false);
+    // The transaction rolled back, so nothing was written — `committed` must be
+    // falsy, otherwise the write-path retention pass would fire for a no-write.
+    expect(second.committed).toBeFalsy();
 
     // Pre-fix, the scalar UPDATE ran on its own operation before the
     // component save, so the headline would have changed here. Post-fix,
