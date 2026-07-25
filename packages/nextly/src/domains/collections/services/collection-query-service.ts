@@ -1122,7 +1122,14 @@ export class CollectionQueryService extends BaseService {
           entries,
           params.collectionName,
           fields,
-          { depth: params.depth }
+          {
+            depth: params.depth,
+            // Expansion spreads whole related rows into these entries, and this
+            // collection's field rules say nothing about another collection's
+            // fields — so the caller has to reach the related row's own rules.
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          }
         );
 
       // Batch-populate component field data from comp_{slug} tables
@@ -1948,7 +1955,13 @@ export class CollectionQueryService extends BaseService {
         entry,
         params.collectionName,
         fields,
-        { depth: params.depth }
+        {
+          depth: params.depth,
+          // Same reasoning as the list path: a related row is redacted by its
+          // own collection's field rules, for this caller.
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+        }
       );
 
       // Populate component field data from comp_{slug} tables

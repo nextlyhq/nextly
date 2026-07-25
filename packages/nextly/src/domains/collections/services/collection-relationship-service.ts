@@ -12,6 +12,7 @@ import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -39,6 +40,18 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
 export const MAX_RELATIONSHIP_DEPTH = 5;
 
 /**
+ * The caller a related row is redacted for.
+ *
+ * Carried separately from {@link RelationshipExpansionOptions} because the fetch
+ * helpers need only these two of its fields, and passing the whole options bag
+ * down would let a depth value leak into a redaction decision.
+ */
+interface RelatedRowAccess {
+  user?: Record<string, unknown>;
+  overrideAccess?: boolean;
+}
+
+/**
  * Options for relationship expansion.
  */
 export interface RelationshipExpansionOptions {
@@ -56,6 +69,26 @@ export interface RelationshipExpansionOptions {
    * @internal
    */
   currentDepth?: number;
+
+  /**
+   * The caller a related row's field-level `access.read` rules are evaluated
+   * against.
+   *
+   * Expansion spreads the whole related row into the parent entry, and the
+   * parent entity's field registry never describes a related collection's
+   * fields — so without the caller here, a field the target collection protects
+   * is returned to anyone who populates the relationship. Absent means
+   * anonymous, which denies any rule that inspects the user, matching how the
+   * parent entry is redacted.
+   */
+  user?: Record<string, unknown>;
+
+  /**
+   * Trusted read: skip field-level read rules on related rows, matching
+   * `applyFieldReadAccess`. Secret stripping (passwords, system columns) is NOT
+   * skipped — a system caller has no reason to receive a password hash.
+   */
+  overrideAccess?: boolean;
 }
 
 /**
@@ -772,6 +805,12 @@ export class CollectionRelationshipService extends BaseService {
     options: RelationshipExpansionOptions = {}
   ): Promise<Record<string, unknown>[]> {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH } = options;
+    // The caller travels with every fetch below so each related row is judged
+    // by its own collection's field rules.
+    const access: RelatedRowAccess = {
+      user: options.user,
+      overrideAccess: options.overrideAccess,
+    };
 
     // Clamp depth to valid range
     const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
@@ -883,7 +922,8 @@ export class CollectionRelationshipService extends BaseService {
         const dataMap = await this.batchFetchManyToManyRelations(
           collectionName,
           entryIds,
-          field
+          field,
+          access
         );
         relationDataMaps[field.name] = dataMap;
       } else if (hasMany) {
@@ -900,7 +940,8 @@ export class CollectionRelationshipService extends BaseService {
           const dataMap = await this.batchFetchRelatedEntries(
             targetCollection,
             uniqueIds,
-            field
+            field,
+            access
           );
           relationDataMaps[field.name] = dataMap;
         } else {
@@ -916,7 +957,8 @@ export class CollectionRelationshipService extends BaseService {
           const dataMap = await this.batchFetchRelatedEntries(
             targetCollection,
             relatedIds,
-            field
+            field,
+            access
           );
           relationDataMaps[field.name] = dataMap;
         } else {
@@ -1013,7 +1055,7 @@ export class CollectionRelationshipService extends BaseService {
                       row,
                       collectionName,
                       nestedFields,
-                      { depth: effectiveDepth, currentDepth: 0 }
+                      { depth: effectiveDepth, currentDepth: 0, ...access }
                     );
                   }
                   return row;
@@ -1032,7 +1074,7 @@ export class CollectionRelationshipService extends BaseService {
                 groupData as Record<string, unknown>,
                 collectionName,
                 nestedFields,
-                { depth: effectiveDepth, currentDepth: 0 }
+                { depth: effectiveDepth, currentDepth: 0, ...access }
               );
             }
           }
@@ -1064,7 +1106,8 @@ export class CollectionRelationshipService extends BaseService {
   async batchFetchRelatedEntries(
     targetCollection: string,
     relatedIds: string[],
-    field: FieldDefinition
+    field: FieldDefinition,
+    access: RelatedRowAccess = {}
   ): Promise<Map<string, Record<string, unknown>>> {
     const resultMap = new Map<string, Record<string, unknown>>();
 
@@ -1132,8 +1175,13 @@ export class CollectionRelationshipService extends BaseService {
       );
     }
 
-    // Strip related-row secrets before the map is spread into responses.
-    await this.redactRelatedRows(targetCollection, [...resultMap.values()]);
+    // Strip related-row secrets and fields the caller may not read before the
+    // map is spread into responses.
+    await this.redactRelatedRows(
+      targetCollection,
+      [...resultMap.values()],
+      access
+    );
 
     return resultMap;
   }
@@ -1150,7 +1198,8 @@ export class CollectionRelationshipService extends BaseService {
   async batchFetchManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryIds: string[],
-    field: FieldDefinition
+    field: FieldDefinition,
+    access: RelatedRowAccess = {}
   ): Promise<Map<string, Record<string, unknown>[]>> {
     const resultMap = new Map<string, Record<string, unknown>[]>();
 
@@ -1274,10 +1323,12 @@ export class CollectionRelationshipService extends BaseService {
       }
     }
 
-    // Strip related-row secrets before the map is spread into responses.
+    // Strip related-row secrets and fields the caller may not read before the
+    // map is spread into responses.
     await this.redactRelatedRows(
       targetCollectionName,
-      [...resultMap.values()].flat()
+      [...resultMap.values()].flat(),
+      access
     );
 
     return resultMap;
@@ -1307,6 +1358,12 @@ export class CollectionRelationshipService extends BaseService {
     options: RelationshipExpansionOptions = {}
   ): Promise<Record<string, unknown>> {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH, currentDepth = 0 } = options;
+    // Travels with every nested expansion and row fetch, so a related row at
+    // any depth is judged by its own collection's field rules.
+    const access: RelatedRowAccess = {
+      user: options.user,
+      overrideAccess: options.overrideAccess,
+    };
 
     // Clamp depth to valid range
     const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
@@ -1386,7 +1443,11 @@ export class CollectionRelationshipService extends BaseService {
                     baseExpanded,
                     targetCollection,
                     targetFields,
-                    { depth: effectiveDepth, currentDepth: currentDepth + 1 }
+                    {
+                      depth: effectiveDepth,
+                      currentDepth: currentDepth + 1,
+                      ...access,
+                    }
                   );
                 }
               }
@@ -1410,7 +1471,8 @@ export class CollectionRelationshipService extends BaseService {
               ids.map(async (id: string) => {
                 const relatedEntry = await this.fetchRelatedEntry(
                   targetCollection,
-                  id
+                  id,
+                  access
                 );
 
                 if (!relatedEntry) return null;
@@ -1430,7 +1492,11 @@ export class CollectionRelationshipService extends BaseService {
                       baseExpanded,
                       targetCollection,
                       targetFields,
-                      { depth: effectiveDepth, currentDepth: currentDepth + 1 }
+                      {
+                        depth: effectiveDepth,
+                        currentDepth: currentDepth + 1,
+                        ...access,
+                      }
                     );
                   }
                 }
@@ -1450,7 +1516,8 @@ export class CollectionRelationshipService extends BaseService {
           if (relatedId) {
             const relatedEntry = await this.fetchRelatedEntry(
               targetCollection,
-              relatedId
+              relatedId,
+              access
             );
 
             if (relatedEntry) {
@@ -1474,7 +1541,11 @@ export class CollectionRelationshipService extends BaseService {
                     expandedRelated,
                     targetCollection,
                     targetFields,
-                    { depth: effectiveDepth, currentDepth: currentDepth + 1 }
+                    {
+                      depth: effectiveDepth,
+                      currentDepth: currentDepth + 1,
+                      ...access,
+                    }
                   );
                 }
               }
@@ -1526,7 +1597,7 @@ export class CollectionRelationshipService extends BaseService {
                   row,
                   collectionName,
                   nestedFields,
-                  { depth: effectiveDepth, currentDepth }
+                  { depth: effectiveDepth, currentDepth, ...access }
                 );
               }
               return row;
@@ -1545,7 +1616,7 @@ export class CollectionRelationshipService extends BaseService {
             groupData as Record<string, unknown>,
             collectionName,
             nestedFields,
-            { depth: effectiveDepth, currentDepth }
+            { depth: effectiveDepth, currentDepth, ...access }
           );
         }
       }
@@ -1660,16 +1731,23 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Strip secret values from related rows before they are merged into a
-   * response. Relationship expansion spreads the entire related row into the
-   * parent entry, so without this a related collection's password fields (or
-   * the users entity's password hash) would be returned to any caller that
-   * populates the relationship. Called once per fetch with the row set, so
-   * the target schema is loaded at most once per relation, not per row.
+   * Strip values the caller may not see from related rows before they are
+   * merged into a response. Relationship expansion spreads the entire related
+   * row into the parent entry, so without this a related collection's password
+   * fields (or the users entity's password hash) would be returned to any
+   * caller that populates the relationship. Called once per fetch with the row
+   * set, so the target schema is loaded at most once per relation, not per row.
+   *
+   * Two independent passes, because they answer different questions:
+   * secrets are stripped for everyone, while field-level `access.read` is
+   * evaluated against the caller. The parent entry's own redaction cannot cover
+   * either one: it runs against the SOURCE collection's field registry, which
+   * never describes a related collection's fields.
    */
   private async redactRelatedRows(
     targetCollection: string,
-    rows: Record<string, unknown>[]
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess = {}
   ): Promise<void> {
     if (rows.length === 0) return;
     // The system owner column must never ride along a populated relationship:
@@ -1682,7 +1760,8 @@ export class CollectionRelationshipService extends BaseService {
       stripSystemOwnerField(row);
     }
     // System entities expose secret columns that are not schema fields, so
-    // strip them by name.
+    // strip them by name. They carry no user-defined field rules, so there is
+    // nothing for the access pass below to evaluate.
     if (isSystemEntity(targetCollection)) {
       for (const row of rows) {
         for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) delete row[col];
@@ -1708,11 +1787,44 @@ export class CollectionRelationshipService extends BaseService {
           delete row.label;
         }
       }
+      // Nothing but id/label survives, so there is no field left to judge.
       return;
     }
-    if (!hasPasswordField(targetFields)) return;
+    // Secrets first, and for every caller: a trusted read has no more use for a
+    // password hash than an anonymous one.
+    if (hasPasswordField(targetFields)) {
+      for (const row of rows) {
+        stripPasswordFieldValues(row, targetFields);
+      }
+    }
+    await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+  }
+
+  /**
+   * Evaluate the TARGET collection's field-level `access.read` against the
+   * caller, per related row.
+   *
+   * Kept separate from secret stripping so it cannot be skipped by that pass's
+   * early exits: a target collection with no password field is the common case,
+   * and returning early on it would leave every access rule unevaluated.
+   *
+   * Rules are the target collection's own, so this is the same decision the
+   * related row would get if it were read directly.
+   */
+  private async applyRelatedRowReadAccess(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess
+  ): Promise<void> {
+    if (access.overrideAccess) return;
     for (const row of rows) {
-      stripPasswordFieldValues(row, targetFields);
+      await applyFieldReadAccess({
+        kind: "collection",
+        slug: targetCollection,
+        entry: row,
+        user: access.user,
+        overrideAccess: false,
+      });
     }
   }
 
@@ -1752,7 +1864,8 @@ export class CollectionRelationshipService extends BaseService {
    */
   async fetchRelatedEntry(
     collectionName: string,
-    entryId: string
+    entryId: string,
+    access: RelatedRowAccess = {}
   ): Promise<Record<string, unknown> | null> {
     try {
       // Check if this is a system entity (like "users")
@@ -1770,7 +1883,7 @@ export class CollectionRelationshipService extends BaseService {
 
         if (!entry) return null;
         const normalized = convertTimestampsToCamelCase({ ...entry });
-        await this.redactRelatedRows(collectionName, [normalized]);
+        await this.redactRelatedRows(collectionName, [normalized], access);
         return normalized;
       } else {
         // Handle dynamic collections
@@ -1783,7 +1896,7 @@ export class CollectionRelationshipService extends BaseService {
 
         if (!entry) return null;
         const normalized = convertTimestampsToCamelCase({ ...entry });
-        await this.redactRelatedRows(collectionName, [normalized]);
+        await this.redactRelatedRows(collectionName, [normalized], access);
         return normalized;
       }
     } catch {
