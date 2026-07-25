@@ -1077,5 +1077,45 @@ describe("reloadNextlyConfig", () => {
       expect(isWebhookRecordingEnabled("collection", "posts")).toBe(false);
       resetWebhookRecordingPolicy();
     });
+
+    it("keeps a plugin-contributed opt-out through a code-first reconcile, without admin.isPlugin", async () => {
+      const { isWebhookRecordingEnabled, resetWebhookRecordingPolicy } =
+        await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // A plugin contributes an opted-out collection via `contributes.collections`
+      // and does NOT set the optional `admin.isPlugin` presentation flag. The
+      // folded reload config lists it (loadConfig folds contributions) AND the
+      // plugin list, so provenance is derived from the contribution — not the
+      // flag — and the prune must never touch it.
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "audit",
+              contributes: { collections: [{ slug: "audit-log" }] },
+            },
+          ],
+          collections: [
+            { slug: "posts", tableName: "dc_posts" },
+            { slug: "audit-log", tableName: "dc_audit_log", webhooks: false },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          { name: "dc_posts", columns: SQLITE_RESERVED },
+          { name: "dc_audit_log", columns: SQLITE_RESERVED },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The plugin's opt-out is honored and survives the reconcile...
+      expect(isWebhookRecordingEnabled("collection", "audit-log")).toBe(false);
+      // ...while the plain code collection records by default.
+      expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
+      resetWebhookRecordingPolicy();
+    });
   });
 });

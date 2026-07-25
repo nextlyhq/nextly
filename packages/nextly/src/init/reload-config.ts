@@ -64,6 +64,7 @@ import {
   setWebhookRecording,
   type WebhookRecordingScope,
 } from "../domains/webhooks/recording-policy";
+import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
@@ -387,18 +388,21 @@ function publishScopeRecording(
   entities: Array<{
     slug?: string;
     webhooks?: CollectionDef["webhooks"];
-    admin?: unknown;
   }>,
+  pluginSlugs: Set<string>,
   synced: boolean
 ): void {
-  const sourceOf = (admin: unknown): "code" | "plugin" =>
-    (admin as { isPlugin?: boolean } | undefined)?.isPlugin ? "plugin" : "code";
+  // Provenance comes from the plugin contribution list, not `admin.isPlugin`:
+  // a plugin's opt-out must be tagged `plugin` so the prune below never removes
+  // it, even when the plugin never sets that presentation flag.
+  const sourceOf = (slug: string): "code" | "plugin" =>
+    pluginSlugs.has(slug) ? "plugin" : "code";
 
   // Opt-outs first, always: safe regardless of sync state (recording is off).
   for (const e of entities) {
     if (!e.slug) continue;
     if (resolveWebhookRecording(e.webhooks).record === false) {
-      setWebhookRecording(scope, e.slug, false, sourceOf(e.admin));
+      setWebhookRecording(scope, e.slug, false, sourceOf(e.slug));
     }
   }
 
@@ -412,7 +416,7 @@ function publishScopeRecording(
   for (const e of entities) {
     if (!e.slug) continue;
     if (resolveWebhookRecording(e.webhooks).record === true) {
-      setWebhookRecording(scope, e.slug, true, sourceOf(e.admin));
+      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug));
     }
   }
 }
@@ -430,15 +434,33 @@ function publishScopeRecording(
  * {@link publishScopeRecording}).
  */
 function republishRecordingPolicies(
-  newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] },
+  newConfig: {
+    collections?: CollectionDef[];
+    singles?: SingleDef[];
+    plugins?: unknown[];
+  },
   scopes: { collections: boolean; singles: boolean }
 ): void {
+  const pluginCollections = collectPluginContributedSlugs(
+    newConfig.plugins,
+    "collections"
+  );
+  const pluginSingles = collectPluginContributedSlugs(
+    newConfig.plugins,
+    "singles"
+  );
   publishScopeRecording(
     "collection",
     newConfig.collections ?? [],
+    pluginCollections,
     scopes.collections
   );
-  publishScopeRecording("single", newConfig.singles ?? [], scopes.singles);
+  publishScopeRecording(
+    "single",
+    newConfig.singles ?? [],
+    pluginSingles,
+    scopes.singles
+  );
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -1296,6 +1318,19 @@ export async function reloadNextlyConfig(opts?: {
 
   if (!applyResult.success) {
     const code = applyResult.error.code;
+
+    // The DDL apply failed (needs-TTY confirmation, an executor error, ...), so
+    // the field-tree syncs and the recording republish under `if (success)` were
+    // skipped. Existing tables and services stay writable, though, so a recording
+    // OPT-OUT loaded this cycle must still take effect — recording off builds no
+    // payload, so the un-synced field tree is irrelevant, and leaving the old
+    // record-enabled decision active would keep leaking the newly private
+    // entity's events. Reconcile with both scopes unsynced: opt-outs apply now,
+    // opt-ins stay gated on a later clean apply (mirrors the deferred path above).
+    republishRecordingPolicies(newConfig, {
+      collections: false,
+      singles: false,
+    });
 
     if (code === "CONFIRMATION_REQUIRED_NO_TTY") {
       // Boot-time + HMR runs in a request-handler context where the

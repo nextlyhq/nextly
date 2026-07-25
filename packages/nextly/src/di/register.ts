@@ -62,6 +62,7 @@ import {
   resetWebhookRecordingPolicy,
   setWebhookRecording,
 } from "../domains/webhooks/recording-policy";
+import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
@@ -1097,39 +1098,40 @@ async function initializeSchemaRegistry(
  * runs.
  */
 function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
+  // Provenance comes from the plugin contribution list, not the optional
+  // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a
+  // code-first reconcile never prunes it) even when the plugin never sets that
+  // presentation flag.
+  const pluginCollections = collectPluginContributedSlugs(
+    config.plugins,
+    "collections"
+  );
+  const pluginSingles = collectPluginContributedSlugs(
+    config.plugins,
+    "singles"
+  );
   for (const collection of config.collections ?? []) {
     const slug = (collection as { slug?: string }).slug;
     if (!slug) continue;
-    // A plugin-contributed collection (form-builder submissions, etc.) is
-    // tagged `plugin` so a later code-first HMR reconcile never prunes its
-    // opt-out — plugins do not re-run on reload.
-    const source = (collection as { admin?: { isPlugin?: boolean } }).admin
-      ?.isPlugin
-      ? "plugin"
-      : "code";
     setWebhookRecording(
       "collection",
       slug,
       resolveWebhookRecording(
         (collection as { webhooks?: boolean | { record?: boolean } }).webhooks
       ).record,
-      source
+      pluginCollections.has(slug) ? "plugin" : "code"
     );
   }
   for (const single of config.singles ?? []) {
     const slug = (single as { slug?: string }).slug;
     if (!slug) continue;
-    const source = (single as { admin?: { isPlugin?: boolean } }).admin
-      ?.isPlugin
-      ? "plugin"
-      : "code";
     setWebhookRecording(
       "single",
       slug,
       resolveWebhookRecording(
         (single as { webhooks?: boolean | { record?: boolean } }).webhooks
       ).record,
-      source
+      pluginSingles.has(slug) ? "plugin" : "code"
     );
   }
 }
