@@ -68,4 +68,98 @@ describe("collection status webhook events (integration)", () => {
       to: "published",
     });
   });
+
+  it("update draft->published emits entry.published + entry.status_changed", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hi", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const upd = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { status: "published" }
+    );
+    expect(upd.success).toBe(true);
+
+    const rows = await events(current);
+    const types = rows.map(r => r.type);
+    expect(types).toContain("entry.published");
+    expect(types).toContain("entry.status_changed");
+
+    const pub = rows.find(r => r.type === "entry.published")!;
+    expect(envelopeOf(pub).statusChange).toEqual({
+      from: "draft",
+      to: "published",
+    });
+    const changed = rows.find(r => r.type === "entry.status_changed")!;
+    expect(envelopeOf(changed).statusChange).toEqual({
+      from: "draft",
+      to: "published",
+    });
+  });
+
+  it("update published->draft emits entry.unpublished + entry.status_changed", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "hi", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const upd = await handler.updateEntry(
+      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { status: "draft" }
+    );
+    expect(upd.success).toBe(true);
+
+    const rows = await events(current);
+    // The unpublish transition emits unpublished + status_changed, each carrying
+    // the published->draft delta (the create-as-published above also produced an
+    // entry.published, with from:null — a different, earlier event).
+    const unpub = rows.find(r => r.type === "entry.unpublished")!;
+    expect(envelopeOf(unpub).statusChange).toEqual({
+      from: "published",
+      to: "draft",
+    });
+    const changed = rows.find(
+      r =>
+        r.type === "entry.status_changed" &&
+        (envelopeOf(r).statusChange as { to?: string }).to === "draft"
+    )!;
+    expect(envelopeOf(changed).statusChange).toEqual({
+      from: "published",
+      to: "draft",
+    });
+    // No unpublish event ever carries a from:draft delta.
+    expect(
+      rows.some(
+        r =>
+          r.type === "entry.unpublished" &&
+          (envelopeOf(r).statusChange as { from?: string | null }).from ===
+            "draft"
+      )
+    ).toBe(false);
+  });
 });

@@ -4073,6 +4073,7 @@ export class CollectionMutationService extends BaseService {
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
               // `recorded` is false when the collection opted out of recording.
+              const updatedDocument = assembleDocument(documentParts);
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
                 resource: {
@@ -4084,11 +4085,66 @@ export class CollectionMutationService extends BaseService {
                     ? { locale: localizedUpdate.writeLocale }
                     : {}),
                 },
-                data: assembleDocument(documentParts),
+                data: updatedDocument,
                 previous: previousDocument,
                 fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
+
+              // D69 status lifecycle events, recorded in the SAME transaction as
+              // entry.updated (mirrors the post-commit transitionStatus, but
+              // durable/atomic). Main-row delta: the prior status read in-tx over
+              // the pre-transaction one so a retry reports the true prior state,
+              // and the status this write persisted to the main row (`undefined`
+              // when the patch set no status, leaving to === from → no event).
+              const actor = actorForWrite(params.actor, params.user);
+              const mainFrom =
+                committedPreviousStatus ??
+                ((existingEntry as Record<string, unknown>).status as
+                  | string
+                  | undefined) ??
+                null;
+              const mainTo =
+                ((updatePayload as { status?: unknown }).status as
+                  | string
+                  | undefined) ?? mainFrom;
+              const mainStatusRecorded = await this.recordStatusEvents(tx, {
+                collection: params.collectionName,
+                id: params.entryId,
+                from: mainFrom,
+                to: mainTo,
+                isCreate: false,
+                data: updatedDocument,
+                previous: previousDocument,
+                fields: webhookFields,
+                actor,
+              });
+
+              // Per-locale delta (i18n M6): a localized write moves the companion
+              // `_status`, leaving the main row unchanged, so the main-row check
+              // above never fires for it. Tag the event with the write locale.
+              let localizedStatusRecorded = false;
+              if (localizedUpdate) {
+                const localizedNext = localizedUpdate.companionData._status;
+                localizedStatusRecorded = await this.recordStatusEvents(tx, {
+                  collection: params.collectionName,
+                  id: params.entryId,
+                  locale: localizedUpdate.writeLocale,
+                  from: localizedPreviousStatus,
+                  to:
+                    typeof localizedNext === "string"
+                      ? localizedNext
+                      : undefined,
+                  isCreate: false,
+                  data: updatedDocument,
+                  previous: previousDocument,
+                  fields: webhookFields,
+                  actor,
+                });
+              }
+              recorded =
+                recorded || mainStatusRecorded || localizedStatusRecorded;
+
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.
               previousSlug = readStringField(previousDocument, "slug");
