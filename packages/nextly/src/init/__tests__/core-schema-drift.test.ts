@@ -26,16 +26,27 @@ function snapshot(tables: Record<string, string[]>): NextlySchemaSnapshot {
 
 describe("findCoreSchemaDrift", () => {
   it("reports a column the code expects that the database lacks", () => {
-    // A collection table created before the localization columns existed.
+    // A collection table created before the localization / config columns
+    // existed. `revalidate` is an additive nullable registry column reported
+    // by the same generic drift check as `versions`, so an install upgraded
+    // without `nextly migrate` is warned to reconcile it.
     const drift = findCoreSchemaDrift(
       snapshot({ dynamic_collections: ["id", "slug"] }),
-      snapshot({ dynamic_collections: ["id", "slug", "localized", "versions"] })
+      snapshot({
+        dynamic_collections: [
+          "id",
+          "slug",
+          "localized",
+          "versions",
+          "revalidate",
+        ],
+      })
     );
 
     expect(drift).toEqual([
       {
         table: "dynamic_collections",
-        missingColumns: ["localized", "versions"],
+        missingColumns: ["localized", "revalidate", "versions"],
       },
     ]);
   });

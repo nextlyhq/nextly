@@ -69,6 +69,19 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
         />
       )}
 
+      {fields.includes("revalidate") && (
+        // Revalidation defaults ON, so the switch is checked unless the value is
+        // explicitly false; turning it off stops this entity from busting cache
+        // tags on write.
+        <SwitchRow
+          ariaLabel="Cache revalidation"
+          label="Cache revalidation"
+          help="Bust cached pages when an entry changes so published edits appear without a redeploy. On by default; turn off for content that never renders on cached pages."
+          checked={values.revalidate ?? true}
+          onChange={v => set("revalidate", v)}
+        />
+      )}
+
       {fields.includes("showSystemFields") && <ShowSystemFieldsSwitch />}
     </div>
   );

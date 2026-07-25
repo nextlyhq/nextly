@@ -33,6 +33,9 @@ export function collectionEntityFromSettings(
       // Version history, mirrored into ui-schema.json so the committed
       // manifest matches what the registry was just told.
       versions: settings.versions === true,
+      // Cache revalidation, mirrored into ui-schema.json. Defaults on, so only
+      // an explicit `false` opts the collection out; anything else stays on.
+      revalidate: settings.revalidate !== false,
     },
     fields,
   });
@@ -52,6 +55,9 @@ export function singleEntityFromSettings(
       localized: settings.i18n === true,
       // Version history (mirrors collectionEntityFromSettings).
       versions: settings.versions === true,
+      // Cache revalidation (mirrors collectionEntityFromSettings): defaults on,
+      // only an explicit `false` opts the single out.
+      revalidate: settings.revalidate !== false,
     },
     fields,
   });

@@ -18,6 +18,7 @@ const COMPARED_KEYS = [
   "status",
   "i18n",
   "versions",
+  "revalidate",
 ] as const;
 
 type ComparedKey = (typeof COMPARED_KEYS)[number];

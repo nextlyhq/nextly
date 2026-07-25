@@ -11,6 +11,7 @@
 
 import type { FieldConfig, IndexConfig } from "@nextly/collections";
 
+import type { RevalidateConfig } from "../../revalidation/types";
 import type { CollectionAccessRules } from "../../services/access/types";
 // Registry-facing resolved versioning config shape for the `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
@@ -387,6 +388,13 @@ export interface DynamicCollectionInsert {
    * `resolveVersionsConfig`, persisted on the `versions` column.
    */
   versions?: ResolvedVersionsConfig | null;
+
+  /**
+   * Cache-revalidation config (`{ tags?, disable? }`), or null/undefined when
+   * the collection sets none. Persisted on the `revalidate` column; the write
+   * path reads it back to honor `disable` and merge extra `tags`.
+   */
+  revalidate?: RevalidateConfig | null;
 
   /** Collection-level i18n master switch. Default: false. */
   localized?: boolean;

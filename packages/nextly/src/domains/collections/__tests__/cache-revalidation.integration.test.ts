@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
+import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
 // Used to model a committed-but-hook-failed write: a code afterCreate hook that
@@ -350,6 +351,85 @@ describe("cache revalidation — write path (sqlite)", () => {
     }
   });
 
+  it("flushes nothing when the collection's revalidate config is disabled", async () => {
+    // The `revalidate: { disable: true }` config must round-trip through the
+    // registry and reach the write site, so a disabled collection busts nothing.
+    const entries = await boot([
+      defineCollection({
+        slug: "noreval",
+        status: true,
+        access: { create: () => true },
+        revalidate: { disable: true },
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+    ]);
+    await entries.createEntry(
+      { collectionName: "noreval", overrideAccess: true },
+      { title: "T", slug: "hidden" }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("includes the collection's configured extra revalidate tags", async () => {
+    // The `revalidate: { tags: [...] }` config must round-trip and be merged into
+    // every write's intent.
+    const entries = await boot([
+      defineCollection({
+        slug: "tagged",
+        status: true,
+        access: { create: () => true },
+        revalidate: { tags: ["navigation"] },
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+    ]);
+    await entries.createEntry(
+      { collectionName: "tagged", overrideAccess: true },
+      { title: "T", slug: "y" }
+    );
+    expect(spy.tags).toContain("navigation");
+    expect(spy.tags).toContain("nextly:tagged:slug:y");
+  });
+
+  it("busts nothing for a Builder collection with revalidation turned off", async () => {
+    // Parity: the Schema Builder switch OFF resolves to the disable config, and
+    // once persisted the write path must honor it exactly like a code-first
+    // opt-out. Binding the resolver output here catches a drift in either.
+    const entries = await boot([
+      defineCollection({
+        slug: "builderoff",
+        status: true,
+        access: { create: () => true },
+        revalidate: resolveBuilderRevalidate(false) ?? undefined,
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+    ]);
+    await entries.createEntry(
+      { collectionName: "builderoff", overrideAccess: true },
+      { title: "T", slug: "off" }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("busts the standard tags for a Builder collection with revalidation on", async () => {
+    // The Builder switch ON resolves to null (no override), so a Builder-created
+    // collection busts the same derived tags a code-first one does.
+    const entries = await boot([
+      defineCollection({
+        slug: "builderon",
+        status: true,
+        access: { create: () => true },
+        revalidate: resolveBuilderRevalidate(true) ?? undefined,
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+    ]);
+    await entries.createEntry(
+      { collectionName: "builderon", overrideAccess: true },
+      { title: "T", slug: "on" }
+    );
+    expect(spy.tags).toContain("nextly:builderon");
+    expect(spy.tags).toContain("nextly:builderon:slug:on");
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
@@ -384,5 +464,30 @@ describe("cache revalidation — write path (sqlite)", () => {
       { overrideAccess: true }
     );
     expect(spy.tags).toContain("nextly:single:header");
+  });
+
+  it("flushes nothing when the single's revalidate config is disabled", async () => {
+    // Singles persist + read `revalidate` through their own registry
+    // deserialize path, so verify a disabled single busts nothing.
+    const adapter = await memoryAdapter();
+    handle = await createTestNextly({
+      adapter,
+      singles: [
+        defineSingle({
+          slug: "footer",
+          access: { read: () => true, update: () => true },
+          revalidate: { disable: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singleEntry =
+      handle.getService<SingleEntryService>("singleEntryService");
+    await singleEntry.update(
+      "footer",
+      { title: "Site" },
+      { overrideAccess: true }
+    );
+    expect(spy.flushed).toHaveLength(0);
   });
 });

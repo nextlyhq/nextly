@@ -24,6 +24,7 @@ import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
+import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { requireBuilderEnabled } from "../shared/builder-access";
@@ -84,6 +85,10 @@ const createCollectionSchema = z.object({
   // Version history opt-in. Default off: capture adds a row to nextly_versions
   // on every save, which no existing caller has asked for.
   versions: z.boolean().optional(),
+  // Cache-revalidation opt-out. Default on (absent): writes bust the standard
+  // nextly:* tags; false persists the disable config so this collection busts
+  // nothing.
+  revalidate: z.boolean().optional(),
   admin: z
     .object({
       group: z.string().optional(),
@@ -278,6 +283,9 @@ export const POST = withErrorHandler(async (request: Request) => {
     // Version history opt-in, normalized to the resolved config the column
     // holds and every runtime reader tests.
     versions: resolveBuilderVersions(validated.versions),
+    // Cache-revalidation opt-out, normalized to the resolved config the write
+    // path reads (null = standard tags, { disable: true } = off).
+    revalidate: resolveBuilderRevalidate(validated.revalidate),
     schemaHash,
     hooks: validated.hooks,
   });

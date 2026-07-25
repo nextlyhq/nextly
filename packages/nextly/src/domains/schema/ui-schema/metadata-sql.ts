@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import {
   toPluralLabel,
@@ -71,6 +72,22 @@ function versionsLiteral(
   dialect: Dialect
 ): string {
   const resolved = resolveBuilderVersions(versions);
+  return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
+}
+
+/**
+ * The `revalidate` column value for a manifest entity.
+ *
+ * The column holds the resolved `{ tags?, disable? }` config the write path
+ * reads, so the manifest's on/off boolean is normalized through the same
+ * mapping the Builder's write paths use: on → NULL (standard revalidation),
+ * off → the disable config.
+ */
+function revalidateLiteral(
+  revalidate: boolean | undefined,
+  dialect: Dialect
+): string {
+  const resolved = resolveBuilderRevalidate(revalidate);
   return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 
@@ -196,6 +213,14 @@ export function buildCollectionMetadataUpsert(
       value: versionsLiteral(entity.versions, dialect),
       update: true,
     },
+    {
+      // Always written, including when off (same reason as versions): flipping
+      // the switch off must clear the column, and a column left out of the
+      // upsert is untouched by its DO UPDATE SET.
+      name: "revalidate",
+      value: revalidateLiteral(entity.revalidate, dialect),
+      update: true,
+    },
     { name: "migration_status", value: sqlStr("applied") },
   ];
   if (entity.admin !== undefined) {
@@ -246,6 +271,12 @@ export function buildSingleMetadataUpsert(
       // DO UPDATE SET.
       name: "versions",
       value: versionsLiteral(entity.versions, dialect),
+      update: true,
+    },
+    {
+      // Mirror the collection upsert: always written so flipping off clears it.
+      name: "revalidate",
+      value: revalidateLiteral(entity.revalidate, dialect),
       update: true,
     },
     { name: "migration_status", value: sqlStr("applied") },
