@@ -33,4 +33,9 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
     );
     expect(collection.admin?.disableCreate).toBe(true);
   });
+
+  it("opts submissions out of webhook recording (they carry ipAddress/userAgent)", () => {
+    const collection = submissionsCollection(formBuilder().config);
+    expect(collection.webhooks).toBe(false);
+  });
 });

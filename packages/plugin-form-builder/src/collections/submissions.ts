@@ -201,6 +201,12 @@ export function submissionsCollection(
     fields: finalFields,
     timestamps: true,
 
+    // Submissions carry visitor-entered content plus ipAddress/userAgent, so
+    // they are never recorded to the webhook outbox — otherwise every submission
+    // would be delivered to any endpoint subscribed to entry.created or `*`. An
+    // operator who wants submission webhooks can override this to `true`.
+    webhooks: false,
+
     admin: {
       isPlugin: true,
       group: "Forms",
