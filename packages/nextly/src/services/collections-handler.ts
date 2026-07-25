@@ -828,12 +828,15 @@ export class CollectionsHandler {
      * API key's OWN delete grant, not the key owner's.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this bulk delete (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
     return this.entryService.bulkDeleteEntries({
       ...this.resolveUserParam(params),
       // Named explicitly so the API-key scope survives the field-by-field
       // rebuild rather than only via resolveUserParam's rest.
       authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
     });
   }
 
@@ -872,12 +875,15 @@ export class CollectionsHandler {
      * per-id publish/unpublish transition is judged on the key's OWN grants.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
     return this.entryService.bulkUpdateEntries({
       ...this.resolveUserParam(params),
       // Named explicitly (like updateEntry) so the API-key scope survives the
       // field-by-field rebuild rather than only via resolveUserParam's rest.
       authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
     });
   }
 

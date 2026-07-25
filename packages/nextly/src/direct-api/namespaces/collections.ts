@@ -420,6 +420,7 @@ export async function bulkDelete(
       ? { id: config.user.id, role: config.user.role }
       : undefined,
     context: config.context,
+    disableRevalidate: config.disableRevalidate,
   });
 
   // Project to the public shape so internal post-commit signals (eventRecorded,

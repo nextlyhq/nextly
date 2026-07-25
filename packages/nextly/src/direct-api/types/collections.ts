@@ -366,6 +366,14 @@ export interface BulkDeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
 
   /** Array of document IDs to delete (required) */
   ids: string[];
+
+  /**
+   * Skip cache revalidation for this bulk delete (the outbox drain still runs).
+   * Set by a CLI, seed, or bulk-import caller that owns its cache strategy.
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
 }
 
 /**

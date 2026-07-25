@@ -517,6 +517,28 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.flushed).toHaveLength(0);
   });
 
+  it("forwards disableRevalidate through the public bulkDelete surface", async () => {
+    // `nx.bulkDelete` reaches the write path through this handler method, which
+    // rebuilds its params field by field — so the flag has to be forwarded here
+    // too, or the documented opt-out silently revalidates every deleted row.
+    const entries = await boot([openCollection("bskip")]);
+    const created = await entries.createEntry(
+      { collectionName: "bskip", overrideAccess: true },
+      { title: "T", slug: "b" }
+    );
+    const id = (created.data as { id: string }).id;
+    spy.flushed.length = 0; // ignore the create's flush
+    const handler =
+      handle!.getService<CollectionsHandler>("collectionsHandler");
+    await handler.bulkDeleteEntries({
+      collectionName: "bskip",
+      ids: [id],
+      overrideAccess: true,
+      disableRevalidate: true,
+    });
+    expect(spy.flushed).toHaveLength(0);
+  });
+
   it("flushes nothing when a single write sets disableRevalidate", async () => {
     const adapter = await memoryAdapter();
     handle = await createTestNextly({
