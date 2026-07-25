@@ -2489,10 +2489,6 @@ export class CollectionMutationService extends BaseService {
       // payload exposes a stale pre-image of the non-status columns. The closure
       // sets it; it is read once after commit for the event.
       let publishedParentRow: Record<string, unknown> | undefined;
-      // Whether any per-locale publish lifecycle event was appended to the outbox
-      // (D69). Set inside the transaction, read into the result so the drain/
-      // retention gate treats a publish like any other event-appending write.
-      let publishStatusRecorded = false;
       const needsFreshParent =
         !!versionsConfig?.enabled ||
         (hasMainStatus && previousStatus !== "published");
@@ -2538,17 +2534,6 @@ export class CollectionMutationService extends BaseService {
               ["published", params.entryId]
             );
           }
-          // Capture each locale's companion `_status` BEFORE the bulk publish, so
-          // the per-locale webhook events below fire only for locales that
-          // actually transition to published (an already-published locale emits
-          // nothing). Read on the transaction so it reflects this tx's view.
-          const priorLocaleStatuses =
-            companion && companionPublishable
-              ? await tx.execute<{ _locale?: unknown; _status?: unknown }>(
-                  `SELECT ${q("_locale")}, ${q("_status")} FROM ${q(companion.companionTableName)} WHERE ${q("_parent")} = ${ph(1)}`,
-                  [params.entryId]
-                )
-              : [];
           if (companion && companionPublishable) {
             await tx.execute(
               `UPDATE ${q(companion.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
@@ -2629,81 +2614,10 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // D69: per-locale publish lifecycle webhook events, recorded in the
-          // SAME transaction as the publish. The default locale's entry-level
-          // status is the main row; every other locale lives in the companion.
-          // Emit one entry.published (+status_changed) per locale that moved to
-          // published, tagged with its locale. Routed through recordMutationEvent
-          // so an opted-out (`webhooks: false`) collection records nothing.
-          if (isWebhookRecordingEnabled("collection", params.collectionName)) {
-            const webhookFields = await this.webhookFieldTree(
-              fields,
-              tx.getDrizzle()
-            );
-            // publishAllLocales carries no explicit actor param; fall back to the
-            // acting user, like its post-commit reaction event does.
-            const actor = actorForWrite(null, params.user);
-            const defaultLocale = this.localization?.defaultLocale;
-            const publishedRow: Record<string, unknown> =
-              publishedParentRow ?? {
-                ...(existingEntry as Record<string, unknown>),
-                status: "published",
-              };
-
-            const emitLocalePublish = async (
-              locale: string | undefined,
-              from: string | null
-            ): Promise<void> => {
-              const { document } = await this.buildDeletedDocument(tx, {
-                collectionName: params.collectionName,
-                entryId: params.entryId,
-                tableName,
-                row: publishedRow,
-                fields,
-                locale,
-              });
-              const did = await this.recordStatusEvents(tx, {
-                collection: params.collectionName,
-                id: params.entryId,
-                ...(locale !== undefined ? { locale } : {}),
-                from,
-                to: "published",
-                isCreate: false,
-                data: document,
-                // Publish only flips status, so overlaying the prior status
-                // reconstructs the pre-publish document for `previous`.
-                previous: { ...document, status: from },
-                fields: webhookFields,
-                actor,
-              });
-              publishStatusRecorded = publishStatusRecorded || did;
-            };
-
-            // Default locale = main row (its entry-level status column).
-            if (hasMainStatus && previousStatus !== "published") {
-              await emitLocalePublish(defaultLocale, previousStatus);
-            }
-            // Non-default locales live in the companion; the default locale is
-            // already covered by the main row above, so skip it here.
-            for (const localeRow of priorLocaleStatuses) {
-              const locale =
-                typeof localeRow._locale === "string"
-                  ? localeRow._locale
-                  : undefined;
-              const prior =
-                typeof localeRow._status === "string"
-                  ? localeRow._status
-                  : null;
-              if (
-                !locale ||
-                locale === defaultLocale ||
-                prior === "published"
-              ) {
-                continue;
-              }
-              await emitLocalePublish(locale, prior);
-            }
-          }
+          // NOTE: publishAllLocales records no webhook events yet — this path
+          // emits no base `entry.updated` either. Its lifecycle + base events
+          // land together in task 017 (tx/bulk/publishAllLocales write
+          // recording), so status-only events are not added here.
         })
       );
 
@@ -2780,9 +2694,6 @@ export class CollectionMutationService extends BaseService {
         message: "All languages published.",
         data: { id: params.entryId, status: "published" },
         revalidationIntent,
-        // So the shared post-write path schedules the fast-drain/retention for a
-        // publish that appended per-locale events, like any other write.
-        eventRecorded: publishStatusRecorded,
       };
     } catch (error) {
       // A publish refused by the under-lock document-rule re-check aborts the
