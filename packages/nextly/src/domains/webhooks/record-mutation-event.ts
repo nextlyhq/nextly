@@ -18,11 +18,28 @@ import type { RequestActor } from "../../auth/request-actor";
 
 import { buildEnvelope } from "./envelope";
 import { recordEvent } from "./record-event";
+import { isWebhookRecordingEnabled } from "./recording-policy";
 import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
 import type { WebhookEventType, WebhookResource } from "./types";
+
+/**
+ * Whether the changed resource opted out of webhook recording. Resolves the
+ * per-entity policy from the event `resource`: an entry is gated by its
+ * collection slug, a single by its own slug. Other kinds (media, user, ...)
+ * carry no per-entity opt-out and always record.
+ */
+function resourceRecordingEnabled(resource: WebhookResource): boolean {
+  if (resource.kind === "entry") {
+    return isWebhookRecordingEnabled("collection", resource.collection);
+  }
+  if (resource.kind === "single" && resource.slug !== undefined) {
+    return isWebhookRecordingEnabled("single", resource.slug);
+  }
+  return true;
+}
 
 /** Arguments for recording one mutation as a durable outbox event. */
 export interface RecordMutationEventArgs {
@@ -58,6 +75,14 @@ export async function recordMutationEvent(
   tx: TransactionContext,
   args: RecordMutationEventArgs
 ): Promise<void> {
+  // Collection/single opt-out: a resource whose entity set `webhooks: false`
+  // records nothing, so PII-bearing content (e.g. form submissions carrying
+  // ipAddress/userAgent) never enters the outbox or the delivery path. Enforced
+  // here at the single seam so every write path inherits it.
+  if (!resourceRecordingEnabled(args.resource)) {
+    return;
+  }
+
   const envelope = buildEnvelope({
     id: (args.newId ?? (() => crypto.randomUUID()))(),
     type: args.type,

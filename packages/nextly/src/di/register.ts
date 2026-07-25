@@ -58,6 +58,8 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import { setWebhookRecording } from "../domains/webhooks/recording-policy";
+import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
@@ -1104,6 +1106,16 @@ async function registerConfigTablesInResolver(
       // which drops functions, so the write/read services resolve them
       // through the field-level registry instead.
       registerFieldFunctions("collection", slug, fields);
+      // Publish the collection's webhook recording policy from the live config
+      // so the outbox choke point can honor a `webhooks: false` opt-out (e.g.
+      // form submissions) without a persisted column.
+      setWebhookRecording(
+        "collection",
+        slug,
+        resolveWebhookRecording(
+          (collection as { webhooks?: boolean | { record?: boolean } }).webhooks
+        ).record
+      );
       const baseTableName = dbName ?? slug.replace(/-/g, "_");
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
@@ -1167,6 +1179,14 @@ async function registerConfigTablesInResolver(
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
       // Same live-config capture as the collections branch above.
       registerFieldFunctions("single", slug, fields);
+      // Mirror the collection branch: publish the single's recording policy.
+      setWebhookRecording(
+        "single",
+        slug,
+        resolveWebhookRecording(
+          (single as { webhooks?: boolean | { record?: boolean } }).webhooks
+        ).record
+      );
       const tableName = resolveSingleTableName({ slug, dbName });
       // Why: forward the code-first `status: true` flag for singles too —
       // mirrors the collection branch above. Same Draft/Published runtime
