@@ -90,12 +90,25 @@ For each new package name, in order:
 1. Confirm the manifest carries `license`, `repository.directory`,
    `engines.node`, and `publishConfig.access: "public"`. A scoped package
    without `access: "public"` is published as restricted and fails.
-2. Make the first publish deliberately, then add the package's Trusted
-   Publisher entry on npmjs.com (repository `nextlyhq/nextly`, workflow
-   `release.yml`, environment `Production` — the environment name must match
-   the workflow's `environment:` exactly).
-3. Re-run the release so the package rejoins the train.
+2. Claim the name with a placeholder that contains no code:
 
-`NEXTLY_RELEASE_ALLOW_BOOTSTRAP=1` relaxes the preflight check for that first
-publish only. Adding a package to the `fixed[]` group without doing this is
-what makes the _next_ release fail.
+   ```sh
+   npm login
+   node scripts/release/bootstrap-package.mjs @nextlyhq/<name>            # shows the plan
+   node scripts/release/bootstrap-package.mjs @nextlyhq/<name> --publish  # claims 0.0.0
+   ```
+
+   The helper refuses to run against a name that already exists, and publishes
+   only a `package.json` and a README. Real versions are always published by
+   CI. (`nextly` itself was claimed this way with a `0.0.1` stub.)
+
+3. Add the package's Trusted Publisher entry at
+   `https://www.npmjs.com/package/<name>/access`: repository `nextlyhq/nextly`,
+   workflow `release.yml`, environment `Production`. The environment name must
+   match the release workflow's `environment:` exactly, or publishing fails
+   with the same 404.
+4. Re-run the release so the package rejoins the train.
+
+`NEXTLY_RELEASE_ALLOW_BOOTSTRAP=1` relaxes the preflight check when CI itself
+should attempt a first publish. Adding a package to the `fixed[]` group without
+completing the steps above is what makes the _next_ release fail.
