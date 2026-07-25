@@ -1151,6 +1151,15 @@ export class CollectionQueryService extends BaseService {
             // untranslated embedded field blank instead of showing default text.
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
+            // A component's relationship fields copy whole rows out of the
+            // target collection, which this collection's field rules say nothing
+            // about — so the caller travels down to reach the related row's own
+            // rules, exactly as it does for direct relationships.
+            access: {
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+            },
           });
       }
 
@@ -1982,6 +1991,13 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
+          // Same reasoning as the list path: a related row reached through a
+          // component is judged by its own collection's field rules.
+          access: {
+            enforceFieldAccess: true,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          },
         });
       }
 
