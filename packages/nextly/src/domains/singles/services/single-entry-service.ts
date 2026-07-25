@@ -140,14 +140,18 @@ export class SingleEntryService extends BaseService {
     options?: UpdateSingleOptions
   ): Promise<SingleResult> {
     const result = await this.mutationService.update(slug, data, options);
-    // A successful update always appends an outbox event (single.updated, plus a
-    // publish/unpublish transition), so kick the post-write side effects; a
-    // rejected write (access/404) recorded nothing and skips them. A write that
-    // committed its event but then failed a post-commit hook reports
-    // `success:false` with `eventRecorded:true`, so key off either — otherwise a
-    // committed event would miss its fast-drain and retention pass.
+    // Cache revalidation follows the CONTENT write, not the webhook event: a
+    // successful write (even one that opted out of recording) must still bust
+    // its ISR tags. A committed-but-post-hook-failed write reports
+    // `success:false` with `eventRecorded:true`, so key off either.
     if (result.success || result.eventRecorded === true) {
       await this.flushRevalidation(result);
+    }
+    // The fast drain + retention pass only matter when an outbox event was
+    // actually recorded. A successful but opted-out write (`webhooks: false`)
+    // records nothing, so scheduling them would only drain unrelated pending
+    // events — gate strictly on `eventRecorded`.
+    if (result.eventRecorded === true) {
       await this.afterWrite();
     }
     return result;

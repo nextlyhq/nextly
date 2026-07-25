@@ -1073,6 +1073,10 @@ export class CollectionBulkService extends BaseService {
               if (createResult.revalidationIntent) {
                 collectedIntents.push(createResult.revalidationIntent);
               }
+              // Aggregate the outbox signal so the wrapper drains only when at
+              // least one item actually recorded — a batch of only opted-out
+              // (`webhooks: false`) creates records nothing and owes no drain.
+              if (createResult.eventRecorded) result.eventRecorded = true;
               if (createResult.success && createResult.data) {
                 result.successful++;
                 result.ids.push(
@@ -1458,6 +1462,8 @@ export class CollectionBulkService extends BaseService {
               if (updateResult.revalidationIntent) {
                 collectedIntents.push(updateResult.revalidationIntent);
               }
+              // Aggregate the outbox signal (see the batch-create loop).
+              if (updateResult.eventRecorded) result.eventRecorded = true;
               if (updateResult.success && updateResult.data) {
                 result.successful++;
                 result.ids.push(
@@ -1658,6 +1664,8 @@ export class CollectionBulkService extends BaseService {
               updateResult.revalidationIntent
             );
           }
+          // Aggregate the outbox signal (see the batch-create loop).
+          if (updateResult.eventRecorded) result.eventRecorded = true;
           if (updateResult.success && updateResult.data) {
             result.successful++;
             result.ids.push(
@@ -1820,6 +1828,8 @@ export class CollectionBulkService extends BaseService {
                 collectedIntents.push(deleteResult.revalidationIntent);
               }
 
+              // Aggregate the outbox signal (see the batch-create loop).
+              if (deleteResult.eventRecorded) result.eventRecorded = true;
               if (deleteResult.success) {
                 result.successful++;
                 result.ids.push(entryId);
@@ -2027,6 +2037,8 @@ export class CollectionBulkService extends BaseService {
               deleteResult.revalidationIntent
             );
           }
+          // Aggregate the outbox signal (see the batch-create loop).
+          if (deleteResult.eventRecorded) result.eventRecorded = true;
           if (deleteResult.success) {
             result.successful++;
             result.ids.push(entryId);

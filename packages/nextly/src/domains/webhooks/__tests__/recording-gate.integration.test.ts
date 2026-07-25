@@ -61,18 +61,22 @@ describe("webhook recording opt-out (integration)", () => {
       { collectionName: "leads", overrideAccess: true },
       { title: "secret" }
     );
+    expect(lead.success).toBe(true);
     const leadId = (lead.data as { id: string }).id;
     // ...nor on update...
-    await handler.updateEntry(
+    const updated = await handler.updateEntry(
       { collectionName: "leads", entryId: leadId, overrideAccess: true },
       { title: "secret-2" }
     );
-    // ...nor on delete.
-    await handler.deleteEntry({
+    expect(updated.success).toBe(true);
+    // ...nor on delete. Asserting each write succeeded keeps the zero-event
+    // check below from passing vacuously on a write that failed pre-recording.
+    const deleted = await handler.deleteEntry({
       collectionName: "leads",
       entryId: leadId,
       overrideAccess: true,
     });
+    expect(deleted.success).toBe(true);
 
     const rows = await events(current);
     // Only the single `posts` create is in the outbox; no `leads` event at all.

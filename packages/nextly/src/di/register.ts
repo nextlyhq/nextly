@@ -58,7 +58,10 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
-import { setWebhookRecording } from "../domains/webhooks/recording-policy";
+import {
+  resetWebhookRecordingPolicy,
+  setWebhookRecording,
+} from "../domains/webhooks/recording-policy";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
@@ -458,6 +461,14 @@ export async function registerServices(
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
 
   const schemaRegistry = await initializeSchemaRegistry(adapter);
+
+  // Publish the webhook recording policy from the config INDEPENDENTLY of the
+  // schema registry. `registerConfigTablesInResolver` (below) only runs when the
+  // registry initialized, but the recording opt-out must hold even in the
+  // executeQuery fallback path taken when it does not — otherwise a
+  // `webhooks: false` collection (e.g. form submissions) would silently record
+  // PII-bearing events despite the opt-out.
+  publishWebhookRecordingPolicies(transformedConfig);
 
   // Belt-and-suspenders: also register every code-first collection and
   // single from the supplied config directly into the resolver. The
@@ -1078,6 +1089,39 @@ async function initializeSchemaRegistry(
 }
 
 /**
+ * Publish each code-first collection/single's webhook recording policy from the
+ * live config into the process-level registry. Runs unconditionally at boot
+ * (independent of the schema registry) so a `webhooks: false` opt-out is honored
+ * on every path — including the executeQuery fallback taken when the schema
+ * registry fails to initialize, where `registerConfigTablesInResolver` never
+ * runs.
+ */
+function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
+  for (const collection of config.collections ?? []) {
+    const slug = (collection as { slug?: string }).slug;
+    if (!slug) continue;
+    setWebhookRecording(
+      "collection",
+      slug,
+      resolveWebhookRecording(
+        (collection as { webhooks?: boolean | { record?: boolean } }).webhooks
+      ).record
+    );
+  }
+  for (const single of config.singles ?? []) {
+    const slug = (single as { slug?: string }).slug;
+    if (!slug) continue;
+    setWebhookRecording(
+      "single",
+      slug,
+      resolveWebhookRecording(
+        (single as { webhooks?: boolean | { record?: boolean } }).webhooks
+      ).record
+    );
+  }
+}
+
+/**
  * Register every code-first collection and single from the config as a
  * runtime Drizzle schema in the resolver. Complements `loadDynamicTables`
  * which reads the same data from the `dynamic_*` DB registry; having both
@@ -1106,16 +1150,6 @@ async function registerConfigTablesInResolver(
       // which drops functions, so the write/read services resolve them
       // through the field-level registry instead.
       registerFieldFunctions("collection", slug, fields);
-      // Publish the collection's webhook recording policy from the live config
-      // so the outbox choke point can honor a `webhooks: false` opt-out (e.g.
-      // form submissions) without a persisted column.
-      setWebhookRecording(
-        "collection",
-        slug,
-        resolveWebhookRecording(
-          (collection as { webhooks?: boolean | { record?: boolean } }).webhooks
-        ).record
-      );
       const baseTableName = dbName ?? slug.replace(/-/g, "_");
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
@@ -1179,14 +1213,6 @@ async function registerConfigTablesInResolver(
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
       // Same live-config capture as the collections branch above.
       registerFieldFunctions("single", slug, fields);
-      // Mirror the collection branch: publish the single's recording policy.
-      setWebhookRecording(
-        "single",
-        slug,
-        resolveWebhookRecording(
-          (single as { webhooks?: boolean | { record?: boolean } }).webhooks
-        ).record
-      );
       const tableName = resolveSingleTableName({ slug, dbName });
       // Why: forward the code-first `status: true` flag for singles too —
       // mirrors the collection branch above. Same Draft/Published runtime
@@ -2307,6 +2333,11 @@ export async function shutdownServices(): Promise<void> {
     console.error("Error during service shutdown:", error);
   } finally {
     container.clear();
+    // The recording policy is a process-global registry, so it must be cleared
+    // with the container — otherwise a later instance where a slug is only
+    // DB/Builder-backed inherits a prior instance's stale opt-out and silently
+    // stops recording.
+    resetWebhookRecordingPolicy();
     globalForReg.__nextly_isRegistered = false;
   }
 }
@@ -2318,6 +2349,9 @@ export async function shutdownServices(): Promise<void> {
  */
 export function clearServices(): void {
   container.clear();
+  // Clear the process-global recording policy alongside the container so a
+  // re-initialization does not inherit a prior config's opt-outs.
+  resetWebhookRecordingPolicy();
   globalForReg.__nextly_isRegistered = false;
 }
 

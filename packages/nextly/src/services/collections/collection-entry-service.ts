@@ -298,13 +298,13 @@ export class CollectionEntryService extends BaseService {
     // bust their tags.
     await this.flushRevalidation(result);
 
-    const recorded =
-      "success" in result
-        ? result.eventRecorded === true
-        : "successCount" in result
-          ? result.successCount > 0 || result.eventRecorded === true
-          : result.successful > 0 || result.eventRecorded === true;
-    if (recorded) {
+    // Drain/retention run only when an outbox event was actually recorded. Every
+    // result — single, bulk (`successCount`), and batch (`successful`) — now
+    // carries an aggregated `eventRecorded` (the bulk/batch paths OR it across
+    // their items), so a write of only opted-out (`webhooks: false`) entries
+    // records nothing and schedules nothing, rather than draining unrelated
+    // pending events off a positive success count.
+    if (result.eventRecorded === true) {
       await this.afterWrite();
     }
   }

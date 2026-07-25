@@ -292,6 +292,37 @@ async function syncCodeFirstMetadataOnly(
   }
 }
 
+/**
+ * Republish the webhook recording policy from the reloaded config, so a live
+ * `webhooks` opt-out/opt-in takes effect without a restart. Called AFTER a sync
+ * path completes successfully — never before it — so a reload whose schema apply
+ * fails does not leave the recording policy ahead of the still-old runtime
+ * config. Overwrites each reloaded slug's decision; a slug removed from the code
+ * config keeps its old entry, but a removed collection/single has no writes, and
+ * a REUSED slug is present in the new config and so is overwritten here.
+ */
+function republishRecordingPolicies(newConfig: {
+  collections?: CollectionDef[];
+  singles?: SingleDef[];
+}): void {
+  for (const c of newConfig.collections ?? []) {
+    if (!c.slug) continue;
+    setWebhookRecording(
+      "collection",
+      c.slug,
+      resolveWebhookRecording(c.webhooks).record
+    );
+  }
+  for (const s of newConfig.singles ?? []) {
+    if (!s.slug) continue;
+    setWebhookRecording(
+      "single",
+      s.slug,
+      resolveWebhookRecording(s.webhooks).record
+    );
+  }
+}
+
 // Reload entry point. resolver is optional and exists primarily for tests.
 // dispatcher is also test-only: injects a fake PromptDispatcher (e.g., one
 // that records prompts and auto-confirms) so tests don't need a real TTY.
@@ -399,27 +430,6 @@ export async function reloadNextlyConfig(opts?: {
   // would crash at runtime).
   const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
-
-  // Keep the webhook recording policy in sync with the reloaded config so a
-  // hot-swapped `webhooks` opt-out/opt-in takes effect without a restart. Runs
-  // before the sync branches below, so BOTH the DDL-diff and the metadata-only
-  // paths honor the change (the boot-time decision would otherwise persist).
-  for (const c of newConfig.collections ?? []) {
-    if (!c.slug) continue;
-    setWebhookRecording(
-      "collection",
-      c.slug,
-      resolveWebhookRecording(c.webhooks).record
-    );
-  }
-  for (const s of newConfig.singles ?? []) {
-    if (!s.slug) continue;
-    setWebhookRecording(
-      "single",
-      s.slug,
-      resolveWebhookRecording(s.webhooks).record
-    );
-  }
 
   // Normalize collections to (slug, tableName, fields, status) tuples. Drop
   // entries without a slug — they can't be addressed. `status` propagates so
@@ -720,6 +730,10 @@ export async function reloadNextlyConfig(opts?: {
     // table, so skip and let a later clean reload / restart reconcile.
     if (!deferredSchemaChange) {
       await syncCodeFirstMetadataOnly(resolve, newConfig, logger);
+      // Metadata-only sync succeeded; publish the (possibly toggled) recording
+      // policy now — a `webhooks` change surfaces as no schema diff, so this is
+      // the path a live opt-out/opt-in toggle flows through.
+      republishRecordingPolicies(newConfig);
     }
     return;
   }
@@ -859,6 +873,10 @@ export async function reloadNextlyConfig(opts?: {
   });
 
   if (applyResult.success) {
+    // The schema change committed, so publish the (possibly toggled) recording
+    // policy now — this covers a combined `webhooks` + schema-field change,
+    // which takes the DDL path rather than the metadata-only path above.
+    republishRecordingPolicies(newConfig);
     // Sync dynamic_collections metadata so the fields JSON reflects the
     // new config. The pipeline above only applies DDL to dc_<slug>; without
     // this call, admin-UI queries still read the old field list until the

@@ -23,4 +23,18 @@ describe("resolveWebhookRecording", () => {
       record: false,
     });
   });
+
+  it("tolerates malformed values from untyped JS configs without throwing", () => {
+    // `null` must not throw (as `null.record` would); a non-boolean `record`
+    // must not escape the boolean return. Both fall back to recording.
+    const asInput = (v: unknown) =>
+      v as boolean | { record?: boolean } | undefined;
+    expect(resolveWebhookRecording(asInput(null))).toEqual({ record: true });
+    expect(resolveWebhookRecording(asInput({ record: "false" }))).toEqual({
+      record: true,
+    });
+    expect(resolveWebhookRecording(asInput({ record: 0 }))).toEqual({
+      record: true,
+    });
+  });
 });

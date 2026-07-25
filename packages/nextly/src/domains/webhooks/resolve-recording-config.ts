@@ -26,7 +26,19 @@ export interface ResolvedWebhookRecording {
 export function resolveWebhookRecording(
   webhooks: boolean | { record?: boolean } | undefined
 ): ResolvedWebhookRecording {
-  if (webhooks === undefined) return { record: true };
-  if (typeof webhooks === "boolean") return { record: webhooks };
-  return { record: webhooks.record ?? true };
+  // Only an explicit boolean `false`, or an object whose `record` is exactly
+  // `false`, opts out. Every other value falls back to recording — the safe
+  // default. This tolerates untyped JS configs: a malformed `null` never throws
+  // (as `null.record` would), and a non-boolean `record` (e.g. the string
+  // "false") is ignored rather than escaping the boolean return as a truthy
+  // value. The result is always a real boolean.
+  if (webhooks === false) return { record: false };
+  if (
+    typeof webhooks === "object" &&
+    webhooks !== null &&
+    webhooks.record === false
+  ) {
+    return { record: false };
+  }
+  return { record: true };
 }
