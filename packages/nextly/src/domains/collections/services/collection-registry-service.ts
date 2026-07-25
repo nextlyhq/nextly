@@ -56,6 +56,8 @@ export interface CodeFirstCollectionConfig {
   status?: boolean;
   /** Resolved content-versioning config (or null when unversioned). */
   versions?: DynamicCollectionInsert["versions"];
+  /** Cache-revalidation config (or null when the collection sets none). */
+  revalidate?: DynamicCollectionInsert["revalidate"];
   /** Whether collection-level i18n is enabled (mirrors `status`). */
   localized?: boolean;
   admin?: DynamicCollectionInsert["admin"];
@@ -233,6 +235,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Persist the resolved versioning config as JSON (or null), the same way
       // `admin`/`hooks` are written on this raw-insert path.
       versions: data.versions ? JSON.stringify(data.versions) : null,
+      // Persist the cache-revalidation config as JSON (or null), like `versions`.
+      revalidate: data.revalidate ? JSON.stringify(data.revalidate) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
@@ -384,6 +388,12 @@ export class CollectionRegistryService extends BaseRegistryService<
         ? JSON.stringify(data.versions)
         : null;
     }
+    // Cache-revalidation config: same explicit-provide semantics as `versions`.
+    if (data.revalidate !== undefined) {
+      updateData.revalidate = data.revalidate
+        ? JSON.stringify(data.revalidate)
+        : null;
+    }
     if (data.localized !== undefined) {
       updateData.localized = data.localized === true ? 1 : 0;
     }
@@ -491,6 +501,8 @@ export class CollectionRegistryService extends BaseRegistryService<
             status: config.status === true,
             // Forward the resolved versioning config on first sync.
             versions: config.versions,
+            // Forward the cache-revalidation config on first sync.
+            revalidate: config.revalidate,
             localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
@@ -504,6 +516,9 @@ export class CollectionRegistryService extends BaseRegistryService<
           // normalized JSON, so a stable string compare detects a real change).
           JSON.stringify(config.versions ?? null) !==
             JSON.stringify(existing.versions ?? null) ||
+          // Re-sync when the cache-revalidation config changed.
+          JSON.stringify(config.revalidate ?? null) !==
+            JSON.stringify(existing.revalidate ?? null) ||
           (config.localized === true) !== (existing.localized === true) ||
           desiredTableName !== existing.tableName
         ) {
@@ -530,6 +545,10 @@ export class CollectionRegistryService extends BaseRegistryService<
               locked: true,
               status: config.status === true,
               versions: config.versions,
+              // Send explicit null (not undefined) when the config removed
+              // `revalidate`, so updateCollection actually clears the column
+              // instead of leaving the stale config persisted.
+              revalidate: config.revalidate ?? null,
               localized: config.localized === true,
               tableName: desiredTableName,
             },
@@ -607,6 +626,7 @@ export class CollectionRegistryService extends BaseRegistryService<
                 // collection recovered here does not silently lose localization.
                 localized: config.localized === true,
                 versions: config.versions,
+                revalidate: config.revalidate,
                 configPath: config.configPath,
                 schemaHash: retrySchemaHash,
               });
@@ -678,6 +698,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       status: data.status === true ? 1 : 0,
       // Same as registerCollection — persist the resolved versioning config.
       versions: data.versions ? JSON.stringify(data.versions) : null,
+      // Same as registerCollection — persist the cache-revalidation config.
+      revalidate: data.revalidate ? JSON.stringify(data.revalidate) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
@@ -789,6 +811,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     const fields = (r.fields || r.fields) as string | object;
     const admin = (r.admin || r.admin) as string | object | null;
     const versions = r.versions as string | object | null | undefined;
+    const revalidate = r.revalidate as string | object | null | undefined;
     const hooks = (r.hooks || r.hooks) as string | object | null;
     const tableName = (r.table_name || r.tableName) as string;
     const configPath = (r.config_path || r.configPath) as string | undefined;
@@ -834,6 +857,14 @@ export class CollectionRegistryService extends BaseRegistryService<
         ? typeof versions === "string"
           ? JSON.parse(versions)
           : versions
+        : null,
+      // Parse the cache-revalidation config (JSON string on the raw-insert path
+      // / SQLite; already an object on pg/mysql jsonb). null when unset or on
+      // rows written before this column existed.
+      revalidate: revalidate
+        ? typeof revalidate === "string"
+          ? JSON.parse(revalidate)
+          : revalidate
         : null,
       localized: r.localized === 1 || r.localized === true,
       configPath,

@@ -358,6 +358,13 @@ function entity(kind?: "collection" | "single" | "component") {
        * write would vanish on the next parse.
        */
       versions: z.boolean().optional(),
+      /**
+       * Whether writes to this entity bust cache tags. Boolean rather than the
+       * code-first `{ tags?, disable? }`: the Schema Builder offers on/off
+       * (custom extra tags stay a code-first control). On is the default, so an
+       * absent key means revalidation on; false persists `{ disable: true }`.
+       */
+      revalidate: z.boolean().optional(),
       fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {
@@ -397,6 +404,16 @@ function entity(kind?: "collection" | "single" | "component") {
           code: z.ZodIssueCode.custom,
           message: "'versions' is not supported on components",
           path: ["versions"],
+        });
+      }
+      // Components have no entries and no registry row of their own, so a
+      // revalidation switch would persist a setting nothing reads and the
+      // Builder never offers (same rationale as `versions` above).
+      if (kind === "component" && e.revalidate !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'revalidate' is not supported on components",
+          path: ["revalidate"],
         });
       }
       // `status` reserved as a field name only when the lifecycle column is on.
