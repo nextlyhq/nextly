@@ -473,6 +473,12 @@ export class CollectionsHandler {
      */
     routeAuthorized?: boolean;
     /**
+     * The caller's authenticated scope. A scoped API key is judged on its own
+     * read grant rather than on the permissions of the user that owns it, so a
+     * super-admin-owned key stays bound by a stored owner-only read rule.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
      * pass 'all' to see drafts too. Forwarded to query service as-is.
@@ -619,6 +625,11 @@ export class CollectionsHandler {
      * the caller may not read.
      */
     routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope, mirroring listEntries so a scoped key's
+     * count matches the rows it can list.
+     */
+    authenticatedScope?: AuthenticatedScope;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Same semantics as listEntries.

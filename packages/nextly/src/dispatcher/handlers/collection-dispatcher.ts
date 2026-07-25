@@ -972,6 +972,10 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         user,
         routeAuthorized: !!user,
+        // A scoped API key is judged on its own read grant rather than on the
+        // permissions of the user that owns it, so a super-admin-owned key
+        // cannot read past its scope by inheriting the session bypass.
+        authenticatedScope: readAuthenticatedScope(p),
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
           rawLimit !== undefined ? parseInt(String(rawLimit), 10) : undefined,
@@ -1026,6 +1030,9 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         user,
         routeAuthorized: !!user,
+        // Same scope judgement as listEntries: a count that ignored the key's
+        // own grant would disclose how many rows exist beyond it.
+        authenticatedScope: readAuthenticatedScope(p),
         search: p.search,
         where: parseWhereParam(p.where),
         status,
@@ -1102,10 +1109,8 @@ const COLLECTIONS_METHODS: Record<
         user,
         routeAuthorized: !!user,
         // A scoped API key is judged on its own read grant rather than on the
-        // permissions of the user that owns it, matching the publish gate from
-        // #290/#297. Only getEntry takes this today; list/count judge the owning
-        // user, so a scoped key can still inherit a stored rule written for
-        // them there (tracked as a follow-up, not widened here).
+        // permissions of the user that owns it, matching listEntries, countEntries
+        // and the publish gate.
         authenticatedScope: readAuthenticatedScope(p),
         depth:
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,

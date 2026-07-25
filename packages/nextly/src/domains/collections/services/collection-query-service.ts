@@ -622,6 +622,13 @@ export class CollectionQueryService extends BaseService {
      */
     routeAuthorized?: boolean;
     /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * read grant, so a super-admin-owned key stays bound by a `read: owner-only`
+     * rule instead of inheriting the owner's session bypass. Undefined for
+     * session/system callers. Mirrors getEntry.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /**
      * Draft/Published filter override. Only takes effect when the collection
      * has Draft/Published enabled (collection.status === true).
      * - 'published' (default for public callers): only published rows
@@ -660,7 +667,10 @@ export class CollectionQueryService extends BaseService {
         undefined,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own read grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -745,7 +755,11 @@ export class CollectionQueryService extends BaseService {
         await this.accessService.getAccessQueryConstraint(
           params.collectionName,
           accessUser,
-          params.overrideAccess
+          params.overrideAccess,
+          // Scope the owner filter too: without this a super-admin-owned scoped
+          // key takes the session bypass and reads past its own grant, the
+          // predicate having been lifted before it ever reached SQL.
+          params.authenticatedScope
         );
 
       // Apply access constraint if present
@@ -1404,6 +1418,11 @@ export class CollectionQueryService extends BaseService {
      */
     routeAuthorized?: boolean;
     /**
+     * The caller's authenticated scope, mirroring listEntries so a scoped key
+     * counts exactly the rows it can list.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /**
      * Draft/Published filter override (only effective when collection.status === true).
      * See listEntries for full semantics.
      */
@@ -1439,7 +1458,10 @@ export class CollectionQueryService extends BaseService {
         undefined,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // Same scope judgement as listEntries, so a count cannot describe rows
+        // the key itself is not allowed to list.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -1470,7 +1492,10 @@ export class CollectionQueryService extends BaseService {
         await this.accessService.getAccessQueryConstraint(
           params.collectionName,
           accessUser,
-          params.overrideAccess
+          params.overrideAccess,
+          // Scoped the same way as listEntries, so the total matches the rows a
+          // scoped key can actually page through.
+          params.authenticatedScope
         );
 
       // Apply access constraint if present

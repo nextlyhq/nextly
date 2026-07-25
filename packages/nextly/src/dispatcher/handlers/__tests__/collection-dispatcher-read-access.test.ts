@@ -68,6 +68,18 @@ const authedParams = {
   _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
 };
 
+/**
+ * The same caller arriving through a scoped API key. The key's own grants are
+ * stamped separately from the owner's roles, which is the whole point: the key
+ * is authoritative on its scope, never on the account that issued it.
+ */
+const apiKeyParams = {
+  ...authedParams,
+  _authenticatedActorType: "apiKey",
+  _authenticatedActorId: "key-1",
+  _authenticatedPermissions: JSON.stringify(["collections:read"]),
+};
+
 describe("collection read handlers forward the caller to the query service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -159,6 +171,44 @@ describe("collection read handlers forward the caller to the query service", () 
     // caller cannot see, leaking how much data exists and breaking pagination.
     expect(countArgs.user).toEqual(listArgs.user);
     expect(countArgs.routeAuthorized).toBe(listArgs.routeAuthorized);
+  });
+
+  it("forwards the API-key scope on every read, not just getEntry", async () => {
+    // Without the scope the access service treats a super-admin-owned key as an
+    // unscoped super-admin session and lifts the stored owner-only predicate, so
+    // the key reads rows outside its own grant. getEntry alone forwarding it is
+    // not enough: list and count are the paths that return rows in bulk.
+    const listEntries = vi.fn().mockResolvedValue(listResult);
+    const countEntries = vi.fn().mockResolvedValue(countResult);
+    const getEntry = vi.fn().mockResolvedValue(docResult);
+    const container = makeContainer({ listEntries, countEntries, getEntry });
+
+    await dispatchCollections(
+      container,
+      "listEntries",
+      { ...apiKeyParams },
+      undefined
+    );
+    await dispatchCollections(
+      container,
+      "countEntries",
+      { ...apiKeyParams },
+      undefined
+    );
+    await dispatchCollections(
+      container,
+      "getEntry",
+      { ...apiKeyParams, entryId: "e1" },
+      undefined
+    );
+
+    const expected = {
+      actorType: "apiKey",
+      permissions: ["collections:read"],
+    };
+    expect(listEntries.mock.calls[0][0].authenticatedScope).toEqual(expected);
+    expect(countEntries.mock.calls[0][0].authenticatedScope).toEqual(expected);
+    expect(getEntry.mock.calls[0][0].authenticatedScope).toEqual(expected);
   });
 
   it("ignores a malformed role payload rather than forwarding a partial set", async () => {
