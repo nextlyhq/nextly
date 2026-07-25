@@ -125,6 +125,19 @@ export function blockPropsToFieldConfigs(
     issues: [],
   };
   const configs = buildFieldConfigs(source.props, "", ctx, 0);
+  // A localized name is only meaningful against a declared prop. Left
+  // unchecked, a typo produces a config with nothing marked translatable and
+  // no sign that the author asked for one.
+  for (const name of source.localized ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(source.props ?? {}, name)) {
+      record(
+        ctx,
+        name,
+        "UNKNOWN_LOCALIZED_PROP",
+        `"${name}" is listed as localized but is not a declared prop.`
+      );
+    }
+  }
   if (ctx.issues.length > 0) {
     throw NextlyError.validation({
       errors: ctx.issues,
@@ -245,6 +258,13 @@ function alreadyReported(
  * all, an empty list where the prop holds one value or declares a minimum,
  * and a required list-shaped prop explicitly set to `[]`, which the shared
  * rules route past their required check in order to reach the bounds rules.
+ *
+ * An explicit `null` is not one of them. Unlike a blank string on a number
+ * prop, `null` is not a value of the wrong type — it is how JSON says a prop
+ * is unset, it survives encoding unchanged, and it reads to a consumer
+ * exactly as an absent key does. A required prop still rejects it, because
+ * the shared rules treat it as empty. Refusing it for optional props would
+ * make clearing a prop an error rather than a normal edit.
  */
 function collectEmptyListIssues(
   fields: readonly WalkableField[],
@@ -257,6 +277,20 @@ function collectEmptyListIssues(
     const value = ownValue(values, field.name);
     if (value === undefined) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
+    if (
+      !alreadyReported(issues, path) &&
+      typeof value === "object" &&
+      value !== null &&
+      definesOwnToJson(value) &&
+      !choosesOwnStoredForm(field)
+    ) {
+      issues.push({
+        path,
+        code: "INVALID_TYPE",
+        message: `${field.label ?? field.name} must not define its own toJSON.`,
+      });
+      continue;
+    }
     if (typeof value === "string" && value.trim() === "") {
       if (!alreadyReported(issues, path) && !holdsText(field)) {
         issues.push({
@@ -325,6 +359,20 @@ function collectEmptyListIssues(
  * Whether a field's value is a list. `json` counts because an array is a
  * legitimate JSON value, not a cardinality mistake.
  */
+/**
+ * Whether a field's declared type lets a value choose its own encoded form.
+ *
+ * Only two do. A `json` prop stores whatever shape the value decides, so
+ * `toJSON` is a legitimate way to pick it. A `date` prop accepts a `Date`,
+ * whose `toJSON` produces the ISO string dates are stored as, and its own
+ * rules already reject anything that is not a date. Every other type is
+ * validated by shape, so a value that substitutes something else on encode
+ * would store what was never checked.
+ */
+function choosesOwnStoredForm(field: WalkableField): boolean {
+  return field.type === "json" || field.type === "date";
+}
+
 /**
  * Whether a field's value may be a string. A blank string reaching any other
  * prop contradicts its declared type: a number cannot be text, and an id that

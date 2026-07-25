@@ -1257,6 +1257,97 @@ describe("validateBlockPropValues stored-form fidelity", () => {
   });
 });
 
+describe("blockPropsToFieldConfigs localized names", () => {
+  it("rejects a localized name that matches no declared prop", () => {
+    // A typo would otherwise produce a config with nothing translatable and
+    // no sign that the author asked for one.
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          localized: ["titel"],
+          props: { title: { type: "text" } },
+        })
+      )
+    ).toEqual([{ path: "titel", code: "UNKNOWN_LOCALIZED_PROP" }]);
+  });
+
+  it("rejects a localized name that only matches a nested field", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          localized: ["note"],
+          props: {
+            meta: { type: "group", fields: { note: { type: "text" } } },
+          },
+        })
+      )
+    ).toEqual([{ path: "note", code: "UNKNOWN_LOCALIZED_PROP" }]);
+  });
+});
+
+describe("validateBlockPropValues encoded form", () => {
+  it("refuses a typed prop value that replaces itself on encode", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        ref: { type: "relationship", relationTo: ["posts", "pages"] },
+        tags: { type: "text", hasMany: true },
+      },
+    };
+    // Both satisfy their declared shape and store something else entirely.
+    expect(
+      await validateBlockPropValues(
+        { ref: { relationTo: "posts", value: "p1", toJSON: () => "broken" } },
+        source
+      )
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { tags: Object.assign(["a"], { toJSON: () => [123] }) },
+        source
+      )
+    ).toHaveLength(1);
+  });
+
+  it("still lets json and date props choose their stored form", async () => {
+    const source: BlockPropsSource = {
+      props: { data: { type: "json" }, when: { type: "date" } },
+    };
+    expect(
+      await validateBlockPropValues(
+        {
+          data: { toJSON: () => ({ ok: true }) },
+          when: new Date("2026-01-01"),
+        },
+        source
+      )
+    ).toEqual([]);
+  });
+
+  it("treats an explicit null as an unset prop", async () => {
+    // null is not a wrong-typed value: it is how JSON says a prop is unset,
+    // it encodes unchanged, and it reads exactly as an absent key does.
+    const optional: BlockPropsSource = {
+      props: {
+        count: { type: "number" },
+        meta: { type: "group", fields: { note: { type: "text" } } },
+        image: { type: "upload", relationTo: "media" },
+      },
+    };
+    expect(
+      await validateBlockPropValues(
+        { count: null, meta: null, image: null },
+        optional
+      )
+    ).toEqual([]);
+    // A required prop still refuses it, through the shared empty-value rule.
+    const required: BlockPropsSource = {
+      props: { count: { type: "number", required: true } },
+    };
+    const issues = await validateBlockPropValues({ count: null }, required);
+    expect(issues.map(issue => issue.code)).toEqual(["REQUIRED"]);
+  });
+});
+
 describe("plugin field types as block props", () => {
   afterEach(() => {
     clearFieldTypes();
