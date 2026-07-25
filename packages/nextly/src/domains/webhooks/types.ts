@@ -143,6 +143,14 @@ export interface WebhookEvent {
   /** Top-level keys whose value changed; drives changed-field filtering. */
   changedFields: string[];
   actor?: WebhookActor;
+  /**
+   * The status delta for a lifecycle event (`entry.published` /
+   * `entry.unpublished` / `entry.status_changed`). Present only on those events,
+   * so a `status_changed` subscriber reads from/to directly instead of diffing
+   * `data.status` against `previous.status`. `from` is null on a create-as-
+   * published. Additive + optional: existing subscribers are unaffected.
+   */
+  statusChange?: { from: string | null; to: string };
 }
 
 /** Lifecycle of one delivery row in the outbox ledger. */
