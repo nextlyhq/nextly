@@ -170,9 +170,7 @@ export default function SingleBuilderEditPage({
           ?.enabled === true,
       // Cache revalidation is on unless the stored config disables it (mirrors
       // the collection builder).
-      revalidate:
-        (single as { revalidate?: { disable?: boolean } | null }).revalidate
-          ?.disable !== true,
+      revalidate: single.revalidate?.disable !== true,
     };
     setSettings(loadedSettings);
     setOriginalSettings(loadedSettings);

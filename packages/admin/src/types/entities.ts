@@ -306,6 +306,14 @@ export interface ApiSingle {
    */
   versions?: { enabled?: boolean } | null;
 
+  /**
+   * Resolved cache-revalidation config, or null/absent when revalidation is on
+   * with no override. The server normalizes the Schema Builder's on/off into
+   * this shape (off → `{ disable: true }`), so reads carry the object while
+   * writes send a boolean — see `UpdateSinglePayload`.
+   */
+  revalidate?: { disable?: boolean; tags?: string[] } | null;
+
   /** Current migration status */
   migrationStatus?: SingleMigrationStatus;
 

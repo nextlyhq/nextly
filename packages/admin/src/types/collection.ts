@@ -251,6 +251,13 @@ export interface Collection {
    */
   status?: boolean;
   /**
+   * Resolved cache-revalidation config, or null/absent when revalidation is on
+   * with no override. The server normalizes the Schema Builder's on/off switch
+   * into this shape (off → `{ disable: true }`), so reads carry the object while
+   * writes send a boolean — see `UpdateCollectionPayload`.
+   */
+  revalidate?: { disable?: boolean; tags?: string[] } | null;
+  /**
    * Legacy schema definition format.
    * New API returns `fields` directly at root level.
    */

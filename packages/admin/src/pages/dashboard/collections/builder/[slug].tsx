@@ -209,9 +209,7 @@ export default function CollectionBuilderEditPage({
           ?.enabled === true,
       // Cache revalidation is on unless the stored config disables it, so the
       // switch reflects on for both null (default) and an absent-disable config.
-      revalidate:
-        (collection as { revalidate?: { disable?: boolean } | null }).revalidate
-          ?.disable !== true,
+      revalidate: collection.revalidate?.disable !== true,
     };
     setSettings(loadedSettings);
     // Pin a copy as the dirty baseline so settings-only edits enable Save.
