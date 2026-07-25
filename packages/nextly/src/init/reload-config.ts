@@ -658,6 +658,16 @@ export async function reloadNextlyConfig(opts?: {
     return;
   }
 
+  // Apply recording OPT-OUTS now, before introspection and the schema apply.
+  // Turning recording off builds no payload and reads no field tree, so an
+  // opt-out is always safe to honor immediately — and every path from here can
+  // still bail early (introspection throwing, an unsafe diff deferring, the
+  // apply failing), each of which consumes the reload event. Publishing opt-outs
+  // up front means a reload that sets `webhooks: false` stops recording even when
+  // one of those later steps aborts; opt-INs (and pruning) still wait for a
+  // successful field-tree sync, applied by the per-scope republishes below.
+  republishRecordingPolicies(newConfig, { collections: false, singles: false });
+
   // Extracted once so the same list is passed to introspectLiveSnapshot
   // AND registered in the live-snapshot cache for the pipeline to reuse.
   const managedTableNames = [
