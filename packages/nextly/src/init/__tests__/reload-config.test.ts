@@ -109,6 +109,8 @@ describe("reloadNextlyConfig", () => {
       fields?: unknown[];
       source?: string;
     }>;
+    /** Force the metadata-only collection sync to reject, so its scope is unsynced. */
+    failCollectionMetaSync?: boolean;
   }) {
     const withAdapter = opts?.withAdapter ?? true;
     const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
@@ -129,7 +131,9 @@ describe("reloadNextlyConfig", () => {
           }
         : undefined,
       collectionRegistryService: {
-        syncCodeFirstCollections: vi.fn().mockResolvedValue({}),
+        syncCodeFirstCollections: opts?.failCollectionMetaSync
+          ? vi.fn().mockRejectedValue(new Error("meta sync failed"))
+          : vi.fn().mockResolvedValue({}),
         // Mirrors CollectionRegistryService.getAllCollections — the DB-backed
         // list of every registered collection (code + UI). Defaults to empty.
         getAllCollections: vi
@@ -1028,6 +1032,49 @@ describe("reloadNextlyConfig", () => {
       expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
         false
       );
+      resetWebhookRecordingPolicy();
+    });
+
+    it("applies a new opt-out even when the metadata sync fails, but gates opt-ins", async () => {
+      const {
+        setWebhookRecording,
+        isWebhookRecordingEnabled,
+        resetWebhookRecordingPolicy,
+      } = await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // `posts` carries a stale opt-out from a previous decision; the reload now
+      // wants it to record again (an opt-IN). `leads` is newly set to
+      // `webhooks: false` (an opt-OUT). Both diffs are zero-op, so the reload
+      // takes the metadata-only path — where the collection sync then FAILS,
+      // leaving that scope unsynced.
+      setWebhookRecording("collection", "posts", false, "code");
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            { slug: "posts", tableName: "dc_posts" },
+            { slug: "leads", tableName: "dc_leads", webhooks: false },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          { name: "dc_posts", columns: SQLITE_RESERVED },
+          { name: "dc_leads", columns: SQLITE_RESERVED },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({
+        resolver: buildResolver({ failCollectionMetaSync: true }),
+      });
+
+      // The opt-OUT applies despite the failed sync — recording off builds no
+      // payload, so the stale field tree is irrelevant, and holding it back would
+      // keep leaking the newly private collection's events.
+      expect(isWebhookRecordingEnabled("collection", "leads")).toBe(false);
+      // The opt-IN is gated: `posts` keeps its stale opt-out until a clean sync,
+      // so payload expansion never runs against a field tree that failed to sync.
+      expect(isWebhookRecordingEnabled("collection", "posts")).toBe(false);
       resetWebhookRecordingPolicy();
     });
   });

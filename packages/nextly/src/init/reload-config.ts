@@ -865,15 +865,28 @@ export async function reloadNextlyConfig(opts?: {
       // Publish each scope's (possibly toggled) recording policy ONLY when that
       // scope's metadata sync succeeded — a `webhooks` change surfaces as no
       // schema diff, so this is the path a live opt-out/opt-in toggle flows
-      // through, but a failed field-tree sync must not activate the new decision
+      // through, but a failed field-tree sync must not activate the new opt-IN
       // while the mutation services still strip against the old fields. A
       // referenced component's field tree drives webhook payload stripping, so
-      // also hold BOTH scopes back until the component sync succeeds: otherwise a
-      // reload that both enables recording and hides a component field would
-      // expand payloads against the stale component tree and leak PII.
+      // also hold BOTH scopes' opt-ins back until the component sync succeeds:
+      // otherwise a reload that both enables recording and hides a component
+      // field would expand payloads against the stale component tree and leak
+      // PII. Opt-OUTs ignore this gate (see publishScopeRecording).
       republishRecordingPolicies(newConfig, {
         collections: synced.collections && synced.components,
         singles: synced.singles && synced.components,
+      });
+    } else {
+      // A real schema change was deferred (unsafe / needs review) or a diff
+      // threw, so the field metadata must NOT be synced — the physical table
+      // disagrees. A recording OPT-OUT is still safe to honor now (recording
+      // turns off, no payload is built against any field tree), and skipping it
+      // would keep a newly opted-out entity's events flowing to the outbox until
+      // a later clean reload or restart. Reconcile with both scopes unsynced so
+      // opt-outs apply immediately while opt-ins stay gated on a good sync.
+      republishRecordingPolicies(newConfig, {
+        collections: false,
+        singles: false,
       });
     }
     return;

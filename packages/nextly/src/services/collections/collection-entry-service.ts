@@ -286,10 +286,10 @@ export class CollectionEntryService extends BaseService {
     // prune trigger for installs with no webhook drain, so even a write to only
     // opted-out (`webhooks: false`) entities must still offer a pass. It is NOT
     // the outbox gate, but it IS gated on a committed write: a rejected request
-    // (validation / access / not-found) committed nothing, so paying for an
-    // awaited outbox-deletion pass on its behalf is wasted latency. An opted-out
-    // write still qualifies (it reports `success` / a positive count / an intent
-    // even though it recorded no event), so coverage is unchanged.
+    // (validation / access / not-found) — and a no-op that wrote nothing —
+    // committed no content, so paying for an awaited outbox-deletion pass on its
+    // behalf is wasted latency. An opted-out write still qualifies (it carries a
+    // revalidation intent even though it recorded no event), so coverage holds.
     if (CollectionEntryService.hasCommittedWrite(result)) {
       await this.offerRetentionPass();
     }
@@ -306,12 +306,14 @@ export class CollectionEntryService extends BaseService {
 
   /**
    * Whether a mutation result represents at least one committed content write.
-   * True for a normal success, for a committed-but-post-hook-failed write (which
-   * reports `success: false` but carries a durable event and/or intent), and for
-   * an opted-out (`webhooks: false`) write (no outbox event, but still a success
-   * / positive count / a revalidation intent). False for a rejected request
-   * (validation / access / not-found) that committed nothing. Covers all three
-   * result shapes so write-path cleanup runs on real writes only.
+   * Keyed off signals that a row was actually written — an outbox event, a
+   * positive bulk/batch count, or a revalidation intent (built on the committed
+   * write) — NOT on `success`: the method contract lets a no-op update or a
+   * `publishAllLocales` no-op return `success: true` having written nothing, and
+   * running an awaited retention pass for those is the same wasted latency as
+   * running it for a rejected request. An opted-out (`webhooks: false`) write
+   * records no event but still carries its revalidation intent, so it stays
+   * covered. False for a rejected request (validation / access / not-found).
    */
   private static hasCommittedWrite(
     result:
@@ -320,7 +322,6 @@ export class CollectionEntryService extends BaseService {
       | BatchOperationResult
   ): boolean {
     if (result.eventRecorded === true) return true;
-    if ("success" in result && result.success === true) return true;
     if ("successCount" in result && result.successCount > 0) return true;
     if ("successful" in result && result.successful > 0) return true;
     if ("revalidationIntent" in result && result.revalidationIntent != null) {
