@@ -66,6 +66,14 @@ export interface UpdateSingleArgs<TSlug extends SingleSlug = SingleSlug>
    * @default false
    */
   draft?: boolean;
+
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs). Set by
+   * a CLI, seed, or bulk-import caller that owns its own cache strategy.
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
 }
 
 /**

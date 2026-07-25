@@ -539,6 +539,8 @@ export class CollectionsHandler {
        * publish transition gate (create-as-published) judges the key's OWN grants.
        */
       authenticatedScope?: AuthenticatedScope;
+      /** Skip cache revalidation for this write (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     body: Record<string, unknown>
   ) {
@@ -550,6 +552,7 @@ export class CollectionsHandler {
         // Named explicitly (like updateEntry) so the API-key scope survives the
         // field-by-field rebuild rather than only via resolveUserParam's rest.
         authenticatedScope: params.authenticatedScope,
+        disableRevalidate: params.disableRevalidate,
       },
       body,
       params.depth
@@ -694,6 +697,8 @@ export class CollectionsHandler {
        * publish/unpublish transition gate judges the key's OWN grants.
        */
       authenticatedScope?: AuthenticatedScope;
+      /** Skip cache revalidation for this write (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     body: Record<string, unknown>
   ) {
@@ -702,6 +707,7 @@ export class CollectionsHandler {
         ...this.resolveUserParam(params),
         locale: params.locale,
         actor: params.actor,
+        disableRevalidate: params.disableRevalidate,
         // Named explicitly rather than left to the spread above, because this
         // facade rebuilds the params object field by field: anything not named
         // here survives only by passing through `resolveUserParam`'s rest, and
@@ -776,12 +782,15 @@ export class CollectionsHandler {
      * delete grant, so the session super-admin bypass does not apply to it.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this delete (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
     return this.entryService.deleteEntry({
       ...this.resolveUserParam(params),
       // Named explicitly so the API-key scope survives the field-by-field
       // rebuild rather than only via resolveUserParam's rest.
       authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
     });
   }
 
@@ -904,6 +913,8 @@ export class CollectionsHandler {
        * each per-row transition on a scoped API key's OWN grants.
        */
       authenticatedScope?: AuthenticatedScope;
+      /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     options?: { limit?: number }
   ) {
@@ -916,6 +927,7 @@ export class CollectionsHandler {
         // Named explicitly so the API-key scope survives the field-by-field
         // rebuild rather than only via resolveUserParam's rest.
         authenticatedScope: params.authenticatedScope,
+        disableRevalidate: params.disableRevalidate,
       },
       options
     );
@@ -951,6 +963,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** Skip cache revalidation for this bulk delete (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     options?: { limit?: number }
   ) {
@@ -995,12 +1009,15 @@ export class CollectionsHandler {
      * API key copying a published source is judged on the key's OWN grant.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this duplicate (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
     return this.entryService.duplicateEntry({
       ...this.resolveUserParam(params),
       // Named explicitly so the API-key scope survives the field-by-field
       // rebuild rather than only via resolveUserParam's rest.
       authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
     });
   }
 

@@ -169,6 +169,7 @@ export async function create<TSlug extends CollectionSlug>(
       // language's companion row, not the default locale's.
       locale: config.locale,
       context: config.context,
+      disableRevalidate: config.disableRevalidate,
     },
     args.data
   );
@@ -216,6 +217,7 @@ export async function update<TSlug extends CollectionSlug>(
         // language's companion row, not the default locale's.
         locale: config.locale,
         context: config.context,
+        disableRevalidate: config.disableRevalidate,
       },
       args.data
     );
@@ -241,6 +243,7 @@ export async function update<TSlug extends CollectionSlug>(
           ? { id: config.user.id, role: config.user.role }
           : undefined,
         context: config.context,
+        disableRevalidate: config.disableRevalidate,
       },
       { limit: 1 }
     );
@@ -316,6 +319,7 @@ export async function deleteEntry<
         ? { id: config.user.id, role: config.user.role }
         : undefined,
       context: config.context,
+      disableRevalidate: config.disableRevalidate,
     });
 
     if (!result.success) {
@@ -338,6 +342,7 @@ export async function deleteEntry<
           ? { id: config.user.id, role: config.user.role }
           : undefined,
         context: config.context,
+        disableRevalidate: config.disableRevalidate,
       },
       { limit: 1000 }
     );
@@ -449,6 +454,7 @@ export async function duplicate<TSlug extends CollectionSlug>(
       ? { id: config.user.id, role: config.user.role }
       : undefined,
     context: config.context,
+    disableRevalidate: config.disableRevalidate,
   });
 
   if (!result.success) {

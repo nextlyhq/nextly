@@ -63,12 +63,16 @@ describe("applyCache — key forwarding and per-caller isolation", () => {
   } {
     const store = new Map<string, unknown>();
     const calls: { keyParts: string[]; tags?: string[] }[] = [];
-    const fn: UnstableCache = (cb, keyParts, options) => {
+    const fn: UnstableCache = <T>(
+      cb: () => Promise<T>,
+      keyParts: string[],
+      options: { tags?: string[]; revalidate?: number | false }
+    ) => {
       calls.push({ keyParts, tags: options.tags });
-      return async () => {
+      return async (): Promise<T> => {
         const key = JSON.stringify(keyParts);
         if (!store.has(key)) store.set(key, await cb());
-        return store.get(key);
+        return store.get(key) as T;
       };
     };
     return { fn, calls };

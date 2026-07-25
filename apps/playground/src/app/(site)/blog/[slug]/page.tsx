@@ -47,11 +47,11 @@ export default async function BlogPost({
 }) {
   const { slug } = await params;
   const nx = await getNextly({ config: nextlyConfig });
-  // ISR via F1: cache the published-post read and tag it with the collection
-  // tag, so publishing or editing a post busts the cache and this page
-  // regenerates on the next visit — no rebuild, no `force-dynamic`. The read
-  // filters by `status: published` only (not by caller), so it is public and
-  // safe to cache under a stable, slug-keyed entry shared by every reader.
+  // Cache the published-post read and tag it with the collection tag, so
+  // publishing or editing a post busts the cache and this page regenerates on
+  // the next visit — no rebuild, no `force-dynamic`. The read filters by
+  // `status: published` only (not by caller), so it is public and safe to cache
+  // under a stable, slug-keyed entry shared by every reader.
   const post = await cachedFind<PostData | null>(
     async () => {
       const { items } = await nx.find({

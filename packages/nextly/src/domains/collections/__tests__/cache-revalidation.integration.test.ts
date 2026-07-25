@@ -499,6 +499,24 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.flushed).toHaveLength(0);
   });
 
+  it("forwards disableRevalidate through the public handler surface", async () => {
+    // The Direct API (`nx.create`) reaches the write path through this handler,
+    // so the flag has to survive the handler's field-by-field param rebuild —
+    // without this forwarding the documented opt-out would silently revalidate.
+    await boot([openCollection("hskip")]);
+    const handler =
+      handle!.getService<CollectionsHandler>("collectionsHandler");
+    await handler.createEntry(
+      {
+        collectionName: "hskip",
+        overrideAccess: true,
+        disableRevalidate: true,
+      },
+      { title: "T", slug: "h" }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
   it("flushes nothing when a single write sets disableRevalidate", async () => {
     const adapter = await memoryAdapter();
     handle = await createTestNextly({
