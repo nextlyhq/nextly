@@ -12,6 +12,7 @@
  * @module schemas/_zod/ui-schema
  * @since v0.0.3-alpha (Plan D1)
  */
+import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 /**
@@ -197,6 +198,15 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       hasMany: z.boolean().optional(),
       relationTo: z.union([z.string(), z.array(z.string())]).optional(),
       options: z.array(selectOption).optional(),
+      // A blocks field's policy: which registered blocks it accepts and which
+      // document kinds. Undeclared, Zod would strip it and persist a field
+      // that accepts everything the submitted schema meant to exclude.
+      blocks: z
+        .object({
+          allow: z.array(z.string()).optional(),
+          kinds: z.array(z.enum(DOCUMENT_KINDS)).optional(),
+        })
+        .optional(),
       defaultValue: z.unknown().optional(),
       validation: validation.optional(),
       admin: fieldAdmin.optional(),

@@ -53,16 +53,6 @@ export interface BlocksFieldOptions {
   kinds?: DocumentKind[];
 }
 
-/** Admin options for a blocks field. */
-export interface BlocksFieldAdminOptions extends FieldAdminOptions {
-  /**
-   * Open the entry in the page builder rather than the form when the entry is
-   * first opened. The form stays reachable either way; this only decides which
-   * view is shown first.
-   */
-  defaultMode?: "form" | "builder";
-}
-
 /**
  * Configuration for a blocks field.
  *
@@ -100,7 +90,7 @@ export interface BlocksFieldConfig
   /**
    * Admin UI configuration.
    */
-  admin?: BlocksFieldAdminOptions;
+  admin?: FieldAdminOptions;
 
   /**
    * Custom validation, run after the document's own structural rules.

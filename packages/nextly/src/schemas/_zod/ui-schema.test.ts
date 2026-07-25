@@ -34,6 +34,68 @@ const VALID = {
   ],
 };
 
+describe("parseUiSchema — blocks fields", () => {
+  const withBlocks = (field: Record<string, unknown>) => ({
+    version: 1,
+    collections: [
+      {
+        slug: "pages",
+        fields: [{ name: "title", type: "text" }, field],
+      },
+    ],
+  });
+
+  it("accepts a blocks field and keeps its policy", () => {
+    // Zod strips undeclared keys, so an unparsed `blocks` option would persist
+    // a field accepting everything the submitted schema meant to exclude.
+    const r = parseUiSchema(
+      withBlocks({
+        name: "content",
+        type: "blocks",
+        blocks: { allow: ["core/*"], kinds: ["page"] },
+      })
+    );
+    expect(r.success).toBe(true);
+    const field = r.success
+      ? (r.data.collections[0].fields[1] as {
+          blocks?: { allow?: string[]; kinds?: string[] };
+        })
+      : undefined;
+    expect(field?.blocks?.allow).toEqual(["core/*"]);
+    expect(field?.blocks?.kinds).toEqual(["page"]);
+  });
+
+  it("accepts a blocks field with no policy", () => {
+    expect(
+      parseUiSchema(withBlocks({ name: "content", type: "blocks" })).success
+    ).toBe(true);
+  });
+
+  it("rejects a document kind that does not exist", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: ["nonsense"] },
+        })
+      ).success
+    ).toBe(false);
+  });
+
+  it("accepts a document as a blocks default", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          defaultValue: { formatVersion: 1, kind: "page", nodes: [] },
+        })
+      ).success
+    ).toBe(true);
+  });
+});
+
 describe("parseUiSchema", () => {
   it("accepts a valid manifest", () => {
     const r = parseUiSchema(VALID);
