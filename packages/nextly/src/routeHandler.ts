@@ -552,8 +552,9 @@ const SINGLE_DOCUMENT_METHODS = new Set([
  * disclose existence, and the two version `get*` methods additionally return a
  * snapshot redacted by field-level `access.read`, which reads the same set.
  *
- * The three entry reads are here because they forward the caller into the query
- * service, which evaluates the collection's stored read rules for them.
+ * The entry and Single document reads are here because they forward the caller
+ * into their query service, which evaluates the entity's stored read rules for
+ * them.
  * Resolving roles costs a permissions lookup on every entry read; a read that
  * silently ignores the rule it was configured with is the worse tradeoff.
  */
@@ -561,6 +562,7 @@ const ROLE_AWARE_READ_METHODS = new Set([
   "listEntries",
   "getEntry",
   "countEntries",
+  "getSingleDocument",
   "listEntryVersions",
   "getEntryVersion",
   "listSingleVersions",

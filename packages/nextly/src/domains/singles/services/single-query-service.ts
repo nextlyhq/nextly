@@ -38,11 +38,11 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import type {
+import type { CollectionAccessRules } from "../../../services/access";
+import {
   AccessControlService,
-  CollectionAccessRules,
+  isSuperAdminContext,
 } from "../../../services/access";
-import { isSuperAdminContext } from "../../../services/access";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
@@ -403,10 +403,20 @@ export class SingleQueryService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    accessControlService?: AccessControlService
   ) {
     super(adapter, logger);
+    // Evaluates the Single's stored access rules. Defaulted rather than
+    // required so every existing construction site keeps working, mirroring
+    // how the mutation service resolves the same dependency: without one the
+    // read gate would silently skip the stored rules it is handed.
+    this.accessControlService =
+      accessControlService ?? new AccessControlService();
   }
+
+  /** Resolves stored `accessRules` for the read gate. */
+  private readonly accessControlService: AccessControlService;
 
   // ============================================================
   // Public API
@@ -436,18 +446,22 @@ export class SingleQueryService extends BaseService {
       }
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
-      // Stored read-rule enforcement is intentionally NOT wired here yet: the
-      // REST read handlers do not forward the authenticated user, so evaluating
-      // a `read: authenticated` / role-based rule would reject every REST caller
-      // as anonymous. It lands with read-path user forwarding in the follow-up
-      // read PR (hence no `accessRules` passed).
+      // The Single's stored read rule is evaluated here against the caller the
+      // route forwards. It is the same rule the admin configures and the same
+      // one the write paths already honor, so a `read: authenticated` or
+      // role-based rule now holds over HTTP instead of only inside the Direct
+      // API.
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
+        accessRules: singleMeta.accessRules,
         user: options.user,
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        // Without this the gate has rules but nothing to evaluate them with, and
+        // silently skips them.
+        accessControlService: this.accessControlService,
         // A scoped API key is judged on its OWN read grant, so a super-admin-owned
         // key does not skip the read gate via the owner's roles.
         authenticatedScope: options.authenticatedScope,
@@ -549,7 +563,8 @@ export class SingleQueryService extends BaseService {
       doc = await this.expandRelationshipFields(
         doc,
         singleMeta.fields,
-        options.depth
+        options.depth,
+        { user: options.user, overrideAccess: options.overrideAccess }
       );
 
       // 7.7. Populate component field data from comp_{slug} tables
@@ -1232,7 +1247,11 @@ export class SingleQueryService extends BaseService {
   async expandRelationshipFields(
     doc: SingleDocument,
     fields: FieldConfig[],
-    depth?: number
+    depth?: number,
+    // The caller a related row's own field rules are evaluated against.
+    // Expansion copies whole related rows into this document, and a Single's
+    // field list never describes a related collection's fields.
+    access: { user?: UserContext; overrideAccess?: boolean } = {}
   ): Promise<SingleDocument> {
     const relationshipService = this.resolveRelationshipService();
     if (!relationshipService) {
@@ -1258,7 +1277,15 @@ export class SingleQueryService extends BaseService {
         doc,
         "", // Singles don't belong to a collection
         fields as unknown as FieldDefinition[],
-        { depth: depth ?? 2 }
+        {
+          depth: depth ?? 2,
+          // Opt in now that the read path forwards a real caller; before that a
+          // Single read carried no user and would have judged everyone as
+          // anonymous, stripping protected related fields from every caller.
+          enforceFieldAccess: true,
+          user: access.user as Record<string, unknown> | undefined,
+          overrideAccess: access.overrideAccess,
+        }
       );
       return expandedDoc as SingleDocument;
     } catch (error) {
