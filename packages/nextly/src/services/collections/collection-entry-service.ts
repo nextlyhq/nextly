@@ -172,6 +172,10 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    routeAuthorized?: boolean;
+    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return this.queryService.listEntries(params);
   }
@@ -187,6 +191,10 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    routeAuthorized?: boolean;
+    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return this.queryService.countEntries(params);
   }

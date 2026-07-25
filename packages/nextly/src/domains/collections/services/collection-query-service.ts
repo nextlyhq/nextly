@@ -1054,6 +1054,12 @@ export class CollectionQueryService extends BaseService {
             // denied here and totalDocs silently falls back to 0 — breaking the
             // bulk-by-query limit guard and pagination.
             routeAuthorized: params.routeAuthorized,
+            // The scope has to travel with it for the same reason. The rows
+            // above are filtered by the key's own grant, so a count taken
+            // without the scope takes the owner's super-admin bypass instead
+            // and reports the unscoped total beside correctly filtered rows —
+            // disclosing how many rows exist outside the grant.
+            authenticatedScope: params.authenticatedScope,
           }),
         ]);
 
