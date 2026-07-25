@@ -962,6 +962,146 @@ describe("blockPropsToFieldConfigs reference bounds", () => {
   });
 });
 
+describe("blockPropsToFieldConfigs list-only options", () => {
+  it("refuses row bounds on a prop that holds one value", () => {
+    // The bounds would constrain nothing, which is the failure mode this
+    // module exists to prevent: a declaration advertising an unenforced rule.
+    for (const declaration of [
+      { type: "text", minRows: 2 },
+      { type: "number", maxRows: 3 },
+      { type: "upload", relationTo: "media", minRows: 1 },
+      { type: "relationship", relationTo: "posts", maxRows: 2 },
+    ]) {
+      expect(
+        issuesOf(() => blockPropsToFieldConfigs({ props: { p: declaration } })),
+        declaration.type
+      ).toEqual([{ path: "p", code: "INVALID_OPTION" }]);
+    }
+  });
+
+  it("still accepts them on a list-shaped prop", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: { tags: { type: "text", hasMany: true, minRows: 1, maxRows: 4 } },
+    });
+    expect(configs[0]).toMatchObject({ minRows: 1, maxRows: 4 });
+  });
+
+  it("leaves a repeater's own bounds alone", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: {
+        items: {
+          type: "repeater",
+          fields: { note: { type: "text" } },
+          minRows: 1,
+          maxRows: 2,
+        },
+      },
+    });
+    expect(configs[0]).toMatchObject({ minRows: 1, maxRows: 2 });
+  });
+});
+
+describe("validateBlockPropValues skipped sentinels", () => {
+  it("rejects a blank string where the prop cannot hold text", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        count: { type: "number" },
+        rows: { type: "repeater", fields: { note: { type: "text" } } },
+        image: { type: "upload", relationTo: "media" },
+        flag: { type: "checkbox" },
+      },
+    };
+    const issues = await validateBlockPropValues(
+      { count: "", rows: "", image: "   ", flag: "" },
+      source
+    );
+    expect(issues.map(issue => issue.path).sort()).toEqual([
+      "count",
+      "flag",
+      "image",
+      "rows",
+    ]);
+    expect(issues.every(issue => issue.code === "INVALID_TYPE")).toBe(true);
+  });
+
+  it("leaves a blank string alone where the prop does hold text", async () => {
+    const source: BlockPropsSource = {
+      props: { title: { type: "text" }, data: { type: "json" } },
+    };
+    expect(
+      await validateBlockPropValues({ title: "", data: "" }, source)
+    ).toEqual([]);
+  });
+
+  it("enforces required on an explicitly empty list", async () => {
+    // The shared rules route a provided empty list past their required check
+    // so it can reach the bounds rules, so nothing else would report this.
+    const source: BlockPropsSource = {
+      props: {
+        tags: { type: "chips", required: true },
+        items: {
+          type: "repeater",
+          required: true,
+          fields: { note: { type: "text" } },
+        },
+      },
+    };
+    const issues = await validateBlockPropValues(
+      { tags: [], items: [] },
+      source
+    );
+    expect(issues.map(issue => issue.code)).toEqual(["REQUIRED", "REQUIRED"]);
+    expect(
+      await validateBlockPropValues(
+        { tags: ["a"], items: [{ note: "b" }] },
+        source
+      )
+    ).toEqual([]);
+  });
+
+  it("rejects a value whose own encoding makes it disappear", async () => {
+    const source: BlockPropsSource = { props: { data: { type: "json" } } };
+    // JSON.stringify returns undefined here: the prop would vanish from the
+    // document rather than be stored wrongly.
+    const vanishing = { toJSON: () => undefined };
+    expect(
+      await validateBlockPropValues({ data: vanishing }, source)
+    ).toHaveLength(1);
+    // Nested, the containing object survives but the key is dropped.
+    expect(
+      await validateBlockPropValues({ data: { inner: vanishing } }, source)
+    ).toHaveLength(1);
+    // A toJSON producing a value JSON cannot represent is caught the same way.
+    expect(
+      await validateBlockPropValues(
+        { data: { toJSON: () => new Map([["a", 1]]) } },
+        source
+      )
+    ).toHaveLength(1);
+  });
+
+  it("survives a toJSON that throws or returns a fresh object each call", async () => {
+    const source: BlockPropsSource = { props: { data: { type: "json" } } };
+    expect(
+      await validateBlockPropValues(
+        {
+          data: {
+            toJSON: () => {
+              throw new Error("no");
+            },
+          },
+        },
+        source
+      )
+    ).toHaveLength(1);
+    // A new object per call must not make the walk run forever.
+    const churning = { toJSON: () => ({ nested: { value: 1 } }) };
+    expect(await validateBlockPropValues({ data: churning }, source)).toEqual(
+      []
+    );
+  });
+});
+
 describe("plugin field types as block props", () => {
   afterEach(() => {
     clearFieldTypes();

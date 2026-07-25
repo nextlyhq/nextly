@@ -221,15 +221,19 @@ function alreadyReported(
 }
 
 /**
- * Report list-shaped values the shared validator skips.
+ * Report values the shared validator classifies as empty and therefore skips.
  *
- * It classifies `[]` as an absent value and returns before any type rule runs,
- * including a field's own `validate`, so an empty array is the one shape the
- * per-type checks never see. Two cases follow from that: an empty array
- * supplied for a prop that holds a single value, which for an entry is
- * harmless because the value is on its way to a typed column but for a block
- * prop reaches the renderer verbatim; and a `hasMany` text or number prop
- * whose declared `minRows` an empty array violates.
+ * It returns before any type rule runs — including a field's own `validate` —
+ * for `null`, a blank string, and an empty array, so those are the shapes the
+ * per-type checks never see. For an entry that is harmless, because the value
+ * is on its way to a typed column that would reject it. A block prop is
+ * stored as JSON exactly as given, so the same value reaches the renderer
+ * contradicting its declaration.
+ *
+ * Three cases follow: a value whose JavaScript type the prop cannot hold at
+ * all, an empty list where the prop holds one value or declares a minimum,
+ * and a required list-shaped prop explicitly set to `[]`, which the shared
+ * rules route past their required check in order to reach the bounds rules.
  */
 function collectEmptyListIssues(
   fields: readonly WalkableField[],
@@ -242,6 +246,16 @@ function collectEmptyListIssues(
     const value = ownValue(values, field.name);
     if (value === undefined) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
+    if (typeof value === "string" && value.trim() === "") {
+      if (!alreadyReported(issues, path) && !holdsText(field)) {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${field.label ?? field.name} must not be text.`,
+        });
+      }
+      continue;
+    }
     if (Array.isArray(value) && value.length === 0) {
       // A scalar select or radio is inspected for arrays by the shared rules,
       // so its issue is already recorded and does not need repeating.
@@ -251,6 +265,17 @@ function collectEmptyListIssues(
           path,
           code: "INVALID_TYPE",
           message: `${field.label ?? field.name} must not be a list.`,
+        });
+        continue;
+      }
+      // The shared rules route a provided empty list past their required
+      // check so it can reach the bounds rules, which leaves a required list
+      // prop accepting no content at all.
+      if (field.required === true) {
+        issues.push({
+          path,
+          code: "REQUIRED",
+          message: `${field.label ?? field.name} is required.`,
         });
         continue;
       }
@@ -289,6 +314,25 @@ function collectEmptyListIssues(
  * Whether a field's value is a list. `json` counts because an array is a
  * legitimate JSON value, not a cardinality mistake.
  */
+/**
+ * Whether a field's value may be a string. A blank string reaching any other
+ * prop contradicts its declared type: a number cannot be text, and an id that
+ * is blank resolves to nothing.
+ */
+function holdsText(field: WalkableField): boolean {
+  return (
+    field.type === "text" ||
+    field.type === "textarea" ||
+    field.type === "email" ||
+    field.type === "code" ||
+    field.type === "select" ||
+    field.type === "radio" ||
+    field.type === "date" ||
+    // An array or a bare string are both legitimate JSON values.
+    field.type === "json"
+  );
+}
+
 function holdsList(field: WalkableField): boolean {
   if (field.type === "chips" || field.type === "repeater") return true;
   if (field.type === "json") return true;
@@ -304,6 +348,7 @@ interface WalkableField {
   name?: string;
   type: string;
   label?: string;
+  required?: boolean;
   hasMany?: boolean;
   minRows?: number;
   fields?: readonly WalkableField[];
@@ -497,7 +542,7 @@ function base(
 const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
   text: (name, declaration, path, ctx) => {
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
-    const rows = rowBounds(declaration, path, ctx);
+    const rows = rowBounds(declaration, path, ctx, hasMany);
     return {
       ...base(name, declaration, path, ctx),
       type: "text",
@@ -525,7 +570,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
     const min = optionalNumber(declaration, "min", path, ctx);
     const max = optionalNumber(declaration, "max", path, ctx);
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
-    const rows = rowBounds(declaration, path, ctx);
+    const rows = rowBounds(declaration, path, ctx, hasMany);
     // A number prop is free to range below zero and to hold fractions, so
     // ordering is the only rule its bounds must satisfy.
     return {
@@ -586,7 +631,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
     const relationTo = relationTarget(declaration, path, ctx);
     if (!relationTo) return null;
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
-    const rows = rowBounds(declaration, path, ctx);
+    const rows = rowBounds(declaration, path, ctx, hasMany);
     return {
       ...base(name, declaration, path, ctx),
       type: "upload",
@@ -603,7 +648,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
     const relationTo = relationTarget(declaration, path, ctx);
     if (!relationTo) return null;
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
-    const rows = rowBounds(declaration, path, ctx);
+    const rows = rowBounds(declaration, path, ctx, hasMany);
     return {
       ...base(name, declaration, path, ctx),
       type: "relationship",
@@ -652,14 +697,28 @@ function lengthBounds(
   return orderedPair(minLength, maxLength, "minLength", "maxLength", path, ctx);
 }
 
-/** Row bounds for the prop types that hold a list of values. */
+/**
+ * Row bounds for a prop that holds several values. They are refused unless the
+ * prop is a list: on a scalar they would constrain nothing, and a declaration
+ * that advertises an unenforceable rule is worse than one that omits it.
+ */
 function rowBounds(
   declaration: BlockPropDeclaration,
   path: string,
-  ctx: ConversionContext
+  ctx: ConversionContext,
+  hasMany: boolean | undefined
 ): { minRows?: number; maxRows?: number } {
   const minRows = countOption(declaration, "minRows", path, ctx);
   const maxRows = countOption(declaration, "maxRows", path, ctx);
+  if (hasMany !== true && (minRows !== undefined || maxRows !== undefined)) {
+    record(
+      ctx,
+      path,
+      "INVALID_OPTION",
+      "`minRows` and `maxRows` apply only to a prop declaring `hasMany: true`."
+    );
+    return {};
+  }
   return orderedPair(minRows, maxRows, "minRows", "maxRows", path, ctx);
 }
 
@@ -980,7 +1039,12 @@ function isJsonRecordList(value: unknown): string | true {
  */
 function isSerializable(value: unknown): string | true {
   try {
-    JSON.stringify(value);
+    // A prop that encodes to nothing is dropped from the document entirely
+    // rather than stored wrongly, so the encoded result is inspected and not
+    // just the absence of a throw.
+    if (JSON.stringify(value) === undefined) {
+      return "must not encode to nothing";
+    }
   } catch {
     return "must be JSON-serializable";
   }
@@ -997,6 +1061,9 @@ function isSerializable(value: unknown): string | true {
  */
 function containsUnserializable(value: unknown): boolean {
   const pending: unknown[] = [value];
+  // Objects can name each other, and a `toJSON` may hand back a fresh object
+  // each call, so the walk remembers what it has already accounted for.
+  const seen = new WeakSet<object>();
   while (pending.length > 0) {
     const current = pending.pop();
     if (
@@ -1012,21 +1079,39 @@ function containsUnserializable(value: unknown): boolean {
       continue;
     }
     if (current === null || typeof current !== "object") continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
     // An object that defines `toJSON` chooses its own stored form, which is
-    // how a Date becomes an ISO string, so it is taken at its word and its
-    // internals are not walked. Anything else that is not a plain record is
-    // reshaped rather than rejected: a Map or a Set encodes as `{}`, losing
-    // its contents without any error to notice.
-    if (definesToJson(current)) continue;
+    // how a Date becomes an ISO string. What it produces is what gets stored,
+    // so the walk follows that result rather than the object: a `toJSON`
+    // returning `undefined` makes the whole prop disappear on encode.
+    const encoded = encodedForm(current);
+    if (encoded !== current) {
+      pending.push(encoded);
+      continue;
+    }
+    // Anything else that is not a plain record is reshaped rather than
+    // rejected: a Map or a Set encodes as `{}`, losing its contents with no
+    // error to notice.
     if (!isPlainRecord(current)) return true;
     pending.push(...Object.values(current));
   }
   return false;
 }
 
-/** Whether a value controls its own encoded form. */
-function definesToJson(value: object): boolean {
-  return typeof (value as { toJSON?: unknown }).toJSON === "function";
+/**
+ * What an object encodes to, or the object itself when it has no say. A
+ * `toJSON` that throws is reported as unserializable, which is what
+ * `JSON.stringify` would do with it anyway.
+ */
+function encodedForm(value: object): unknown {
+  const toJSON = (value as { toJSON?: unknown }).toJSON;
+  if (typeof toJSON !== "function") return value;
+  try {
+    return (toJSON as (key?: string) => unknown).call(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function optionalString(
