@@ -20,6 +20,7 @@ export type AdvancedField =
   | "status"
   | "i18n"
   | "versions"
+  | "revalidate"
   | "showSystemFields";
 
 export type BuilderConfig = {

@@ -62,6 +62,9 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         localized: values.i18n === true,
         // Version history opt-in at create; the server resolves the boolean.
         versions: values.versions === true,
+        // Cache revalidation opt-out at create; on by default, so only an
+        // explicit false is forwarded as off. The server resolves the boolean.
+        revalidate: values.revalidate !== false,
         // Why: useAsTitle + timestamps removed in PR B. Backend defaults
         // (timestamps always on, useAsTitle = system title) take over.
         // Code-first config can still override either.
@@ -90,6 +93,8 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
                     localized: values.i18n === true,
                     // and with version history.
                     versions: values.versions === true,
+                    // and with cache revalidation (on unless explicitly off).
+                    revalidate: values.revalidate !== false,
                   },
                   fields: [],
                 })

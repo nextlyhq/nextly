@@ -65,6 +65,9 @@ export default function SingleBuilderPage(): React.ReactElement | null {
         ...(values.i18n === true ? { localized: true } : {}),
         // Version history opt-in at create; the server resolves the boolean.
         ...(values.versions === true ? { versions: true } : {}),
+        // Cache revalidation is on by default, so only forward an explicit
+        // opt-out; omitting the key leaves the server default (on).
+        ...(values.revalidate === false ? { revalidate: false } : {}),
         // Empty user-fields list — system columns are auto-injected by
         // the server; user adds custom fields on the next page.
         fields: [],
@@ -86,6 +89,8 @@ export default function SingleBuilderPage(): React.ReactElement | null {
                     localized: values.i18n === true,
                     // and version history.
                     versions: values.versions === true,
+                    // and cache revalidation (on unless explicitly off).
+                    revalidate: values.revalidate !== false,
                   },
                   fields: [],
                 })

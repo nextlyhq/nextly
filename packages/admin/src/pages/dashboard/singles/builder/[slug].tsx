@@ -168,6 +168,11 @@ export default function SingleBuilderEditPage({
       versions:
         (single as { versions?: { enabled?: boolean } | null }).versions
           ?.enabled === true,
+      // Cache revalidation is on unless the stored config disables it (mirrors
+      // the collection builder).
+      revalidate:
+        (single as { revalidate?: { disable?: boolean } | null }).revalidate
+          ?.disable !== true,
     };
     setSettings(loadedSettings);
     setOriginalSettings(loadedSettings);
@@ -256,6 +261,8 @@ export default function SingleBuilderEditPage({
                   status: settings.status === true,
                   localized: settings.i18n === true,
                   versions: settings.versions === true,
+                  // Cache revalidation: on unless explicitly turned off.
+                  revalidate: settings.revalidate !== false,
                 },
               },
               {
@@ -337,6 +344,8 @@ export default function SingleBuilderEditPage({
             // Version history: the server normalizes this into the resolved
             // config the registry column holds.
             versions: settings.versions === true,
+            // Cache revalidation: on unless explicitly turned off.
+            revalidate: settings.revalidate !== false,
           },
         },
         {

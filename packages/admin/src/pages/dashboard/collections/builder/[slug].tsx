@@ -207,6 +207,11 @@ export default function CollectionBuilderEditPage({
       versions:
         (collection as { versions?: { enabled?: boolean } | null }).versions
           ?.enabled === true,
+      // Cache revalidation is on unless the stored config disables it, so the
+      // switch reflects on for both null (default) and an absent-disable config.
+      revalidate:
+        (collection as { revalidate?: { disable?: boolean } | null }).revalidate
+          ?.disable !== true,
     };
     setSettings(loadedSettings);
     // Pin a copy as the dirty baseline so settings-only edits enable Save.
@@ -325,6 +330,9 @@ export default function CollectionBuilderEditPage({
                   status: settings.status === true,
                   localized: settings.i18n === true,
                   versions: settings.versions === true,
+                  // Cache revalidation: on unless explicitly turned off; the
+                  // server normalizes the boolean into the stored config.
+                  revalidate: settings.revalidate !== false,
                 },
               },
               {
@@ -410,6 +418,8 @@ export default function CollectionBuilderEditPage({
             // Version history: the server normalizes this into the resolved
             // config the registry column holds.
             versions: settings.versions === true,
+            // Cache revalidation: on unless explicitly turned off.
+            revalidate: settings.revalidate !== false,
             // Why: useAsTitle + timestamps were removed from the modal in
             // PR B (system title is always the display; timestamps always
             // emitted). Backend defaults take over -- code-first config can

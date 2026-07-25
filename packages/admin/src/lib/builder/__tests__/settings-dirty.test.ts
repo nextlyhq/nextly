@@ -41,6 +41,7 @@ describe("settingsAreDirty", () => {
     status: { ...base, status: false },
     i18n: { ...base, i18n: true },
     versions: { ...base, versions: true },
+    revalidate: { ...base, revalidate: false },
   };
 
   for (const [key, next] of Object.entries(changed)) {

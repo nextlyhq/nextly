@@ -319,12 +319,16 @@ export interface ApiSingle {
 /**
  * What a Single schema update may send.
  *
- * Most keys mirror the read shape, but `versions` does not: the Schema Builder
- * offers on/off and the server resolves that into the config `ApiSingle`
- * carries back.
+ * Most keys mirror the read shape, but `versions` and `revalidate` do not: the
+ * Schema Builder offers on/off and the server resolves each into the config
+ * `ApiSingle` carries back.
  */
-export type UpdateSinglePayload = Omit<Partial<ApiSingle>, "versions"> & {
+export type UpdateSinglePayload = Omit<
+  Partial<ApiSingle>,
+  "versions" | "revalidate"
+> & {
   versions?: boolean;
+  revalidate?: boolean;
 };
 
 // ==================== COMPONENT TYPES ====================
