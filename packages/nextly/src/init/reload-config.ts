@@ -267,6 +267,34 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
     });
 }
 
+// Normalize code-first components to the registry sync shape. Shared by the DDL
+// path and the metadata-only path so a component's metadata (e.g. a `hidden`
+// field flag, which drives webhook payload stripping) stays in step either way.
+function buildComponentSyncPayload(components: ComponentDef[]) {
+  return components
+    .filter((c): c is ComponentDef & { slug: string } => !!c.slug)
+    .map(c => {
+      const labelStr =
+        typeof c.label === "string"
+          ? c.label
+          : (c.label?.singular ??
+            c.slug
+              .split(/[-_]/)
+              .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+              .join(" "));
+      return {
+        slug: c.slug,
+        label: labelStr,
+        fields: c.fields ?? [],
+        description: c.description,
+        admin: c.admin,
+        // i18n: forward the localized master switch — otherwise the reload flips
+        // a localized component's flag OFF every HMR/boot.
+        localized: (c as { localized?: boolean }).localized === true,
+      };
+    });
+}
+
 // Metadata-only registry sync for the no-DDL HMR path: a `versions`/`localized`/
 // status/labels edit produces no schema operations, so the main flow's
 // `if (!hasChanges) return` would otherwise skip persistence until a restart.
@@ -279,11 +307,16 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
 // does not block the other's committed decisions.
 async function syncCodeFirstMetadataOnly(
   resolve: ServiceResolver,
-  newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] },
+  newConfig: {
+    collections?: CollectionDef[];
+    singles?: SingleDef[];
+    components?: ComponentDef[];
+  },
   logger?: LoggerLike
-): Promise<{ collections: boolean; singles: boolean }> {
+): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
   let collections = true;
   let singles = true;
+  let components = true;
   try {
     const registry = (await resolve(
       "collectionRegistryService"
@@ -312,7 +345,24 @@ async function syncCodeFirstMetadataOnly(
       }`
     );
   }
-  return { collections, singles };
+  // A component's metadata (e.g. a `hidden` field flag) can change with no
+  // schema diff and drives webhook payload stripping, so sync it here too — the
+  // caller gates the recording policy on this before activating a new decision.
+  try {
+    const compReg = (await resolve(
+      "componentRegistryService"
+    )) as ComponentRegistrySurface;
+    const payload = buildComponentSyncPayload(newConfig.components ?? []);
+    if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
+  } catch (err) {
+    components = false;
+    logger?.warn(
+      `[Nextly HMR] metadata-only component sync failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  return { collections, singles, components };
 }
 
 /**
@@ -788,9 +838,15 @@ export async function reloadNextlyConfig(opts?: {
       // scope's metadata sync succeeded — a `webhooks` change surfaces as no
       // schema diff, so this is the path a live opt-out/opt-in toggle flows
       // through, but a failed field-tree sync must not activate the new decision
-      // while the mutation services still strip against the old fields. This
-      // path syncs no components, so there is no component gate here.
-      republishRecordingPolicies(newConfig, synced);
+      // while the mutation services still strip against the old fields. A
+      // referenced component's field tree drives webhook payload stripping, so
+      // also hold BOTH scopes back until the component sync succeeds: otherwise a
+      // reload that both enables recording and hides a component field would
+      // expand payloads against the stale component tree and leak PII.
+      republishRecordingPolicies(newConfig, {
+        collections: synced.collections && synced.components,
+        singles: synced.singles && synced.components,
+      });
     }
     return;
   }
@@ -1010,28 +1066,9 @@ export async function reloadNextlyConfig(opts?: {
       const compReg = (await resolve(
         "componentRegistryService"
       )) as ComponentRegistrySurface;
-      const codeFirstComponentConfigs = (newConfig.components ?? [])
-        .filter((c): c is ComponentDef & { slug: string } => !!c.slug)
-        .map(c => {
-          const labelStr =
-            typeof c.label === "string"
-              ? c.label
-              : (c.label?.singular ??
-                c.slug
-                  .split(/[-_]/)
-                  .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" "));
-          return {
-            slug: c.slug,
-            label: labelStr,
-            fields: c.fields ?? [],
-            description: c.description,
-            admin: c.admin,
-            // i18n: forward the localized master switch — otherwise the reload flips a
-            // localized component's flag OFF every HMR/boot.
-            localized: (c as { localized?: boolean }).localized === true,
-          };
-        });
+      const codeFirstComponentConfigs = buildComponentSyncPayload(
+        newConfig.components ?? []
+      );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
       }

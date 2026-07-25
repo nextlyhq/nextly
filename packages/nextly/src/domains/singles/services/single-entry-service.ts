@@ -145,8 +145,15 @@ export class SingleEntryService extends BaseService {
     // opted out of recording) must still bust its ISR tags, and — since the
     // write path is the only prune trigger for installs with no webhook drain —
     // must still offer a retention pass. A committed-but-post-hook-failed write
-    // reports `success:false` with `eventRecorded:true`, so key off either.
-    if (result.success || result.eventRecorded === true) {
+    // reports `success:false`; it sets `eventRecorded:true` when it recorded, but
+    // an OPTED-OUT such write records nothing yet still committed content — a
+    // populated `revalidationIntent` is the durable-write signal in that case, so
+    // key off all three or its ISR tag would be left stale.
+    if (
+      result.success ||
+      result.eventRecorded === true ||
+      result.revalidationIntent != null
+    ) {
       await this.flushRevalidation(result);
       await this.retentionRunner?.maybeRun(
         SingleEntryService.WRITE_PATH_PRUNE_BATCHES
