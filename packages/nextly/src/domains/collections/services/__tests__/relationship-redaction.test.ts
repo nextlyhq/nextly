@@ -5,9 +5,21 @@
  * leaks are guarded here — the users system entity's password hash (a column,
  * not a schema field) and a related dynamic collection's `password` field.
  */
-import { afterAll, describe, it, expect, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  expect,
+  vi,
+} from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import {
+  clearFieldFunctions,
+  registerFieldFunctions,
+} from "../../../../shared/lib/field-level-registry";
 import { CollectionRelationshipService } from "../collection-relationship-service";
 
 // getSystemEntityTable() resolves the users table via env.DB_DIALECT (not the
@@ -191,6 +203,239 @@ describe("relationship expansion secret redaction", () => {
     );
 
     expect(await service.fetchRelatedEntry("members", "missing")).toBeNull();
+  });
+
+  /**
+   * Secret stripping is unconditional; field-level `access.read` is a decision
+   * about a specific caller. Expansion spreads the whole related row into the
+   * parent entry, and the parent's own redaction pass runs against the SOURCE
+   * collection's field registry — which never describes a related collection's
+   * fields. So without the caller reaching the target collection's rules, a
+   * field that collection protects is returned to anyone who populates the
+   * relationship.
+   */
+  describe("field-level read access on related rows", () => {
+    const TARGET_FIELDS = [
+      { name: "email", type: "text" },
+      {
+        name: "salary",
+        type: "number",
+        // Only finance may read it. Registered as a live function, which is how
+        // a code-first config supplies field access.
+        access: {
+          read: ({ req }: { req: { user?: { roles?: string[] } } }) =>
+            req.user?.roles?.includes("finance") === true,
+        },
+      },
+    ];
+
+    function serviceWithTarget() {
+      const collectionService = {
+        getCollection: vi.fn().mockResolvedValue({ fields: TARGET_FIELDS }),
+      };
+      const fileManager = {
+        loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }),
+      };
+      return new CollectionRelationshipService(
+        adapterReturning({ id: "m1", email: "a@b.co", salary: 120000 }),
+        silentLogger(),
+        fileManager as never,
+        collectionService as never
+      );
+    }
+
+    beforeEach(() => {
+      clearFieldFunctions();
+      registerFieldFunctions("collection", "members", TARGET_FIELDS);
+    });
+
+    afterEach(() => {
+      clearFieldFunctions();
+    });
+
+    it("strips a protected field from a related row for a caller the rule denies", async () => {
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        { enforceFieldAccess: true, user: { id: "u1", roles: ["editor"] } }
+      );
+
+      expect(related).toMatchObject({ id: "m1", email: "a@b.co" });
+      expect(related).not.toHaveProperty("salary");
+    });
+
+    it("keeps the field for a caller the rule allows", async () => {
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        { enforceFieldAccess: true, user: { id: "u2", roles: ["finance"] } }
+      );
+
+      expect(related).toMatchObject({ salary: 120000 });
+    });
+
+    it("strips a protected field for an anonymous caller", async () => {
+      // No user means no rule can be satisfied, matching how the parent entry
+      // is redacted rather than treating "absent" as trusted.
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        { enforceFieldAccess: true }
+      );
+
+      expect(related).not.toHaveProperty("salary");
+    });
+
+    it("keeps the field for a trusted read", async () => {
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        { enforceFieldAccess: true, overrideAccess: true }
+      );
+
+      expect(related).toMatchObject({ salary: 120000 });
+    });
+
+    it("still strips secrets on a trusted read", async () => {
+      // overrideAccess waives the caller's field rules, not secret stripping: a
+      // system reader has no more use for a password hash than anyone else.
+      const fields = [
+        { name: "email", type: "text" },
+        { name: "secret", type: "password" },
+      ];
+      registerFieldFunctions("collection", "members", fields);
+      const service = new CollectionRelationshipService(
+        adapterReturning({ id: "m1", email: "a@b.co", secret: "$2b$12$hash" }),
+        silentLogger(),
+        { loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }) } as never,
+        { getCollection: vi.fn().mockResolvedValue({ fields }) } as never
+      );
+
+      const related = await service.fetchRelatedEntry("members", "m1", {
+        enforceFieldAccess: true,
+        overrideAccess: true,
+      });
+
+      expect(related).not.toHaveProperty("secret");
+    });
+
+    it("leaves related rows alone for a caller that has not opted in", async () => {
+      // "No user supplied" and "anonymous caller" are indistinguishable here and
+      // want opposite outcomes, so enforcement is explicit: an expansion entry
+      // point that has not been given the caller yet keeps its behavior instead
+      // of stripping fields from everyone who reads through it.
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1"
+      );
+
+      expect(related).toMatchObject({ salary: 120000 });
+    });
+
+    it("strips a denied field nested in a JSON-string container (sqlite shape)", async () => {
+      // SQLite stores group/repeater as a JSON string. The rules have to reach
+      // inside it and the container has to be written back as a string, or a
+      // denied nested field rides out in the serialized value.
+      const fields = [
+        {
+          name: "comp",
+          type: "group",
+          fields: [
+            { name: "public", type: "text" },
+            {
+              name: "private",
+              type: "text",
+              access: { read: () => false },
+            },
+          ],
+        },
+      ];
+      clearFieldFunctions();
+      registerFieldFunctions("collection", "members", fields);
+      const service = new CollectionRelationshipService(
+        adapterReturning({
+          id: "m1",
+          comp: JSON.stringify({ public: "ok", private: "secret" }),
+        }),
+        silentLogger(),
+        { loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }) } as never,
+        { getCollection: vi.fn().mockResolvedValue({ fields }) } as never
+      );
+
+      const related = await service.fetchRelatedEntry("members", "m1", {
+        enforceFieldAccess: true,
+        user: { id: "u1" },
+      });
+
+      const comp = JSON.parse((related as Record<string, string>).comp);
+      expect(comp).toEqual({ public: "ok" });
+      // Still a string, so the column type survives the round trip.
+      expect(typeof (related as Record<string, unknown>).comp).toBe("string");
+    });
+
+    it("does not leak a denied field through the derived label", async () => {
+      // The label is a copy of a field's value under another key, so redacting
+      // the source field does not touch it. Taken from an unredacted row, a
+      // protected value walks straight out as `label`.
+      const fields = [
+        {
+          name: "codename",
+          type: "text",
+          access: { read: () => false },
+        },
+      ];
+      clearFieldFunctions();
+      registerFieldFunctions("collection", "members", fields);
+
+      const rows = [{ id: "m1", codename: "classified" }];
+      const batchAdapter = {
+        getDrizzle: () => ({
+          select: () => ({
+            from: () => ({ where: () => Promise.resolve(rows) }),
+          }),
+        }),
+        getDialect: () => "postgresql",
+        dialect: "postgresql",
+        getCapabilities: () => ({ dialect: "postgresql" }),
+      } as never;
+
+      const service = new CollectionRelationshipService(
+        batchAdapter,
+        silentLogger(),
+        { loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }) } as never,
+        { getCollection: vi.fn().mockResolvedValue({ fields }) } as never
+      );
+
+      const map = await service.batchFetchRelatedEntries(
+        "members",
+        ["m1"],
+        {
+          name: "member",
+          type: "relationship",
+          options: { targetLabelField: "codename" },
+        } as never,
+        { enforceFieldAccess: true, user: { id: "u1" } }
+      );
+
+      const related = map.get("m1");
+      expect(related).not.toHaveProperty("codename");
+      // Falls back to the id rather than carrying the denied value.
+      expect(related?.label).toBe("m1");
+    });
+
+    it("evaluates rules on a target with no password field", async () => {
+      // The secret pass returns early when the target has no password field, so
+      // an access pass folded into it would never run for the common case.
+      expect(TARGET_FIELDS.some(f => f.type === "password")).toBe(false);
+
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        { enforceFieldAccess: true, user: { id: "u1", roles: ["editor"] } }
+      );
+
+      expect(related).not.toHaveProperty("salary");
+    });
   });
 
   describe("label field never resolves to a secret", () => {

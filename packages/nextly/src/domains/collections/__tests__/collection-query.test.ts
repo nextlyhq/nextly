@@ -521,6 +521,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         mockRelationshipService.batchExpandRelationships
       ).toHaveBeenCalledWith(expect.any(Array), "posts", expect.any(Array), {
         depth: 0,
+        // Expansion copies whole related rows in, so it also carries the caller
+        // its related rows are redacted for.
+        enforceFieldAccess: true,
+        user: undefined,
+        overrideAccess: undefined,
       });
     });
 
@@ -535,6 +540,9 @@ describe("CollectionEntryService — Query Contracts", () => {
         mockRelationshipService.batchExpandRelationships
       ).toHaveBeenCalledWith(expect.any(Array), "posts", expect.any(Array), {
         depth: undefined,
+        enforceFieldAccess: true,
+        user: undefined,
+        overrideAccess: undefined,
       });
     });
 

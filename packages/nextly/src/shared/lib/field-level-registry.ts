@@ -223,6 +223,34 @@ function nestedRows(value: unknown): Record<string, unknown>[] {
 }
 
 /**
+ * Open a container value for in-place editing, parsing a JSON string first.
+ *
+ * SQLite stores `group` / `repeater` values as JSON strings, so a caller that
+ * hands over a row straight from the database has containers that
+ * {@link nestedRows} cannot descend — the nested fields inside would keep
+ * whatever the rules should have removed. `serialize()` writes the (mutated)
+ * container back in the shape it arrived in, so a string column stays a string.
+ * Returns null when there is nothing to descend into.
+ */
+function openNestedContainer(
+  value: unknown
+): { rows: Record<string, unknown>[]; serialize: () => unknown } | null {
+  if (typeof value !== "string") {
+    const rows = nestedRows(value);
+    return rows.length > 0 ? { rows, serialize: () => value } : null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  const rows = nestedRows(parsed);
+  if (rows.length === 0) return null;
+  return { rows, serialize: () => JSON.stringify(parsed) };
+}
+
+/**
  * Recursive worker for write access. Every rule at one level is evaluated
  * against the SAME immutable snapshot of that level's data, so a rule that
  * reads a sibling field's value can't flip from deny to allow purely
@@ -303,8 +331,12 @@ async function applyReadAccessRec(
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;
     if (fieldFns.fields) {
-      for (const row of nestedRows(entry[name])) {
-        await applyReadAccessRec(row, fieldFns.fields, ctx);
+      const container = openNestedContainer(entry[name]);
+      if (container) {
+        for (const row of container.rows) {
+          await applyReadAccessRec(row, fieldFns.fields, ctx);
+        }
+        entry[name] = container.serialize();
       }
     }
     const fn = fieldFns.access?.read;

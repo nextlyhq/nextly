@@ -58,6 +58,12 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import {
+  resetWebhookRecordingPolicy,
+  setWebhookRecording,
+} from "../domains/webhooks/recording-policy";
+import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
+import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
@@ -456,6 +462,14 @@ export async function registerServices(
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
 
   const schemaRegistry = await initializeSchemaRegistry(adapter);
+
+  // Publish the webhook recording policy from the config INDEPENDENTLY of the
+  // schema registry. `registerConfigTablesInResolver` (below) only runs when the
+  // registry initialized, but the recording opt-out must hold even in the
+  // executeQuery fallback path taken when it does not — otherwise a
+  // `webhooks: false` collection (e.g. form submissions) would silently record
+  // PII-bearing events despite the opt-out.
+  publishWebhookRecordingPolicies(transformedConfig);
 
   // Belt-and-suspenders: also register every code-first collection and
   // single from the supplied config directly into the resolver. The
@@ -1072,6 +1086,53 @@ async function initializeSchemaRegistry(
     // SchemaRegistry setup failed entirely — adapter falls back to
     // executeQuery for basic operations.
     return undefined;
+  }
+}
+
+/**
+ * Publish each code-first collection/single's webhook recording policy from the
+ * live config into the process-level registry. Runs unconditionally at boot
+ * (independent of the schema registry) so a `webhooks: false` opt-out is honored
+ * on every path — including the executeQuery fallback taken when the schema
+ * registry fails to initialize, where `registerConfigTablesInResolver` never
+ * runs.
+ */
+function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
+  // Provenance comes from the plugin contribution list, not the optional
+  // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a
+  // code-first reconcile never prunes it) even when the plugin never sets that
+  // presentation flag.
+  const pluginCollections = collectPluginContributedSlugs(
+    config.plugins,
+    "collections"
+  );
+  const pluginSingles = collectPluginContributedSlugs(
+    config.plugins,
+    "singles"
+  );
+  for (const collection of config.collections ?? []) {
+    const slug = (collection as { slug?: string }).slug;
+    if (!slug) continue;
+    setWebhookRecording(
+      "collection",
+      slug,
+      resolveWebhookRecording(
+        (collection as { webhooks?: boolean | { record?: boolean } }).webhooks
+      ).record,
+      pluginCollections.has(slug) ? "plugin" : "code"
+    );
+  }
+  for (const single of config.singles ?? []) {
+    const slug = (single as { slug?: string }).slug;
+    if (!slug) continue;
+    setWebhookRecording(
+      "single",
+      slug,
+      resolveWebhookRecording(
+        (single as { webhooks?: boolean | { record?: boolean } }).webhooks
+      ).record,
+      pluginSingles.has(slug) ? "plugin" : "code"
+    );
   }
 }
 
@@ -2295,6 +2356,11 @@ export async function shutdownServices(): Promise<void> {
     console.error("Error during service shutdown:", error);
   } finally {
     container.clear();
+    // The recording policy is a process-global registry, so it must be cleared
+    // with the container — otherwise a later instance where a slug is only
+    // DB/Builder-backed inherits a prior instance's stale opt-out and silently
+    // stops recording.
+    resetWebhookRecordingPolicy();
     globalForReg.__nextly_isRegistered = false;
   }
 }
@@ -2306,6 +2372,9 @@ export async function shutdownServices(): Promise<void> {
  */
 export function clearServices(): void {
   container.clear();
+  // Clear the process-global recording policy alongside the container so a
+  // re-initialization does not inherit a prior config's opt-outs.
+  resetWebhookRecordingPolicy();
   globalForReg.__nextly_isRegistered = false;
 }
 

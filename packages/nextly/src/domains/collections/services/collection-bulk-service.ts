@@ -92,6 +92,13 @@ type PerItemOutcome<T> =
   | {
       kind: "success";
       record: T;
+      /**
+       * Whether this item appended an outbox event. A normal write records; an
+       * opted-out (`webhooks: false`) collection does not. Aggregated into the
+       * batch result's `eventRecorded` so the wrapper drains only when at least
+       * one item actually recorded.
+       */
+      eventRecorded?: boolean;
       /** The item's cache-revalidation intent, aggregated for the post-commit flush. */
       revalidationIntent?: RevalidationIntent;
     }
@@ -171,6 +178,9 @@ function partitionOutcomes<T>(
       if (value.kind === "success") {
         result.successes.push(value.record);
         result.successCount++;
+        // Aggregate the outbox signal: a normal item records, an opted-out one
+        // does not — the wrapper drains only when at least one item recorded.
+        if (value.eventRecorded) result.eventRecorded = true;
         collectIntent(value.revalidationIntent);
       } else {
         result.failures.push(value.failure);
@@ -392,6 +402,7 @@ export class CollectionBulkService extends BaseService {
               return {
                 kind: "success",
                 record: { id: entryId },
+                eventRecorded: deleteResult.eventRecorded,
                 revalidationIntent: deleteResult.revalidationIntent,
               };
             }
@@ -491,6 +502,7 @@ export class CollectionBulkService extends BaseService {
               return {
                 kind: "success",
                 record: updateResult.data as Record<string, unknown>,
+                eventRecorded: updateResult.eventRecorded,
                 revalidationIntent: updateResult.revalidationIntent,
               };
             }
@@ -1073,6 +1085,10 @@ export class CollectionBulkService extends BaseService {
               if (createResult.revalidationIntent) {
                 collectedIntents.push(createResult.revalidationIntent);
               }
+              // Aggregate the outbox signal so the wrapper drains only when at
+              // least one item actually recorded — a batch of only opted-out
+              // (`webhooks: false`) creates records nothing and owes no drain.
+              if (createResult.eventRecorded) result.eventRecorded = true;
               if (createResult.success && createResult.data) {
                 result.successful++;
                 result.ids.push(
@@ -1116,7 +1132,12 @@ export class CollectionBulkService extends BaseService {
         result.revalidationIntents = collectedIntents;
       }
     } catch (error: unknown) {
-      // Transaction was rolled back (stopOnError case)
+      // Transaction was rolled back (stopOnError case). Any outbox events an
+      // item recorded before the abort were rolled back too, so clear the
+      // aggregated flag unconditionally — even when the first item recorded and
+      // aborted before ANY item was counted successful, so the wrapper never
+      // drains for events that never committed.
+      result.eventRecorded = false;
       // Reset successful count since transaction rolled back
       if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk create rolled back due to stopOnError", {
@@ -1458,6 +1479,8 @@ export class CollectionBulkService extends BaseService {
               if (updateResult.revalidationIntent) {
                 collectedIntents.push(updateResult.revalidationIntent);
               }
+              // Aggregate the outbox signal (see the batch-create loop).
+              if (updateResult.eventRecorded) result.eventRecorded = true;
               if (updateResult.success && updateResult.data) {
                 result.successful++;
                 result.ids.push(
@@ -1501,7 +1524,11 @@ export class CollectionBulkService extends BaseService {
         result.revalidationIntents = collectedIntents;
       }
     } catch (error: unknown) {
-      // Transaction was rolled back (stopOnError case)
+      // Transaction was rolled back (stopOnError case). Clear the aggregated
+      // outbox flag unconditionally — an item can record before the abort even
+      // when none is counted successful — so the wrapper never drains for events
+      // that never committed.
+      result.eventRecorded = false;
       // Reset successful count since transaction rolled back
       if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk update rolled back due to stopOnError", {
@@ -1658,6 +1685,8 @@ export class CollectionBulkService extends BaseService {
               updateResult.revalidationIntent
             );
           }
+          // Aggregate the outbox signal (see the batch-create loop).
+          if (updateResult.eventRecorded) result.eventRecorded = true;
           if (updateResult.success && updateResult.data) {
             result.successful++;
             result.ids.push(
@@ -1820,6 +1849,8 @@ export class CollectionBulkService extends BaseService {
                 collectedIntents.push(deleteResult.revalidationIntent);
               }
 
+              // Aggregate the outbox signal (see the batch-create loop).
+              if (deleteResult.eventRecorded) result.eventRecorded = true;
               if (deleteResult.success) {
                 result.successful++;
                 result.ids.push(entryId);
@@ -1885,6 +1916,9 @@ export class CollectionBulkService extends BaseService {
       result.successful = 0;
       result.ids = [];
       result.failed = ids.length;
+      // The rolled-back deletes recorded no committed events, so clear the
+      // aggregated flag to keep the wrapper from draining uncommitted events.
+      result.eventRecorded = false;
       const batchError = error instanceof Error ? error.message : String(error);
       const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
       // Rebuild errors as exactly one entry per requested id, in index order.
@@ -2027,6 +2061,8 @@ export class CollectionBulkService extends BaseService {
               deleteResult.revalidationIntent
             );
           }
+          // Aggregate the outbox signal (see the batch-create loop).
+          if (deleteResult.eventRecorded) result.eventRecorded = true;
           if (deleteResult.success) {
             result.successful++;
             result.ids.push(entryId);

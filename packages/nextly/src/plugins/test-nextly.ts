@@ -22,6 +22,7 @@ import { resetEmailProviderRegistry } from "../domains/email/services/email-prov
 import { normalizeLocalization } from "../domains/i18n/config/normalize";
 import type { LocalizationConfig } from "../domains/i18n/config/types";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
+import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-policy";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
 import { resetFilterRegistry } from "../filters";
@@ -122,6 +123,7 @@ export async function createTestNextly(
   resetEmailProviderRegistry();
   clearFieldTypes();
   resetFilterRegistry();
+  resetWebhookRecordingPolicy();
   resetPluginRouteRegistry();
   resetNextlyInstance();
   // Each boot is a fresh, distinct in-memory database. The schema-snapshot
@@ -216,6 +218,7 @@ export async function createTestNextly(
       resetEmailProviderRegistry();
       clearFieldTypes();
       resetFilterRegistry();
+      resetWebhookRecordingPolicy();
       resetPluginRouteRegistry();
       resetNextlyInstance();
       clearCachedSnapshot();

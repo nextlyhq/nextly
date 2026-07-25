@@ -362,6 +362,16 @@ export interface SingleConfig {
   localized?: boolean;
 
   /**
+   * Webhook recording policy for this Single. When `false` (or
+   * `{ record: false }`), writes to this Single record NO event to the webhook
+   * outbox, so nothing is ever delivered to subscribed endpoints. The object
+   * form leaves room for finer policy later without a breaking change.
+   *
+   * @default true (writes are recorded)
+   */
+  webhooks?: boolean | { record?: boolean };
+
+  /**
    * Admin panel configuration options.
    * Controls how the Single appears in the Admin UI.
    */

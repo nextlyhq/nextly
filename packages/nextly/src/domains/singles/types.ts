@@ -218,4 +218,14 @@ export interface SingleResult<T = SingleDocument> {
    * disabled for the single.
    */
   revalidationIntent?: RevalidationIntent;
+  /**
+   * Whether this update committed a content write to the database — true once the
+   * row is written (even a write that opts out of BOTH recording and
+   * revalidation, and even one whose post-commit hook then throws), false for a
+   * rejected request or a no-op. The write-path retention pass keys off this so
+   * it runs for every durable write yet skips one that changed nothing, without
+   * conflating `success` (a no-op reports success) with a committed write.
+   * Mirrors `CollectionServiceResult.committed`.
+   */
+  committed?: boolean;
 }
