@@ -47,6 +47,7 @@
     "atomic-content-writes",
     "audit-log-metadata",
     "blocks-engine-migrations",
+    "blocks-engine-registry",
     "blocks-engine-scaffold",
     "blocks-engine-validation",
     "branding-colors-paint",
