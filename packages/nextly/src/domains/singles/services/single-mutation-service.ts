@@ -432,6 +432,10 @@ export class SingleMutationService extends BaseService {
     // return report a committed-but-post-hook-failed write as `eventRecorded`
     // even when `success` is false. Declared out here so every return sees it.
     let eventRecorded = false;
+    // Set once a row is actually written, independent of the recording and
+    // revalidation opt-outs — the durable-write signal the retention pass keys
+    // off, so a Single that opts out of BOTH still triggers write-path cleanup.
+    let committedWrite = false;
     // Whether the outbox event was actually appended: false when the Single
     // opted out of recording (`webhooks: false`), so the post-commit drain is
     // scheduled only for a write that recorded something. The three single.*
@@ -1798,6 +1802,8 @@ export class SingleMutationService extends BaseService {
       // Single, whose committed content must still bust its ISR tag even though
       // it records no outbox event.
       const wroteRow = updatedRows.length > 0;
+      // The row is durable regardless of the recording/revalidation opt-outs.
+      committedWrite = wroteRow;
       // `eventRecorded` additionally requires that recording actually happened:
       // the empty-rows path returns before recording, and an opted-out Single
       // records nothing — either way it owes no delivery/drain.
@@ -1815,9 +1821,10 @@ export class SingleMutationService extends BaseService {
           success: false,
           statusCode: 500,
           message: "Failed to update Single document",
-          // Carries the per-write state; here it is false (nothing was recorded
-          // for an empty write) but is threaded for parity with the other returns.
+          // Carries the per-write state; here both are false (no row written) but
+          // are threaded for parity with the other returns.
           eventRecorded,
+          committed: committedWrite,
         };
       }
 
@@ -1894,6 +1901,7 @@ export class SingleMutationService extends BaseService {
         data: updatedDoc,
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     } catch (error) {
       // A publish-transition refused against the row-locked status aborts the
@@ -1911,6 +1919,7 @@ export class SingleMutationService extends BaseService {
         ...buildSingleErrorResult(error, "Failed to update Single document"),
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     }
   }

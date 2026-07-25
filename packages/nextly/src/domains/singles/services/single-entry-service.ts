@@ -141,16 +141,16 @@ export class SingleEntryService extends BaseService {
   ): Promise<SingleResult> {
     const result = await this.mutationService.update(slug, data, options);
     // Cache revalidation AND the opportunistic retention pass both follow the
-    // CONTENT write, not the webhook event: a successful write (even one that
-    // opted out of recording) must still bust its ISR tags, and — since the
-    // write path is the only prune trigger for installs with no webhook drain —
-    // must still offer a retention pass. A committed-but-post-hook-failed write
-    // reports `success:false`; it sets `eventRecorded:true` when it recorded, but
-    // an OPTED-OUT such write records nothing yet still committed content — a
-    // populated `revalidationIntent` is the durable-write signal in that case, so
-    // key off all three or its ISR tag would be left stale.
+    // CONTENT write, not the webhook event: a committed write (even one that opts
+    // out of recording) must still bust its ISR tags, and — since the write path
+    // is the only prune trigger for installs with no webhook drain — must still
+    // offer a retention pass. Keyed off the explicit `committed` flag, set the
+    // moment a row is written independent of the opt-outs, so a Single with BOTH
+    // `webhooks: false` and `revalidate: { disable: true }` whose post-commit hook
+    // then throws (reporting `success:false`, no event, no intent) is still
+    // covered. NOT keyed off `success`, which a no-op also reports.
     if (
-      result.success ||
+      result.committed === true ||
       result.eventRecorded === true ||
       result.revalidationIntent != null
     ) {
