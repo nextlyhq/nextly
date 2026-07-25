@@ -137,13 +137,13 @@ Pages pre-render at build time via `generateStaticParams`, then stay fresh throu
 
 ### What a write refreshes
 
-| Change in /admin                                      | Pages that refresh on next visit                                                                                                                                                   |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Publish / edit / delete a post                        | Homepage, `/blog` (+ pagination), the post's `/blog/[slug]`, and every author / category / tag listing it appears in                                                               |
-| Rename a post's slug                                  | The new `/blog/[slug]` renders; the old URL 404s (its page regenerated and no published post matches)                                                                              |
-| Edit a category / tag                                 | Its listing page and any post detail that shows it                                                                                                                                 |
-| Edit an author's profile                              | Post pages by that author refresh immediately; the author's own name / bio / avatar refresh within a short safety-net window (the `users` collection does not emit cache tags yet) |
-| Edit the Site settings / Navigation / Homepage single | Every page that reads that global                                                                                                                                                  |
+| Change in /admin                                      | Pages that refresh on next visit                                                                                                                                                                                      |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Publish / edit / delete a post                        | Homepage, `/blog` (+ pagination), the post's `/blog/[slug]`, and every author / category / tag listing it appears in                                                                                                  |
+| Rename a post's slug                                  | The new `/blog/[slug]` renders; the old URL 404s (its page regenerated and no published post matches)                                                                                                                 |
+| Edit a category / tag                                 | Its listing page and any post detail that shows it                                                                                                                                                                    |
+| Edit an author's profile                              | The `users` collection emits no cache tags, so the author's name / bio / avatar refresh within the safety-net window — on `/authors/[slug]` and wherever the author appears in post lists / details — never instantly |
+| Edit the Site settings / Navigation / Homepage single | Every page that reads that global                                                                                                                                                                                     |
 
 ### Opting a write out of revalidation
 

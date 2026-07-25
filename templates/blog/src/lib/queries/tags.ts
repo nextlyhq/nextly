@@ -32,8 +32,11 @@ export async function getTagBySlug(slug: string): Promise<Tag | null> {
       { tags: nextlyTags("tags"), keyParts: ["tags", "detail", slug] }
     );
   } catch (error) {
+    // Rethrow, don't return null: a genuine miss returns null above (cached
+    // with the tags tag, recoverable), but swallowing a transient error into
+    // null would bake a tagless, timerless notFound() — a permanent 404.
     console.error(`Error fetching tag by slug ${slug}:`, error);
-    return null;
+    throw error;
   }
 }
 
@@ -72,29 +75,24 @@ export async function getAllTagsWithCounts(): Promise<
         return await Promise.all(
           all.items.map(async tag => {
             const tagId = String(tag.id);
-            try {
-              const posts = await nextly.find({
-                collection: "posts",
-                where: {
-                  and: [
-                    { status: { equals: "published" } },
-                    { tags: { contains: tagId } },
-                  ],
-                },
-                limit: 0,
-                depth: 0,
-              });
-              return {
-                item: tag as Tag,
-                postCount: posts.meta.total,
-              };
-            } catch {
-              // If count fails, return tag with 0 posts
-              return {
-                item: tag as Tag,
-                postCount: 0,
-              };
-            }
+            // No inner catch: a count failure must reject the whole read so the
+            // outer fallback runs uncached, instead of caching a wrong zero
+            // count until the next tag/post write busts the tag.
+            const posts = await nextly.find({
+              collection: "posts",
+              where: {
+                and: [
+                  { status: { equals: "published" } },
+                  { tags: { contains: tagId } },
+                ],
+              },
+              limit: 0,
+              depth: 0,
+            });
+            return {
+              item: tag as Tag,
+              postCount: posts.meta.total,
+            };
           })
         );
       },

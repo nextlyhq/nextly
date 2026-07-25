@@ -75,8 +75,11 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
       }
     );
   } catch (error) {
+    // Rethrow, don't return null: a genuine miss returns null above, but
+    // swallowing a transient error into null would bake a timerless
+    // notFound() on /authors/[slug] — a permanent 404 for a real author.
     console.error(`Error fetching author by slug ${slug}:`, error);
-    return null;
+    throw error;
   }
 }
 

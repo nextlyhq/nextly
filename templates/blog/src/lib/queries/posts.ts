@@ -238,8 +238,13 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
       }
     );
   } catch (error) {
+    // Rethrow rather than return null: a genuine miss (no published post)
+    // already returns null above and caches a tagged 404 that a later publish
+    // busts, but swallowing a transient DB error into null would make the page
+    // bake a notFound() that carries no tags and no timer — a permanent 404 for
+    // a real post. Letting it throw yields an uncached, retryable error instead.
     console.error(`Error fetching post by slug ${slug}:`, error);
-    return null;
+    throw error;
   }
 }
 

@@ -67,6 +67,31 @@ describe("blog template — tag-based ISR", () => {
     expect(src).toContain('nextlyTags("users")');
   });
 
+  it("by-slug detail lookups rethrow transient errors instead of caching a 404", () => {
+    // Returning null on a fetch error lets the page bake a permanent, tagless
+    // notFound(); these lookups must rethrow so a transient failure stays a
+    // retryable error. A genuine miss still returns null (cached with a tag).
+    for (const file of [
+      "src/lib/queries/posts.ts",
+      "src/lib/queries/categories.ts",
+      "src/lib/queries/tags.ts",
+      "src/lib/queries/authors.ts",
+    ]) {
+      expect(read(file)).toContain("throw error;");
+    }
+  });
+
+  it("taxonomy count helpers do not cache a swallowed zero count", () => {
+    // A per-item count catch returning 0 would be cached under the read's tag;
+    // the count helpers must let a count failure reject the whole read instead.
+    for (const file of [
+      "src/lib/queries/categories.ts",
+      "src/lib/queries/tags.ts",
+    ]) {
+      expect(read(file)).not.toContain("postCount: 0");
+    }
+  });
+
   const SINGLE_QUERIES = [
     "src/lib/queries/site-settings.ts",
     "src/lib/queries/navigation.ts",

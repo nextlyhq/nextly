@@ -36,8 +36,11 @@ export async function getCategoryBySlug(
       }
     );
   } catch (error) {
+    // Rethrow, don't return null: a genuine miss returns null above (cached
+    // with the categories tag, recoverable), but swallowing a transient error
+    // into null would bake a tagless, timerless notFound() — a permanent 404.
     console.error(`Error fetching category by slug ${slug}:`, error);
-    return null;
+    throw error;
   }
 }
 
@@ -113,29 +116,24 @@ export async function getAllCategoriesWithCounts(): Promise<
         return await Promise.all(
           cats.items.map(async cat => {
             const catId = String(cat.id);
-            try {
-              const posts = await nextly.find({
-                collection: "posts",
-                where: {
-                  and: [
-                    { status: { equals: "published" } },
-                    { categories: { contains: catId } },
-                  ],
-                },
-                limit: 0,
-                depth: 0,
-              });
-              return {
-                item: cat as Category,
-                postCount: posts.meta.total,
-              };
-            } catch {
-              // If count fails, return category with 0 posts
-              return {
-                item: cat as Category,
-                postCount: 0,
-              };
-            }
+            // No inner catch: a count failure must reject the whole read so the
+            // outer fallback runs uncached, instead of caching a wrong zero
+            // count until the next category/post write busts the tag.
+            const posts = await nextly.find({
+              collection: "posts",
+              where: {
+                and: [
+                  { status: { equals: "published" } },
+                  { categories: { contains: catId } },
+                ],
+              },
+              limit: 0,
+              depth: 0,
+            });
+            return {
+              item: cat as Category,
+              postCount: posts.meta.total,
+            };
           })
         );
       },
