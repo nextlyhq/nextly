@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 
+import { container } from "../../../di/container";
 import { SingleQueryService } from "../services/single-query-service";
 
 import {
@@ -33,10 +34,13 @@ const ROLE_BASED_READ = {
 const editor = { id: "user-1", roles: ["editor"] };
 const admin = { id: "user-2", roles: ["admin"] };
 
-function createService(evaluateAllowed: boolean) {
+function createService(
+  evaluateAllowed: boolean,
+  accessRules: Record<string, unknown> = ROLE_BASED_READ
+) {
   const registry = createMockSingleRegistry();
   registry.registerSingle("site-settings", {
-    ...siteSettingsMeta({ accessRules: ROLE_BASED_READ }),
+    ...siteSettingsMeta({ accessRules }),
     fields: [textField("siteName")],
   });
 
@@ -109,6 +113,41 @@ describe("SingleQueryService.get — stored read rules", () => {
     expect(context.user).toMatchObject({ id: "user-1", roles: ["editor"] });
   });
 
+  it("does not blanket-deny an owner-only read before the row is loaded", async () => {
+    // The gate runs before the document is fetched and fails an owner-only rule
+    // closed when it has no document, so evaluating it there would 403 every
+    // non-super-admin read. The rule has to be judged against the loaded row.
+    const { service, accessControlService } = createService(true, {
+      read: { type: "owner-only" as const },
+    });
+
+    const result = await service.get("site-settings", {
+      user: editor,
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    const [, , , documentId, document] =
+      accessControlService.evaluateAccess.mock.calls[0];
+    // Judged against the real row, so ownership is actually comparable.
+    expect(documentId).toBe("doc1");
+    expect(document).toMatchObject({ id: "doc1" });
+  });
+
+  it("denies an owner-only read the rule rejects for this caller", async () => {
+    const { service } = createService(false, {
+      read: { type: "owner-only" as const },
+    });
+
+    const result = await service.get("site-settings", {
+      user: editor,
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("lets a trusted read bypass the stored rule", async () => {
     const { service, accessControlService } = createService(false);
 
@@ -118,5 +157,58 @@ describe("SingleQueryService.get — stored read rules", () => {
 
     expect(result.success).toBe(true);
     expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Enforcement of related-row field rules is opt-in, and the default matters: a
+ * caller that supplies no access context cannot be told apart from an anonymous
+ * one, so enforcing by default would strip protected related fields from every
+ * caller of the mutation-response path, which passes no context at all.
+ */
+describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in", () => {
+  const RELATION_FIELDS = [{ name: "author", type: "relationship" }];
+
+  function serviceWithRelationshipSpy() {
+    const expandRelationships = vi
+      .fn()
+      .mockImplementation((doc: unknown) => Promise.resolve(doc));
+    container.register("collectionsHandler", () => ({
+      getRelationshipService: () => ({ expandRelationships }),
+    }));
+
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      createMockSingleRegistry() as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+    return { service, expandRelationships };
+  }
+
+  it("leaves enforcement off for a caller that supplies no access context", async () => {
+    const { service, expandRelationships } = serviceWithRelationshipSpy();
+
+    await service.expandRelationshipFields(
+      { id: "doc1" } as never,
+      RELATION_FIELDS as never
+    );
+
+    expect(expandRelationships.mock.calls[0][3].enforceFieldAccess).toBeFalsy();
+  });
+
+  it("enforces when the read path opts in with its caller", async () => {
+    const { service, expandRelationships } = serviceWithRelationshipSpy();
+
+    await service.expandRelationshipFields(
+      { id: "doc1" } as never,
+      RELATION_FIELDS as never,
+      undefined,
+      { enforceFieldAccess: true, user: editor }
+    );
+
+    const options = expandRelationships.mock.calls[0][3];
+    expect(options.enforceFieldAccess).toBe(true);
+    expect(options.user).toMatchObject({ id: "user-1" });
   });
 });

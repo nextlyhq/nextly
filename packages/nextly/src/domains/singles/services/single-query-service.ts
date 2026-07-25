@@ -418,6 +418,53 @@ export class SingleQueryService extends BaseService {
   /** Resolves stored `accessRules` for the read gate. */
   private readonly accessControlService: AccessControlService;
 
+  /**
+   * Judge a document-dependent read rule against the loaded row.
+   *
+   * `checkSingleAccess` runs before the row is fetched, so an `owner-only` or
+   * `custom` read rule has nothing to compare against there — owner-only fails
+   * closed by design, and a custom rule would receive an undefined id and data.
+   * Those rules are deferred past that gate and settled here instead, which is
+   * the same split the mutation service uses for publish transitions.
+   */
+  private async evaluateReadDocumentRule(params: {
+    slug: string;
+    accessRules: CollectionAccessRules | undefined;
+    user?: UserContext;
+    document: Record<string, unknown>;
+  }): Promise<SingleResult | null> {
+    const { slug, accessRules, user, document } = params;
+    // Only reached for a document-dependent rule, so an absent rule set means
+    // there is nothing left to judge.
+    if (!accessRules) return null;
+    const documentId =
+      typeof document.id === "string" ? document.id : undefined;
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      "read",
+      {
+        user: user
+          ? {
+              id: user.id,
+              role: user.role,
+              roles: user.roles,
+              email: user.email,
+            }
+          : undefined,
+      },
+      documentId,
+      document
+    );
+    if (result.allowed) return null;
+    return {
+      success: false,
+      statusCode: 403,
+      message:
+        result.reason ??
+        `Access denied: read on single "${slug}" is not permitted`,
+    };
+  }
+
   // ============================================================
   // Public API
   // ============================================================
@@ -451,10 +498,24 @@ export class SingleQueryService extends BaseService {
       // one the write paths already honor, so a `read: authenticated` or
       // role-based rule now holds over HTTP instead of only inside the Direct
       // API.
+      // An owner-only or custom read rule can only be judged against the row,
+      // and the row is not loaded yet. Defer those to the re-check below: the
+      // gate fails an owner-only rule closed when it has no document, which
+      // would deny every non-super-admin read of an owner-only Single.
+      const readRule = (singleMeta.accessRules as CollectionAccessRules)
+        ?.read as { type?: string } | undefined;
+      const isSuperAdminSession =
+        isSuperAdminContext(options.user) &&
+        options.authenticatedScope?.actorType !== "apiKey";
+      const deferDocumentRule =
+        !isSuperAdminSession &&
+        (readRule?.type === "owner-only" || readRule?.type === "custom");
+
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
         accessRules: singleMeta.accessRules,
+        deferStoredRuleEval: deferDocumentRule,
         user: options.user,
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
@@ -553,6 +614,19 @@ export class SingleQueryService extends BaseService {
         statusFilter ? statusFilter.value : undefined
       );
 
+      // 6.95. Re-judge a document-dependent read rule now that the row exists.
+      // Ownership and custom rules need the document the earlier gate could not
+      // supply; evaluating them there would have denied on the missing row.
+      if (deferDocumentRule && !options.overrideAccess) {
+        const documentRuleDenied = await this.evaluateReadDocumentRule({
+          slug,
+          accessRules: singleMeta.accessRules,
+          user: options.user,
+          document: doc,
+        });
+        if (documentRuleDenied) return documentRuleDenied;
+      }
+
       // 7. Deserialize JSON fields
       doc = this.deserializeJsonFields(doc, singleMeta.fields);
 
@@ -564,7 +638,11 @@ export class SingleQueryService extends BaseService {
         doc,
         singleMeta.fields,
         options.depth,
-        { user: options.user, overrideAccess: options.overrideAccess }
+        {
+          enforceFieldAccess: true,
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+        }
       );
 
       // 7.7. Populate component field data from comp_{slug} tables
@@ -1248,10 +1326,17 @@ export class SingleQueryService extends BaseService {
     doc: SingleDocument,
     fields: FieldConfig[],
     depth?: number,
-    // The caller a related row's own field rules are evaluated against.
-    // Expansion copies whole related rows into this document, and a Single's
-    // field list never describes a related collection's fields.
-    access: { user?: UserContext; overrideAccess?: boolean } = {}
+    // The caller a related row's own field rules are evaluated against, and
+    // whether to evaluate them at all. Expansion copies whole related rows into
+    // this document, and a Single's field list never describes a related
+    // collection's fields. Enforcement is opt-in because a caller that has not
+    // supplied a user is indistinguishable from an anonymous one here, and
+    // enforcing for the former strips protected fields from everybody.
+    access: {
+      enforceFieldAccess?: boolean;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    } = {}
   ): Promise<SingleDocument> {
     const relationshipService = this.resolveRelationshipService();
     if (!relationshipService) {
@@ -1279,10 +1364,10 @@ export class SingleQueryService extends BaseService {
         fields as unknown as FieldDefinition[],
         {
           depth: depth ?? 2,
-          // Opt in now that the read path forwards a real caller; before that a
-          // Single read carried no user and would have judged everyone as
-          // anonymous, stripping protected related fields from every caller.
-          enforceFieldAccess: true,
+          // Set by the read path, which forwards a real caller. The mutation
+          // path does not, so its response keeps the fields it already returned
+          // rather than having them stripped as if nobody were asking.
+          enforceFieldAccess: access.enforceFieldAccess,
           user: access.user as Record<string, unknown> | undefined,
           overrideAccess: access.overrideAccess,
         }
