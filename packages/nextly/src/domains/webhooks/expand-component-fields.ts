@@ -83,20 +83,30 @@ async function resolveOnce(
   return resolved;
 }
 
+/**
+ * Expand component references inside inlined block definitions.
+ *
+ * `blocks` is only walked when it is an array of definitions carrying their
+ * own fields. A Nextly blocks field puts an options object there naming the
+ * registered block types it accepts, which holds no fields to expand, so it
+ * passes through untouched.
+ */
 async function expandBlocks(
   blocks: SensitiveFieldSource["blocks"],
   resolve: ComponentFieldResolver,
   seen: ReadonlySet<string>,
   cache: ResolutionCache
 ): Promise<SensitiveFieldSource["blocks"]> {
-  if (!blocks) return blocks;
+  if (!Array.isArray(blocks)) return blocks;
   return Promise.all(
-    blocks.map(async block => ({
-      ...block,
-      fields: block.fields
-        ? await expandComponentFields(block.fields, resolve, seen, cache)
-        : block.fields,
-    }))
+    blocks.map(async entry => {
+      const block = entry as { fields?: SensitiveFieldSource[] };
+      if (!Array.isArray(block.fields)) return entry;
+      return {
+        ...block,
+        fields: await expandComponentFields(block.fields, resolve, seen, cache),
+      };
+    })
   );
 }
 

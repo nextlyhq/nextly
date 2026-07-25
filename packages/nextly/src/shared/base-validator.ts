@@ -114,6 +114,8 @@ export const VALID_FIELD_TYPES = [
   "chips",
   // Component type
   "component",
+  // Page-builder document
+  "blocks",
 ] as const;
 
 /** Set form of {@link VALID_FIELD_TYPES} for O(1) membership checks. */

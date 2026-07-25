@@ -33,6 +33,7 @@ import {
   isGroupField,
   isJSONField,
   isChipsField,
+  isBlocksField,
   isDataField,
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
@@ -403,6 +404,12 @@ export class ZodGenerator {
     // Chips fields
     else if (isChipsField(field)) {
       zodSchema = this.buildChipsSchema(field);
+    }
+    // Blocks fields — a whole page document, validated in depth by the engine
+    // on write; the generated schema only asserts the envelope's own shape.
+    else if (isBlocksField(field)) {
+      zodSchema =
+        "z.object({ formatVersion: z.number(), kind: z.string(), nodes: z.array(z.unknown()) }).passthrough()";
     }
     // Unknown field type
     else {

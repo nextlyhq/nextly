@@ -35,6 +35,7 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
+  isBlocksField,
   isChipsField,
   isComponentField,
   isDataField,
@@ -233,6 +234,15 @@ export class TypeGenerator {
     );
     lines.push(" */");
     lines.push("");
+
+    // A blocks field is typed as the engine's document. The import is emitted
+    // only when one is present, and from `nextly` rather than the engine
+    // package directly, so the generated file resolves against the dependency
+    // every app already has.
+    if (this.usesBlocksField(collections, singles, components)) {
+      lines.push('import type { BlockDocument } from "nextly";');
+      lines.push("");
+    }
 
     // Generate interfaces for each component (before collections/singles since they may reference components)
     for (const component of components) {
@@ -682,6 +692,10 @@ export class TypeGenerator {
     else if (isChipsField(field)) {
       tsType = "string[]";
     }
+    // Blocks fields (one page-builder document)
+    else if (isBlocksField(field)) {
+      tsType = "BlockDocument";
+    }
     // Component fields
     else if (isComponentField(field)) {
       tsType = this.buildComponentType(field, allComponents);
@@ -752,6 +766,21 @@ export class TypeGenerator {
     }
 
     return `  ${field.name}${optional}: ${tsType};`;
+  }
+
+  /**
+   * Whether any entity declares a blocks field, which decides if the generated
+   * file needs the document type imported.
+   */
+  private usesBlocksField(
+    collections: DynamicCollectionRecord[],
+    singles: DynamicSingleRecord[],
+    components: DynamicComponentRecord[]
+  ): boolean {
+    const entities = [...collections, ...singles, ...components];
+    return entities.some(entity =>
+      (entity.fields ?? []).some(field => field?.type === "blocks")
+    );
   }
 
   /**

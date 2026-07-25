@@ -56,7 +56,8 @@ export type DynamicFieldType =
   | "group"
   | "json"
   | "component"
-  | "chips";
+  | "chips"
+  | "blocks";
 
 export type FieldDefinition = {
   name: string;

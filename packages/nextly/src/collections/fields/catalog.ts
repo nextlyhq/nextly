@@ -177,6 +177,13 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     hint: "Embed a reusable component",
     icon: "Puzzle",
   },
+  {
+    type: "blocks",
+    label: "Blocks",
+    category: "Structured",
+    hint: "Page built from blocks",
+    icon: "LayoutGrid",
+  },
 ];
 
 /**
@@ -350,13 +357,16 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
  * - `component` is excluded because reusable composition inside a block
  *   document happens through slots and component-instance nodes; admitting the
  *   component field type as well would give one concept two storage shapes.
+ * - `blocks` is excluded because a prop holding a whole nested document is
+ *   what slots already express, and nesting documents inside documents would
+ *   put two migration boundaries in one value.
  *
  * Link-shaped props keep using `text` until the dedicated link picker joins
  * the catalog with its admin component.
  */
 export type BlockFieldCatalogType = Exclude<
   FieldType,
-  "password" | "component"
+  "password" | "component" | "blocks"
 >;
 
 /** Every block-prop field type, in catalog order. */
@@ -467,6 +477,7 @@ export const FIELD_TYPE_BINDING_KIND: Readonly<
   json: "json",
   component: null,
   chips: "list",
+  blocks: null,
 };
 
 /**

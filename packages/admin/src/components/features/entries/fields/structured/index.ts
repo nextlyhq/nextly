@@ -25,3 +25,4 @@ export { GroupInput, type GroupInputProps } from "./GroupInput";
 
 // JSON field component
 export { JsonInput, type JsonInputProps } from "./JsonInput";
+export { BlocksSummary } from "./BlocksSummary";
