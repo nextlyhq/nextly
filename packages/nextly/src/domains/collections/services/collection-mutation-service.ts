@@ -96,6 +96,7 @@ import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
+import { statusEventsFor } from "../../webhooks/status-events";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -360,6 +361,65 @@ export class CollectionMutationService extends BaseService {
   ): Promise<readonly SensitiveFieldSource[]> {
     if (!isWebhookRecordingEnabled("collection", collectionSlug)) return fields;
     return this.webhookFieldTree(fields, executor);
+  }
+
+  /**
+   * Record the lifecycle status events for one transition
+   * (`entry.published`/`entry.unpublished`/`entry.status_changed`) into the
+   * outbox, INSIDE the caller's write transaction so they commit atomically with
+   * the content write and inherit the recording opt-out (each call routes through
+   * `recordMutationEvent`, which short-circuits on a `webhooks: false`
+   * collection). `statusEventsFor` decides the event set; a no-op transition
+   * (`from === to`, or a write that set no `status`) records nothing. Reuses the
+   * document/`previous`/`fields` the surrounding write already assembled for its
+   * `entry.created`/`entry.updated` event, so an opted-out write pays nothing
+   * extra. Returns whether any event was appended, so the caller folds it into
+   * the same `eventRecorded` signal that gates the fast-drain and retention pass.
+   */
+  private async recordStatusEvents(
+    tx: TransactionContext,
+    args: {
+      collection: string;
+      id: string;
+      locale?: string;
+      from: string | null;
+      to: string | null | undefined;
+      isCreate: boolean;
+      data: Record<string, unknown>;
+      previous: Record<string, unknown> | null;
+      fields: readonly SensitiveFieldSource[];
+      actor: RequestActor | null;
+    }
+  ): Promise<boolean> {
+    // Only a real string status can be a lifecycle transition; a write that set
+    // no status field has nothing to emit.
+    if (typeof args.to !== "string") return false;
+    const types = statusEventsFor({
+      from: args.from,
+      to: args.to,
+      isCreate: args.isCreate,
+    });
+    if (types.length === 0) return false;
+    const statusChange = { from: args.from, to: args.to };
+    let recorded = false;
+    for (const type of types) {
+      const did = await recordMutationEvent(tx, {
+        type,
+        resource: {
+          kind: "entry",
+          collection: args.collection,
+          id: args.id,
+          ...(args.locale !== undefined ? { locale: args.locale } : {}),
+        },
+        data: args.data,
+        previous: args.previous,
+        fields: args.fields,
+        actor: args.actor,
+        statusChange,
+      });
+      recorded = recorded || did;
+    }
+    return recorded;
   }
 
   /**
@@ -2047,6 +2107,7 @@ export class CollectionMutationService extends BaseService {
 
         // Append the outbox event in the same transaction, so it commits with
         // the entry and is never recorded for a write that later rolls back.
+        const createdDocument = assembleDocument(documentParts);
         recorded = await recordMutationEvent(tx, {
           type: "entry.created",
           resource: {
@@ -2058,11 +2119,28 @@ export class CollectionMutationService extends BaseService {
             // collection actually stores per-locale values.
             ...(localizedWrite ? { locale: localizedWrite.writeLocale } : {}),
           },
-          data: assembleDocument(documentParts),
+          data: createdDocument,
           previous: null,
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
+        // A create landing directly on `published` is a publish lifecycle event
+        // too (D69). Recorded in the SAME transaction, so it commits with the row
+        // and inherits the recording opt-out. `statusEventsFor` emits only
+        // `entry.published` here (no `status_changed` — nothing to change from).
+        const createdStatusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: entry.id as string,
+          ...(localizedWrite ? { locale: localizedWrite.writeLocale } : {}),
+          from: null,
+          to: (entry as { status?: unknown }).status as string | undefined,
+          isCreate: true,
+          data: createdDocument,
+          previous: null,
+          fields: webhookFields,
+          actor: actorForWrite(params.actor, params.user),
+        });
+        recorded = recorded || createdStatusRecorded;
       });
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
