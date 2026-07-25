@@ -19,14 +19,30 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 function makeDataProvider(nx: NextlyInstance): DataProvider {
   return {
     find: async args => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Direct API arg shapes vary by slug
-      const result = await nx.find(args as any);
+      // A page-builder layout can Query-Loop any collection, not just posts.
+      // Cache each provider read and tag it with ITS collection, so those tags
+      // attach to this page and a write to the queried collection revalidates it
+      // — otherwise the loop would stay stale once the route is no longer
+      // force-dynamic. Public reads (no per-caller filter), so a stable key is
+      // fine.
+      const collection = args.collection;
+      const result = await cachedFind(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Direct API arg shapes vary by slug
+        () => nx.find(args as any),
+        {
+          tags: nextlyTags(collection),
+          keyParts: ["pb-find", JSON.stringify(args)],
+        }
+      );
       return {
         items: result.items ?? [],
       };
     },
     findOne: async ({ collection, id }) => {
-      const doc = await nx.findByID({ collection, id });
+      const doc = await cachedFind(() => nx.findByID({ collection, id }), {
+        tags: nextlyTags(collection, id),
+        keyParts: ["pb-find-one", collection, id],
+      });
       return doc ?? null;
     },
     resolveMedia: async () => null,

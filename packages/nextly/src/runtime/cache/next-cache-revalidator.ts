@@ -10,12 +10,14 @@
  * when `next/cache` is unavailable (a non-Next runtime, the CLI) and never
  * throws — a revalidation failure must not turn a committed write into an error.
  *
- * `revalidateTag` is called with the `"max"` cache-life profile
- * (stale-while-revalidate). On Next 16 the single-argument form is deprecated
- * and logs a warning on every call (noisy under bulk writes); passing `"max"`
- * silences it and is the recommended form. On Next 14/15 `revalidateTag` takes
- * only the tag, so the extra argument is ignored — the same call is safe across
- * the whole `next` peer range (`^14 || ^15 || ^16`).
+ * `revalidateTag` is called with an explicit `{ expire: 0 }` cache-life profile:
+ * a content write must invalidate the cached read immediately — an unpublished
+ * or deleted document has to stop being served on the very next request, not
+ * after a stale-while-revalidate pass. `{ expire: 0 }` is the immediate-expiry
+ * form, and passing it also silences the Next 16 deprecation warning the bare
+ * single-argument call now logs on every tag. On Next 14/15 `revalidateTag`
+ * reads only the tag, so the extra argument is ignored — the same call is safe
+ * across the whole `next` peer range (`^14 || ^15 || ^16`).
  *
  * @module runtime/cache/next-cache-revalidator
  */
@@ -26,16 +28,19 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 
+/** A Next `cacheLife`-style profile: `{ expire: 0 }` means expire immediately. */
+type CacheLifeProfile = string | { expire?: number };
+
 /**
- * The `cacheLife` profile passed to `revalidateTag` on Next 16 so it does not
- * warn about the deprecated single-argument form. `"max"` marks tagged data
- * stale and serves it stale-while-revalidate; ignored on Next 14/15.
+ * The profile passed to `revalidateTag`: expire the tag immediately so the next
+ * request after a write gets fresh (or 404) content, not a stale copy. Ignored
+ * on Next 14/15, where `revalidateTag` reads only the tag.
  */
-const REVALIDATE_PROFILE = "max";
+const REVALIDATE_PROFILE: CacheLifeProfile = { expire: 0 };
 
 /** The subset of `next/cache` this adapter uses. */
 export interface NextCacheModule {
-  revalidateTag: (tag: string, profile?: string) => void;
+  revalidateTag: (tag: string, profile?: CacheLifeProfile) => void;
   revalidatePath: (path: string, type?: "page" | "layout") => void;
 }
 
