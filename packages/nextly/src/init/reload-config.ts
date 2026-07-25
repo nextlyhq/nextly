@@ -983,11 +983,6 @@ export async function reloadNextlyConfig(opts?: {
       metadataSynced = false;
     }
 
-    // The DDL and the field-tree metadata are now both in step (or the sync
-    // failed and will retry), so it is safe to activate the recording policy —
-    // never before, so a stale field tree can't pair with the new decision.
-    if (metadataSynced) republishRecordingPolicies(newConfig);
-
     // Sync dynamic_components metadata — keeps dynamic_components.fields
     // in step with the DDL changes the pipeline just applied.
     try {
@@ -1021,7 +1016,15 @@ export async function reloadNextlyConfig(opts?: {
       }
     } catch {
       // Non-fatal: same reasoning as collection/single metadata sync above.
+      metadataSynced = false;
     }
+
+    // Activate the recording policy only once the DDL AND all of the field-tree
+    // metadata (collections, singles, AND components) are in step — never
+    // before. Webhook payload stripping resolves sensitive fields through the
+    // component registry too (webhookFieldTree / expandComponentFields), so a
+    // failed component sync must also hold the new decision back.
+    if (metadataSynced) republishRecordingPolicies(newConfig);
 
     // Pre-compute fresh Drizzle table objects for all affected collections,
     // singles, and components. Synchronous (schema generation, no DB I/O).

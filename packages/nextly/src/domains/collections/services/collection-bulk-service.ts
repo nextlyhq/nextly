@@ -1132,7 +1132,12 @@ export class CollectionBulkService extends BaseService {
         result.revalidationIntents = collectedIntents;
       }
     } catch (error: unknown) {
-      // Transaction was rolled back (stopOnError case)
+      // Transaction was rolled back (stopOnError case). Any outbox events an
+      // item recorded before the abort were rolled back too, so clear the
+      // aggregated flag unconditionally — even when the first item recorded and
+      // aborted before ANY item was counted successful, so the wrapper never
+      // drains for events that never committed.
+      result.eventRecorded = false;
       // Reset successful count since transaction rolled back
       if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk create rolled back due to stopOnError", {
@@ -1144,10 +1149,6 @@ export class CollectionBulkService extends BaseService {
         const rolledBackCount = result.successful;
         result.successful = 0;
         result.ids = [];
-        // The outbox events of the rolled-back items were rolled back too, so
-        // clear the aggregated flag — otherwise the wrapper would drain for
-        // events that never committed.
-        result.eventRecorded = false;
         // Add rollback info to first error
         if (result.errors.length > 0) {
           result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
@@ -1523,7 +1524,11 @@ export class CollectionBulkService extends BaseService {
         result.revalidationIntents = collectedIntents;
       }
     } catch (error: unknown) {
-      // Transaction was rolled back (stopOnError case)
+      // Transaction was rolled back (stopOnError case). Clear the aggregated
+      // outbox flag unconditionally — an item can record before the abort even
+      // when none is counted successful — so the wrapper never drains for events
+      // that never committed.
+      result.eventRecorded = false;
       // Reset successful count since transaction rolled back
       if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk update rolled back due to stopOnError", {
@@ -1535,10 +1540,6 @@ export class CollectionBulkService extends BaseService {
         const rolledBackCount = result.successful;
         result.successful = 0;
         result.ids = [];
-        // The outbox events of the rolled-back items were rolled back too, so
-        // clear the aggregated flag — otherwise the wrapper would drain for
-        // events that never committed.
-        result.eventRecorded = false;
         // Add rollback info to first error
         if (result.errors.length > 0) {
           result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;

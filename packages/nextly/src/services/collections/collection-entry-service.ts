@@ -254,22 +254,6 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * The post-write side effects, run after every write that appends an event.
-   *
-   * The drain fast path goes first so the `after()` callback is scheduled
-   * promptly (it only runs post-response, so it adds no latency); the retention
-   * pass follows. Both absorb their own failures, so this never turns a
-   * successful save into an error. `offer()` is synchronous — it only registers
-   * the post-response callback, whose work `after()` owns — so it is not awaited;
-   * the retention pass is awaited for the reason `offerRetentionPass` documents:
-   * a detached promise may not survive a serverless response.
-   */
-  private async afterWrite(): Promise<void> {
-    this.fastDrainScheduler?.offer();
-    await this.offerRetentionPass();
-  }
-
-  /**
    * Run the post-write side effects only when the mutation actually recorded a
    * change (and therefore appended an outbox event). A rejected write — a
    * validation or access failure surfaced as `success: false`, or a bulk/batch
@@ -298,14 +282,20 @@ export class CollectionEntryService extends BaseService {
     // bust their tags.
     await this.flushRevalidation(result);
 
-    // Drain/retention run only when an outbox event was actually recorded. Every
-    // result — single, bulk (`successCount`), and batch (`successful`) — now
-    // carries an aggregated `eventRecorded` (the bulk/batch paths OR it across
-    // their items), so a write of only opted-out (`webhooks: false`) entries
-    // records nothing and schedules nothing, rather than draining unrelated
-    // pending events off a positive success count.
+    // Retention is opportunistic write-path cleanup, NOT tied to the outbox gate:
+    // `retention-runner` documents the write path as the only prune trigger for
+    // installs with no webhook drain, so even a write to only opted-out
+    // (`webhooks: false`) entities must still offer a pass. The runner is
+    // internally rate-limited, so offering on every write is cheap.
+    await this.offerRetentionPass();
+
+    // The fast drain, by contrast, only matters when an outbox event was actually
+    // recorded to deliver. Every result — single, bulk (`successCount`), and
+    // batch (`successful`) — carries an aggregated `eventRecorded`, so a write of
+    // only opted-out entries records nothing and schedules no drain, rather than
+    // draining unrelated pending events off a positive success count.
     if (result.eventRecorded === true) {
-      await this.afterWrite();
+      this.fastDrainScheduler?.offer();
     }
   }
 
