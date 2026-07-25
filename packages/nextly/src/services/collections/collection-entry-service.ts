@@ -282,12 +282,17 @@ export class CollectionEntryService extends BaseService {
     // bust their tags.
     await this.flushRevalidation(result);
 
-    // Retention is opportunistic write-path cleanup, NOT tied to the outbox gate:
-    // `retention-runner` documents the write path as the only prune trigger for
-    // installs with no webhook drain, so even a write to only opted-out
-    // (`webhooks: false`) entities must still offer a pass. The runner is
-    // internally rate-limited, so offering on every write is cheap.
-    await this.offerRetentionPass();
+    // Retention is opportunistic write-path cleanup — the write path is the only
+    // prune trigger for installs with no webhook drain, so even a write to only
+    // opted-out (`webhooks: false`) entities must still offer a pass. It is NOT
+    // the outbox gate, but it IS gated on a committed write: a rejected request
+    // (validation / access / not-found) committed nothing, so paying for an
+    // awaited outbox-deletion pass on its behalf is wasted latency. An opted-out
+    // write still qualifies (it reports `success` / a positive count / an intent
+    // even though it recorded no event), so coverage is unchanged.
+    if (CollectionEntryService.hasCommittedWrite(result)) {
+      await this.offerRetentionPass();
+    }
 
     // The fast drain, by contrast, only matters when an outbox event was actually
     // recorded to deliver. Every result — single, bulk (`successCount`), and
@@ -297,6 +302,37 @@ export class CollectionEntryService extends BaseService {
     if (result.eventRecorded === true) {
       this.fastDrainScheduler?.offer();
     }
+  }
+
+  /**
+   * Whether a mutation result represents at least one committed content write.
+   * True for a normal success, for a committed-but-post-hook-failed write (which
+   * reports `success: false` but carries a durable event and/or intent), and for
+   * an opted-out (`webhooks: false`) write (no outbox event, but still a success
+   * / positive count / a revalidation intent). False for a rejected request
+   * (validation / access / not-found) that committed nothing. Covers all three
+   * result shapes so write-path cleanup runs on real writes only.
+   */
+  private static hasCommittedWrite(
+    result:
+      | CollectionServiceResult<unknown>
+      | BulkOperationResult<unknown>
+      | BatchOperationResult
+  ): boolean {
+    if (result.eventRecorded === true) return true;
+    if ("success" in result && result.success === true) return true;
+    if ("successCount" in result && result.successCount > 0) return true;
+    if ("successful" in result && result.successful > 0) return true;
+    if ("revalidationIntent" in result && result.revalidationIntent != null) {
+      return true;
+    }
+    if (
+      "revalidationIntents" in result &&
+      (result.revalidationIntents?.length ?? 0) > 0
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**

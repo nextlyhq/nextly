@@ -4020,20 +4020,20 @@ export class CollectionMutationService extends BaseService {
 
       // The tags this update invalidates: the id and current-slug tags, plus the
       // previous-slug tag when the slug changed (captured in the transaction), so
-      // a read cached under the old URL clears. Only when the write recorded an
-      // event — a no-op update revalidates nothing.
-      if (eventRecorded) {
-        revalidationIntent = buildEntryRevalidationIntent(
-          params.collectionName,
-          readRevalidateConfig(collection),
-          {
-            id: params.entryId,
-            slug: readStringField(updated as Record<string, unknown>, "slug"),
-            previousSlug,
-            locale: localizedUpdate?.writeLocale,
-          }
-        );
-      }
+      // a read cached under the old URL clears. Built on the committed write, NOT
+      // the outbox-event flag: reaching here past the 404 guard means the row was
+      // written, so an opted-out (`webhooks: false`) update — which records no
+      // event — must still bust its tags, exactly as create and delete do.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: params.entryId,
+          slug: readStringField(updated as Record<string, unknown>, "slug"),
+          previousSlug,
+          locale: localizedUpdate?.writeLocale,
+        }
+      );
 
       // Execute afterUpdate hooks (code-registered)
       // Hooks run after database update completes (for side effects)

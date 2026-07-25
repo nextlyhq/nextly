@@ -62,6 +62,7 @@ import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import {
   pruneRemovedCodeFirstRecording,
   setWebhookRecording,
+  type WebhookRecordingScope,
 } from "../domains/webhooks/recording-policy";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import type { RevalidateConfig } from "../revalidation/types";
@@ -366,61 +367,78 @@ async function syncCodeFirstMetadataOnly(
 }
 
 /**
+ * Publish one scope's recording decisions from the reloaded config. The two
+ * directions have asymmetric safety, so they are gated differently:
+ *
+ * - Opt-OUTS (`record: false`) are applied UNCONDITIONALLY, even when this
+ *   scope's metadata sync failed or was deferred. Turning recording OFF builds
+ *   no payload and reads no field tree, so a just-loaded privacy opt-out is safe
+ *   to honor immediately — and MUST be, or a reload that flips `webhooks` to
+ *   `false` while an unrelated diff is deferred would keep leaking events.
+ * - Opt-INS (`record: true`, including a removed slug reverting to the default)
+ *   DO read the field tree when a payload is later expanded, so they are applied
+ *   ONLY when `synced` is true. Otherwise expansion would strip against a stale
+ *   component/field tree and could emit a value that is now hidden. Pruning a
+ *   removed code-first slug reverts it to the recording default, so it is an
+ *   opt-in and waits on `synced` too. Plugin-sourced decisions are never pruned.
+ */
+function publishScopeRecording(
+  scope: WebhookRecordingScope,
+  entities: Array<{
+    slug?: string;
+    webhooks?: CollectionDef["webhooks"];
+    admin?: unknown;
+  }>,
+  synced: boolean
+): void {
+  const sourceOf = (admin: unknown): "code" | "plugin" =>
+    (admin as { isPlugin?: boolean } | undefined)?.isPlugin ? "plugin" : "code";
+
+  // Opt-outs first, always: safe regardless of sync state (recording is off).
+  for (const e of entities) {
+    if (!e.slug) continue;
+    if (resolveWebhookRecording(e.webhooks).record === false) {
+      setWebhookRecording(scope, e.slug, false, sourceOf(e.admin));
+    }
+  }
+
+  // Opt-ins and removed-slug pruning only once the field tree is in step.
+  if (!synced) return;
+  const present = new Set<string>();
+  for (const e of entities) {
+    if (e.slug) present.add(e.slug);
+  }
+  pruneRemovedCodeFirstRecording(scope, present);
+  for (const e of entities) {
+    if (!e.slug) continue;
+    if (resolveWebhookRecording(e.webhooks).record === true) {
+      setWebhookRecording(scope, e.slug, true, sourceOf(e.admin));
+    }
+  }
+}
+
+/**
  * Republish the webhook recording policy from the reloaded config, so a live
  * `webhooks` opt-out/opt-in takes effect without a restart. Called AFTER a sync
  * path completes — never before it — so a reload whose schema apply fails does
- * not leave the recording policy ahead of the still-old runtime config.
+ * not leave a recording OPT-IN ahead of the still-old runtime field tree.
  *
  * Per-scope on purpose: `scopes` names the entity kinds whose metadata sync
  * actually succeeded, so a PARTIAL reload (collections synced, singles/component
- * failed) still activates the committed collections' decisions instead of
- * holding every decision hostage to an unrelated failure. Each enabled scope
- * prunes removed code-first slugs (a removed-but-DB-backed collection can stay
- * writable, so a stale opt-out would otherwise suppress its events) and
- * overwrites present slugs; plugin-sourced decisions are preserved.
+ * failed) still activates the committed collections' opt-ins instead of holding
+ * them hostage to an unrelated failure. Opt-OUTS ignore the gate entirely (see
+ * {@link publishScopeRecording}).
  */
 function republishRecordingPolicies(
   newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] },
   scopes: { collections: boolean; singles: boolean }
 ): void {
-  if (scopes.collections) {
-    const present = new Set<string>();
-    for (const c of newConfig.collections ?? []) {
-      if (c.slug) present.add(c.slug);
-    }
-    pruneRemovedCodeFirstRecording("collection", present);
-    for (const c of newConfig.collections ?? []) {
-      if (!c.slug) continue;
-      const source = (c.admin as { isPlugin?: boolean } | undefined)?.isPlugin
-        ? "plugin"
-        : "code";
-      setWebhookRecording(
-        "collection",
-        c.slug,
-        resolveWebhookRecording(c.webhooks).record,
-        source
-      );
-    }
-  }
-  if (scopes.singles) {
-    const present = new Set<string>();
-    for (const s of newConfig.singles ?? []) {
-      if (s.slug) present.add(s.slug);
-    }
-    pruneRemovedCodeFirstRecording("single", present);
-    for (const s of newConfig.singles ?? []) {
-      if (!s.slug) continue;
-      const source = (s.admin as { isPlugin?: boolean } | undefined)?.isPlugin
-        ? "plugin"
-        : "code";
-      setWebhookRecording(
-        "single",
-        s.slug,
-        resolveWebhookRecording(s.webhooks).record,
-        source
-      );
-    }
-  }
+  publishScopeRecording(
+    "collection",
+    newConfig.collections ?? [],
+    scopes.collections
+  );
+  publishScopeRecording("single", newConfig.singles ?? [], scopes.singles);
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.

@@ -63,12 +63,16 @@ describe("webhook recording opt-out (integration)", () => {
     );
     expect(lead.success).toBe(true);
     const leadId = (lead.data as { id: string }).id;
-    // ...nor on update...
+    // ...nor on update. The update still busts its cache tags, though: recording
+    // is decoupled from revalidation, so an opted-out write that commits content
+    // must still carry a revalidation intent (the tags derive from the write, not
+    // the outbox event) — otherwise ISR consumers would serve the stale value.
     const updated = await handler.updateEntry(
       { collectionName: "leads", entryId: leadId, overrideAccess: true },
       { title: "secret-2" }
     );
     expect(updated.success).toBe(true);
+    expect(updated.revalidationIntent).toBeDefined();
     // ...nor on delete. Asserting each write succeeded keeps the zero-event
     // check below from passing vacuously on a write that failed pre-recording.
     const deleted = await handler.deleteEntry({
