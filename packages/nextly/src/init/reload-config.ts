@@ -59,6 +59,8 @@ import { resolveCollectionTableName } from "../domains/schema/utils/resolve-tabl
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import { setWebhookRecording } from "../domains/webhooks/recording-policy";
+import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { ComponentSchemaService } from "../services/components/component-schema-service";
@@ -101,6 +103,8 @@ type CollectionDef = {
   localized?: boolean;
   /** Content-versioning option; persisted (resolved) to dynamic_collections.versions. */
   versions?: boolean | VersionsConfig;
+  /** Webhook recording opt-out; resolved into the process-level recording policy. */
+  webhooks?: boolean | { record?: boolean };
 };
 
 type SingleDef = {
@@ -115,6 +119,8 @@ type SingleDef = {
   localized?: boolean;
   /** Content-versioning option; persisted (resolved) to dynamic_singles.versions. */
   versions?: boolean | VersionsConfig;
+  /** Webhook recording opt-out; resolved into the process-level recording policy. */
+  webhooks?: boolean | { record?: boolean };
 };
 
 type ComponentDef = {
@@ -393,6 +399,27 @@ export async function reloadNextlyConfig(opts?: {
   // would crash at runtime).
   const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
+
+  // Keep the webhook recording policy in sync with the reloaded config so a
+  // hot-swapped `webhooks` opt-out/opt-in takes effect without a restart. Runs
+  // before the sync branches below, so BOTH the DDL-diff and the metadata-only
+  // paths honor the change (the boot-time decision would otherwise persist).
+  for (const c of newConfig.collections ?? []) {
+    if (!c.slug) continue;
+    setWebhookRecording(
+      "collection",
+      c.slug,
+      resolveWebhookRecording(c.webhooks).record
+    );
+  }
+  for (const s of newConfig.singles ?? []) {
+    if (!s.slug) continue;
+    setWebhookRecording(
+      "single",
+      s.slug,
+      resolveWebhookRecording(s.webhooks).record
+    );
+  }
 
   // Normalize collections to (slug, tableName, fields, status) tuples. Drop
   // entries without a slug — they can't be addressed. `status` propagates so

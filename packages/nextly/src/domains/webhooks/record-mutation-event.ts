@@ -70,17 +70,21 @@ export interface RecordMutationEventArgs {
  *
  * The insert shares the caller's transaction, so the event commits with the
  * content change and is never recorded for a write that later rolls back.
+ *
+ * @returns `true` when an outbox event was appended; `false` when the resource
+ * opted out of recording. Callers gate their post-commit webhook work (fast
+ * drain, retention pass) on this, so an opted-out write schedules nothing.
  */
 export async function recordMutationEvent(
   tx: TransactionContext,
   args: RecordMutationEventArgs
-): Promise<void> {
+): Promise<boolean> {
   // Collection/single opt-out: a resource whose entity set `webhooks: false`
   // records nothing, so PII-bearing content (e.g. form submissions carrying
   // ipAddress/userAgent) never enters the outbox or the delivery path. Enforced
   // here at the single seam so every write path inherits it.
   if (!resourceRecordingEnabled(args.resource)) {
-    return;
+    return false;
   }
 
   const envelope = buildEnvelope({
@@ -96,4 +100,5 @@ export async function recordMutationEvent(
   });
 
   await recordEvent(tx, { envelope });
+  return true;
 }

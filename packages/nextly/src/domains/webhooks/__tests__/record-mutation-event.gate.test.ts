@@ -27,17 +27,19 @@ const entryArgs = (collection: string) => ({
 });
 
 describe("recordMutationEvent recording gate", () => {
-  it("records an outbox event for a collection with no opt-out", async () => {
+  it("records an outbox event and returns true for a collection with no opt-out", async () => {
     const { tx, insert } = makeTx();
-    await recordMutationEvent(tx, entryArgs("posts"));
+    const recorded = await recordMutationEvent(tx, entryArgs("posts"));
     expect(insert).toHaveBeenCalledTimes(1);
+    expect(recorded).toBe(true);
   });
 
-  it("records nothing for a collection that opted out", async () => {
+  it("records nothing and returns false for a collection that opted out", async () => {
     setWebhookRecording("collection", "submissions", false);
     const { tx, insert } = makeTx();
-    await recordMutationEvent(tx, entryArgs("submissions"));
+    const recorded = await recordMutationEvent(tx, entryArgs("submissions"));
     expect(insert).not.toHaveBeenCalled();
+    expect(recorded).toBe(false);
   });
 
   it("records nothing for an opted-out single", async () => {

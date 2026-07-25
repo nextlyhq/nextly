@@ -1850,6 +1850,10 @@ export class CollectionMutationService extends BaseService {
       const webhookFields = await this.webhookFieldTree(fields);
 
       const entry: Record<string, unknown> = {};
+      // Whether the outbox event was actually appended (false when the
+      // collection opted out of recording), so the post-commit fast drain is
+      // scheduled only for a write that recorded something.
+      let recorded = false;
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -2017,7 +2021,7 @@ export class CollectionMutationService extends BaseService {
 
         // Append the outbox event in the same transaction, so it commits with
         // the entry and is never recorded for a write that later rolls back.
-        await recordMutationEvent(tx, {
+        recorded = await recordMutationEvent(tx, {
           type: "entry.created",
           resource: {
             kind: "entry",
@@ -2037,7 +2041,8 @@ export class CollectionMutationService extends BaseService {
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
       // there; from here a post-commit hook failure must not hide the delivery.
-      eventRecorded = true;
+      // False when the collection opted out — nothing was recorded to drain.
+      eventRecorded = recorded;
 
       // The tags this create invalidates: derived from the collection, the new
       // id, and the new slug (plus the write locale), so a tagged read of the
@@ -3952,7 +3957,8 @@ export class CollectionMutationService extends BaseService {
 
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
-              await recordMutationEvent(tx, {
+              // `recorded` is false when the collection opted out of recording.
+              recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
                 resource: {
                   kind: "entry",
@@ -3968,7 +3974,6 @@ export class CollectionMutationService extends BaseService {
                 fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
-              recorded = true;
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.
               previousSlug = readStringField(previousDocument, "slug");
@@ -4387,6 +4392,9 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           params.entryId
         );
+      // False when the collection opted out of recording, so the post-commit
+      // drain is not scheduled for a delete that recorded nothing.
+      let recorded = false;
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -4444,7 +4452,7 @@ export class CollectionMutationService extends BaseService {
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
         // so a receiver knows which translation the payload represents.
-        await recordMutationEvent(tx, {
+        recorded = await recordMutationEvent(tx, {
           type: "entry.deleted",
           resource: {
             kind: "entry",
@@ -4459,9 +4467,11 @@ export class CollectionMutationService extends BaseService {
         });
       });
       // Set only after the transaction resolves: `deletedRow` is true exactly
-      // when the delete + event committed, so a commit failure never flags a
-      // durable event that isn't there; a later hook failure must not hide it.
-      eventRecorded = deletedRow;
+      // when the delete committed, so a commit failure never flags a durable
+      // event that isn't there; a later hook failure must not hide it. `recorded`
+      // is false when the collection opted out, so an opted-out delete schedules
+      // no drain.
+      eventRecorded = deletedRow && recorded;
 
       // A concurrent delete removed the row first: report not-found rather than
       // a second success (and a duplicate event) for a deletion this call did
@@ -7024,7 +7034,7 @@ export class CollectionMutationService extends BaseService {
       // single-delete path. Resolve component schemas on this transaction's
       // connection to avoid taking a second pooled connection. `locale` is set
       // only for a localized collection.
-      await recordMutationEvent(tx, {
+      const deleteRecorded = await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
           kind: "entry",
@@ -7040,7 +7050,8 @@ export class CollectionMutationService extends BaseService {
       // The event is recorded, so the delete + event are now consistent; a later
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;
-      eventRecorded = true;
+      // False when the collection opted out — nothing to drain post-commit.
+      eventRecorded = deleteRecorded;
 
       // The tags this delete invalidates, collected by the batch caller and
       // flushed once the shared transaction commits. Slug read from the assembled
