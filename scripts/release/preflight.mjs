@@ -5,10 +5,6 @@
 // here is knowable before the first byte is published.
 //
 // Exit codes: 0 = safe to publish, 1 = blocked.
-//
-// Set NEXTLY_RELEASE_ALLOW_BOOTSTRAP=1 for the deliberate first publish of a new
-// package name, which is the one case where "this package does not exist on the
-// registry" is expected rather than fatal.
 
 import {
   fetchAllRegistryStates,
@@ -16,24 +12,13 @@ import {
   getReleaseManifest,
 } from "./lib.mjs";
 
-const allowBootstrap = process.env.NEXTLY_RELEASE_ALLOW_BOOTSTRAP === "1";
-
-async function main() {
-  const manifest = getReleaseManifest();
-  if (manifest.length === 0) {
-    console.error("preflight: no publishable packages found under packages/");
-    process.exit(1);
-  }
-
-  const registry = await fetchAllRegistryStates(manifest);
-
+/** Groups every package by the reason it can or cannot be published right now. */
+function classify(manifest, registry, expectedVersion) {
   const metadataErrors = [];
+  const versionMismatch = [];
   const bootstrapNeeded = [];
   const alreadyPublished = [];
   const toPublish = [];
-  const versionMismatch = [];
-
-  const expectedVersion = manifest[0].version;
 
   for (const entry of manifest) {
     const missing = findMissingPublishFields(entry.pkg);
@@ -57,6 +42,32 @@ async function main() {
       toPublish.push(entry.name);
     }
   }
+
+  return {
+    metadataErrors,
+    versionMismatch,
+    bootstrapNeeded,
+    alreadyPublished,
+    toPublish,
+  };
+}
+
+async function main() {
+  const manifest = getReleaseManifest();
+  if (manifest.length === 0) {
+    console.error("preflight: no publishable packages found under packages/");
+    process.exit(1);
+  }
+
+  const expectedVersion = manifest[0].version;
+  const registry = await fetchAllRegistryStates(manifest);
+  const {
+    metadataErrors,
+    versionMismatch,
+    bootstrapNeeded,
+    alreadyPublished,
+    toPublish,
+  } = classify(manifest, registry, expectedVersion);
 
   console.log(`Release preflight for ${expectedVersion}`);
   console.log(`  publishable packages: ${manifest.length}`);
@@ -88,17 +99,26 @@ async function main() {
     }
   }
 
-  if (bootstrapNeeded.length > 0 && !allowBootstrap) {
+  // Blocking here is deliberate and cannot be waived from CI. npm requires a
+  // package to exist before a trusted publisher can be attached to it, and OIDC
+  // cannot perform a package's first publish, so this release genuinely cannot
+  // succeed until the name is claimed once by a maintainer. Letting it start
+  // anyway would publish the rest of the train and strand this package.
+  if (bootstrapNeeded.length > 0) {
     blocked = true;
     console.error("\nBlocked: package has never been published to npm");
     for (const name of bootstrapNeeded) {
       console.error(`  ${name}`);
     }
     console.error(
-      "\n  A trusted publisher can only be configured against a package that exists,\n" +
-        "  so the first publish of a new name has to be made deliberately. Publish it\n" +
-        "  once, add its trusted publisher entry on npmjs.com, then re-run the release.\n" +
-        "  Set NEXTLY_RELEASE_ALLOW_BOOTSTRAP=1 to run that first publish from CI."
+      "\n  Claim each name once, then add its trusted publisher:\n" +
+        bootstrapNeeded
+          .map(
+            name =>
+              `    node scripts/release/bootstrap-package.mjs ${name} --publish`
+          )
+          .join("\n") +
+        "\n\n  See the release-and-changesets skill for the full procedure."
     );
   }
 
@@ -109,22 +129,12 @@ async function main() {
     process.exit(1);
   }
 
-  // A bootstrap run publishes the new names too, so report everything the
-  // publish step will attempt rather than only the packages that already exist.
-  const attempting = [...toPublish, ...(allowBootstrap ? bootstrapNeeded : [])];
-
-  if (attempting.length === 0) {
+  if (toPublish.length === 0) {
     console.log(
       "\nNothing new to publish; the registry already has this version."
     );
   } else {
-    console.log(`\nReady to publish: ${attempting.sort().join(", ")}`);
-    if (allowBootstrap && bootstrapNeeded.length > 0) {
-      console.log(
-        `  first publish for: ${bootstrapNeeded.join(", ")} ` +
-          "(add each one's trusted publisher on npmjs.com afterwards)"
-      );
-    }
+    console.log(`\nReady to publish: ${toPublish.join(", ")}`);
   }
 }
 

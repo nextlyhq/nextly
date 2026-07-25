@@ -103,28 +103,39 @@ jobs:
       # even when some of them failed, so the only way to know a release is
       # whole is to ask the registry afterwards. Failing here stops the tag and
       # the GitHub Release from being created, which is what keeps npm, git and
-      # the Releases page describing the same release. Publishing is resumable:
-      # re-running skips versions the registry already has.
+      # the Releases page describing the same release.
+      #
+      # Gated on `hasChangesets == 'false'` (this run took the publish path)
+      # rather than on `published == 'true'` (this run published something new).
+      # The two differ during recovery: publishing is resumable, so a re-run
+      # after a partial release skips the versions npm already has and reports
+      # nothing newly published. Keying off `published` would then skip both
+      # verification and finalization forever, leaving a complete npm release
+      # with no tag and no GitHub Release. Both steps below are idempotent, so
+      # running them on an already-finalized release is a no-op.
       - name: Verify every package reached the registry
-        if: steps.changesets.outputs.published == 'true'
+        if: steps.changesets.outputs.hasChangesets == 'false'
         run: pnpm release:verify
 
       - name: Create consolidated GitHub Release
-        if: steps.changesets.outputs.published == 'true'
+        if: steps.changesets.outputs.hasChangesets == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          PUBLISHED: ${{ steps.changesets.outputs.publishedPackages }}
         run: |
           set -euo pipefail
 
-          # Published packages share a version via `fixed[]`, so the first
-          # entry's version is the canonical monorepo version.
-          VERSION=$(echo "$PUBLISHED" | jq -r '.[0].version')
+          # Build the notes from the workspace manifest, not from the publish
+          # step's output. On a recovery run that output lists only the
+          # stragglers it just published, which would produce a release claiming
+          # three packages shipped and omit the rest of the train's changelogs.
+          # Verification above has already confirmed the whole manifest is live.
+          MANIFEST=$(node scripts/release/manifest.mjs)
+
+          # Every publishable package shares a version via `fixed[]`, so the
+          # first entry's version is the canonical monorepo version.
+          VERSION=$(echo "$MANIFEST" | jq -r '.[0].version')
           TAG="v${VERSION}"
-          # Count the packages that actually published rather than restating a
-          # number in prose: hand-maintained counts drift as packages join the
-          # release train.
-          PKG_COUNT=$(echo "$PUBLISHED" | jq -r 'length')
+          PKG_COUNT=$(echo "$MANIFEST" | jq -r 'length')
 
           # Build the release notes by extracting each package's CHANGELOG
           # section for this version and concatenating them under one
@@ -135,7 +146,7 @@ jobs:
             echo
             echo "## What's changed"
             echo
-            for pkg in $(echo "$PUBLISHED" | jq -r '.[].name'); do
+            for pkg in $(echo "$MANIFEST" | jq -r '.[].name'); do
               pkg_dir="packages/${pkg#@nextlyhq/}"
               CHANGELOG="${pkg_dir}/CHANGELOG.md"
               if [[ -f "$CHANGELOG" ]]; then
@@ -173,15 +184,18 @@ jobs:
             RELEASE_FLAG="--latest"
           fi
 
-          # Idempotent: skip if the release already exists (e.g. a previous
-          # workflow run partially completed)
+          # Idempotent: skip if the release already exists. This step now also
+          # runs on pushes after a release is finalized, so "already done" is a
+          # normal outcome rather than a sign something went wrong.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; skipping creation"
+            echo "Release $TAG already exists; nothing to finalize"
           else
-            # Create the unified tag pointing at the publish commit, then
-            # the GitHub Release on top of it
-            git tag "$TAG"
-            git push origin "$TAG"
+            # The tag is created separately from the release, so a previous run
+            # can have pushed it without getting as far as the release.
+            if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              git tag "$TAG"
+            fi
+            git push origin "$TAG" || echo "Tag $TAG already on origin"
             gh release create "$TAG" \
               --title "$TAG" \
               --notes-file "$NOTES_FILE" \
@@ -190,7 +204,7 @@ jobs:
 
           # Mirror the notes into the workflow run summary for visibility
           echo "## Released $TAG" >> $GITHUB_STEP_SUMMARY
-          echo '${{ steps.changesets.outputs.publishedPackages }}' \
+          echo "$MANIFEST" \
             | jq -r '.[] | "- **\(.name)** @ `\(.version)`"' \
             >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

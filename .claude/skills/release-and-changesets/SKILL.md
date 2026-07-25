@@ -73,10 +73,19 @@ already has, so a re-run only attempts the missing packages.
 
 1. `pnpm release:verify` to list exactly which packages are missing and why.
 2. Fix the cause per package (metadata, npm access, trusted publisher).
-3. Re-run the release workflow. The already-published packages are skipped.
+3. Land a commit on `main` that adds no new changeset. In prerelease mode the
+   `.changeset/*.md` files stay on disk after versioning, but the ones already
+   recorded in `pre.json.changesets` do not count as pending, so the action takes
+   the publish path and retries the current version. Adding a changeset instead
+   opens a Version PR and moves the train to the next version.
 4. Do not bump the version to "get a clean run": that abandons the partial
    version permanently, leaving a hole where some packages exist at a version
    and their siblings never do.
+
+Finalization (the consolidated tag and GitHub Release) is gated on the registry
+being complete, not on whether a particular run published something, so a
+recovery run still creates the tag for a release whose packages were published
+earlier.
 
 ## Bootstrapping a brand-new package
 
@@ -109,6 +118,12 @@ For each new package name, in order:
    with the same 404.
 4. Re-run the release so the package rejoins the train.
 
-`NEXTLY_RELEASE_ALLOW_BOOTSTRAP=1` relaxes the preflight check when CI itself
-should attempt a first publish. Adding a package to the `fixed[]` group without
-completing the steps above is what makes the _next_ release fail.
+There is no CI-only path for step 2, and no override for it: OIDC cannot perform
+a package's first publish, and giving CI a long-lived npm token just to claim a
+name would replace short-lived trusted publishing with a standing credential.
+The helper refuses to publish when `CI` is set for that reason. Preflight blocks
+the whole release until the name exists, which is deliberate: the alternative is
+publishing the rest of the train and stranding this package.
+
+Adding a package to the `fixed[]` group without completing the steps above is
+what makes the _next_ release fail.

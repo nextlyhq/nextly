@@ -37,6 +37,19 @@ async function main() {
     );
   }
 
+  // Refuse to run in CI. Every real release must go through trusted publishing,
+  // and wiring this into a workflow would mean putting a long-lived npm token in
+  // CI purely to claim a name: a standing credential replacing short-lived OIDC.
+  // Claiming a name is a rare, one-time act; it stays a deliberate local one.
+  if (shouldPublish && process.env.CI) {
+    fail(
+      "This script must not publish from CI.\n" +
+        "Real versions are published by the release workflow through trusted\n" +
+        "publishing (OIDC). Claiming a new package name is a one-time manual step;\n" +
+        "run it locally after `npm login`."
+    );
+  }
+
   const entry = getReleaseManifest().find(pkg => pkg.name === target);
   if (!entry) {
     fail(
