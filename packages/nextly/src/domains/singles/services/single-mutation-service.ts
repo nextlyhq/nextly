@@ -1346,22 +1346,32 @@ export class SingleMutationService extends BaseService {
             // view; a non-localized single has no locale.
             const payloadLocale = eventLocale ?? defaultViewLocale;
 
-            const previousDoc = preRow
-              ? await this.buildSingleWebhookDoc(
-                  tx,
-                  existingDoc.id,
-                  singleMeta.tableName,
-                  preRow,
-                  fieldConfigs,
-                  companion,
-                  companionPhysicallyExists,
-                  eventLocale != null
-                    ? previousCompanionValues
-                    : defaultViewCompanion,
-                  payloadLocale,
-                  overlayLocaleStatus ? previousLocaleStatus : undefined
-                )
-              : null;
+            // Resolve the opt-out ONCE, before assembling any webhook payload.
+            // Building the previous/next documents calls populateComponentData
+            // (strict) — a per-component read that can throw on a missing/stale
+            // component table — and expands the field tree, all of which only
+            // ever feed recordMutationEvent. That helper short-circuits on the
+            // opt-out, so for a `webhooks: false` Single this assembly is pure
+            // waste and must not be able to fail a scalar content write.
+            const recordingEnabled = isWebhookRecordingEnabled("single", slug);
+
+            const previousDoc =
+              recordingEnabled && preRow
+                ? await this.buildSingleWebhookDoc(
+                    tx,
+                    existingDoc.id,
+                    singleMeta.tableName,
+                    preRow,
+                    fieldConfigs,
+                    companion,
+                    companionPhysicallyExists,
+                    eventLocale != null
+                      ? previousCompanionValues
+                      : defaultViewCompanion,
+                    payloadLocale,
+                    overlayLocaleStatus ? previousLocaleStatus : undefined
+                  )
+                : null;
 
             // Clone per attempt: saveComponentDataInTransaction mutates the data
             // in place (hashing passwords, assigning ids), so a conflict retry
@@ -1685,28 +1695,34 @@ export class SingleMutationService extends BaseService {
             // columns); a shared-field event instead carries the default view
             // (`defaultViewCompanion`), which the shared write left untouched.
             // Components are read on the transaction (read-your-writes).
-            const dataDoc = await this.buildSingleWebhookDoc(
-              tx,
-              existingDoc.id,
-              singleMeta.tableName,
-              rows[0],
-              fieldConfigs,
-              companion,
-              companionPhysicallyExists,
-              eventLocale != null ? dataCompanionValues : defaultViewCompanion,
-              payloadLocale,
-              overlayLocaleStatus ? dataLocaleStatus : undefined
-            );
+            // Assemble the event document only when recording — this is the
+            // populateComponentData(strict) read the opt-out must skip. When off,
+            // recordMutationEvent ignores `data`, so the raw written row stands in.
+            const dataDoc = recordingEnabled
+              ? await this.buildSingleWebhookDoc(
+                  tx,
+                  existingDoc.id,
+                  singleMeta.tableName,
+                  rows[0],
+                  fieldConfigs,
+                  companion,
+                  companionPhysicallyExists,
+                  eventLocale != null
+                    ? dataCompanionValues
+                    : defaultViewCompanion,
+                  payloadLocale,
+                  overlayLocaleStatus ? dataLocaleStatus : undefined
+                )
+              : rows[0];
 
             // The single's field tree with component references expanded, so the
             // secret/hidden strip descends into fields declared inside a
             // component. Resolved on the transaction's connection (components
             // already read on it) to avoid taking a second pooled connection
-            // while this write still holds one. Skipped when the single opted out
-            // of recording: recordMutationEvent short-circuits before it reads
-            // `fields`, so the per-component registry reads would be pure waste and
-            // a scalar write should not be able to fail on them.
-            const webhookFields = isWebhookRecordingEnabled("single", slug)
+            // while this write still holds one. Skipped on the same opt-out: the
+            // per-component registry reads would be pure waste and a scalar write
+            // should not be able to fail on them.
+            const webhookFields = recordingEnabled
               ? await expandComponentFields(
                   fieldConfigs,
                   async componentSlug =>

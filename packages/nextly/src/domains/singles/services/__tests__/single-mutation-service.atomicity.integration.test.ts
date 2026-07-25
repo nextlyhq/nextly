@@ -34,6 +34,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  resetWebhookRecordingPolicy,
+  setWebhookRecording,
+} from "../../../webhooks/recording-policy";
 import { clearServices } from "../../../../di/register";
 import {
   seedBuilderComponent,
@@ -132,5 +136,39 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].headline).toBe("Original headline");
+  });
+
+  it("does not assemble the webhook payload (nor read components) for an opted-out Single", async () => {
+    const { singles } = await seedSettingsWithHero();
+    const adapter = handle!.adapter;
+
+    // Seed an initial value while the component table still exists.
+    const first = await singles.update(
+      "preferences",
+      { headline: "Original headline", seo: { heading: "Original SEO" } },
+      { overrideAccess: true }
+    );
+    expect(first.success).toBe(true);
+
+    // Opt this Single out of recording, then drop the component table. The
+    // webhook payload assembly reads component subtrees (populateComponentData,
+    // strict) even for a scalar-only update, so before the opt-out gate a scalar
+    // write would throw on the missing table. With recording off, that assembly
+    // is skipped and the scalar write must still succeed.
+    setWebhookRecording("single", "preferences", false);
+    await adapter.executeQuery(`DROP TABLE "comp_hero"`);
+
+    const scalar = await singles.update(
+      "preferences",
+      { headline: "Scalar-only change" },
+      { overrideAccess: true }
+    );
+
+    expect(scalar.success).toBe(true);
+    const rows = await adapter.executeQuery<{ headline: string }>(
+      `SELECT headline FROM single_preferences LIMIT 1`
+    );
+    expect(rows[0].headline).toBe("Scalar-only change");
+    resetWebhookRecordingPolicy();
   });
 });
