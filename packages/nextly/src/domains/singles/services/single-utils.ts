@@ -58,7 +58,11 @@ export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
  * Mirrors the logic in RuntimeSchemaGenerator to ensure consistent handling.
  */
 export function shouldTreatAsJson(field: FieldConfig): boolean {
-  if (["json", "repeater", "group", "richText", "chips"].includes(field.type)) {
+  if (
+    ["json", "repeater", "group", "richText", "chips", "blocks"].includes(
+      field.type
+    )
+  ) {
     return true;
   }
 

@@ -180,6 +180,15 @@ function uniqueSorted(values: string[]): string[] {
   return Array.from(new Set(values)).sort();
 }
 
+/** Whether a blocks field appears anywhere in a field tree, at any depth. */
+function hasBlocksField(fields: readonly unknown[]): boolean {
+  return fields.some(entry => {
+    const field = entry as { type?: unknown; fields?: unknown };
+    if (field?.type === "blocks") return true;
+    return Array.isArray(field?.fields) && hasBlocksField(field.fields);
+  });
+}
+
 export class TypeGenerator {
   private readonly includeComments: boolean;
   private readonly generateInputTypes: boolean;
@@ -770,7 +779,9 @@ export class TypeGenerator {
 
   /**
    * Whether any entity declares a blocks field, which decides if the generated
-   * file needs the document type imported.
+   * file needs the document type imported. Nested fields count: a blocks field
+   * inside a group or repeater is emitted as `BlockDocument` too, so a shallow
+   * check would leave the generated file referencing a name it never imported.
    */
   private usesBlocksField(
     collections: DynamicCollectionRecord[],
@@ -778,9 +789,7 @@ export class TypeGenerator {
     components: DynamicComponentRecord[]
   ): boolean {
     const entities = [...collections, ...singles, ...components];
-    return entities.some(entity =>
-      (entity.fields ?? []).some(field => field?.type === "blocks")
-    );
+    return entities.some(entity => hasBlocksField(entity.fields ?? []));
   }
 
   /**

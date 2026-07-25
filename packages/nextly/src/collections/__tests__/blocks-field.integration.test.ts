@@ -12,9 +12,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { blocks, defineCollection, text } from "../../config";
+import { blocks, defineCollection, defineSingle, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
+import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 
 let current: TestNextly | undefined;
 
@@ -51,10 +52,10 @@ const DOCUMENT = {
 /** The created entry's id, from the handler's result envelope. */
 function idOf(result: unknown): string {
   const data = (result as { data?: { id?: unknown } }).data;
-  if (typeof data?.id !== "string") {
-    throw new Error(`create did not return an id: ${JSON.stringify(result)}`);
-  }
-  return data.id;
+  // Asserted rather than thrown: a failed create then reports what came back
+  // instead of surfacing as an unrelated error from the helper.
+  expect(typeof data?.id, JSON.stringify(result)).toBe("string");
+  return String(data?.id);
 }
 
 /** The read entry's fields, from the handler's result envelope. */
@@ -155,6 +156,31 @@ describe("blocks field storage (integration)", () => {
       overrideAccess: true,
     });
     expect(dataOf(read).content ?? null).toBeNull();
+  });
+
+  it("round-trips a document on a single, not just a collection", async () => {
+    // Singles have their own JSON classifier and their own serialize/
+    // deserialize pair, so a collection round-trip proves nothing about them.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "homepage",
+          fields: [text({ name: "title" }), blocks({ name: "content" })],
+        }),
+      ],
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    const written = await singles.update(
+      "homepage",
+      { title: "Home", content: DOCUMENT },
+      { overrideAccess: true }
+    );
+    expect((written as { success?: boolean }).success).toBe(true);
+
+    const read = await singles.get("homepage", { overrideAccess: true });
+    expect(dataOf(read).content).toEqual(DOCUMENT);
   });
 
   it("refuses a document the field does not accept", async () => {

@@ -268,6 +268,12 @@ function getDefaultValues(
       case "chips":
         defaults[fieldName] = [];
         break;
+      case "blocks":
+        // The form control for a blocks field is read-only, so a declared
+        // default dropped here could not be restored by hand.
+        defaults[fieldName] =
+          (field as { defaultValue?: unknown }).defaultValue ?? null;
+        break;
       case "group": {
         const groupField = field as { fields: FieldConfig[] };
         defaults[fieldName] = getDefaultValues(groupField.fields);

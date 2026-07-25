@@ -38,6 +38,7 @@ export const UI_FIELD_TYPES = [
   "component",
   "json",
   "chips",
+  "blocks",
 ] as const;
 
 /** Field names the framework reserves (system columns). */
@@ -313,6 +314,12 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
         const okType =
           (f.type === "number" && typeof dv === "number") ||
           (f.type === "checkbox" && typeof dv === "boolean") ||
+          // A blocks default is a whole document, so it is an object rather
+          // than one of the scalar shapes the other types accept.
+          (f.type === "blocks" &&
+            typeof dv === "object" &&
+            dv !== null &&
+            !Array.isArray(dv)) ||
           ([
             "text",
             "textarea",

@@ -318,6 +318,38 @@ function RichTextCell({ value }: { value: unknown }) {
 /**
  * Renders a JSON field as a truncated code preview.
  */
+/**
+ * A page document in one line: how many blocks it holds. The document itself
+ * is a nested tree, so stringifying it would fill the column with structure
+ * nobody can read at a glance.
+ */
+function BlocksCell({ value }: { value: unknown }) {
+  const nodes = (value as { nodes?: unknown })?.nodes;
+  const count = countBlocks(Array.isArray(nodes) ? nodes : []);
+  if (count === 0) {
+    return <span className="text-muted-foreground text-sm">Empty</span>;
+  }
+  return (
+    <span className="text-sm">
+      {count} {count === 1 ? "block" : "blocks"}
+    </span>
+  );
+}
+
+/** Every block in the tree, including those nested inside slots. */
+function countBlocks(nodes: readonly unknown[]): number {
+  let total = 0;
+  for (const entry of nodes) {
+    const node = entry as { slots?: Record<string, unknown> };
+    if (!node || typeof node !== "object") continue;
+    total += 1;
+    for (const slot of Object.values(node.slots ?? {})) {
+      if (Array.isArray(slot)) total += countBlocks(slot);
+    }
+  }
+  return total;
+}
+
 function JsonCell({ value }: { value: unknown }) {
   const jsonStr = JSON.stringify(value);
   const maxLength = 40;
@@ -526,6 +558,11 @@ export function EntryTableCell({
     // JSON data
     case "json": {
       return renderContent(<JsonCell value={value} />);
+    }
+
+    // A page built from blocks
+    case "blocks": {
+      return renderContent(<BlocksCell value={value} />);
     }
 
     // Fallback for unknown types

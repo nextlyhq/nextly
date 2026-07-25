@@ -53,6 +53,7 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
+  isBlocksField,
   isComponentField,
   isDataField,
 } from "../../../collections/fields/guards";
@@ -793,7 +794,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
     }
-    if (isJSONField(field)) {
+    if (isJSONField(field) || isBlocksField(field)) {
       return types.json;
     }
 

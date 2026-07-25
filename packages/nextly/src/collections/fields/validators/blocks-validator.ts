@@ -99,7 +99,12 @@ export function validateBlocksValue(
   }
 
   issues.push(...kindIssues(doc, path, label, options));
-  issues.push(...disallowedBlockIssues(doc, path, label, options));
+  // The allow-list walk reads node types, which is only safe once the engine
+  // has confirmed the tree is well formed. A malformed node would otherwise
+  // throw here and turn a rejected document into a server error.
+  if (documentIssues.length === 0) {
+    issues.push(...disallowedBlockIssues(doc, path, label, options));
+  }
 
   if (issues.length <= MAX_REPORTED_ISSUES) return issues;
   const withheld = issues.length - MAX_REPORTED_ISSUES;
@@ -139,7 +144,10 @@ function disallowedBlockIssues(
   options: BlocksValidationOptions
 ): Issue[] {
   const allow = options.allow;
-  if (!allow || allow.length === 0) return [];
+  // Omitting `allow` permits every registered block; declaring an empty list
+  // permits none. Treating the two the same would silently ignore the
+  // stricter of the two configurations.
+  if (!allow) return [];
   if (!Array.isArray(doc.nodes)) return [];
 
   const disallowed = new Set<string>();
@@ -150,11 +158,12 @@ function disallowedBlockIssues(
   });
   if (disallowed.size === 0) return [];
 
+  const accepted = allow.length > 0 ? allow.join(", ") : "none";
   return [
     {
       path,
       code: "DISALLOWED_BLOCK_TYPE",
-      message: `${label} does not accept ${[...disallowed].sort().join(", ")}. Accepted: ${allow.join(", ")}.`,
+      message: `${label} does not accept ${[...disallowed].sort().join(", ")}. Accepted: ${accepted}.`,
     },
   ];
 }

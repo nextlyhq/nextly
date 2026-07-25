@@ -158,6 +158,40 @@ describe("validateBlocksValue", () => {
     });
   });
 
+  it("treats an empty allow-list as permitting nothing", () => {
+    // Omitting `allow` and declaring `allow: []` are different statements;
+    // reading them the same way would ignore the stricter one.
+    const issues = validateBlocksValue(
+      page([node("core/heading", "11111111-1111-4111-8111-111111111111")]),
+      "content",
+      "Content",
+      { allow: [] }
+    );
+    expect(issues.map(issue => issue.code)).toEqual(["DISALLOWED_BLOCK_TYPE"]);
+    expect(issues[0]?.message).toContain("Accepted: none");
+  });
+
+  it("does not walk a document the engine already rejected", () => {
+    // A malformed node would throw inside the allow-list walk, turning a
+    // rejected document into a server error.
+    for (const nodes of [[null], [42], ["text"], [{ id: "a" }]]) {
+      expect(() =>
+        validateBlocksValue(page(nodes), "content", "Content", {
+          allow: ["core/*"],
+        })
+      ).not.toThrow();
+      const issues = validateBlocksValue(page(nodes), "content", "Content", {
+        allow: ["core/*"],
+      });
+      // The structural failure is reported; the allow-list rule stays quiet
+      // until there is a well-formed tree to check.
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.map(issue => issue.code)).not.toContain(
+        "DISALLOWED_BLOCK_TYPE"
+      );
+    }
+  });
+
   it("caps how many issues one field reports and says how many it withheld", () => {
     // Every node carries the same defect, so the document produces far more
     // issues than a writer could act on.

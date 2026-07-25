@@ -450,6 +450,14 @@ function getDefaultValues(
           (field as { defaultValue?: unknown }).defaultValue ?? null;
         break;
 
+      case "blocks":
+        // The form control for a blocks field is read-only, so a declared
+        // default that was dropped here could not be restored by hand — and a
+        // required field would fail validation despite having a valid default.
+        defaults[fieldName] =
+          (field as { defaultValue?: unknown }).defaultValue ?? null;
+        break;
+
       case "component": {
         // Component fields: get nested defaults from componentFields
         const componentField = field as {
