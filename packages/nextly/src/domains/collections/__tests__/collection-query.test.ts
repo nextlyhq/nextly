@@ -460,6 +460,40 @@ describe("CollectionEntryService — Query Contracts", () => {
       );
     });
 
+    it("applies a stored read constraint through the full filter translation", async () => {
+      // The constraint is a filter predicate, not a single equality. Reading one
+      // `equals` off its first key silently returns rows the rule excludes: a
+      // second field goes unapplied, and an operator like `in` leaves the read
+      // completely unfiltered.
+      const buildSpy = vi.spyOn(
+        CollectionQueryService.prototype,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private seam
+        "buildDrizzleCondition" as any
+      );
+      mockAccessControlService.evaluateAccess.mockResolvedValue({
+        allowed: true,
+        query: { tenant: { equals: "acme" }, tier: { in: ["gold", "silver"] } },
+      });
+      mockCollectionService.getCollection.mockResolvedValue({
+        accessRules: { read: { type: "owner-only" } },
+      });
+      selectData.rows = [];
+
+      await service.listEntries({
+        collectionName: "posts",
+        user: { id: "u1", roles: ["editor"] },
+        routeAuthorized: true,
+      });
+
+      // Both fields reach the translator, including the non-equals operator.
+      const translated = buildSpy.mock.calls
+        .map(call => JSON.stringify(call[0]))
+        .join("|");
+      expect(translated).toContain("tenant");
+      expect(translated).toContain("tier");
+      buildSpy.mockRestore();
+    });
+
     it("should count under the same caller and route attestation the rows were listed under", async () => {
       selectData.rows = [];
       const countSpy = vi.spyOn(

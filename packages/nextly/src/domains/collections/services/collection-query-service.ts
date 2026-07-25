@@ -38,6 +38,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import {
@@ -762,16 +763,10 @@ export class CollectionQueryService extends BaseService {
           params.authenticatedScope
         );
 
-      // Apply access constraint if present
-      if (accessConstraint) {
-        const accessField = Object.keys(accessConstraint)[0];
-        const accessValue = (
-          accessConstraint[accessField] as { equals?: unknown }
-        )?.equals;
-        if (accessField && accessValue) {
-          whereConditions.push(eq(schema[accessField], accessValue));
-        }
-      }
+      // The constraint is applied further down, through the same translation
+      // the caller's own `where` uses: it is a full filter predicate, not a
+      // single equality, and reducing it here would narrow less than the rule
+      // asks for.
 
       // Apply Draft/Published auto-filter. The helper returns null when the
       // collection has no status column, the caller is trusted with no
@@ -923,6 +918,32 @@ export class CollectionQueryService extends BaseService {
 
         if (whereCondition) {
           whereConditions.push(whereCondition);
+        }
+      }
+
+      // Apply the stored read rule's query constraint through the same
+      // translation the caller's `where` uses. It is a full filter predicate:
+      // an owner-only read emits one field, but a custom rule can return any
+      // supported operator across several fields, and reading a single `equals`
+      // off the first key silently returns rows the rule excludes.
+      if (accessConstraint) {
+        const accessCondition = this.buildDrizzleCondition(
+          buildWhereClause(accessConstraint as WhereFilter),
+          schema,
+          dialect,
+          localizedCtx
+        );
+        if (accessCondition) {
+          whereConditions.push(accessCondition);
+        } else {
+          // A constraint that translates to nothing would widen the read to
+          // every row. Fail closed instead: the rule asked to narrow.
+          throw NextlyError.forbidden({
+            logContext: {
+              collection: params.collectionName,
+              reason: "untranslatable-access-constraint",
+            },
+          });
         }
       }
 
@@ -1521,16 +1542,10 @@ export class CollectionQueryService extends BaseService {
           params.authenticatedScope
         );
 
-      // Apply access constraint if present
-      if (accessConstraint) {
-        const accessField = Object.keys(accessConstraint)[0];
-        const accessValue = (
-          accessConstraint[accessField] as { equals?: unknown }
-        )?.equals;
-        if (accessField && accessValue) {
-          whereConditions.push(eq(schema[accessField], accessValue));
-        }
-      }
+      // The constraint is applied further down, through the same translation
+      // the caller's own `where` uses: it is a full filter predicate, not a
+      // single equality, and reducing it here would narrow less than the rule
+      // asks for.
 
       // Apply Draft/Published auto-filter. The helper returns null when the
       // collection has no status column, the caller is trusted with no
@@ -1675,6 +1690,32 @@ export class CollectionQueryService extends BaseService {
           if (whereCondition) {
             whereConditions.push(whereCondition);
           }
+        }
+      }
+
+      // Apply the stored read rule's query constraint through the same
+      // translation the caller's `where` uses. It is a full filter predicate:
+      // an owner-only read emits one field, but a custom rule can return any
+      // supported operator across several fields, and reading a single `equals`
+      // off the first key silently returns rows the rule excludes.
+      if (accessConstraint) {
+        const accessCondition = this.buildDrizzleCondition(
+          buildWhereClause(accessConstraint as WhereFilter),
+          schema,
+          this.adapter?.dialect || "postgresql",
+          localizedCtx
+        );
+        if (accessCondition) {
+          whereConditions.push(accessCondition);
+        } else {
+          // A constraint that translates to nothing would widen the read to
+          // every row. Fail closed instead: the rule asked to narrow.
+          throw NextlyError.forbidden({
+            logContext: {
+              collection: params.collectionName,
+              reason: "untranslatable-access-constraint",
+            },
+          });
         }
       }
 
