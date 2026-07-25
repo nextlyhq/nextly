@@ -81,26 +81,28 @@ export function isWebhookRecordingEnabled(
 }
 
 /**
- * Drop every `code`-sourced decision whose `${scope}:${slug}` key is not in
- * `presentKeys`. Used on reload to clear a code-first entity removed from the
- * config: its DB table can survive (the reload merges registered tables back),
- * so a stale opt-out would otherwise suppress its events until restart. `plugin`
- * decisions are never pruned here.
+ * Within ONE scope, drop every `code`-sourced decision whose slug is not in
+ * `presentSlugs`. Scoped so a reload that republishes only the entities whose
+ * metadata sync succeeded (e.g. collections but not singles) prunes only that
+ * scope and never touches the other's still-valid decisions. Used on reload to
+ * clear a code-first entity removed from the config: its DB table can survive
+ * (the reload merges registered tables back), so a stale opt-out would otherwise
+ * suppress its events until restart. `plugin` decisions are never pruned.
  */
-export function pruneRemovedCodeFirstRecording(presentKeys: Set<string>): void {
+export function pruneRemovedCodeFirstRecording(
+  scope: WebhookRecordingScope,
+  presentSlugs: Set<string>
+): void {
+  const prefix = `${scope}:`;
   for (const [key, entry] of policy) {
-    if (entry.source === "code" && !presentKeys.has(key)) {
+    if (
+      entry.source === "code" &&
+      key.startsWith(prefix) &&
+      !presentSlugs.has(key.slice(prefix.length))
+    ) {
       policy.delete(key);
     }
   }
-}
-
-/** The `${scope}:${slug}` key for a decision, for building a present-key set. */
-export function webhookRecordingKey(
-  scope: WebhookRecordingScope,
-  slug: string
-): string {
-  return keyFor(scope, slug);
 }
 
 /** Clear every registered decision (boot/test reset). */

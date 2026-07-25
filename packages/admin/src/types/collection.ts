@@ -251,6 +251,13 @@ export interface Collection {
    */
   status?: boolean;
   /**
+   * Resolved cache-revalidation config, or null/absent when revalidation is on
+   * with no override. The server normalizes the Schema Builder's on/off switch
+   * into this shape (off → `{ disable: true }`), so reads carry the object while
+   * writes send a boolean — see `UpdateCollectionPayload`.
+   */
+  revalidate?: { disable?: boolean; tags?: string[] } | null;
+  /**
    * Legacy schema definition format.
    * New API returns `fields` directly at root level.
    */
@@ -334,6 +341,8 @@ export interface CreateCollectionPayload {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. Default false. */
   versions?: boolean;
+  /** Whether writes bust cache tags. Default true; false opts the collection out. */
+  revalidate?: boolean;
   /** Whether to auto-generate createdAt/updatedAt. Default true. */
   timestamps?: boolean;
   fields: FieldDefinition[];
@@ -356,6 +365,8 @@ export interface UpdateCollectionPayload {
   status?: boolean;
   /** Toggle version history. Every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Toggle cache revalidation. Default true; false opts the collection out. */
+  revalidate?: boolean;
   /** i18n: toggle translatable fields. Toggling on adds the companion `_locales`
    *  table (migration-gated, via the schema-change preview). */
   localized?: boolean;

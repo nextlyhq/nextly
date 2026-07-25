@@ -334,6 +334,8 @@ export class CollectionsHandler {
     status?: boolean;
     /** i18n: whether the collection is localized (translatable fields + companion table). */
     localized?: boolean;
+    /** Whether writes bust cache tags. Default on; false opts the collection out. */
+    revalidate?: boolean;
     fields: FieldDefinition[];
     createdBy?: string;
   }) {
@@ -415,6 +417,8 @@ export class CollectionsHandler {
       sidebarGroup?: string;
       useAsTitle?: string;
       hidden?: boolean;
+      /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
+      revalidate?: boolean;
       fields?: FieldDefinition[];
     }
   ) {

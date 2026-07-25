@@ -65,6 +65,7 @@ import type { SingleRegistryService } from "../../domains/singles/services/singl
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
+import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -511,6 +512,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             localized?: boolean;
             // Version history opt-in; persists to dynamic_singles.versions.
             versions?: boolean;
+            // Cache-revalidation opt-out; persists to dynamic_singles.revalidate.
+            revalidate?: boolean;
           }
         | undefined;
 
@@ -668,6 +671,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // created with the switch on is written unversioned and the switch
         // reads as off the moment the editor loads.
         versions: resolveBuilderVersions(b.versions),
+        // Cache-revalidation opt-out from the create payload (null = standard
+        // tags, { disable: true } = off), so the write path reads it back.
+        revalidate: resolveBuilderRevalidate(b.revalidate),
         schemaHash,
         migrationStatus,
       });
@@ -952,6 +958,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Version history toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.versions.
             versions?: boolean;
+            // Cache-revalidation toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.revalidate.
+            revalidate?: boolean;
           }
         | undefined;
 
@@ -985,6 +994,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // stop the toggle from turning versioning off on a Draft/Published single.
       if (b.versions !== undefined) {
         updateData.versions = resolveBuilderVersions(b.versions);
+      }
+      // Cache-revalidation toggle, normalized to the resolved config the write
+      // path reads; on writes null (standard tags), off writes the disable config.
+      if (b.revalidate !== undefined) {
+        updateData.revalidate = resolveBuilderRevalidate(b.revalidate);
       }
       const wasLocalized = existing.localized === true;
       const isLocalized =

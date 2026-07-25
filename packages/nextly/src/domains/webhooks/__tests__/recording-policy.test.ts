@@ -5,7 +5,6 @@ import {
   pruneRemovedCodeFirstRecording,
   resetWebhookRecordingPolicy,
   setWebhookRecording,
-  webhookRecordingKey,
 } from "../recording-policy";
 
 // The recording policy is a process-level registry populated from code config
@@ -40,22 +39,23 @@ describe("webhook recording policy", () => {
     expect(isWebhookRecordingEnabled("collection", "submissions")).toBe(true);
   });
 
-  it("prunes a removed code-first slug but preserves plugin and present slugs", () => {
+  it("prunes a removed code-first slug but preserves plugin, present, and other-scope slugs", () => {
     setWebhookRecording("collection", "leads", false, "code"); // removed below
     setWebhookRecording("collection", "posts", false, "code"); // still present
     setWebhookRecording("collection", "form-submissions", false, "plugin");
+    setWebhookRecording("single", "leads", false, "code"); // other scope, untouched
 
-    // Reconcile against the config that no longer lists `leads`.
-    pruneRemovedCodeFirstRecording(
-      new Set([webhookRecordingKey("collection", "posts")])
-    );
+    // Reconcile the COLLECTION scope against a config that no longer lists `leads`.
+    pruneRemovedCodeFirstRecording("collection", new Set(["posts"]));
 
-    // The removed code-first slug reverts to the default (record)...
+    // The removed code-first collection reverts to the default (record)...
     expect(isWebhookRecordingEnabled("collection", "leads")).toBe(true);
-    // ...while a still-present code-first slug and the plugin slug keep opt-out.
+    // ...while a still-present collection, the plugin slug, and the same-named
+    // slug in the OTHER scope all keep their opt-out.
     expect(isWebhookRecordingEnabled("collection", "posts")).toBe(false);
     expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
       false
     );
+    expect(isWebhookRecordingEnabled("single", "leads")).toBe(false);
   });
 });

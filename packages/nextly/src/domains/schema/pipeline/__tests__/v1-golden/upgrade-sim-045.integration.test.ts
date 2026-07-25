@@ -150,6 +150,17 @@ const addsVersionsColumn = (stmt: string): boolean =>
     stmt.trim()
   );
 
+// The `revalidate` config column is additive (nullable) on the pre-existing
+// dynamic_collections / dynamic_singles registry tables, exactly like
+// `versions` above, so a v1 upgrade of a schema captured before it emits one
+// additive `ADD COLUMN revalidate` per table. Accept it rather than mistaking
+// it for a phantom diff. Scoped to the two registry tables (revalidate is added
+// nowhere else). Tolerant of pg/MySQL quoting and the optional COLUMN keyword.
+const addsRevalidateColumn = (stmt: string): boolean =>
+  /^ALTER TABLE [`"]?(dynamic_collections|dynamic_singles)[`"]? ADD (COLUMN )?[`"]?revalidate[`"]?\b/i.test(
+    stmt.trim()
+  );
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -254,7 +265,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           expect(
             isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
-              addsVersionsColumn(s),
+              addsVersionsColumn(s) ||
+              addsRevalidateColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
         }
@@ -327,7 +339,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
             isDefaultReconcile ||
               isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
-              addsVersionsColumn(s),
+              addsVersionsColumn(s) ||
+              addsRevalidateColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }

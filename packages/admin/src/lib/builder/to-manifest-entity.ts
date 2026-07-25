@@ -82,6 +82,8 @@ export interface BuilderSettingsInput {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Whether writes bust cache tags. Defaults on; false opts out. */
+  revalidate?: boolean;
   useAsTitle?: string;
   defaultColumns?: string[];
   group?: string;
@@ -139,6 +141,8 @@ export interface ManifestEntity {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Whether writes bust cache tags. Defaults on; false opts out. */
+  revalidate?: boolean;
   fields: ManifestField[];
 }
 
@@ -202,8 +206,15 @@ export function applyCommonSettings(
   entity: ManifestEntity,
   settings: BuilderSettingsInput
 ): void {
-  const { useAsTitle, defaultColumns, group, status, localized, versions } =
-    settings;
+  const {
+    useAsTitle,
+    defaultColumns,
+    group,
+    status,
+    localized,
+    versions,
+    revalidate,
+  } = settings;
   const admin: NonNullable<ManifestEntity["admin"]> = {};
   if (useAsTitle) admin.useAsTitle = useAsTitle;
   if (defaultColumns && defaultColumns.length > 0) {
@@ -214,6 +225,7 @@ export function applyCommonSettings(
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;
   if (versions !== undefined) entity.versions = versions;
+  if (revalidate !== undefined) entity.revalidate = revalidate;
 }
 
 export function collectionToManifestEntity(
