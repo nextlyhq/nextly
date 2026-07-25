@@ -1,5 +1,6 @@
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
+  FieldStoragePrimitive,
   FieldSurface,
   FieldTypeCategory,
 } from "../collections/fields/catalog";
@@ -126,7 +127,7 @@ export interface PluginFieldType {
   /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
   type: string;
   /** The existing storage primitive this type persists as. */
-  storage: "text" | "longText" | "boolean" | "number" | "timestamp" | "json";
+  storage: FieldStoragePrimitive;
   /** Admin field-editor component path, resolved via the component registry. */
   component: ComponentPath;
   /**

@@ -24,6 +24,13 @@
  * raises at conversion time rather than producing a config that silently
  * validates nothing.
  *
+ * That JSON document is also why the reference-shaped types carry a `validate`
+ * function. The entry validator applies no scalar rules to `richText`,
+ * `upload`, `relationship`, and `json`, because an entry write normalizes and
+ * referentially checks those values in later pipeline stages. A block prop
+ * never enters those stages, so without a shape check here a malformed value
+ * would reach the renderer unexamined.
+ *
  * @module collections/fields/block-props
  */
 
@@ -33,11 +40,14 @@ import {
 } from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ValidationPublicData } from "../../errors/public-data";
-import type { PluginFieldType } from "../../plugins/contributions";
 import { validateEntryData } from "../../shared/lib/entry-validation";
 
 import type { BlockFieldCatalogType } from "./catalog";
-import { BLOCK_FIELD_TYPES, isBlockFieldType } from "./catalog";
+import {
+  BLOCK_FIELD_TYPES,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+  isBlockFieldType,
+} from "./catalog";
 import type { FieldConfig, SelectOption } from "./types";
 
 type ConversionIssue = ValidationPublicData["errors"][number];
@@ -72,6 +82,15 @@ export interface BlockPropsSource {
  */
 const PROP_NAME_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+/**
+ * How deep structured props may nest. Conversion recurses through `repeater`
+ * and `group` declarations, so a bound turns a cyclic or absurdly deep
+ * declaration — trivial to produce by reusing one declaration object, and
+ * unavoidable once declarations arrive from a manifest rather than hand-written
+ * code — into a reported issue instead of a stack overflow.
+ */
+const MAX_PROP_NESTING_DEPTH = 5;
+
 interface ConversionContext {
   blockName: string;
   localized: ReadonlySet<string>;
@@ -86,7 +105,8 @@ type PropBuilder = (
   name: string,
   declaration: BlockPropDeclaration,
   path: string,
-  ctx: ConversionContext
+  ctx: ConversionContext,
+  depth: number
 ) => FieldConfig | null;
 
 /**
@@ -103,7 +123,7 @@ export function blockPropsToFieldConfigs(
     localized: new Set(source.localized ?? []),
     issues: [],
   };
-  const configs = buildFieldConfigs(source.props, "", ctx);
+  const configs = buildFieldConfigs(source.props, "", ctx, 0);
   if (ctx.issues.length > 0) {
     throw NextlyError.validation({
       errors: ctx.issues,
@@ -131,7 +151,8 @@ export async function validateBlockPropValues(
 function buildFieldConfigs(
   props: Record<string, BlockPropDeclaration> | undefined,
   prefix: string,
-  ctx: ConversionContext
+  ctx: ConversionContext,
+  depth: number
 ): FieldConfig[] {
   if (!props) return [];
   const configs: FieldConfig[] = [];
@@ -165,27 +186,11 @@ function buildFieldConfigs(
       );
       continue;
     }
-    const config = BUILDERS[resolved](name, declaration, path, ctx);
+    const config = BUILDERS[resolved](name, declaration, path, ctx, depth);
     if (config) configs.push(config);
   }
   return configs;
 }
-
-/**
- * The block field type a plugin field type's storage primitive validates as.
- * A plugin type persists as one of the primitives, so its values are checked
- * by that primitive's rules while its own admin component renders it.
- */
-const PLUGIN_STORAGE_AS_PROP_TYPE: Readonly<
-  Record<PluginFieldType["storage"], BlockFieldCatalogType>
-> = {
-  text: "text",
-  longText: "textarea",
-  boolean: "checkbox",
-  number: "number",
-  timestamp: "date",
-  json: "json",
-};
 
 /**
  * The block field type a declaration is built as, or `null` when the type is
@@ -199,7 +204,7 @@ function resolvePropType(type: string): BlockFieldCatalogType | null {
   if (isBlockFieldType(type)) return type;
   if (!isPluginFieldTypeOnSurface(type, "blocks")) return null;
   const storage = getFieldType(type)?.storage;
-  return storage ? PLUGIN_STORAGE_AS_PROP_TYPE[storage] : null;
+  return storage ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[storage] : null;
 }
 
 /**
@@ -229,29 +234,33 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
   text: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "text",
-    minLength: optionalNumber(declaration, "minLength", path, ctx),
-    maxLength: optionalNumber(declaration, "maxLength", path, ctx),
+    ...lengthBounds(declaration, path, ctx),
   }),
   textarea: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "textarea",
-    minLength: optionalNumber(declaration, "minLength", path, ctx),
-    maxLength: optionalNumber(declaration, "maxLength", path, ctx),
+    ...lengthBounds(declaration, path, ctx),
   }),
   richText: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "richText",
+    validate: isEditorContent,
   }),
   email: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "email",
   }),
-  number: (name, declaration, path, ctx) => ({
-    ...base(name, declaration, path, ctx),
-    type: "number",
-    min: optionalNumber(declaration, "min", path, ctx),
-    max: optionalNumber(declaration, "max", path, ctx),
-  }),
+  number: (name, declaration, path, ctx) => {
+    const min = optionalNumber(declaration, "min", path, ctx);
+    const max = optionalNumber(declaration, "max", path, ctx);
+    // A number prop is free to range below zero and to hold fractions, so
+    // ordering is the only rule its bounds must satisfy.
+    return {
+      ...base(name, declaration, path, ctx),
+      type: "number",
+      ...orderedPair(min, max, "min", "max", path, ctx),
+    };
+  },
   code: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "code",
@@ -286,46 +295,55 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
   json: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "json",
+    validate: isSerializable,
   }),
-  chips: (name, declaration, path, ctx) => ({
-    ...base(name, declaration, path, ctx),
-    type: "chips",
-    minChips: optionalNumber(declaration, "minChips", path, ctx),
-    maxChips: optionalNumber(declaration, "maxChips", path, ctx),
-  }),
+  chips: (name, declaration, path, ctx) => {
+    const minChips = countOption(declaration, "minChips", path, ctx);
+    const maxChips = countOption(declaration, "maxChips", path, ctx);
+    return {
+      ...base(name, declaration, path, ctx),
+      type: "chips",
+      ...orderedPair(minChips, maxChips, "minChips", "maxChips", path, ctx),
+    };
+  },
   upload: (name, declaration, path, ctx) => {
     const relationTo = relationTarget(declaration, path, ctx);
     if (!relationTo) return null;
+    const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
     return {
       ...base(name, declaration, path, ctx),
       type: "upload",
       relationTo,
-      hasMany: optionalBoolean(declaration, "hasMany", path, ctx),
+      hasMany,
+      validate: referenceValidator(hasMany),
     };
   },
   relationship: (name, declaration, path, ctx) => {
     const relationTo = relationTarget(declaration, path, ctx);
     if (!relationTo) return null;
+    const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
     return {
       ...base(name, declaration, path, ctx),
       type: "relationship",
       relationTo,
-      hasMany: optionalBoolean(declaration, "hasMany", path, ctx),
+      hasMany,
+      validate: referenceValidator(hasMany),
     };
   },
-  repeater: (name, declaration, path, ctx) => {
-    const fields = nestedFields(declaration, path, ctx);
+  repeater: (name, declaration, path, ctx, depth) => {
+    const fields = nestedFields(declaration, path, ctx, depth);
     if (!fields) return null;
+    const minRows = countOption(declaration, "minRows", path, ctx);
+    const maxRows = countOption(declaration, "maxRows", path, ctx);
     return {
       ...base(name, declaration, path, ctx),
       type: "repeater",
       fields,
-      minRows: optionalNumber(declaration, "minRows", path, ctx),
-      maxRows: optionalNumber(declaration, "maxRows", path, ctx),
+      ...orderedPair(minRows, maxRows, "minRows", "maxRows", path, ctx),
     };
   },
-  group: (name, declaration, path, ctx) => {
-    const fields = nestedFields(declaration, path, ctx);
+  group: (name, declaration, path, ctx, depth) => {
+    const fields = nestedFields(declaration, path, ctx, depth);
     if (!fields) return null;
     return {
       ...base(name, declaration, path, ctx),
@@ -334,6 +352,45 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
     };
   },
 };
+
+/** Text length bounds, which must be ordered non-negative integers. */
+function lengthBounds(
+  declaration: BlockPropDeclaration,
+  path: string,
+  ctx: ConversionContext
+): { minLength?: number; maxLength?: number } {
+  const minLength = countOption(declaration, "minLength", path, ctx);
+  const maxLength = countOption(declaration, "maxLength", path, ctx);
+  return orderedPair(minLength, maxLength, "minLength", "maxLength", path, ctx);
+}
+
+/**
+ * A lower/upper bound pair, dropped entirely when the lower exceeds the upper.
+ * Such a pair admits no value at all, so it is a declaration defect rather
+ * than a rule to enforce on every subsequent edit.
+ */
+function orderedPair<L extends string, U extends string>(
+  lower: number | undefined,
+  upper: number | undefined,
+  lowerKey: L,
+  upperKey: U,
+  path: string,
+  ctx: ConversionContext
+): Partial<Record<L | U, number>> {
+  if (lower !== undefined && upper !== undefined && lower > upper) {
+    record(
+      ctx,
+      path,
+      "INVALID_BOUNDS",
+      `\`${lowerKey}\` must not be greater than \`${upperKey}\`.`
+    );
+    return {};
+  }
+  const pair: Partial<Record<L | U, number>> = {};
+  if (lower !== undefined) pair[lowerKey] = lower;
+  if (upper !== undefined) pair[upperKey] = upper;
+  return pair;
+}
 
 /** The choice list `select` and `radio` cannot be built without. */
 function choiceOptions(
@@ -399,8 +456,18 @@ function relationTarget(
 function nestedFields(
   declaration: BlockPropDeclaration,
   path: string,
-  ctx: ConversionContext
+  ctx: ConversionContext,
+  depth: number
 ): FieldConfig[] | null {
+  if (depth >= MAX_PROP_NESTING_DEPTH) {
+    record(
+      ctx,
+      path,
+      "NESTING_TOO_DEEP",
+      `Block props may nest at most ${MAX_PROP_NESTING_DEPTH} levels deep.`
+    );
+    return null;
+  }
   const raw = declaration.fields;
   if (!isPlainObject(raw) || Object.keys(raw).length === 0) {
     record(
@@ -414,11 +481,115 @@ function nestedFields(
   const nested = buildFieldConfigs(
     raw as Record<string, BlockPropDeclaration>,
     path,
-    ctx
+    ctx,
+    depth + 1
   );
   // An empty result means every nested declaration failed; its own issues are
   // already recorded, so the parent is dropped without adding noise.
   return nested.length > 0 ? nested : null;
+}
+
+/**
+ * A count-shaped option: lengths, chip counts, and row counts are quantities,
+ * so a fractional or negative value describes a rule no value can satisfy.
+ */
+function countOption(
+  declaration: BlockPropDeclaration,
+  key: string,
+  path: string,
+  ctx: ConversionContext
+): number | undefined {
+  const value = declaration[key];
+  if (value === undefined) return undefined;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  recordOptionType(ctx, path, key, "a non-negative integer");
+  return undefined;
+}
+
+/** Whether a value is shaped like editor content: a root node with children. */
+function isEditorContent(value: unknown): string | true {
+  if (!isPlainObject(value)) return "must be editor content";
+  const root = value.root;
+  if (!isPlainObject(root) || !Array.isArray(root.children)) {
+    return "must be editor content with a root node";
+  }
+  return true;
+}
+
+/**
+ * Whether a value is a stored reference: an id, or the polymorphic
+ * `{ relationTo, value }` pair a multi-collection relation stores.
+ */
+function isReference(value: unknown): boolean {
+  if (typeof value === "string") return value.length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (!isPlainObject(value)) return false;
+  return (
+    typeof value.relationTo === "string" &&
+    value.relationTo.length > 0 &&
+    (typeof value.value === "string" || typeof value.value === "number")
+  );
+}
+
+/** Reference-shape check for one prop, honoring its cardinality. */
+function referenceValidator(
+  hasMany: boolean | undefined
+): (value: unknown) => string | true {
+  return value => {
+    if (hasMany) {
+      if (!Array.isArray(value)) return "must be a list of references";
+      return value.every(isReference)
+        ? true
+        : "must contain only ids or { relationTo, value } references";
+    }
+    if (Array.isArray(value)) return "must be a single reference, not a list";
+    return isReference(value)
+      ? true
+      : "must be an id or a { relationTo, value } reference";
+  };
+}
+
+/**
+ * Whether a value survives being written to a block document. The document is
+ * stored as JSON, so anything JSON cannot represent — a function, a symbol, a
+ * bigint, a cycle — would be silently dropped or would throw on write.
+ */
+function isSerializable(value: unknown): string | true {
+  try {
+    JSON.stringify(value);
+  } catch {
+    return "must be JSON-serializable";
+  }
+  return containsUnserializable(value)
+    ? "must not contain functions, symbols, or undefined values"
+    : true;
+}
+
+/**
+ * Whether any part of a value is a type `JSON.stringify` drops rather than
+ * rejects. Stringify succeeds on these by omitting object keys and writing
+ * array holes as `null`, so the loss is invisible without an explicit walk.
+ */
+function containsUnserializable(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (
+      typeof current === "function" ||
+      typeof current === "symbol" ||
+      current === undefined
+    ) {
+      return true;
+    }
+    if (Array.isArray(current)) {
+      pending.push(...current);
+      continue;
+    }
+    if (isPlainObject(current)) pending.push(...Object.values(current));
+  }
+  return false;
 }
 
 function optionalString(

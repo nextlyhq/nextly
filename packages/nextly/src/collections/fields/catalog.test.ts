@@ -8,7 +8,8 @@ import {
   FIELD_TYPE_CATALOG,
   FORM_FIELD_TYPE_CATALOG,
   USER_FIELD_TYPE_CATALOG,
-  canBindFieldTypeToPropType,
+  bindingKindOf,
+  canBindFieldToProp,
   getFieldTypeCatalogEntry,
   isBindablePropType,
   isBlockFieldType,
@@ -189,42 +190,104 @@ describe("binding kinds", () => {
   });
 
   it("makes bindability a property of the prop type", () => {
-    expect(isBindablePropType("text")).toBe(true);
-    expect(isBindablePropType("upload")).toBe(true);
+    expect(isBindablePropType({ type: "text" })).toBe(true);
+    expect(isBindablePropType({ type: "upload" })).toBe(true);
     // Structured props are composed, not bound.
-    expect(isBindablePropType("repeater")).toBe(false);
-    expect(isBindablePropType("group")).toBe(false);
+    expect(isBindablePropType({ type: "repeater" })).toBe(false);
+    expect(isBindablePropType({ type: "group" })).toBe(false);
     // Not a block prop type at all.
-    expect(isBindablePropType("password")).toBe(false);
+    expect(isBindablePropType({ type: "password" })).toBe(false);
   });
 
   it("pairs compatible source fields with props", () => {
-    expect(canBindFieldTypeToPropType("text", "text")).toBe(true);
-    expect(canBindFieldTypeToPropType("email", "text")).toBe(true);
-    expect(canBindFieldTypeToPropType("number", "text")).toBe(true);
-    expect(canBindFieldTypeToPropType("select", "radio")).toBe(true);
-    expect(canBindFieldTypeToPropType("upload", "upload")).toBe(true);
-    expect(canBindFieldTypeToPropType("relationship", "relationship")).toBe(
+    expect(canBindFieldToProp({ type: "text" }, { type: "text" })).toBe(true);
+    expect(canBindFieldToProp({ type: "email" }, { type: "text" })).toBe(true);
+    expect(canBindFieldToProp({ type: "number" }, { type: "text" })).toBe(true);
+    expect(canBindFieldToProp({ type: "select" }, { type: "radio" })).toBe(
       true
     );
+    expect(canBindFieldToProp({ type: "upload" }, { type: "upload" })).toBe(
+      true
+    );
+    expect(
+      canBindFieldToProp({ type: "relationship" }, { type: "relationship" })
+    ).toBe(true);
   });
 
   it("refuses pairs the renderer would have to coerce", () => {
     // Rich text is structured editor content; a plain string is not it.
-    expect(canBindFieldTypeToPropType("text", "richText")).toBe(false);
-    expect(canBindFieldTypeToPropType("richText", "text")).toBe(false);
-    expect(canBindFieldTypeToPropType("number", "checkbox")).toBe(false);
+    expect(canBindFieldToProp({ type: "text" }, { type: "richText" })).toBe(
+      false
+    );
+    expect(canBindFieldToProp({ type: "richText" }, { type: "text" })).toBe(
+      false
+    );
+    expect(canBindFieldToProp({ type: "number" }, { type: "checkbox" })).toBe(
+      false
+    );
     // A to-many repeater is iterated by a loop, never flattened into a prop.
-    expect(canBindFieldTypeToPropType("repeater", "text")).toBe(false);
+    expect(canBindFieldToProp({ type: "repeater" }, { type: "text" })).toBe(
+      false
+    );
     // Secrets never leave the server.
-    expect(canBindFieldTypeToPropType("password", "text")).toBe(false);
+    expect(canBindFieldToProp({ type: "password" }, { type: "text" })).toBe(
+      false
+    );
+  });
+
+  it("requires the two ends to agree on cardinality", () => {
+    const many = { type: "select", hasMany: true };
+    const single = { type: "select" };
+    expect(canBindFieldToProp(many, single)).toBe(false);
+    expect(canBindFieldToProp(single, many)).toBe(false);
+    expect(canBindFieldToProp(many, many)).toBe(true);
+    expect(canBindFieldToProp(single, single)).toBe(true);
+    // A multi-upload produces an array of references.
+    expect(
+      canBindFieldToProp(
+        { type: "upload", hasMany: true },
+        { type: "upload", hasMany: true }
+      )
+    ).toBe(true);
+    expect(
+      canBindFieldToProp({ type: "upload", hasMany: true }, { type: "upload" })
+    ).toBe(false);
+  });
+
+  it("resolves a plugin type through its storage primitive", () => {
+    // A plugin type is not in the built-in union, so its primitive decides
+    // what it produces and what it accepts.
+    expect(bindingKindOf({ type: "rating", storage: "number" })).toBe("number");
+    expect(
+      canBindFieldToProp(
+        { type: "number" },
+        { type: "rating", storage: "number" }
+      )
+    ).toBe(true);
+    expect(
+      canBindFieldToProp(
+        { type: "rating", storage: "number" },
+        { type: "text" }
+      )
+    ).toBe(true);
+    expect(
+      canBindFieldToProp(
+        { type: "rating", storage: "number" },
+        { type: "checkbox" }
+      )
+    ).toBe(false);
   });
 
   it("rejects unknown types on either side", () => {
-    expect(canBindFieldTypeToPropType("nope", "text")).toBe(false);
-    expect(canBindFieldTypeToPropType("text", "nope")).toBe(false);
-    expect(canBindFieldTypeToPropType("text", "password")).toBe(false);
+    expect(bindingKindOf({ type: "nope" })).toBeNull();
+    expect(canBindFieldToProp({ type: "nope" }, { type: "text" })).toBe(false);
+    expect(canBindFieldToProp({ type: "text" }, { type: "nope" })).toBe(false);
+    expect(canBindFieldToProp({ type: "text" }, { type: "password" })).toBe(
+      false
+    );
     // A prototype member is not a field type.
-    expect(canBindFieldTypeToPropType("toString", "text")).toBe(false);
+    expect(canBindFieldToProp({ type: "toString" }, { type: "text" })).toBe(
+      false
+    );
   });
 });

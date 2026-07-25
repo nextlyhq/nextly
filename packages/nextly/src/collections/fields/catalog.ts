@@ -393,6 +393,36 @@ export function isBlockFieldType(type: string): type is BlockFieldCatalogType {
 }
 
 /**
+ * The storage shapes a plugin-contributed field type can persist as. A plugin
+ * type is not a member of the built-in union, so everything that needs to
+ * reason about its values (validation, bindings) goes through the primitive it
+ * declared.
+ */
+export type FieldStoragePrimitive =
+  | "text"
+  | "longText"
+  | "boolean"
+  | "number"
+  | "timestamp"
+  | "json";
+
+/**
+ * The built-in field type each storage primitive behaves as. A plugin type
+ * validates by its primitive's rules and binds by its primitive's value kind,
+ * while its own admin component renders it.
+ */
+export const STORAGE_PRIMITIVE_AS_FIELD_TYPE: Readonly<
+  Record<FieldStoragePrimitive, BlockFieldCatalogType>
+> = {
+  text: "text",
+  longText: "textarea",
+  boolean: "checkbox",
+  number: "number",
+  timestamp: "date",
+  json: "json",
+};
+
+/**
  * The value shapes a binding can carry. A binding connects a data field to a
  * block prop, so both sides are described in this one vocabulary and
  * compatibility is a set membership test rather than a per-pair table.
@@ -472,24 +502,71 @@ export const BINDABLE_KINDS: Readonly<
   group: [],
 };
 
-/** Whether a block prop of this type can be bound to a data field at all. */
-export function isBindablePropType(type: string): boolean {
-  return isBlockFieldType(type) && BINDABLE_KINDS[type].length > 0;
+/**
+ * One end of a candidate binding: a field being bound from, or a block prop
+ * being bound into.
+ *
+ * `hasMany` matters because a multi-valued field produces an array, so type
+ * agreement alone does not make two ends compatible. `storage` describes a
+ * plugin-contributed type, which is not a member of the built-in union but
+ * persists as one of the primitives; supplying it lets a plugin type take part
+ * in bindings on the same terms as a built-in.
+ */
+export interface BindingEndpoint {
+  type: string;
+  hasMany?: boolean;
+  storage?: FieldStoragePrimitive;
 }
 
 /**
- * Whether a field of `sourceType` can be bound into a block prop of
- * `propType`. Pickers use this to filter the field list they offer, so a user
- * is never shown a binding that the renderer would then have to coerce.
+ * The built-in field type an endpoint resolves to, or `null` when the type is
+ * neither a built-in nor a plugin type whose storage primitive was supplied.
  */
-export function canBindFieldTypeToPropType(
-  sourceType: string,
-  propType: string
-): boolean {
-  if (!isBlockFieldType(propType)) return false;
-  const kind = isFieldType(sourceType)
-    ? FIELD_TYPE_BINDING_KIND[sourceType]
+function resolveEndpointType(endpoint: BindingEndpoint): FieldType | null {
+  if (isFieldType(endpoint.type)) return endpoint.type;
+  return endpoint.storage
+    ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[endpoint.storage]
     : null;
+}
+
+/**
+ * The value kind an endpoint produces when it is a binding source, or `null`
+ * when it cannot be bound from.
+ */
+export function bindingKindOf(
+  endpoint: BindingEndpoint
+): BindingValueKind | null {
+  const resolved = resolveEndpointType(endpoint);
+  return resolved ? FIELD_TYPE_BINDING_KIND[resolved] : null;
+}
+
+/** Whether a block prop can be bound to a data field at all. */
+export function isBindablePropType(prop: BindingEndpoint): boolean {
+  const resolved = resolveEndpointType(prop);
+  return (
+    resolved !== null &&
+    isBlockFieldType(resolved) &&
+    BINDABLE_KINDS[resolved].length > 0
+  );
+}
+
+/**
+ * Whether a field can be bound into a block prop. Pickers use this to filter
+ * the field list they offer, so a user is never shown a binding that the
+ * renderer would then have to coerce.
+ *
+ * Both the value kind and the cardinality must agree: a multi-valued source
+ * produces an array, which a single-valued prop cannot render, and a
+ * single-valued source cannot fill a prop that expects a list.
+ */
+export function canBindFieldToProp(
+  source: BindingEndpoint,
+  prop: BindingEndpoint
+): boolean {
+  const propType = resolveEndpointType(prop);
+  if (propType === null || !isBlockFieldType(propType)) return false;
+  if (Boolean(source.hasMany) !== Boolean(prop.hasMany)) return false;
+  const kind = bindingKindOf(source);
   return kind !== null && BINDABLE_KINDS[propType].includes(kind);
 }
 

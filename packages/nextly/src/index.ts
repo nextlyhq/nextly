@@ -398,11 +398,15 @@ export {
   BLOCK_FIELD_TYPE_CATALOG,
   BINDABLE_KINDS,
   FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
   isBlockFieldType,
   isBindablePropType,
-  canBindFieldTypeToPropType,
+  bindingKindOf,
+  canBindFieldToProp,
   type BlockFieldCatalogType,
+  type BindingEndpoint,
   type BindingValueKind,
+  type FieldStoragePrimitive,
 } from "./collections/fields/catalog";
 
 // Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.

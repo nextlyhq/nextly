@@ -259,6 +259,161 @@ describe("blockPropsToFieldConfigs rejections", () => {
   });
 });
 
+describe("blockPropsToFieldConfigs bounds", () => {
+  it("rejects a lower bound greater than its upper bound", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { text: { type: "text", minLength: 10, maxLength: 5 } },
+        })
+      )
+    ).toEqual([{ path: "text", code: "INVALID_BOUNDS" }]);
+  });
+
+  it("rejects inverted bounds on numbers, chips, and rows", () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["count", { type: "number", min: 10, max: 1 }],
+      ["tags", { type: "chips", minChips: 3, maxChips: 1 }],
+      [
+        "items",
+        {
+          type: "repeater",
+          fields: { a: { type: "text" } },
+          minRows: 4,
+          maxRows: 2,
+        },
+      ],
+    ];
+    for (const [name, declaration] of cases) {
+      expect(
+        issuesOf(() =>
+          blockPropsToFieldConfigs({ props: { [name]: declaration } })
+        ),
+        name
+      ).toEqual([{ path: name, code: "INVALID_BOUNDS" }]);
+    }
+  });
+
+  it("rejects a negative or fractional count bound", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { text: { type: "text", maxLength: -1 } },
+        })
+      )
+    ).toEqual([{ path: "text.maxLength", code: "INVALID_OPTION" }]);
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { text: { type: "text", minLength: 1.5 } },
+        })
+      )
+    ).toEqual([{ path: "text.minLength", code: "INVALID_OPTION" }]);
+  });
+
+  it("still allows a number prop to range below zero and hold fractions", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: { offset: { type: "number", min: -10.5, max: 10.5 } },
+    });
+    expect(configs[0]).toMatchObject({ min: -10.5, max: 10.5 });
+  });
+
+  it("accepts equal bounds", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: { code: { type: "text", minLength: 4, maxLength: 4 } },
+    });
+    expect(configs[0]).toMatchObject({ minLength: 4, maxLength: 4 });
+  });
+
+  it("stops recursion at the nesting limit instead of overflowing", () => {
+    // A declaration that contains itself: legal to write, impossible to walk.
+    const cyclic: Record<string, unknown> = { type: "group" };
+    cyclic.fields = { inner: cyclic };
+    const issues = issuesOf(() =>
+      blockPropsToFieldConfigs({
+        props: { root: cyclic as never },
+      })
+    );
+    expect(issues.at(-1)?.code).toBe("NESTING_TOO_DEEP");
+  });
+});
+
+describe("validateBlockPropValues shape checks", () => {
+  it("rejects a rich text value that is not editor content", async () => {
+    const source: BlockPropsSource = { props: { body: { type: "richText" } } };
+    expect(await validateBlockPropValues({ body: 42 }, source)).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ body: { nope: true } }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { body: { root: { type: "root", children: [] } } },
+        source
+      )
+    ).toEqual([]);
+  });
+
+  it("rejects a malformed reference on upload and relationship props", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        image: { type: "upload", relationTo: "media" },
+        related: { type: "relationship", relationTo: ["posts"], hasMany: true },
+      },
+    };
+    const issues = await validateBlockPropValues(
+      { image: { nonsense: true }, related: [{ bad: 1 }] },
+      source
+    );
+    expect(issues.map(issue => issue.path).sort()).toEqual([
+      "image",
+      "related",
+    ]);
+  });
+
+  it("accepts ids and polymorphic references, honoring cardinality", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        image: { type: "upload", relationTo: "media" },
+        related: { type: "relationship", relationTo: ["posts"], hasMany: true },
+      },
+    };
+    expect(
+      await validateBlockPropValues(
+        {
+          image: "media-1",
+          related: [{ relationTo: "posts", value: "p1" }, "p2"],
+        },
+        source
+      )
+    ).toEqual([]);
+    // A list where a single reference belongs, and the reverse.
+    expect(
+      await validateBlockPropValues(
+        { image: ["media-1"], related: "p1" },
+        source
+      )
+    ).toHaveLength(2);
+  });
+
+  it("rejects a json prop value JSON cannot represent", async () => {
+    const source: BlockPropsSource = { props: { data: { type: "json" } } };
+    expect(
+      await validateBlockPropValues({ data: () => 1 }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ data: { nested: [Symbol("x")] } }, source)
+    ).toHaveLength(1);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(
+      await validateBlockPropValues({ data: cyclic }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ data: { ok: [1, "two", null] } }, source)
+    ).toEqual([]);
+  });
+});
+
 describe("plugin field types as block props", () => {
   afterEach(() => {
     clearFieldTypes();
