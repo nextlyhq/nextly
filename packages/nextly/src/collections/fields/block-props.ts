@@ -169,7 +169,7 @@ function collectSerializationIssues(
 ): void {
   for (const field of fields) {
     if (!field.name) continue;
-    const value = values[field.name];
+    const value = ownValue(values, field.name);
     if (value === undefined) continue;
     // A prop that already failed a type rule does not need a second, vaguer
     // issue: the specific one describes the same defect better.
@@ -183,6 +183,28 @@ function collectSerializationIssues(
       });
     }
   }
+  // A stored node may carry keys no current declaration covers — an older
+  // prop kept through a migration, or an extra supplied by an API caller.
+  // They are written into the same document, so they answer to the same rule.
+  const declared = new Set(fields.map(field => field.name));
+  for (const [name, value] of Object.entries(values)) {
+    if (declared.has(name) || alreadyReported(issues, name)) continue;
+    const result = isSerializable(value);
+    if (result !== true) {
+      issues.push({
+        path: name,
+        code: "NOT_SERIALIZABLE",
+        message: `${name} ${result}.`,
+      });
+    }
+  }
+}
+
+/** Reads only a value's own key, never an inherited Object.prototype member. */
+function ownValue(values: Record<string, unknown>, name: string): unknown {
+  return Object.prototype.hasOwnProperty.call(values, name)
+    ? values[name]
+    : undefined;
 }
 
 /** Whether any recorded issue already points at this prop or inside it. */
@@ -217,10 +239,13 @@ function collectEmptyListIssues(
 ): void {
   for (const field of fields) {
     if (!field.name) continue;
-    const value = values[field.name];
+    const value = ownValue(values, field.name);
     if (value === undefined) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
     if (Array.isArray(value) && value.length === 0) {
+      // A scalar select or radio is inspected for arrays by the shared rules,
+      // so its issue is already recorded and does not need repeating.
+      if (alreadyReported(issues, path)) continue;
       if (!holdsList(field)) {
         issues.push({
           path,
@@ -303,6 +328,18 @@ function buildFieldConfigs(
       );
       continue;
     }
+    // A prop named after an Object.prototype member reads back as the
+    // inherited function whenever the prop is absent, so an omitted optional
+    // prop would look like a value of the wrong type to every consumer.
+    if (name in Object.prototype) {
+      record(
+        ctx,
+        path,
+        "RESERVED_NAME",
+        `"${name}" is a member of Object.prototype and cannot be a prop name.`
+      );
+      continue;
+    }
     if (!isPlainObject(declaration)) {
       record(
         ctx,
@@ -379,8 +416,15 @@ const ALLOWED_OPTIONS: Readonly<
   checkbox: ["label", "required"],
   json: ["label", "required"],
   chips: ["label", "required", "minChips", "maxChips"],
-  upload: ["label", "required", "relationTo", "hasMany"],
-  relationship: ["label", "required", "relationTo", "hasMany"],
+  upload: ["label", "required", "relationTo", "hasMany", "minRows", "maxRows"],
+  relationship: [
+    "label",
+    "required",
+    "relationTo",
+    "hasMany",
+    "minRows",
+    "maxRows",
+  ],
   repeater: ["label", "required", "fields", "minRows", "maxRows"],
   group: ["label", "required", "fields"],
 };
@@ -542,24 +586,34 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
     const relationTo = relationTarget(declaration, path, ctx);
     if (!relationTo) return null;
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
+    const rows = rowBounds(declaration, path, ctx);
     return {
       ...base(name, declaration, path, ctx),
       type: "upload",
       relationTo,
       hasMany,
-      validate: referenceValidator(hasMany, relationTo),
+      ...rows,
+      validate: allOf(
+        referenceValidator(hasMany, relationTo),
+        listBoundsValidator(rows.minRows, rows.maxRows)
+      ),
     };
   },
   relationship: (name, declaration, path, ctx) => {
     const relationTo = relationTarget(declaration, path, ctx);
     if (!relationTo) return null;
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
+    const rows = rowBounds(declaration, path, ctx);
     return {
       ...base(name, declaration, path, ctx),
       type: "relationship",
       relationTo,
       hasMany,
-      validate: referenceValidator(hasMany, relationTo),
+      ...rows,
+      validate: allOf(
+        referenceValidator(hasMany, relationTo),
+        listBoundsValidator(rows.minRows, rows.maxRows)
+      ),
     };
   },
   repeater: (name, declaration, path, ctx, depth) => {
@@ -669,15 +723,15 @@ function choiceOptions(
       );
       return null;
     }
-    // An empty stored value is indistinguishable from no value at all: the
-    // shared rules read `""` as absent, so such an option could never be
-    // selected, and an empty label leaves nothing to select in the picker.
-    if (entry.label.length === 0 || entry.value.length === 0) {
+    // A blank stored value is indistinguishable from no value at all: the
+    // shared rules trim before deciding emptiness, so an option declaring one
+    // could never be selected, and a blank label leaves nothing to click.
+    if (entry.label.trim().length === 0 || entry.value.trim().length === 0) {
       record(
         ctx,
         path,
         "INVALID_OPTIONS",
-        "Every entry in `options` must have a non-empty `label` and `value`."
+        "Every entry in `options` must have a `label` and `value` that are not empty or whitespace."
       );
       return null;
     }
@@ -854,6 +908,19 @@ function referenceValidator(
   };
 }
 
+/** Runs validators in order, reporting the first failure. */
+function allOf(
+  ...validators: Array<(value: unknown) => string | true>
+): (value: unknown) => string | true {
+  return value => {
+    for (const validator of validators) {
+      const result = validator(value);
+      if (result !== true) return result;
+    }
+    return true;
+  };
+}
+
 /**
  * Row-count check for a list-shaped scalar prop. The shared rules read row
  * bounds for repeaters and chips but not for a `hasMany` text or number field,
@@ -918,7 +985,7 @@ function isSerializable(value: unknown): string | true {
     return "must be JSON-serializable";
   }
   return containsUnserializable(value)
-    ? "must not contain functions, symbols, undefined, or non-finite numbers"
+    ? "must not contain functions, symbols, undefined, non-finite numbers, or values JSON would reshape"
     : true;
 }
 
@@ -944,9 +1011,22 @@ function containsUnserializable(value: unknown): boolean {
       pending.push(...current);
       continue;
     }
-    if (isPlainObject(current)) pending.push(...Object.values(current));
+    if (current === null || typeof current !== "object") continue;
+    // An object that defines `toJSON` chooses its own stored form, which is
+    // how a Date becomes an ISO string, so it is taken at its word and its
+    // internals are not walked. Anything else that is not a plain record is
+    // reshaped rather than rejected: a Map or a Set encodes as `{}`, losing
+    // its contents without any error to notice.
+    if (definesToJson(current)) continue;
+    if (!isPlainRecord(current)) return true;
+    pending.push(...Object.values(current));
   }
   return false;
+}
+
+/** Whether a value controls its own encoded form. */
+function definesToJson(value: object): boolean {
+  return typeof (value as { toJSON?: unknown }).toJSON === "function";
 }
 
 function optionalString(

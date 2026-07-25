@@ -810,6 +810,20 @@ describe("blockPropsToFieldConfigs choices", () => {
     ).toEqual([{ path: "level", code: "INVALID_OPTIONS" }]);
   });
 
+  it("rejects a whitespace-only label or value", () => {
+    // The shared rules trim before deciding emptiness, so a blank value is
+    // read as absent exactly like an empty one.
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: {
+            level: { type: "select", options: [{ label: "Sp", value: "   " }] },
+          },
+        })
+      )
+    ).toEqual([{ path: "level", code: "INVALID_OPTIONS" }]);
+  });
+
   it("rejects two options sharing a stored value", () => {
     expect(
       issuesOf(() =>
@@ -841,6 +855,110 @@ describe("blockPropsToFieldConfigs choices", () => {
       },
     });
     expect(configs[0]).toMatchObject({ type: "select" });
+  });
+});
+
+describe("block prop names", () => {
+  it("refuses a name that shadows an Object.prototype member", () => {
+    for (const reserved of ["toString", "constructor", "hasOwnProperty"]) {
+      expect(
+        issuesOf(() =>
+          blockPropsToFieldConfigs({ props: { [reserved]: { type: "text" } } })
+        ),
+        reserved
+      ).toEqual([{ path: reserved, code: "RESERVED_NAME" }]);
+    }
+  });
+
+  it("refuses a reserved name nested inside a structured prop", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: {
+            meta: { type: "group", fields: { valueOf: { type: "text" } } },
+          },
+        })
+      )
+    ).toEqual([{ path: "meta.valueOf", code: "RESERVED_NAME" }]);
+  });
+});
+
+describe("validateBlockPropValues stored-document safety", () => {
+  it("checks props the declaration does not cover", async () => {
+    // A stored node can carry a key no current declaration knows about; it is
+    // written into the same document, so it answers to the same rule.
+    const source: BlockPropsSource = { props: { title: { type: "text" } } };
+    const issues = await validateBlockPropValues(
+      { title: "ok", legacyExtra: () => 1 },
+      source
+    );
+    expect(issues).toEqual([
+      {
+        path: "legacyExtra",
+        code: "NOT_SERIALIZABLE",
+        message: expect.stringContaining("legacyExtra"),
+      },
+    ]);
+  });
+
+  it("rejects values JSON reshapes instead of rejecting", async () => {
+    const source: BlockPropsSource = { props: { data: { type: "json" } } };
+    // A Map encodes as {} and a Set as {}, losing their contents silently.
+    expect(
+      await validateBlockPropValues({ data: new Map([["a", 1]]) }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ data: { inner: new Set([1]) } }, source)
+    ).toHaveLength(1);
+  });
+
+  it("accepts a value that defines its own encoded form", async () => {
+    // A Date chooses an ISO string through toJSON, which is exactly how dates
+    // are stored, so it is not a reshaping loss.
+    const source: BlockPropsSource = { props: { when: { type: "date" } } };
+    expect(
+      await validateBlockPropValues({ when: new Date("2026-01-01") }, source)
+    ).toEqual([]);
+  });
+
+  it("reports one issue for an empty list on a scalar choice", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        level: {
+          type: "select",
+          options: [{ label: "H1", value: "h1" }],
+        },
+      },
+    };
+    const issues = await validateBlockPropValues({ level: [] }, source);
+    expect(issues).toHaveLength(1);
+  });
+});
+
+describe("blockPropsToFieldConfigs reference bounds", () => {
+  it("accepts and enforces row bounds on a multi-reference prop", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        gallery: {
+          type: "upload",
+          relationTo: "media",
+          hasMany: true,
+          minRows: 2,
+          maxRows: 3,
+        },
+      },
+    };
+    const configs = blockPropsToFieldConfigs(source);
+    expect(configs[0]).toMatchObject({ minRows: 2, maxRows: 3 });
+    expect(
+      await validateBlockPropValues({ gallery: ["a"] }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ gallery: ["a", "b", "c", "d"] }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ gallery: ["a", "b"] }, source)
+    ).toEqual([]);
   });
 });
 
