@@ -217,4 +217,31 @@ describe("collection status webhook events (integration)", () => {
       });
     }
   });
+
+  it("a webhooks:false collection emits no status events on publish", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "leads",
+          status: true,
+          webhooks: false,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "leads", overrideAccess: true },
+      { title: "secret", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      { collectionName: "leads", entryId: id, overrideAccess: true },
+      { status: "published" }
+    );
+    // The 001 recording gate short-circuits every recordMutationEvent, including
+    // the status events, so an opted-out collection writes nothing at all.
+    expect(await events(current)).toHaveLength(0);
+  });
 });
