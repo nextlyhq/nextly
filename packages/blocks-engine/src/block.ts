@@ -98,10 +98,14 @@ export interface BlockExample<P> {
   slots?: Record<string, BlockNode[]>;
 }
 
-/** One block type. */
-export interface BlockDefinition<
-  P extends Record<string, unknown> = Record<string, unknown>,
-> {
+/**
+ * One block type.
+ *
+ * `P` is constrained to `object` rather than a string-index record so ordinary
+ * named interfaces (which carry no implicit index signature) can describe a
+ * block's props without being rewritten.
+ */
+export interface BlockDefinition<P extends object = Record<string, unknown>> {
   /** Namespaced, immutable identity, e.g. "core/heading". */
   name: string;
   /** Schema version stamped onto every node of this type. */
@@ -115,22 +119,33 @@ export interface BlockDefinition<
   description: string;
   /** Required: a worked instance, for previews and few-shot prompting. */
   example: BlockExample<P>;
-  /** Prop schemas keyed by prop name. */
-  props?: Record<string, PropSchema>;
+  /**
+   * Prop schemas, keyed by the block's own prop names so a typo cannot declare
+   * a schema for a prop the block does not have.
+   */
+  props?: Partial<Record<keyof P & string, PropSchema>>;
   /** Default prop values; also the inference source for the block's prop type. */
   defaultProps?: P;
   /** Prop names whose values are translatable. */
-  localized?: string[];
+  localized?: (keyof P & string)[];
   /** Shared default styles for every instance of this block type. */
   baseStyles?: NodeStyles;
   /** Named child regions; only container blocks declare these. */
   slots?: Record<string, SlotSpec>;
   /** Style capabilities this block opts into. */
   supports?: BlockSupports;
-  /** Renders the block. May be async. */
-  render: (args: BlockRenderArgs<P>) => BlockRenderResult;
+  /**
+   * Renders the block. May be async.
+   *
+   * Declared as a method so parameter checking stays bivariant: a registry
+   * holds definitions of many different prop shapes, and each is only ever
+   * called with its own props, so requiring strict contravariance here would
+   * make a typed definition unassignable to the heterogeneous collection
+   * without buying any safety.
+   */
+  render(args: BlockRenderArgs<P>): BlockRenderResult;
   /** Optional editor-side data hydration before rendering. */
-  resolve?: (props: P, ctx: unknown) => unknown;
+  resolve?(props: P, ctx: unknown): unknown;
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta;
 }
@@ -142,7 +157,7 @@ export interface BlockDefinition<
  * data (name format, version/migration coverage, support keys) are enforced
  * when the block is registered.
  */
-export function defineBlock<P extends Record<string, unknown>>(
+export function defineBlock<P extends object>(
   definition: BlockDefinition<P>
 ): BlockDefinition<P> {
   return definition;
@@ -150,3 +165,27 @@ export function defineBlock<P extends Record<string, unknown>>(
 
 /** The prop type of a block definition. */
 export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
+
+/**
+ * A block definition with its prop typing erased.
+ *
+ * `BlockDefinition<P>` uses `P` both to produce values (`example`,
+ * `defaultProps`) and to consume them (`render`), so it is invariant in `P` —
+ * `BlockDefinition<{ text: string }>` is deliberately NOT assignable to
+ * `BlockDefinition<Record<string, unknown>>`. Collections that hold many block
+ * types (the registry above all) accept this erased shape instead, so a fully
+ * typed definition can be registered without discarding its prop types at the
+ * definition site.
+ */
+export interface AnyBlockDefinition
+  extends Omit<
+    BlockDefinition,
+    "example" | "defaultProps" | "props" | "localized" | "render" | "resolve"
+  > {
+  example: { props: object; slots?: Record<string, BlockNode[]> };
+  defaultProps?: object;
+  props?: Partial<Record<string, PropSchema>>;
+  localized?: string[];
+  render(args: BlockRenderArgs<never>): BlockRenderResult;
+  resolve?(props: never, ctx: unknown): unknown;
+}

@@ -78,6 +78,7 @@ export type {
 
 export { defineBlock } from "./block";
 export type {
+  AnyBlockDefinition,
   BlockDefinition,
   BlockEditorMeta,
   BlockExample,
@@ -102,6 +103,7 @@ export {
   getSupport,
   allSupports,
   clearBlocks,
+  MAX_BLOCK_VERSION,
   registryLookup,
   registryMigrationSource,
 } from "./registry";

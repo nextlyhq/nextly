@@ -9,9 +9,10 @@
  * Registration is where definition rules are enforced — a malformed block fails
  * at boot with a named error rather than producing broken pages later.
  */
-import type { BlockDefinition, BlockSupports } from "./block";
+import type { AnyBlockDefinition, BlockSupports } from "./block";
+import { COMPONENT_INSTANCE_TYPE } from "./document";
 import type { MigrationSource } from "./migration";
-import { findMigrationGaps } from "./migration";
+import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { BlockTypeLookup } from "./validation";
 
 /** A style capability blocks may opt into. */
@@ -31,7 +32,7 @@ export interface RegisterOptions {
 }
 
 interface RegistryEntry {
-  definition: BlockDefinition;
+  definition: AnyBlockDefinition;
   source: string;
 }
 
@@ -83,6 +84,20 @@ function supportStore(): Map<string, SupportDefinition> {
 /** A block name is a namespaced slug, e.g. "core/heading". */
 const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/**
+ * The highest version a block may declare. Migration chains a bounded number of
+ * steps, so a version above this could never carry its oldest stored nodes
+ * forward — registration refuses it rather than promise an upgrade path that
+ * does not exist.
+ */
+export const MAX_BLOCK_VERSION = 1 + MAX_MIGRATION_STEPS;
+
+/**
+ * Names the engine owns. They identify nodes resolved by the engine's own
+ * machinery rather than by a registered block, so a block may not claim one.
+ */
+const RESERVED_BLOCK_NAMES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
+
 /** A support key is a single lowerCamel/slug token. */
 const SUPPORT_KEY_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
 
@@ -94,17 +109,30 @@ function fail(code: string, message: string): never {
  * Check one definition against the rules registration enforces. Split out so a
  * caller can validate a definition without committing it to the registry.
  */
-function assertValidDefinition(def: BlockDefinition): void {
+function assertValidDefinition(def: AnyBlockDefinition): void {
   if (typeof def.name !== "string" || !BLOCK_NAME_RE.test(def.name)) {
     fail(
       "NEXTLY_BLOCK_INVALID",
       `block name "${String(def.name)}" must be a namespaced slug like "core/heading".`
     );
   }
-  if (!Number.isInteger(def.version) || def.version < 1) {
+  if (RESERVED_BLOCK_NAMES.has(def.name)) {
+    fail(
+      "NEXTLY_BLOCK_RESERVED_NAME",
+      `block name "${def.name}" is reserved by the engine and cannot be registered.`
+    );
+  }
+  if (
+    !Number.isInteger(def.version) ||
+    def.version < 1 ||
+    // A version further above 1 than migration will chain cannot have an
+    // upgrade path for its oldest stored nodes, so accepting it here would
+    // promise something migration cannot honor.
+    def.version > MAX_BLOCK_VERSION
+  ) {
     fail(
       "NEXTLY_BLOCK_INVALID",
-      `block "${def.name}" must declare an integer version of at least 1.`
+      `block "${def.name}" must declare an integer version between 1 and ${MAX_BLOCK_VERSION}.`
     );
   }
   // description and example are required so generated documentation, palette
@@ -172,7 +200,7 @@ function assertKnownSupports(
  * half-populated.
  */
 export function registerBlocks(
-  definitions: BlockDefinition[],
+  definitions: AnyBlockDefinition[],
   options: RegisterOptions = {}
 ): void {
   const source = options.source ?? "app";
@@ -222,7 +250,7 @@ export function registerSupport(support: SupportDefinition): void {
 }
 
 /** A registered block definition, or `undefined`. */
-export function getBlock(name: string): BlockDefinition | undefined {
+export function getBlock(name: string): AnyBlockDefinition | undefined {
   return blockStore().get(name)?.definition;
 }
 
@@ -231,7 +259,7 @@ export function hasBlock(name: string): boolean {
 }
 
 /** Every registered block definition. */
-export function allBlocks(): BlockDefinition[] {
+export function allBlocks(): AnyBlockDefinition[] {
   return [...blockStore().values()].map(entry => entry.definition);
 }
 

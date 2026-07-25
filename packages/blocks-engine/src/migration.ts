@@ -71,7 +71,7 @@ export interface PropsMigrationResult {
  * increment by one per schema change, so a span this large signals a malformed
  * version rather than a real upgrade; it also bounds the loops below.
  */
-const MAX_MIGRATION_STEPS = 1000;
+export const MAX_MIGRATION_STEPS = 1000;
 
 /** True if a version range is a sane, finite, bounded span of non-negative integers. */
 function isValidVersionRange(fromVersion: number, toVersion: number): boolean {

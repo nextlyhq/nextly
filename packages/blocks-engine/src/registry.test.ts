@@ -56,6 +56,42 @@ describe("defineBlock typing", () => {
   });
 });
 
+describe("the define-then-register workflow keeps its prop types", () => {
+  it("registers a definition whose props were inferred from a literal", () => {
+    // This is the primary workflow: defineBlock infers { text: string }, and
+    // that fully-typed definition must be registrable without erasing types.
+    const heading = defineBlock({
+      name: "core/typed-heading",
+      version: 1,
+      description: "A heading.",
+      example: { props: { text: "Hi" } },
+      defaultProps: { text: "" },
+      props: { text: { type: "text" } },
+      localized: ["text"],
+      render: args => args.props.text,
+    });
+    expect(() => registerBlocks([heading])).not.toThrow();
+    expect(getBlock("core/typed-heading")).toBeDefined();
+  });
+
+  it("registers a definition whose props come from a named interface", () => {
+    // Interfaces carry no implicit index signature, so the prop constraint has
+    // to accept plain object shapes for ordinary author code to compile.
+    interface CardProps {
+      title: string;
+      count: number;
+    }
+    const card = defineBlock<CardProps>({
+      name: "core/typed-card",
+      version: 1,
+      description: "A card.",
+      example: { props: { title: "a", count: 1 } },
+      render: args => `${args.props.title}${args.props.count}`,
+    });
+    expect(() => registerBlocks([card])).not.toThrow();
+  });
+});
+
 describe("registration rules", () => {
   it("registers and reads back a block with its source", () => {
     registerBlocks([block({ name: "core/text" })], { source: "core" });
@@ -89,6 +125,20 @@ describe("registration rules", () => {
     expect(() =>
       registerBlocks([block({ name: "core/d", version: 1.5 })])
     ).toThrow(/NEXTLY_BLOCK_INVALID/);
+  });
+
+  it("rejects a version beyond the span migration can chain", () => {
+    // Above this, findMigrationGaps cannot report gaps and migration would
+    // reject the range at runtime, so registration must not accept it.
+    expect(() =>
+      registerBlocks([block({ name: "core/huge", version: 5000 })])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*between 1 and/s);
+  });
+
+  it("refuses to register a name the engine reserves", () => {
+    expect(() =>
+      registerBlocks([block({ name: "nextly/component-instance" })])
+    ).toThrow(/NEXTLY_BLOCK_RESERVED_NAME/);
   });
 
   it("refuses a version bump that has no covering migration", () => {

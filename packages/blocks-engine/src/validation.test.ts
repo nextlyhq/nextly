@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BreakpointSet } from "./document";
+import { documentBytes } from "./limits";
 import {
   FIXTURE_BREAKPOINTS,
   VALIDATION_FIXTURES,
@@ -627,6 +628,74 @@ describe("byte measurement counts JSON escaping", () => {
       limits: { maxDepth: 12, maxNodes: 5000, maxBytes: 1000 },
     });
     expect(issues.some(i => i.code === "document-too-large")).toBe(true);
+  });
+});
+
+describe("byte estimation agrees with real serialization", () => {
+  // Strings that exercise every escape path: short escapes, other control
+  // characters, quote/backslash, multi-byte, an emoji (surrogate PAIR), and
+  // lone surrogates (which JSON escapes rather than encoding as UTF-8).
+  const tricky = [
+    "plain ascii",
+    "tabs\tand\nnewlines\r\f\b",
+    "",
+    'quote " and backslash \\',
+    "café — ünïcodé",
+    "emoji 👋🏽 家",
+    `lone high \ud800 and low \udc00`,
+  ];
+
+  for (const text of tricky) {
+    it(`matches JSON.stringify size for ${JSON.stringify(text).slice(0, 28)}`, () => {
+      const doc: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "n1", type: "core/text", version: 1, props: { text } }],
+      };
+      // documentBytes serializes for real; the validator's internal estimate
+      // must not disagree about which side of the cap the document falls on.
+      const actual = documentBytes(doc);
+      const underCap = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { maxDepth: 12, maxNodes: 5000, maxBytes: actual + 200 },
+      });
+      expect(underCap.some(i => i.code === "document-too-large")).toBe(false);
+
+      const overCap = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: {
+          maxDepth: 12,
+          maxNodes: 5000,
+          maxBytes: Math.floor(actual / 2),
+        },
+      });
+      expect(overCap.some(i => i.code === "document-too-large")).toBe(true);
+    });
+  }
+
+  it("does not reject a newline-heavy document that is well under the cap", () => {
+    // Newlines serialize as two-byte short escapes, so ~60k of them is ~120KB
+    // and must stay far below a 2 MiB cap.
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: { text: "\n".repeat(60_000) },
+        },
+      ],
+    };
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { maxDepth: 12, maxNodes: 5000, maxBytes: 2 * 1024 * 1024 },
+    });
+    expect(issues.some(i => i.code === "document-too-large")).toBe(false);
   });
 });
 

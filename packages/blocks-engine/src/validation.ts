@@ -373,16 +373,34 @@ function utf8ByteLength(s: string, budget: number): number {
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
     if (code < 0x80) {
-      // Serialized size counts JSON escaping: a control character becomes a
-      // six-byte \uXXXX escape and a quote or backslash becomes two bytes, so
-      // counting one byte each would under-measure an escape-heavy string.
-      if (code < 0x20) bytes += 6;
+      // Serialized size counts JSON escaping. Backspace, tab, newline, form
+      // feed, and carriage return have two-byte short escapes; other control
+      // characters expand to a six-byte \uXXXX; quote and backslash are two.
+      if (
+        code === 0x08 ||
+        code === 0x09 ||
+        code === 0x0a ||
+        code === 0x0c ||
+        code === 0x0d
+      ) {
+        bytes += 2;
+      } else if (code < 0x20) bytes += 6;
       else if (code === 0x22 || code === 0x5c) bytes += 2;
       else bytes += 1;
     } else if (code < 0x800) bytes += 2;
     else if (code >= 0xd800 && code <= 0xdbff) {
-      bytes += 4; // surrogate pair → one 4-byte code point
-      i++;
+      // A high surrogate is a 4-byte code point only when a low surrogate
+      // follows. A lone one is not valid UTF-8 and serializes as a six-byte
+      // \uXXXX escape, and must not consume the next unit.
+      const next = s.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 6;
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      bytes += 6; // lone low surrogate → \uXXXX
     } else bytes += 3;
     if (bytes > budget) return bytes;
   }
