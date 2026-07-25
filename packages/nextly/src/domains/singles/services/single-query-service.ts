@@ -43,6 +43,7 @@ import {
   AccessControlService,
   isSuperAdminContext,
 } from "../../../services/access";
+import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
@@ -173,47 +174,6 @@ export function buildSingleHookContext<T>(
  *
  * @returns `null` if access is allowed, `SingleResult` if denied
  */
-/**
- * Whether a loaded row satisfies an access constraint of the
- * `{ field: { equals: value } }` shape the access service emits for reads.
- *
- * Reads are expected to fold that predicate into a LIST query, which compiles
- * the full Where grammar; a caller holding one row has to check it directly
- * instead. Only a lone `equals` per field is checked, and **anything else
- * denies** — a compound condition whose other operators went unchecked would
- * admit a row the predicate excludes, and re-implementing the rest of the
- * grammar here would be a second, drifting evaluator. Owner-only, the rule this
- * exists for, emits exactly this shape. A custom rule returning any other
- * operator is refused rather than half-evaluated.
- */
-function documentSatisfiesConstraint(
-  document: Record<string, unknown>,
-  query: unknown
-): boolean {
-  if (!query || typeof query !== "object") return true;
-  for (const [field, condition] of Object.entries(
-    query as Record<string, unknown>
-  )) {
-    if (condition === null || typeof condition !== "object") return false;
-    const operators = Object.keys(condition);
-    // Exactly one operator, and it must be `equals`: a condition carrying more
-    // than that is only partly checkable, and partly checked is not satisfied.
-    if (operators.length !== 1 || operators[0] !== "equals") {
-      return false;
-    }
-    const expected = (condition as Record<string, unknown>).equals;
-    // Singles default their owner column to camelCase `createdBy` while the row
-    // may carry the snake_case column the database stores, so a constraint is
-    // matched against either spelling of the same column rather than missing it
-    // and denying a legitimate owner.
-    const camel = field.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
-    const snake = field.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
-    const actual = document[field] ?? document[camel] ?? document[snake];
-    if (actual !== expected) return false;
-  }
-  return true;
-}
-
 export async function checkSingleAccess(params: {
   slug: string;
   operation: "read" | "update" | "publish" | "unpublish";
@@ -460,74 +420,55 @@ export class SingleQueryService extends BaseService {
   private readonly accessControlService: AccessControlService;
 
   /**
-   * Judge a document-dependent read rule against the loaded row.
+   * Decide an `owner-only` read against the loaded row.
    *
-   * `checkSingleAccess` runs before the row is fetched, so an `owner-only` or
-   * `custom` read rule has nothing to compare against there — owner-only fails
-   * closed by design, and a custom rule would receive an undefined id and data.
-   * Those rules are deferred past that gate and settled here instead, which is
-   * the same split the mutation service uses for publish transitions.
+   * `checkSingleAccess` runs before the row is fetched and fails an owner-only
+   * rule closed for lack of a document, so the rule is skipped there and
+   * settled here — the same split the mutation service uses for publish
+   * transitions.
+   *
+   * Ownership is compared directly rather than through the access service. For
+   * a read that service does not decide at all: it reports `allowed: true` for
+   * any authenticated caller and returns the predicate a LIST would have
+   * filtered by, which one document has no query to apply. Comparing the owner
+   * column here keeps the check to the one thing owner-only actually asserts,
+   * with no filter grammar to re-implement.
    */
-  private async evaluateReadDocumentRule(params: {
+  private evaluateOwnerOnlyRead(params: {
     slug: string;
-    accessRules: CollectionAccessRules | undefined;
+    rule: { ownerField?: string } | undefined;
     user?: UserContext;
     document: Record<string, unknown> | null;
-  }): Promise<SingleResult | null> {
-    const { slug, accessRules, user, document } = params;
-    // Only reached for a document-dependent rule, so an absent rule set means
-    // there is nothing left to judge.
-    if (!accessRules) return null;
-
+  }): SingleResult | null {
+    const { slug, rule, user, document } = params;
     const denied: SingleResult = {
       success: false,
       statusCode: 403,
       message: `Access denied: read on single "${slug}" is not permitted`,
     };
 
-    const documentId =
-      typeof document?.id === "string" ? document.id : undefined;
-    const result = await this.accessControlService.evaluateAccess(
-      accessRules,
-      "read",
-      {
-        user: user
-          ? {
-              id: user.id,
-              role: user.role,
-              roles: user.roles,
-              email: user.email,
-            }
-          : undefined,
-      },
-      documentId,
-      document ?? undefined
-    );
+    // Ownership presupposes an identity.
+    if (!user?.id) return denied;
 
-    if (!result.allowed) {
-      return { ...denied, message: result.reason ?? denied.message };
-    }
-
-    // An owner-only read does not decide: it returns the predicate a LIST would
-    // have filtered by and reports `allowed: true` whoever owns the row. A
-    // Single is one document, so there is nothing to filter — the predicate has
-    // to be checked against the row itself or every authenticated caller reads
-    // it. Custom rules that return a constraint are held to the same check.
-    if (result.query === undefined || result.query === null) {
-      // No predicate to satisfy. A custom rule that admits the caller on user
-      // context alone lands here, including on a Single that has never been
-      // materialized — so its first permitted read can still auto-create it.
-      return null;
-    }
-
-    // A predicate with no row cannot be satisfied. Denying here also stops
-    // auto-create from materializing a document the predicate would exclude.
+    // No row means ownership cannot be established. Denying also stops
+    // auto-create from materializing an unowned document for a caller who may
+    // not be entitled to it — a write triggered by a read about to be refused.
     if (!document) return denied;
 
-    if (!documentSatisfiesConstraint(document, result.query)) {
-      return denied;
-    }
-    return null;
+    // Singles default the owner column to camelCase `createdBy` while the row
+    // may carry the snake_case column the database stores, so both spellings of
+    // the same column are accepted rather than denying the real owner.
+    const ownerField = rule?.ownerField ?? GENERIC_DEFAULT_OWNER_FIELD;
+    const camel = ownerField.replace(/_([a-z])/g, (_m: string, c: string) =>
+      c.toUpperCase()
+    );
+    const snake = ownerField.replace(
+      /[A-Z]/g,
+      (c: string) => `_${c.toLowerCase()}`
+    );
+    const owner = document[ownerField] ?? document[camel] ?? document[snake];
+
+    return owner === user.id ? null : denied;
   }
 
   // ============================================================
@@ -572,15 +513,23 @@ export class SingleQueryService extends BaseService {
       const isSuperAdminSession =
         isSuperAdminContext(options.user) &&
         options.authenticatedScope?.actorType !== "apiKey";
-      const deferDocumentRule =
+      // Both kinds are skipped at the gate, which has no row to judge them
+      // against, but only owner-only is settled below. A `custom` function may
+      // return an arbitrary query constraint, and honouring that on one document
+      // means re-implementing the filter grammar a list read compiles in SQL —
+      // a second evaluator to drift from the first. Custom read rules on Singles
+      // are therefore left unenforced here rather than half-enforced.
+      const skipRuleAtGate =
         !isSuperAdminSession &&
         (readRule?.type === "owner-only" || readRule?.type === "custom");
+      const deferDocumentRule =
+        !isSuperAdminSession && readRule?.type === "owner-only";
 
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
         accessRules: singleMeta.accessRules,
-        deferStoredRuleEval: deferDocumentRule,
+        deferStoredRuleEval: skipRuleAtGate,
         user: options.user,
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
@@ -609,9 +558,9 @@ export class SingleQueryService extends BaseService {
           singleMeta.tableName,
           {}
         );
-        const documentRuleDenied = await this.evaluateReadDocumentRule({
+        const documentRuleDenied = this.evaluateOwnerOnlyRead({
           slug,
-          accessRules: singleMeta.accessRules,
+          rule: readRule as { ownerField?: string } | undefined,
           user: options.user,
           document: loadedDoc,
         });
