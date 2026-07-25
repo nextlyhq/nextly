@@ -488,6 +488,39 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain("nextly:single:header");
   });
 
+  it("flushes nothing when a collection write sets disableRevalidate", async () => {
+    // The per-operation escape hatch: a caller that owns its cache strategy (a
+    // CLI / seed / bulk-import write) skips revalidation for that write.
+    const entries = await boot([openCollection("skip")]);
+    await entries.createEntry(
+      { collectionName: "skip", overrideAccess: true, disableRevalidate: true },
+      { title: "T", slug: "s" }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("flushes nothing when a single write sets disableRevalidate", async () => {
+    const adapter = await memoryAdapter();
+    handle = await createTestNextly({
+      adapter,
+      singles: [
+        defineSingle({
+          slug: "footer",
+          access: { read: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singleEntry =
+      handle.getService<SingleEntryService>("singleEntryService");
+    await singleEntry.update(
+      "footer",
+      { title: "Site" },
+      { overrideAccess: true, disableRevalidate: true }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
   it("flushes nothing when the single's revalidate config is disabled", async () => {
     // Singles persist + read `revalidate` through their own registry
     // deserialize path, so verify a disabled single busts nothing.

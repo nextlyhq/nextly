@@ -158,6 +158,12 @@ export interface UpdateSingleOptions {
    * the key owner's RBAC.
    */
   authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs). Set by
+   * callers that own their cache strategy — a CLI, seed, or bulk-import write.
+   */
+  disableRevalidate?: boolean;
 }
 
 /**

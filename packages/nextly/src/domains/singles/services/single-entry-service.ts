@@ -152,7 +152,11 @@ export class SingleEntryService extends BaseService {
     // `success:false` with `eventRecorded:true`, so key off either — otherwise a
     // committed event would miss its fast-drain and retention pass.
     if (result.success || result.eventRecorded === true) {
-      await this.flushRevalidation(result);
+      // The per-operation escape hatch skips cache revalidation (a CLI / seed /
+      // bulk-import write); the outbox drain still runs so webhooks are intact.
+      if (options?.disableRevalidate !== true) {
+        await this.flushRevalidation(result);
+      }
       await this.afterWrite();
     }
     return result;
