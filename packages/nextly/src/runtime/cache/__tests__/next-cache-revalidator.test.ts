@@ -12,7 +12,7 @@ import {
 
 function fakeNextCache() {
   return {
-    revalidateTag: vi.fn<(tag: string) => void>(),
+    revalidateTag: vi.fn<(tag: string, profile?: string) => void>(),
     revalidatePath: vi.fn<(path: string, type?: "page" | "layout") => void>(),
   } satisfies NextCacheModule;
 }
@@ -29,9 +29,14 @@ describe("NextCacheRevalidator", () => {
     revalidator.flush(intents);
 
     expect(next.revalidateTag).toHaveBeenCalledTimes(3);
-    expect(next.revalidateTag).toHaveBeenCalledWith("nextly:posts");
-    expect(next.revalidateTag).toHaveBeenCalledWith("nextly:posts:id:1");
-    expect(next.revalidateTag).toHaveBeenCalledWith("nextly:single:header");
+    // The "max" cache-life profile silences the Next 16 single-arg deprecation
+    // warning and is ignored on Next 14/15.
+    expect(next.revalidateTag).toHaveBeenCalledWith("nextly:posts", "max");
+    expect(next.revalidateTag).toHaveBeenCalledWith("nextly:posts:id:1", "max");
+    expect(next.revalidateTag).toHaveBeenCalledWith(
+      "nextly:single:header",
+      "max"
+    );
   });
 
   it("revalidates path targets with their type", () => {

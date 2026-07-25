@@ -6,19 +6,21 @@
  * to null-check the sink; a framework adapter (the Next cache adapter) replaces
  * this registration with an implementation that calls `revalidateTag`.
  */
-import { NoopRevalidator } from "../../revalidation/noop-revalidator";
+import { createDefaultRevalidator } from "../../revalidation/default-revalidator";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
 
 export function registerRevalidationServices(_ctx: RegistrationContext): void {
-  // Only register the no-op default when nothing else has claimed the slot, so a
+  // Only register the default when nothing else has claimed the slot, so a
   // framework adapter registered earlier (or a test's fake) is never clobbered.
+  // `createDefaultRevalidator` returns the framework adapter when one installed
+  // its factory (a Next app), else the no-op — so a reboot after clearServices()
+  // re-seeds the adapter instead of silently falling back to the no-op.
   if (!container.has("cacheRevalidator")) {
-    container.registerSingleton<CacheRevalidator>(
-      "cacheRevalidator",
-      () => new NoopRevalidator()
+    container.registerSingleton<CacheRevalidator>("cacheRevalidator", () =>
+      createDefaultRevalidator()
     );
   }
 }

@@ -10,9 +10,12 @@
  * when `next/cache` is unavailable (a non-Next runtime, the CLI) and never
  * throws — a revalidation failure must not turn a committed write into an error.
  *
- * `revalidateTag(tag)` is called single-arg, the form supported across the whole
- * `next` peer range (`^14 || ^15 || ^16`). The Next 16 `{ profile: "max" }`
- * second argument (stale-while-revalidate) is an optional future enhancement.
+ * `revalidateTag` is called with the `"max"` cache-life profile
+ * (stale-while-revalidate). On Next 16 the single-argument form is deprecated
+ * and logs a warning on every call (noisy under bulk writes); passing `"max"`
+ * silences it and is the recommended form. On Next 14/15 `revalidateTag` takes
+ * only the tag, so the extra argument is ignored — the same call is safe across
+ * the whole `next` peer range (`^14 || ^15 || ^16`).
  *
  * @module runtime/cache/next-cache-revalidator
  */
@@ -23,9 +26,16 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 
+/**
+ * The `cacheLife` profile passed to `revalidateTag` on Next 16 so it does not
+ * warn about the deprecated single-argument form. `"max"` marks tagged data
+ * stale and serves it stale-while-revalidate; ignored on Next 14/15.
+ */
+const REVALIDATE_PROFILE = "max";
+
 /** The subset of `next/cache` this adapter uses. */
 export interface NextCacheModule {
-  revalidateTag: (tag: string) => void;
+  revalidateTag: (tag: string, profile?: string) => void;
   revalidatePath: (path: string, type?: "page" | "layout") => void;
 }
 
@@ -72,7 +82,7 @@ export class NextCacheRevalidator implements CacheRevalidator {
     for (const intent of intents) {
       for (const tag of intent.tags) {
         try {
-          next.revalidateTag(tag);
+          next.revalidateTag(tag, REVALIDATE_PROFILE);
         } catch {
           // `revalidateTag` throws when called outside a request/render scope
           // (e.g. a CLI or background write). Swallow per-call so one failure

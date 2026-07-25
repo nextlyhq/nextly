@@ -48,11 +48,24 @@ export const { GET, POST, PATCH, DELETE } = createDynamicHandlers();
 ```
 
 If you write content through the Direct API (`nextly.create(...)`) from a Server
-Action, a custom route, or a background worker, register from
-`instrumentation.ts` as above — relying on the admin route alone leaves those
-contexts on the no-op revalidator, and their writes would not refresh cached
-pages. A write in a context with no adapter registered is a silent no-op for
-revalidation (never an error), so it is safe but stale.
+Action, a custom route, or the admin API, register from `instrumentation.ts` as
+above — relying on the admin route alone leaves those contexts on the no-op
+revalidator, and their writes would not refresh cached pages. A write in a
+context with no adapter registered is a silent no-op for revalidation (never an
+error), so it is safe but stale.
+
+### Writes must run inside a request
+
+Automatic revalidation fires for a write that runs **inside a Next.js request or
+render** — a Route Handler, a Server Action, or the admin API. That is where
+`revalidateTag` is valid, and it covers how content is normally edited.
+
+A write from **outside** a request — a cron job, a CLI, or a background worker
+with no request in flight — cannot call `revalidateTag` (there is no cache scope
+to invalidate), so the adapter safely skips it (the write still succeeds). Those
+callers should either run the write in a Route Handler / Server Action, or
+invalidate the cache themselves. This mirrors how on-demand ISR works in Next.js
+generally: revalidation is request-scoped.
 
 ## Tag a read
 
@@ -100,8 +113,16 @@ Builds the tags a read should carry:
 - `nextlyTags("posts", id)` — adds the entry-id tag; for a detail page, so a
   change to that one entry invalidates it. Tags by the **immutable id**, so a
   slug rename or a status change still invalidates.
-- `nextlyTags("posts", id, locale)` — adds the per-locale tag, so publishing one
-  locale busts only that locale's page.
+- `nextlyTags("posts", id, locale)` — adds the per-locale id tag.
+
+A detail read intentionally carries the collection tag too, so it also refreshes
+when the collection changes around it. Because a match on **any** tag
+invalidates the entry, that broadens invalidation: any change in the collection
+(or any locale of the entry) refreshes the read, rather than only that one
+locale's page. That is safe — a stale read is never served, only re-fetched more
+often. If you need strictly per-entry or per-locale granularity on a
+high-traffic route, tag with the entry/locale tag alone rather than this helper's
+broad, safe default.
 
 For a singleton (global) use `nextlySingleTags("header")`.
 
