@@ -1130,9 +1130,11 @@ function containsUnserializable(value: unknown, key: string): boolean {
       continue;
     }
     if (Array.isArray(current)) {
-      current.forEach((item, index) =>
-        pending.push({ value: item, key: String(index) })
-      );
+      // Indexed rather than iterated: a hole is skipped by the array methods
+      // but encoded as `null`, which changes the stored shape silently.
+      for (let index = 0; index < current.length; index++) {
+        pending.push({ value: current[index], key: String(index) });
+      }
       continue;
     }
     // Anything else that is not a plain record is reshaped rather than

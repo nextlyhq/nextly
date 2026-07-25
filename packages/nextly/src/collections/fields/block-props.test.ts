@@ -1221,6 +1221,24 @@ describe("validateBlockPropValues stored-form fidelity", () => {
     ).toHaveLength(1);
   });
 
+  it("rejects a sparse array, whose holes encode as null", async () => {
+    const source: BlockPropsSource = {
+      props: { tags: { type: "chips" }, data: { type: "json" } },
+    };
+    const sparse: unknown[] = [];
+    sparse[2] = "a";
+    // Array methods skip the holes; encoding writes them as null.
+    expect(
+      await validateBlockPropValues({ tags: sparse }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ data: sparse }, source)
+    ).toHaveLength(1);
+    expect(await validateBlockPropValues({ tags: ["a", "b"] }, source)).toEqual(
+      []
+    );
+  });
+
   it("reports one issue when the container shape itself is wrong", async () => {
     const source: BlockPropsSource = {
       props: {
