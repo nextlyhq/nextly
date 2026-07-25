@@ -89,6 +89,7 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
 import type { WebhookResource } from "../../webhooks/types";
 import type {
   SingleDocument,
@@ -1697,17 +1698,22 @@ export class SingleMutationService extends BaseService {
             // secret/hidden strip descends into fields declared inside a
             // component. Resolved on the transaction's connection (components
             // already read on it) to avoid taking a second pooled connection
-            // while this write still holds one.
-            const webhookFields = await expandComponentFields(
-              fieldConfigs,
-              async slug =>
-                this.componentDataService
-                  ? await this.componentDataService.getComponentFields(
-                      slug,
-                      tx.getDrizzle()
-                    )
-                  : null
-            );
+            // while this write still holds one. Skipped when the single opted out
+            // of recording: recordMutationEvent short-circuits before it reads
+            // `fields`, so the per-component registry reads would be pure waste and
+            // a scalar write should not be able to fail on them.
+            const webhookFields = isWebhookRecordingEnabled("single", slug)
+              ? await expandComponentFields(
+                  fieldConfigs,
+                  async componentSlug =>
+                    this.componentDataService
+                      ? await this.componentDataService.getComponentFields(
+                          componentSlug,
+                          tx.getDrizzle()
+                        )
+                      : null
+                )
+              : fieldConfigs;
 
             // A publish/unpublish is a status change, so only a write that
             // ASSIGNS a status can trigger one — the `writtenStatus` gate keeps

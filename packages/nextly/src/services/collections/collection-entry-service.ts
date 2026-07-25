@@ -306,14 +306,13 @@ export class CollectionEntryService extends BaseService {
 
   /**
    * Whether a mutation result represents at least one committed content write.
-   * Keyed off signals that a row was actually written — an outbox event, a
-   * positive bulk/batch count, or a revalidation intent (built on the committed
-   * write) — NOT on `success`: the method contract lets a no-op update or a
-   * `publishAllLocales` no-op return `success: true` having written nothing, and
-   * running an awaited retention pass for those is the same wasted latency as
-   * running it for a rejected request. An opted-out (`webhooks: false`) write
-   * records no event but still carries its revalidation intent, so it stays
-   * covered. False for a rejected request (validation / access / not-found).
+   * A single create/update/delete carries the explicit `committed` flag (set the
+   * moment its transaction commits, independent of the recording and revalidation
+   * opt-outs), so even a write that opts out of BOTH — no event, no intent — is
+   * covered, while a rejected request (validation / access / not-found) and a
+   * `publishAllLocales` no-op are not. Bulk/batch results use their positive
+   * counts; `eventRecorded` covers a committed-but-hook-failed batch. NOT keyed
+   * off `success`, which a no-op update also reports.
    */
   private static hasCommittedWrite(
     result:
@@ -321,9 +320,12 @@ export class CollectionEntryService extends BaseService {
       | BulkOperationResult<unknown>
       | BatchOperationResult
   ): boolean {
+    if ("committed" in result && result.committed === true) return true;
     if (result.eventRecorded === true) return true;
     if ("successCount" in result && result.successCount > 0) return true;
     if ("successful" in result && result.successful > 0) return true;
+    // Covers single ops that flush an intent without setting `committed` (e.g. a
+    // publish-all-locales transition) — a present intent means content changed.
     if ("revalidationIntent" in result && result.revalidationIntent != null) {
       return true;
     }
