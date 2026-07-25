@@ -41,6 +41,7 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
+import type { RevalidateConfig } from "../../revalidation/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
 // Normalized versioning config persisted on the registry `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
@@ -184,6 +185,15 @@ export const dynamicSinglesSqlite = sqliteTable(
     versions: text("versions", {
       mode: "json",
     }).$type<ResolvedVersionsConfig>(),
+
+    /**
+     * Cache-revalidation config (`{ tags?, disable? }`), a JSON column like
+     * `versions` so `disable`/extra-`tags` reach the write path. Nullable when
+     * the single sets no `revalidate` config.
+     */
+    revalidate: text("revalidate", {
+      mode: "json",
+    }).$type<RevalidateConfig>(),
 
     /**
      * Path to the config file (code-first Singles only).
