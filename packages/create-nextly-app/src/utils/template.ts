@@ -21,6 +21,29 @@ export function projectUsesFormBuilder(projectType: ProjectType): boolean {
   return PROJECT_TYPES_WITH_FORM_BUILDER.has(projectType);
 }
 
+/** The npm dist-tag a scaffold installs `nextly` + `@nextlyhq/*` from. */
+export type NextlyDistTag = "latest" | "alpha";
+
+/**
+ * Templates that render CMS content through `nextly/runtime` cache helpers
+ * (`cachedFind` / `nextlyTags`) install `nextly` + `@nextlyhq/*` from the
+ * `alpha` dist-tag rather than `latest`. Those helpers ship on the active
+ * alpha channel, and during the alpha the conservative `latest` tag can lag
+ * behind it — a content scaffold pinned to `latest` would then install a
+ * `nextly` missing the helpers its pages import, and fail to build. Non-content
+ * scaffolds (blank, plugin) stay on `latest`.
+ */
+const CONTENT_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set(["blog"]);
+
+/**
+ * The npm dist-tag a scaffold of `projectType` installs `nextly` + `@nextlyhq/*`
+ * from: content templates track `alpha` (see {@link CONTENT_TEMPLATE_TYPES}),
+ * everything else tracks `latest`.
+ */
+export function templateNextlyChannel(projectType: ProjectType): NextlyDistTag {
+  return CONTENT_TEMPLATE_TYPES.has(projectType) ? "alpha" : "latest";
+}
+
 // ============================================================
 // Text File Extensions (for placeholder replacement)
 // ============================================================
@@ -223,14 +246,19 @@ const NEXTLY_PACKAGES = [
   "@nextlyhq/plugin-sdk",
 ];
 
-/** Cache so we only fetch once per CLI run. */
-let resolvedNextlyVersions: Record<string, string> | null = null;
+/** Cache so we only fetch once per channel per CLI run. */
+const resolvedNextlyVersions = new Map<NextlyDistTag, Record<string, string>>();
 
 /**
- * Fetch the latest version of a package from the npm registry.
- * Returns `"latest"` on failure (network error, timeout, not published yet).
+ * Fetch a package's version for the given dist-tag from the npm registry.
+ * Falls back to the `latest` tag when the package has no entry for `channel`,
+ * and returns the `"latest"` string on failure (network error, timeout, not
+ * published yet).
  */
-async function fetchLatestVersion(pkg: string): Promise<string> {
+async function fetchLatestVersion(
+  pkg: string,
+  channel: NextlyDistTag = "latest"
+): Promise<string> {
   try {
     const res = await fetch(
       `https://registry.npmjs.org/-/package/${encodeURIComponent(pkg)}/dist-tags`,
@@ -238,26 +266,31 @@ async function fetchLatestVersion(pkg: string): Promise<string> {
     );
     if (!res.ok) return "latest";
     const data = (await res.json()) as Record<string, string>;
-    return data.latest ? `^${data.latest}` : "latest";
+    const version = data[channel] ?? data.latest;
+    return version ? `^${version}` : "latest";
   } catch {
     return "latest";
   }
 }
 
 /**
- * Resolve all @nextlyhq/* package versions in parallel.
- * Results are cached for the lifetime of the CLI process.
+ * Resolve all @nextlyhq/* package versions in parallel for the given dist-tag
+ * channel. Results are cached per channel for the lifetime of the CLI process.
  */
-export async function resolveNextlyVersions(): Promise<Record<string, string>> {
-  if (resolvedNextlyVersions) return resolvedNextlyVersions;
+export async function resolveNextlyVersions(
+  channel: NextlyDistTag = "latest"
+): Promise<Record<string, string>> {
+  const cached = resolvedNextlyVersions.get(channel);
+  if (cached) return cached;
 
   const entries = await Promise.all(
     NEXTLY_PACKAGES.map(
-      async pkg => [pkg, await fetchLatestVersion(pkg)] as const
+      async pkg => [pkg, await fetchLatestVersion(pkg, channel)] as const
     )
   );
-  resolvedNextlyVersions = Object.fromEntries(entries);
-  return resolvedNextlyVersions;
+  const versions = Object.fromEntries(entries);
+  resolvedNextlyVersions.set(channel, versions);
+  return versions;
 }
 
 /** Cache for runtime-resolved package versions (next, eslint-config-next). */
@@ -328,7 +361,12 @@ export async function generatePackageJson(
   dependencies["lucide-react"] = "^0.544.0";
 
   if (!useYalc) {
-    const versions = await resolveNextlyVersions();
+    // Content templates (blog) track the `alpha` dist-tag so they always get a
+    // nextly that has the `nextly/runtime` cache helpers their pages import;
+    // other scaffolds track `latest`.
+    const versions = await resolveNextlyVersions(
+      templateNextlyChannel(projectType)
+    );
     dependencies["nextly"] = versions["nextly"];
     dependencies["@nextlyhq/admin"] = versions["@nextlyhq/admin"];
     dependencies["@nextlyhq/ui"] = versions["@nextlyhq/ui"] || "latest";

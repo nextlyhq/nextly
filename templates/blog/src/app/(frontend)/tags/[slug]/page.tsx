@@ -17,12 +17,14 @@ import { PostGrid } from "@/components/PostGrid";
 import { getAllTagSlugs, getPostsByTag, getTagBySlug } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
 
+// Pre-render known tag pages at build time. Freshness afterward is
+// tag-based: the query helpers tag their reads (src/lib/queries), so a tag
+// or post change busts the tag and this page regenerates on the next
+// request — no time-based `revalidate`. New tags render on demand.
 export async function generateStaticParams() {
   const slugs = await getAllTagSlugs();
   return slugs.map(slug => ({ slug }));
 }
-
-export const revalidate = 60;
 
 export async function generateMetadata({
   params,

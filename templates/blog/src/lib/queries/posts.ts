@@ -9,6 +9,14 @@
  * Helpers that look up a single entity return `null` (not a thrown error)
  * when nothing matches; pages should call `notFound()` from `next/navigation`
  * to render the 404 page.
+ *
+ * Caching: every read is wrapped in `cachedFind` and tagged with
+ * `nextlyTags("posts")`. Publishing, editing, or deleting a post busts that
+ * tag on write (the admin route registers the Next cache adapter for you),
+ * so these pages regenerate on the next request with no rebuild and no
+ * time-based `revalidate`. All reads are public (published content, no
+ * per-caller filter), so a stable cache key shared by every visitor is
+ * correct; the varying arguments (slug, page, limit, ...) go in `keyParts`.
  */
 
 // Pass nextlyConfig (loaded via the @nextly-config path alias) so
@@ -16,6 +24,7 @@
 // Without this, the global singleton initializes empty and
 // find('posts') throws "Schema not in registry".
 import { getNextly } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
 
 import type { Post } from "./types";
@@ -45,15 +54,23 @@ function coercePosts(docs: unknown[]): Post[] {
  */
 export async function getLatestPosts(limit = 3): Promise<Post[]> {
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const result = await nextly.find({
-      collection: "posts",
-      where: PUBLISHED,
-      sort: "-publishedAt",
-      limit,
-      depth: 2,
-    });
-    return coercePosts(result.items);
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: PUBLISHED,
+          sort: "-publishedAt",
+          limit,
+          depth: 2,
+        });
+        return coercePosts(result.items);
+      },
+      {
+        tags: nextlyTags("posts"),
+        keyParts: ["posts", "latest", String(limit)],
+      }
+    );
   } catch (error) {
     console.error("Error fetching latest posts:", error);
     return [];
@@ -68,17 +85,22 @@ export async function getLatestPosts(limit = 3): Promise<Post[]> {
  */
 export async function getFeaturedPost(): Promise<Post | null> {
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const result = await nextly.find({
-      collection: "posts",
-      where: {
-        and: [PUBLISHED, { featured: { equals: true } }],
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: {
+            and: [PUBLISHED, { featured: { equals: true } }],
+          },
+          sort: "-publishedAt",
+          limit: 1,
+          depth: 2,
+        });
+        return result.items[0] ? coercePost(result.items[0]) : null;
       },
-      sort: "-publishedAt",
-      limit: 1,
-      depth: 2,
-    });
-    return result.items[0] ? coercePost(result.items[0]) : null;
+      { tags: nextlyTags("posts"), keyParts: ["posts", "featured"] }
+    );
   } catch (error) {
     console.error("Error fetching featured post:", error);
     return null;
@@ -115,23 +137,31 @@ export async function getPosts({
   limit = 9,
 }: PostListOptions = {}): Promise<PostListResult> {
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const result = await nextly.find({
-      collection: "posts",
-      where: PUBLISHED,
-      sort: "-publishedAt",
-      page,
-      limit,
-      depth: 2,
-    });
-    return {
-      items: coercePosts(result.items),
-      meta: {
-        total: result.meta.total,
-        totalPages: result.meta.totalPages,
-        page,
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: PUBLISHED,
+          sort: "-publishedAt",
+          page,
+          limit,
+          depth: 2,
+        });
+        return {
+          items: coercePosts(result.items),
+          meta: {
+            total: result.meta.total,
+            totalPages: result.meta.totalPages,
+            page,
+          },
+        };
       },
-    };
+      {
+        tags: nextlyTags("posts"),
+        keyParts: ["posts", "list", String(page), String(limit)],
+      }
+    );
   } catch (error) {
     console.error("Error fetching posts:", error);
     return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
@@ -144,20 +174,29 @@ export async function getPosts({
  * Only returns published posts — a draft preview system would need a
  * separate helper with a token-based auth check.
  * Returns null when the slug doesn't match or the post is not published.
+ *
+ * Tagged with the collection tag (not an entry-id tag): the id isn't known
+ * until the read resolves, and a slug rename busts `nextly:posts` anyway, so
+ * the old slug's page regenerates and 404s once the post moves.
  */
 export async function getPostBySlug(slug: string): Promise<Post | null> {
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const result = await nextly.find({
-      collection: "posts",
-      where: {
-        and: [PUBLISHED, { slug: { equals: slug } }],
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: {
+            and: [PUBLISHED, { slug: { equals: slug } }],
+          },
+          limit: 1,
+          depth: 2,
+          richTextFormat: "html",
+        });
+        return result.items[0] ? coercePost(result.items[0]) : null;
       },
-      limit: 1,
-      depth: 2,
-      richTextFormat: "html",
-    });
-    return result.items[0] ? coercePost(result.items[0]) : null;
+      { tags: nextlyTags("posts"), keyParts: ["posts", "detail", slug] }
+    );
   } catch (error) {
     console.error(`Error fetching post by slug ${slug}:`, error);
     return null;
@@ -171,14 +210,19 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
  */
 export async function getAllPostSlugs(): Promise<string[]> {
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const result = await nextly.find({
-      collection: "posts",
-      where: PUBLISHED,
-      limit: 1000,
-      depth: 0,
-    });
-    return result.items.map(d => d.slug as string);
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: PUBLISHED,
+          limit: 1000,
+          depth: 0,
+        });
+        return result.items.map(d => d.slug as string);
+      },
+      { tags: nextlyTags("posts"), keyParts: ["posts", "slugs"] }
+    );
   } catch (error) {
     console.error("Error fetching all post slugs:", error);
     return [];
@@ -200,20 +244,25 @@ export interface ArchiveEntry {
  */
 export async function getAllPublishedForArchive(): Promise<ArchiveEntry[]> {
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const result = await nextly.find({
-      collection: "posts",
-      where: PUBLISHED,
-      sort: "-publishedAt",
-      limit: 1000,
-      depth: 0,
-    });
-    return result.items.map(d => ({
-      id: d.id as string,
-      title: d.title as string,
-      slug: d.slug as string,
-      publishedAt: (d.publishedAt as string | null) ?? null,
-    }));
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: PUBLISHED,
+          sort: "-publishedAt",
+          limit: 1000,
+          depth: 0,
+        });
+        return result.items.map(d => ({
+          id: d.id as string,
+          title: d.title as string,
+          slug: d.slug as string,
+          publishedAt: (d.publishedAt as string | null) ?? null,
+        }));
+      },
+      { tags: nextlyTags("posts"), keyParts: ["posts", "archive"] }
+    );
   } catch (error) {
     console.error("Error fetching archive posts:", error);
     return [];
@@ -229,25 +278,33 @@ export async function getPostsByAuthor(
 ): Promise<PostListResult> {
   const { page = 1, limit = 20 } = opts;
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const result = await nextly.find({
-      collection: "posts",
-      where: {
-        and: [PUBLISHED, { author: { equals: authorId } }],
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: {
+            and: [PUBLISHED, { author: { equals: authorId } }],
+          },
+          sort: "-publishedAt",
+          page,
+          limit,
+          depth: 2,
+        });
+        return {
+          items: coercePosts(result.items),
+          meta: {
+            total: result.meta.total,
+            totalPages: result.meta.totalPages,
+            page,
+          },
+        };
       },
-      sort: "-publishedAt",
-      page,
-      limit,
-      depth: 2,
-    });
-    return {
-      items: coercePosts(result.items),
-      meta: {
-        total: result.meta.total,
-        totalPages: result.meta.totalPages,
-        page,
-      },
-    };
+      {
+        tags: nextlyTags("posts"),
+        keyParts: ["posts", "by-author", authorId, String(page), String(limit)],
+      }
+    );
   } catch (error) {
     console.error(`Error fetching posts by author ${authorId}:`, error);
     return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
@@ -261,6 +318,9 @@ export async function getPostsByAuthor(
  * in a TEXT column (e.g. `["uuid1","uuid2"]`). The `contains` operator
  * translates to `LIKE '%value%'` which correctly matches the category
  * ID within the serialized JSON string.
+ *
+ * The slug→id lookup (`getCategoryBySlug`, itself cached) resolves before
+ * the cached posts read so the two caches never nest.
  */
 export async function getPostsByCategory(
   categorySlug: string,
@@ -268,7 +328,6 @@ export async function getPostsByCategory(
 ): Promise<PostListResult> {
   const { page = 1, limit = 9 } = opts;
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
     const category = await getCategoryBySlug(categorySlug);
     if (!category) {
       return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
@@ -276,24 +335,39 @@ export async function getPostsByCategory(
 
     const categoryId = String(category.id);
 
-    const result = await nextly.find({
-      collection: "posts",
-      where: {
-        and: [PUBLISHED, { categories: { contains: categoryId } }],
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: {
+            and: [PUBLISHED, { categories: { contains: categoryId } }],
+          },
+          sort: "-publishedAt",
+          page,
+          limit,
+          depth: 2,
+        });
+        return {
+          items: coercePosts(result.items),
+          meta: {
+            total: result.meta.total,
+            totalPages: result.meta.totalPages,
+            page,
+          },
+        };
       },
-      sort: "-publishedAt",
-      page,
-      limit,
-      depth: 2,
-    });
-    return {
-      items: coercePosts(result.items),
-      meta: {
-        total: result.meta.total,
-        totalPages: result.meta.totalPages,
-        page,
-      },
-    };
+      {
+        tags: nextlyTags("posts"),
+        keyParts: [
+          "posts",
+          "by-category",
+          categorySlug,
+          String(page),
+          String(limit),
+        ],
+      }
+    );
   } catch (error) {
     console.error(`Error fetching posts for category ${categorySlug}:`, error);
     return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
@@ -309,7 +383,6 @@ export async function getPostsByTag(
 ): Promise<PostListResult> {
   const { page = 1, limit = 9 } = opts;
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
     const tag = await getTagBySlug(tagSlug);
     if (!tag) {
       return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
@@ -317,24 +390,33 @@ export async function getPostsByTag(
 
     const tagId = String(tag.id);
 
-    const result = await nextly.find({
-      collection: "posts",
-      where: {
-        and: [PUBLISHED, { tags: { contains: tagId } }],
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const result = await nextly.find({
+          collection: "posts",
+          where: {
+            and: [PUBLISHED, { tags: { contains: tagId } }],
+          },
+          sort: "-publishedAt",
+          page,
+          limit,
+          depth: 2,
+        });
+        return {
+          items: coercePosts(result.items),
+          meta: {
+            total: result.meta.total,
+            totalPages: result.meta.totalPages,
+            page,
+          },
+        };
       },
-      sort: "-publishedAt",
-      page,
-      limit,
-      depth: 2,
-    });
-    return {
-      items: coercePosts(result.items),
-      meta: {
-        total: result.meta.total,
-        totalPages: result.meta.totalPages,
-        page,
-      },
-    };
+      {
+        tags: nextlyTags("posts"),
+        keyParts: ["posts", "by-tag", tagSlug, String(page), String(limit)],
+      }
+    );
   } catch (error) {
     console.error(`Error fetching posts for tag ${tagSlug}:`, error);
     return { items: [], meta: { total: 0, totalPages: 0, page: 1 } };
@@ -358,44 +440,58 @@ export async function getAdjacentPosts(
 }> {
   try {
     if (!currentPublishedAt) return { previous: null, next: null };
-    const nextly = await getNextly({ config: nextlyConfig });
 
-    const [prev, next] = await Promise.all([
-      nextly.find({
-        collection: "posts",
-        where: {
-          and: [
-            PUBLISHED,
-            { publishedAt: { less_than: currentPublishedAt } },
-            { slug: { not_equals: currentSlug } },
-          ],
-        },
-        sort: "-publishedAt",
-        limit: 1,
-        depth: 0,
-      }),
-      nextly.find({
-        collection: "posts",
-        where: {
-          and: [
-            PUBLISHED,
-            { publishedAt: { greater_than: currentPublishedAt } },
-            { slug: { not_equals: currentSlug } },
-          ],
-        },
-        sort: "publishedAt",
-        limit: 1,
-        depth: 0,
-      }),
-    ]);
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
 
-    const pick = (doc?: Record<string, unknown>) =>
-      doc ? { title: doc.title as string, slug: doc.slug as string } : null;
+        const [prev, next] = await Promise.all([
+          nextly.find({
+            collection: "posts",
+            where: {
+              and: [
+                PUBLISHED,
+                { publishedAt: { less_than: currentPublishedAt } },
+                { slug: { not_equals: currentSlug } },
+              ],
+            },
+            sort: "-publishedAt",
+            limit: 1,
+            depth: 0,
+          }),
+          nextly.find({
+            collection: "posts",
+            where: {
+              and: [
+                PUBLISHED,
+                { publishedAt: { greater_than: currentPublishedAt } },
+                { slug: { not_equals: currentSlug } },
+              ],
+            },
+            sort: "publishedAt",
+            limit: 1,
+            depth: 0,
+          }),
+        ]);
 
-    return {
-      previous: pick(prev.items[0]),
-      next: pick(next.items[0]),
-    };
+        const pick = (doc?: Record<string, unknown>) =>
+          doc ? { title: doc.title as string, slug: doc.slug as string } : null;
+
+        return {
+          previous: pick(prev.items[0]),
+          next: pick(next.items[0]),
+        };
+      },
+      {
+        tags: nextlyTags("posts"),
+        keyParts: [
+          "posts",
+          "adjacent",
+          currentSlug,
+          String(currentPublishedAt),
+        ],
+      }
+    );
   } catch (err) {
     console.error("[blog] getAdjacentPosts error:", err);
     return { previous: null, next: null };
@@ -416,6 +512,9 @@ export interface RelatedPostsOptions {
  * the first layer that returns results. If none match, returns [] so
  * the caller can hide the "Related Posts" section rather than show
  * unrelated newest posts (which would be misleading labelling).
+ *
+ * Each layer's posts read is cached under its own key; the slug→id
+ * lookups resolve before the cached read so the caches never nest.
  */
 export async function getRelatedPosts(
   currentSlug: string,
@@ -423,42 +522,53 @@ export async function getRelatedPosts(
 ): Promise<Post[]> {
   try {
     const { tagSlugs = [], categorySlugs = [], authorId, limit = 2 } = opts;
-    const nextly = await getNextly({ config: nextlyConfig });
 
     const excludeCurrent = { slug: { not_equals: currentSlug } };
 
-    const tryQuery = async (where: Record<string, unknown>) => {
-      const result = await nextly.find({
-        collection: "posts",
-        where: {
-          and: [PUBLISHED, excludeCurrent, where],
+    const tryQuery = (keySuffix: string, where: Record<string, unknown>) =>
+      cachedFind(
+        async () => {
+          const nextly = await getNextly({ config: nextlyConfig });
+          const result = await nextly.find({
+            collection: "posts",
+            where: {
+              and: [PUBLISHED, excludeCurrent, where],
+            },
+            sort: "-publishedAt",
+            limit,
+            depth: 2,
+          });
+          return coercePosts(result.items);
         },
-        sort: "-publishedAt",
-        limit,
-        depth: 2,
-      });
-      return coercePosts(result.items);
-    };
+        {
+          tags: nextlyTags("posts"),
+          keyParts: ["posts", "related", currentSlug, keySuffix, String(limit)],
+        }
+      );
 
     // Resolve slugs to IDs then use `contains` on the JSON-encoded TEXT column
     if (tagSlugs.length > 0) {
       const tag = await getTagBySlug(tagSlugs[0]);
       if (tag) {
-        const docs = await tryQuery({ tags: { contains: String(tag.id) } });
+        const docs = await tryQuery(`tag:${tag.id}`, {
+          tags: { contains: String(tag.id) },
+        });
         if (docs.length > 0) return docs;
       }
     }
     if (categorySlugs.length > 0) {
       const cat = await getCategoryBySlug(categorySlugs[0]);
       if (cat) {
-        const docs = await tryQuery({
+        const docs = await tryQuery(`category:${cat.id}`, {
           categories: { contains: String(cat.id) },
         });
         if (docs.length > 0) return docs;
       }
     }
     if (authorId) {
-      const docs = await tryQuery({ author: { equals: authorId } });
+      const docs = await tryQuery(`author:${authorId}`, {
+        author: { equals: authorId },
+      });
       if (docs.length > 0) return docs;
     }
 

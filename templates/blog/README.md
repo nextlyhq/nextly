@@ -128,14 +128,30 @@ Create new files in `src/app/(frontend)/` following the Next.js App Router conve
 
 ## Performance
 
-Dynamic pages pre-render at build time via `generateStaticParams` and revalidate every 60 seconds (ISR):
+Pages pre-render at build time via `generateStaticParams`, then stay fresh through **tag-based revalidation** — no time-based `revalidate`, no rebuilds:
 
-- Every published post
-- Every author
-- Every category
-- Every tag
+- Every published post, author, category, and tag is pre-rendered at build.
+- Every read in `src/lib/queries/` is wrapped in Nextly's `cachedFind` and tagged with `nextlyTags(...)` / `nextlySingleTags(...)`.
+- When you publish, edit, or delete content in `/admin`, the write busts the matching tag and the affected pages regenerate on the **next** request. The admin route registers the Next cache adapter for you (via `createDynamicHandlers`), so this works out of the box — no `instrumentation.ts` to wire up.
+- Slugs published after the last build render on first request (`dynamicParams`).
 
-New content renders on-demand and caches until the next ISR tick. Adjust the window by editing `export const revalidate = 60` in the relevant page. Lower for fresher content at higher DB cost; higher for the opposite.
+### What a write refreshes
+
+| Change in /admin                                      | Pages that refresh on next visit                                                                                                                                                   |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Publish / edit / delete a post                        | Homepage, `/blog` (+ pagination), the post's `/blog/[slug]`, and every author / category / tag listing it appears in                                                               |
+| Rename a post's slug                                  | The new `/blog/[slug]` renders; the old URL 404s (its page regenerated and no published post matches)                                                                              |
+| Edit a category / tag                                 | Its listing page and any post detail that shows it                                                                                                                                 |
+| Edit an author's profile                              | Post pages by that author refresh immediately; the author's own name / bio / avatar refresh within a short safety-net window (the `users` collection does not emit cache tags yet) |
+| Edit the Site settings / Navigation / Homepage single | Every page that reads that global                                                                                                                                                  |
+
+### Opting a write out of revalidation
+
+A bulk import or seed script can skip the cache bust by passing `disableRevalidate: true` to a Direct API write — `nextly.create({ collection: "posts", data, disableRevalidate: true })`. The write still happens; it just doesn't bust tags, which is handy when you would rather revalidate once at the end of a batch.
+
+### Time-based safety net
+
+Tag busting is exact, so posts, categories, tags, and the singles need no timer. The exception is **authors**: the `users` collection does not emit cache tags yet, so `src/lib/queries/authors.ts` ships a time-based backstop (`AUTHOR_REVALIDATE_SECONDS`, one hour) that makes a profile edit appear within that window — lower it for fresher author pages. To add a backstop to any other read, pass `revalidate: <seconds>` to its `cachedFind` call.
 
 Images use `next/image` with a `sizes` attribute so phones don't download desktop-sized files. The `unoptimized` prop is set on avatar images since they can come from arbitrary remote URLs that aren't in `next.config.images.remotePatterns`.
 
@@ -163,7 +179,7 @@ export default async function BlogPage() {
 }
 ```
 
-The Direct API runs in Server Components with zero HTTP overhead. Relationships populate via the `depth` parameter. Per-request caching (React `cache()`) avoids duplicate fetches when multiple components need the same data; see `src/lib/queries/` for the cached helpers.
+The Direct API runs in Server Components with zero HTTP overhead. Relationships populate via the `depth` parameter. React `cache()` deduplicates fetches within a single request; cross-request freshness is tag-based via `cachedFind` (see [Performance](#performance) above). See `src/lib/queries/` for the cached helpers.
 
 ## Search
 
