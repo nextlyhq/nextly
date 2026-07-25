@@ -144,12 +144,23 @@ export async function validateBlockPropValues(
   source: BlockPropsSource
 ): Promise<ConversionIssue[]> {
   const fields = blockPropsToFieldConfigs(source);
+  // Only the record's own keys are stored, so only they are validated. A
+  // props object carrying a custom prototype would otherwise let an inherited
+  // value satisfy a required prop while encoding writes nothing for it.
+  const own = ownProperties(values);
   // Block props are always written whole: a stored node carries every prop it
   // has, so absent means unset rather than untouched, which is create mode.
-  const issues = await validateEntryData(values, fields, { mode: "create" });
-  collectSerializationIssues(fields, values, issues);
-  collectEmptyListIssues(fields, values, "", issues);
+  const issues = await validateEntryData(own, fields, { mode: "create" });
+  collectSerializationIssues(fields, own, issues);
+  collectEmptyListIssues(fields, own, "", issues);
   return issues;
+}
+
+/** A shallow copy carrying only a record's own enumerable keys. */
+function ownProperties(
+  values: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(values));
 }
 
 /**
@@ -174,7 +185,7 @@ function collectSerializationIssues(
     // A prop that already failed a type rule does not need a second, vaguer
     // issue: the specific one describes the same defect better.
     if (alreadyReported(issues, field.name)) continue;
-    const result = isSerializable(value);
+    const result = isSerializable(value, field.name);
     if (result !== true) {
       issues.push({
         path: field.name,
@@ -189,7 +200,7 @@ function collectSerializationIssues(
   const declared = new Set(fields.map(field => field.name));
   for (const [name, value] of Object.entries(values)) {
     if (declared.has(name) || alreadyReported(issues, name)) continue;
-    const result = isSerializable(value);
+    const result = isSerializable(value, name);
     if (result !== true) {
       issues.push({
         path: name,
@@ -907,16 +918,21 @@ function isEditorContent(value: unknown): string | true {
   // Plain records, not merely objects: a class instance with the right keys
   // encodes to whatever its own `toJSON` decides, so the renderer would read
   // back something other than the envelope that was validated.
-  if (!isPlainRecord(value)) return "must be editor content";
+  if (!isPlainRecord(value) || definesOwnToJson(value)) {
+    return "must be editor content";
+  }
   const root = value.root;
-  if (!isPlainRecord(root) || root.type !== "root") {
+  if (!isPlainRecord(root) || definesOwnToJson(root) || root.type !== "root") {
     return "must be editor content with a root node";
   }
   if (!Array.isArray(root.children)) {
     return "must be editor content whose root has a list of children";
   }
   return root.children.every(
-    child => isPlainRecord(child) && typeof child.type === "string"
+    child =>
+      isPlainRecord(child) &&
+      !definesOwnToJson(child) &&
+      typeof child.type === "string"
   )
     ? true
     : "must be editor content whose root children are nodes";
@@ -924,7 +940,9 @@ function isEditorContent(value: unknown): string | true {
 
 /** Whether every entry of a list value is text. */
 function isTextList(value: unknown): string | true {
-  if (!Array.isArray(value)) return "must be a list";
+  // The shared rules report a non-list chips value, so this looks only at the
+  // elements of a value that already has the right container shape.
+  if (!Array.isArray(value)) return true;
   return value.every(entry => typeof entry === "string")
     ? true
     : "must contain only text entries";
@@ -1014,7 +1032,20 @@ function listBoundsValidator(
  * the document is encoded — and a cyclic object, which makes encoding throw.
  */
 function isJsonRecord(value: unknown): string | true {
-  return isPlainRecord(value) ? true : "must be a plain object";
+  // The shared rules own the container-shape check for these types, so a
+  // non-object is already reported and repeating it would double the issue.
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return true;
+  }
+  if (!isPlainRecord(value)) return "must be a plain object";
+  // A record whose shape was just validated must be stored as that shape; an
+  // own `toJSON` replaces it with something else entirely on encode.
+  return definesOwnToJson(value) ? "must not define its own toJSON" : true;
+}
+
+/** Whether a value would substitute something else for itself on encode. */
+function definesOwnToJson(value: object): boolean {
+  return typeof (value as { toJSON?: unknown }).toJSON === "function";
 }
 
 /**
@@ -1032,6 +1063,9 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function isJsonRecordList(value: unknown): string | true {
   if (!Array.isArray(value)) return true;
   for (const row of value) {
+    // A malformed row is reported by the shared rules with its own index, so
+    // only rows that passed that check are examined here.
+    if (typeof row !== "object" || row === null || Array.isArray(row)) continue;
     const result = isJsonRecord(row);
     if (result !== true) return `rows ${result}`;
   }
@@ -1043,7 +1077,7 @@ function isJsonRecordList(value: unknown): string | true {
  * stored as JSON, so anything JSON cannot represent — a function, a symbol, a
  * bigint, a cycle — would be silently dropped or would throw on write.
  */
-function isSerializable(value: unknown): string | true {
+function isSerializable(value: unknown, key: string): string | true {
   try {
     // A prop that encodes to nothing is dropped from the document entirely
     // rather than stored wrongly, so the encoded result is inspected and not
@@ -1054,7 +1088,7 @@ function isSerializable(value: unknown): string | true {
   } catch {
     return "must be JSON-serializable";
   }
-  return containsUnserializable(value)
+  return containsUnserializable(value, key)
     ? "must not contain functions, symbols, undefined, non-finite numbers, or values JSON would reshape"
     : true;
 }
@@ -1065,13 +1099,15 @@ function isSerializable(value: unknown): string | true {
  * holes as `null`, and turning `NaN` and the infinities into `null`, so the
  * loss is invisible without an explicit walk.
  */
-function containsUnserializable(value: unknown): boolean {
-  const pending: unknown[] = [value];
+function containsUnserializable(value: unknown, key: string): boolean {
+  const pending: Array<{ value: unknown; key: string }> = [{ value, key }];
   // Objects can name each other, and a `toJSON` may hand back a fresh object
   // each call, so the walk remembers what it has already accounted for.
   const seen = new WeakSet<object>();
   while (pending.length > 0) {
-    const current = pending.pop();
+    const entry = pending.pop();
+    if (entry === undefined) continue;
+    const current = entry.value;
     if (
       typeof current === "function" ||
       typeof current === "symbol" ||
@@ -1088,20 +1124,24 @@ function containsUnserializable(value: unknown): boolean {
     // so the walk follows that result rather than the value it was called on.
     // Arrays are consulted here too: one carrying a `toJSON` is encoded from
     // that result, not from its elements.
-    const encoded = encodedForm(current);
+    const encoded = encodedForm(current, entry.key);
     if (encoded !== current) {
-      pending.push(encoded);
+      pending.push({ value: encoded, key: entry.key });
       continue;
     }
     if (Array.isArray(current)) {
-      pending.push(...current);
+      current.forEach((item, index) =>
+        pending.push({ value: item, key: String(index) })
+      );
       continue;
     }
     // Anything else that is not a plain record is reshaped rather than
     // rejected: a Map or a Set encodes as `{}`, losing its contents with no
     // error to notice.
     if (!isPlainRecord(current)) return true;
-    pending.push(...Object.values(current));
+    for (const [childKey, childValue] of Object.entries(current)) {
+      pending.push({ value: childValue, key: childKey });
+    }
   }
   return false;
 }
@@ -1111,11 +1151,13 @@ function containsUnserializable(value: unknown): boolean {
  * `toJSON` that throws is reported as unserializable, which is what
  * `JSON.stringify` would do with it anyway.
  */
-function encodedForm(value: object): unknown {
+function encodedForm(value: object, key: string): unknown {
   const toJSON = (value as { toJSON?: unknown }).toJSON;
   if (typeof toJSON !== "function") return value;
   try {
-    return (toJSON as (key?: string) => unknown).call(value);
+    // Encoding passes the containing key, and a serializer is free to read
+    // it, so the walk supplies the same one rather than calling bare.
+    return (toJSON as (key: string) => unknown).call(value, key);
   } catch {
     return undefined;
   }

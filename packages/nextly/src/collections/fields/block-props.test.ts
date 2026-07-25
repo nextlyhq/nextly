@@ -1157,6 +1157,88 @@ describe("validateBlockPropValues stored shapes", () => {
   });
 });
 
+describe("validateBlockPropValues stored-form fidelity", () => {
+  it("validates only the props record's own keys", async () => {
+    // An inherited value satisfies `field.name in data` but encodes to
+    // nothing, so a required prop would pass while storing an empty object.
+    const source: BlockPropsSource = {
+      props: { title: { type: "text", required: true } },
+    };
+    const inherited = Object.create({ title: "inherited" }) as Record<
+      string,
+      unknown
+    >;
+    const issues = await validateBlockPropValues(inherited, source);
+    expect(issues.map(issue => issue.code)).toEqual(["REQUIRED"]);
+  });
+
+  it("passes the containing key to a serializer that reads it", async () => {
+    const source: BlockPropsSource = { props: { data: { type: "json" } } };
+    // Encoding calls toJSON("data"), which drops the prop; calling it bare
+    // would have made this look safe.
+    const keySensitive = {
+      toJSON: (key?: string) => (key === "data" ? undefined : { ok: true }),
+    };
+    expect(
+      await validateBlockPropValues({ data: keySensitive }, source)
+    ).toHaveLength(1);
+  });
+
+  it("refuses a shape-constrained record that replaces itself on encode", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        meta: { type: "group", fields: { child: { type: "text" } } },
+        items: {
+          type: "repeater",
+          fields: { child: { type: "text" } },
+        },
+        body: { type: "richText" },
+      },
+    };
+    // Each of these satisfies its declared shape and stores something else.
+    expect(
+      await validateBlockPropValues(
+        { meta: { child: "ok", toJSON: () => "lost" } },
+        source
+      )
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { items: [{ child: "ok", toJSON: () => "lost" }] },
+        source
+      )
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        {
+          body: {
+            root: { type: "root", children: [] },
+            toJSON: () => "lost",
+          },
+        },
+        source
+      )
+    ).toHaveLength(1);
+  });
+
+  it("reports one issue when the container shape itself is wrong", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        tags: { type: "chips" },
+        meta: { type: "group", fields: { child: { type: "text" } } },
+      },
+    };
+    // The shared rules own the container-shape failure; the element and
+    // record checks must not restate it.
+    expect(await validateBlockPropValues({ tags: 123 }, source)).toHaveLength(
+      1
+    );
+    expect(await validateBlockPropValues({ meta: 123 }, source)).toHaveLength(
+      1
+    );
+  });
+});
+
 describe("plugin field types as block props", () => {
   afterEach(() => {
     clearFieldTypes();
