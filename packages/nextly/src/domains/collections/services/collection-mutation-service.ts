@@ -2128,19 +2128,36 @@ export class CollectionMutationService extends BaseService {
         // too (D69). Recorded in the SAME transaction, so it commits with the row
         // and inherits the recording opt-out. `statusEventsFor` emits only
         // `entry.published` here (no `status_changed` — nothing to change from).
-        const createdStatusRecorded = await this.recordStatusEvents(tx, {
-          collection: params.collectionName,
-          id: entry.id as string,
-          ...(localizedWrite ? { locale: localizedWrite.writeLocale } : {}),
-          from: null,
-          to: (entry as { status?: unknown }).status as string | undefined,
-          isCreate: true,
-          data: createdDocument,
-          previous: null,
-          fields: webhookFields,
-          actor: actorForWrite(params.actor, params.user),
-        });
-        recorded = recorded || createdStatusRecorded;
+        //
+        // Gated on the collection's Draft/Published LIFECYCLE flag: a collection
+        // without it may still define an ordinary user field named `status`, and
+        // an ordinary `"published"` value there is business data, not a publish.
+        //
+        // A localized create moves the requested status to the companion, leaving
+        // the main row on its table default, so the write-locale's companion
+        // `_status` is the real transition target (same value the version capture
+        // above indexes); tag the event with that write locale.
+        const collectionHasStatusLifecycle =
+          (collection as { status?: boolean }).status === true;
+        if (collectionHasStatusLifecycle) {
+          const createdToStatus =
+            typeof createCompanionStatus === "string"
+              ? createCompanionStatus
+              : ((entry as { status?: unknown }).status as string | undefined);
+          const createdStatusRecorded = await this.recordStatusEvents(tx, {
+            collection: params.collectionName,
+            id: entry.id as string,
+            ...(localizedWrite ? { locale: localizedWrite.writeLocale } : {}),
+            from: null,
+            to: createdToStatus,
+            isCreate: true,
+            data: createdDocument,
+            previous: null,
+            fields: webhookFields,
+            actor: actorForWrite(params.actor, params.user),
+          });
+          recorded = recorded || createdStatusRecorded;
+        }
       });
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -4192,16 +4209,26 @@ export class CollectionMutationService extends BaseService {
               // and the status this write persisted to the main row (`undefined`
               // when the patch set no status, leaving to === from → no event).
               const actor = actorForWrite(params.actor, params.user);
+              // Only a Draft/Published lifecycle collection has real status
+              // transitions. A collection without it may define an ordinary user
+              // field named `status`, whose values are business data, not publish
+              // signals — so no lifecycle event fires for those.
+              const collectionHasStatusLifecycle =
+                (collection as { status?: boolean }).status === true;
+              // Both statuses come from the ROW-LOCKED reads, not the request:
+              // `preUpdateRow` is the prior main-row status read under the lock
+              // (correct for unversioned collections and under a concurrent writer
+              // that this tx waited on), and `currentRow` is the PERSISTED value
+              // after this write — so a status the DB coerced into the text column
+              // (a numeric/boolean input) is compared as its committed string, not
+              // the raw request value.
               const mainFrom =
-                committedPreviousStatus ??
-                ((existingEntry as Record<string, unknown>).status as
+                ((preUpdateRow as { status?: unknown } | undefined)?.status as
                   | string
-                  | undefined) ??
-                null;
-              const mainTo =
-                ((updatePayload as { status?: unknown }).status as
-                  | string
-                  | undefined) ?? mainFrom;
+                  | undefined) ?? null;
+              const mainTo = (currentParent as { status?: unknown }).status as
+                | string
+                | undefined;
               // The main row's status is the DEFAULT locale's entry-level status
               // on a localized collection (a default-locale write keeps `status`
               // in the main payload; a non-default write strips it, so the main
@@ -4211,20 +4238,22 @@ export class CollectionMutationService extends BaseService {
               const defaultLocale = localizedUpdate
                 ? this.localization?.defaultLocale
                 : undefined;
-              const mainStatusRecorded = await this.recordStatusEvents(tx, {
-                collection: params.collectionName,
-                id: params.entryId,
-                ...(defaultLocale !== undefined
-                  ? { locale: defaultLocale }
-                  : {}),
-                from: mainFrom,
-                to: mainTo,
-                isCreate: false,
-                data: updatedDocument,
-                previous: previousDocument,
-                fields: webhookFields,
-                actor,
-              });
+              const mainStatusRecorded = collectionHasStatusLifecycle
+                ? await this.recordStatusEvents(tx, {
+                    collection: params.collectionName,
+                    id: params.entryId,
+                    ...(defaultLocale !== undefined
+                      ? { locale: defaultLocale }
+                      : {}),
+                    from: mainFrom,
+                    to: mainTo,
+                    isCreate: false,
+                    data: updatedDocument,
+                    previous: previousDocument,
+                    fields: webhookFields,
+                    actor,
+                  })
+                : false;
 
               // Per-locale delta (i18n M6): a NON-default localized write moves
               // only the companion `_status`, leaving the main row unchanged, so
@@ -4234,6 +4263,7 @@ export class CollectionMutationService extends BaseService {
               // recording it here as well would duplicate the event.
               let localizedStatusRecorded = false;
               if (
+                collectionHasStatusLifecycle &&
                 localizedUpdate &&
                 localizedUpdate.writeLocale !== this.localization?.defaultLocale
               ) {
