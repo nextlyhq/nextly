@@ -912,10 +912,12 @@ export async function reloadNextlyConfig(opts?: {
   });
 
   if (applyResult.success) {
-    // The schema change committed, so publish the (possibly toggled) recording
-    // policy now — this covers a combined `webhooks` + schema-field change,
-    // which takes the DDL path rather than the metadata-only path above.
-    republishRecordingPolicies(newConfig);
+    // Publish the (possibly toggled) recording policy only AFTER the metadata
+    // syncs below succeed (see the assignment after them): the DDL applied, but
+    // if the field-tree sync then fails, activating the new decision while the
+    // mutation services still read stale fields would record/suppress events
+    // against the wrong stripping config.
+    let metadataSynced = true;
     // Sync dynamic_collections metadata so the fields JSON reflects the
     // new config. The pipeline above only applies DDL to dc_<slug>; without
     // this call, admin-UI queries still read the old field list until the
@@ -946,6 +948,7 @@ export async function reloadNextlyConfig(opts?: {
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
       // or HMR cycle will retry via registerServices.
+      metadataSynced = false;
     }
 
     // Mirror the same metadata sync for singles — keeps dynamic_singles.fields
@@ -977,7 +980,13 @@ export async function reloadNextlyConfig(opts?: {
       }
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above.
+      metadataSynced = false;
     }
+
+    // The DDL and the field-tree metadata are now both in step (or the sync
+    // failed and will retry), so it is safe to activate the recording policy —
+    // never before, so a stale field tree can't pair with the new decision.
+    if (metadataSynced) republishRecordingPolicies(newConfig);
 
     // Sync dynamic_components metadata — keeps dynamic_components.fields
     // in step with the DDL changes the pipeline just applied.
