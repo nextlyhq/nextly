@@ -380,6 +380,31 @@ export {
   getFieldType as getPluginFieldType,
 } from "./domains/schema/field-types/field-type-registry";
 
+// Block props on the field system — a block's prop declarations become
+// ordinary field configs, so block values validate through the same pass
+// entries do instead of a parallel rule set.
+export {
+  blockPropsToFieldConfigs,
+  validateBlockPropValues,
+  type BlockPropDeclaration,
+  type BlockPropsSource,
+} from "./collections/fields/block-props";
+
+// The block-prop surface: which field types a block prop may declare, and
+// which data fields may be bound into one. Both derive from the prop's type,
+// never from a per-block opt-in.
+export {
+  BLOCK_FIELD_TYPES,
+  BLOCK_FIELD_TYPE_CATALOG,
+  BINDABLE_KINDS,
+  FIELD_TYPE_BINDING_KIND,
+  isBlockFieldType,
+  isBindablePropType,
+  canBindFieldTypeToPropType,
+  type BlockFieldCatalogType,
+  type BindingValueKind,
+} from "./collections/fields/catalog";
+
 // Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
 export type {
   ServiceOpts,

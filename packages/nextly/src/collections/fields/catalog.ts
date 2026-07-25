@@ -187,7 +187,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
  * here beside the surface catalogs so both the built-in surface types and
  * plugin-declared `surfaces` reference one definition.
  */
-export type FieldSurface = "entries" | "users" | "forms";
+export type FieldSurface = "entries" | "users" | "forms" | "blocks";
 
 /**
  * The surface a plugin field type targets when its author declares none. Shared
@@ -339,6 +339,164 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
     combined.push(HIDDEN_SURFACE_ENTRY, FILE_SURFACE_ENTRY);
     return combined;
   })();
+
+/**
+ * The block-prop surface's field types: everything a collection can declare
+ * except two deliberate exclusions.
+ *
+ * - `password` is excluded because a block document is public page content
+ *   rendered to every visitor, so a secret must never be authorable as a
+ *   block prop.
+ * - `component` is excluded because reusable composition inside a block
+ *   document happens through slots and component-instance nodes; admitting the
+ *   component field type as well would give one concept two storage shapes.
+ *
+ * Link-shaped props keep using `text` until the dedicated link picker joins
+ * the catalog with its admin component.
+ */
+export type BlockFieldCatalogType = Exclude<
+  FieldType,
+  "password" | "component"
+>;
+
+/** Every block-prop field type, in catalog order. */
+export const BLOCK_FIELD_TYPES: readonly BlockFieldCatalogType[] = [
+  "text",
+  "textarea",
+  "richText",
+  "email",
+  "number",
+  "code",
+  "date",
+  "select",
+  "radio",
+  "checkbox",
+  "json",
+  "chips",
+  "upload",
+  "relationship",
+  "repeater",
+  "group",
+];
+
+/**
+ * The block-prop picker's catalog: the shared catalog narrowed to the types a
+ * block prop may declare. Unlike the user and form surfaces it adds no
+ * surface-only types, so every entry here maps to a real `FieldConfig`.
+ */
+export const BLOCK_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<BlockFieldCatalogType>[] =
+  narrowFieldTypeCatalog(BLOCK_FIELD_TYPES);
+
+/** Whether a field type may be declared as a block prop. */
+export function isBlockFieldType(type: string): type is BlockFieldCatalogType {
+  return (BLOCK_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * The value shapes a binding can carry. A binding connects a data field to a
+ * block prop, so both sides are described in this one vocabulary and
+ * compatibility is a set membership test rather than a per-pair table.
+ */
+export type BindingValueKind =
+  | "text"
+  | "richText"
+  | "number"
+  | "boolean"
+  | "date"
+  | "media"
+  | "option"
+  | "reference"
+  | "list"
+  | "json";
+
+/**
+ * The kind of value a field of each type produces when it is a binding
+ * SOURCE. `null` means the type cannot be bound from at all: `password` never
+ * leaves the server, `component` and `group` are containers whose parts are
+ * bound individually, and a `repeater` is a to-many collection that a loop
+ * iterates rather than a binding flattens.
+ */
+export const FIELD_TYPE_BINDING_KIND: Readonly<
+  Record<FieldType, BindingValueKind | null>
+> = {
+  text: "text",
+  textarea: "text",
+  richText: "richText",
+  email: "text",
+  password: null,
+  code: "text",
+  number: "number",
+  checkbox: "boolean",
+  date: "date",
+  select: "option",
+  radio: "option",
+  upload: "media",
+  relationship: "reference",
+  repeater: null,
+  group: null,
+  json: "json",
+  component: null,
+  chips: "list",
+};
+
+/**
+ * The value kinds each block-prop type accepts from a binding. This map IS the
+ * bindability rule: a prop's binding affordance is derived from its declared
+ * TYPE and never from a per-block opt-in, so a new block gets binding support
+ * on every compatible prop the moment it is written.
+ *
+ * String-valued props accept numbers and dates because a binding carries an
+ * optional formatter that renders them as text. Rich text accepts only rich
+ * text: its stored value is structured editor content, and a plain string
+ * would not survive the round trip. Structured props (`repeater`, `group`) are
+ * composed rather than bound, so they accept nothing.
+ */
+export const BINDABLE_KINDS: Readonly<
+  Record<BlockFieldCatalogType, readonly BindingValueKind[]>
+> = {
+  text: ["text", "option", "number", "date"],
+  textarea: ["text", "option", "number", "date"],
+  richText: ["richText"],
+  email: ["text"],
+  number: ["number"],
+  code: ["text"],
+  date: ["date"],
+  select: ["option", "text"],
+  radio: ["option", "text"],
+  checkbox: ["boolean"],
+  json: ["json"],
+  chips: ["list"],
+  upload: ["media"],
+  relationship: ["reference"],
+  repeater: [],
+  group: [],
+};
+
+/** Whether a block prop of this type can be bound to a data field at all. */
+export function isBindablePropType(type: string): boolean {
+  return isBlockFieldType(type) && BINDABLE_KINDS[type].length > 0;
+}
+
+/**
+ * Whether a field of `sourceType` can be bound into a block prop of
+ * `propType`. Pickers use this to filter the field list they offer, so a user
+ * is never shown a binding that the renderer would then have to coerce.
+ */
+export function canBindFieldTypeToPropType(
+  sourceType: string,
+  propType: string
+): boolean {
+  if (!isBlockFieldType(propType)) return false;
+  const kind = isFieldType(sourceType)
+    ? FIELD_TYPE_BINDING_KIND[sourceType]
+    : null;
+  return kind !== null && BINDABLE_KINDS[propType].includes(kind);
+}
+
+/** Narrowing guard for the built-in field-type union. */
+function isFieldType(type: string): type is FieldType {
+  return Object.prototype.hasOwnProperty.call(FIELD_TYPE_BINDING_KIND, type);
+}
 
 /** Look up one catalog entry by its type key. */
 export function getFieldTypeCatalogEntry(

@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BINDABLE_KINDS,
+  BLOCK_FIELD_TYPES,
+  BLOCK_FIELD_TYPE_CATALOG,
+  FIELD_TYPE_BINDING_KIND,
   FIELD_TYPE_CATALOG,
   FORM_FIELD_TYPE_CATALOG,
   USER_FIELD_TYPE_CATALOG,
+  canBindFieldTypeToPropType,
   getFieldTypeCatalogEntry,
+  isBindablePropType,
+  isBlockFieldType,
   narrowFieldTypeCatalog,
 } from "./catalog";
 import { ALL_FIELD_TYPES } from "./types";
@@ -119,5 +126,105 @@ describe("FORM_FIELD_TYPE_CATALOG", () => {
       expect(entry.hint.length).toBeGreaterThan(0);
       expect(entry.icon.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("BLOCK_FIELD_TYPE_CATALOG", () => {
+  it("is the canonical catalog minus password and component", () => {
+    const types = BLOCK_FIELD_TYPE_CATALOG.map(entry => entry.type);
+    expect(new Set(types).size).toBe(types.length);
+    expect([...types].sort()).toEqual(
+      ALL_FIELD_TYPES.filter(
+        type => type !== "password" && type !== "component"
+      ).sort()
+    );
+  });
+
+  it("adds no surface-only types, so every entry maps to a field config", () => {
+    const canonical = new Set(FIELD_TYPE_CATALOG.map(entry => entry.type));
+    for (const entry of BLOCK_FIELD_TYPE_CATALOG) {
+      expect(canonical.has(entry.type), entry.type).toBe(true);
+    }
+  });
+
+  it("lists the same types the type list does, in catalog order", () => {
+    expect(BLOCK_FIELD_TYPE_CATALOG.map(entry => entry.type)).toEqual(
+      FIELD_TYPE_CATALOG.map(entry => entry.type).filter(type =>
+        (BLOCK_FIELD_TYPES as readonly string[]).includes(type)
+      )
+    );
+  });
+
+  it("recognizes block prop types and rejects everything else", () => {
+    expect(isBlockFieldType("richText")).toBe(true);
+    expect(isBlockFieldType("password")).toBe(false);
+    expect(isBlockFieldType("component")).toBe(false);
+    expect(isBlockFieldType("url")).toBe(false);
+    expect(isBlockFieldType("nope")).toBe(false);
+  });
+});
+
+describe("binding kinds", () => {
+  it("assigns a source kind to every canonical field type", () => {
+    for (const type of ALL_FIELD_TYPES) {
+      expect(FIELD_TYPE_BINDING_KIND).toHaveProperty(type);
+    }
+  });
+
+  it("declares accepted kinds for every block prop type", () => {
+    for (const type of BLOCK_FIELD_TYPES) {
+      expect(BINDABLE_KINDS[type]).toBeDefined();
+    }
+  });
+
+  it("never accepts a kind no field type can produce", () => {
+    const producible = new Set(
+      Object.values(FIELD_TYPE_BINDING_KIND).filter(kind => kind !== null)
+    );
+    for (const accepted of Object.values(BINDABLE_KINDS)) {
+      for (const kind of accepted) {
+        expect(producible.has(kind), kind).toBe(true);
+      }
+    }
+  });
+
+  it("makes bindability a property of the prop type", () => {
+    expect(isBindablePropType("text")).toBe(true);
+    expect(isBindablePropType("upload")).toBe(true);
+    // Structured props are composed, not bound.
+    expect(isBindablePropType("repeater")).toBe(false);
+    expect(isBindablePropType("group")).toBe(false);
+    // Not a block prop type at all.
+    expect(isBindablePropType("password")).toBe(false);
+  });
+
+  it("pairs compatible source fields with props", () => {
+    expect(canBindFieldTypeToPropType("text", "text")).toBe(true);
+    expect(canBindFieldTypeToPropType("email", "text")).toBe(true);
+    expect(canBindFieldTypeToPropType("number", "text")).toBe(true);
+    expect(canBindFieldTypeToPropType("select", "radio")).toBe(true);
+    expect(canBindFieldTypeToPropType("upload", "upload")).toBe(true);
+    expect(canBindFieldTypeToPropType("relationship", "relationship")).toBe(
+      true
+    );
+  });
+
+  it("refuses pairs the renderer would have to coerce", () => {
+    // Rich text is structured editor content; a plain string is not it.
+    expect(canBindFieldTypeToPropType("text", "richText")).toBe(false);
+    expect(canBindFieldTypeToPropType("richText", "text")).toBe(false);
+    expect(canBindFieldTypeToPropType("number", "checkbox")).toBe(false);
+    // A to-many repeater is iterated by a loop, never flattened into a prop.
+    expect(canBindFieldTypeToPropType("repeater", "text")).toBe(false);
+    // Secrets never leave the server.
+    expect(canBindFieldTypeToPropType("password", "text")).toBe(false);
+  });
+
+  it("rejects unknown types on either side", () => {
+    expect(canBindFieldTypeToPropType("nope", "text")).toBe(false);
+    expect(canBindFieldTypeToPropType("text", "nope")).toBe(false);
+    expect(canBindFieldTypeToPropType("text", "password")).toBe(false);
+    // A prototype member is not a field type.
+    expect(canBindFieldTypeToPropType("toString", "text")).toBe(false);
   });
 });
