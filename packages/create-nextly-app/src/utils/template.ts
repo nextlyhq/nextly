@@ -251,9 +251,10 @@ const resolvedNextlyVersions = new Map<NextlyDistTag, Record<string, string>>();
 
 /**
  * Fetch a package's version for the given dist-tag from the npm registry.
- * Falls back to the `latest` tag when the package has no entry for `channel`,
- * and returns the `"latest"` string on failure (network error, timeout, not
- * published yet).
+ * On any failure (non-OK response, timeout, missing tag, thrown error) it
+ * returns the requested dist-tag NAME itself (e.g. "alpha") — a valid npm
+ * install spec — so a content template pinned to `alpha` never silently drops
+ * to `latest`, which lacks the runtime helpers its pages import.
  */
 async function fetchLatestVersion(
   pkg: string,
@@ -264,12 +265,12 @@ async function fetchLatestVersion(
       `https://registry.npmjs.org/-/package/${encodeURIComponent(pkg)}/dist-tags`,
       { signal: AbortSignal.timeout(5000) }
     );
-    if (!res.ok) return "latest";
+    if (!res.ok) return channel;
     const data = (await res.json()) as Record<string, string>;
-    const version = data[channel] ?? data.latest;
-    return version ? `^${version}` : "latest";
+    const version = data[channel];
+    return version ? `^${version}` : channel;
   } catch {
-    return "latest";
+    return channel;
   }
 }
 

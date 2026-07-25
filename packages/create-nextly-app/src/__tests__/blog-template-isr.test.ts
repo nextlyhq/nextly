@@ -57,6 +57,16 @@ describe("blog template — tag-based ISR", () => {
     }
   );
 
+  it("post reads that embed relations carry the related collection tags", () => {
+    // Depth>=1 post reads populate author / category / tag records, so a write
+    // to any of those collections must refresh the post pages showing it — not
+    // only nextly:posts. Guards against a regression back to posts-tag-only.
+    const src = read("src/lib/queries/posts.ts");
+    expect(src).toContain('nextlyTags("categories")');
+    expect(src).toContain('nextlyTags("tags")');
+    expect(src).toContain('nextlyTags("users")');
+  });
+
   const SINGLE_QUERIES = [
     "src/lib/queries/site-settings.ts",
     "src/lib/queries/navigation.ts",

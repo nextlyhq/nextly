@@ -10,13 +10,21 @@
  * when nothing matches; pages should call `notFound()` from `next/navigation`
  * to render the 404 page.
  *
- * Caching: every read is wrapped in `cachedFind` and tagged with
- * `nextlyTags("posts")`. Publishing, editing, or deleting a post busts that
- * tag on write (the admin route registers the Next cache adapter for you),
- * so these pages regenerate on the next request with no rebuild and no
- * time-based `revalidate`. All reads are public (published content, no
- * per-caller filter), so a stable cache key shared by every visitor is
+ * Caching: every read is wrapped in `cachedFind`. Publishing, editing, or
+ * deleting a post busts `nextly:posts` on write (the admin route registers the
+ * Next cache adapter for you), so these pages regenerate on the next request
+ * with no rebuild and no fixed timer. All reads are public (published content,
+ * no per-caller filter), so a stable cache key shared by every visitor is
  * correct; the varying arguments (slug, page, limit, ...) go in `keyParts`.
+ *
+ * Depth>=1 reads embed related author / category / tag records, so an edit to
+ * one of those must also refresh the post pages showing it. Those reads use
+ * `POST_WITH_RELATIONS_TAGS`: category and tag writes bust their own collection
+ * tags immediately, and because the `users` collection (authors) does not emit
+ * cache tags yet, those reads also carry a time-based safety net
+ * (`RELATION_REVALIDATE_SECONDS`) so an author profile edit becomes visible
+ * within that window. Depth=0 reads select only post columns and stay tagged
+ * with `nextly:posts` alone.
  */
 
 // Pass nextlyConfig (loaded via the @nextly-config path alias) so
@@ -32,6 +40,28 @@ import { getCategoryBySlug } from "./categories";
 import { getTagBySlug } from "./tags";
 
 const PUBLISHED = { status: { equals: "published" } };
+
+/**
+ * Tags for a read that populates related records (depth>=1). Carries the post,
+ * category, tag, and user collection tags so an edit to any embedded relation
+ * busts these pages. Categories and tags emit their tags on write; the `users`
+ * tag is inert today (see `RELATION_REVALIDATE_SECONDS`) but future-proofs the
+ * read for when user writes gain tag emission.
+ */
+const POST_WITH_RELATIONS_TAGS = [
+  ...nextlyTags("posts"),
+  ...nextlyTags("categories"),
+  ...nextlyTags("tags"),
+  ...nextlyTags("users"),
+];
+
+/**
+ * Time-based safety net (seconds) for reads that embed author (user) fields.
+ * The `users` collection does not emit revalidation tags today, so this window
+ * is how an author's updated name / bio / avatar becomes visible inside posts.
+ * Lower it for fresher relation data at a higher DB cost.
+ */
+const RELATION_REVALIDATE_SECONDS = 3600;
 
 /**
  * Nextly's `find()` returns loosely-typed documents (Record<string, unknown>).
@@ -67,8 +97,9 @@ export async function getLatestPosts(limit = 3): Promise<Post[]> {
         return coercePosts(result.items);
       },
       {
-        tags: nextlyTags("posts"),
+        tags: POST_WITH_RELATIONS_TAGS,
         keyParts: ["posts", "latest", String(limit)],
+        revalidate: RELATION_REVALIDATE_SECONDS,
       }
     );
   } catch (error) {
@@ -99,7 +130,11 @@ export async function getFeaturedPost(): Promise<Post | null> {
         });
         return result.items[0] ? coercePost(result.items[0]) : null;
       },
-      { tags: nextlyTags("posts"), keyParts: ["posts", "featured"] }
+      {
+        tags: POST_WITH_RELATIONS_TAGS,
+        keyParts: ["posts", "featured"],
+        revalidate: RELATION_REVALIDATE_SECONDS,
+      }
     );
   } catch (error) {
     console.error("Error fetching featured post:", error);
@@ -158,8 +193,9 @@ export async function getPosts({
         };
       },
       {
-        tags: nextlyTags("posts"),
+        tags: POST_WITH_RELATIONS_TAGS,
         keyParts: ["posts", "list", String(page), String(limit)],
+        revalidate: RELATION_REVALIDATE_SECONDS,
       }
     );
   } catch (error) {
@@ -175,7 +211,7 @@ export async function getPosts({
  * separate helper with a token-based auth check.
  * Returns null when the slug doesn't match or the post is not published.
  *
- * Tagged with the collection tag (not an entry-id tag): the id isn't known
+ * Tagged with the collection tags (not an entry-id tag): the id isn't known
  * until the read resolves, and a slug rename busts `nextly:posts` anyway, so
  * the old slug's page regenerates and 404s once the post moves.
  */
@@ -195,7 +231,11 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
         });
         return result.items[0] ? coercePost(result.items[0]) : null;
       },
-      { tags: nextlyTags("posts"), keyParts: ["posts", "detail", slug] }
+      {
+        tags: POST_WITH_RELATIONS_TAGS,
+        keyParts: ["posts", "detail", slug],
+        revalidate: RELATION_REVALIDATE_SECONDS,
+      }
     );
   } catch (error) {
     console.error(`Error fetching post by slug ${slug}:`, error);
@@ -301,8 +341,9 @@ export async function getPostsByAuthor(
         };
       },
       {
-        tags: nextlyTags("posts"),
+        tags: POST_WITH_RELATIONS_TAGS,
         keyParts: ["posts", "by-author", authorId, String(page), String(limit)],
+        revalidate: RELATION_REVALIDATE_SECONDS,
       }
     );
   } catch (error) {
@@ -358,7 +399,7 @@ export async function getPostsByCategory(
         };
       },
       {
-        tags: nextlyTags("posts"),
+        tags: POST_WITH_RELATIONS_TAGS,
         keyParts: [
           "posts",
           "by-category",
@@ -366,6 +407,7 @@ export async function getPostsByCategory(
           String(page),
           String(limit),
         ],
+        revalidate: RELATION_REVALIDATE_SECONDS,
       }
     );
   } catch (error) {
@@ -413,8 +455,9 @@ export async function getPostsByTag(
         };
       },
       {
-        tags: nextlyTags("posts"),
+        tags: POST_WITH_RELATIONS_TAGS,
         keyParts: ["posts", "by-tag", tagSlug, String(page), String(limit)],
+        revalidate: RELATION_REVALIDATE_SECONDS,
       }
     );
   } catch (error) {
@@ -541,8 +584,9 @@ export async function getRelatedPosts(
           return coercePosts(result.items);
         },
         {
-          tags: nextlyTags("posts"),
+          tags: POST_WITH_RELATIONS_TAGS,
           keyParts: ["posts", "related", currentSlug, keySuffix, String(limit)],
+          revalidate: RELATION_REVALIDATE_SECONDS,
         }
       );
 

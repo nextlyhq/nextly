@@ -65,3 +65,41 @@ describe("content-template dist-tag pinning", () => {
     expect(pkg.dependencies["@nextlyhq/admin"]).toBe(`^${LATEST}`);
   });
 });
+
+// Reset modules per test so the per-channel version cache never masks the
+// failure path (a cached alpha version would hide a regression here).
+describe("alpha pin survives a registry lookup failure", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a blog scaffold on the alpha tag when the registry request fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, json: async () => ({}) }))
+    );
+    const { generatePackageJson: gen } = await import("../utils/template");
+    const pkg = JSON.parse(await gen("blog-app", pgDatabase, false, "blog"));
+    // The dist-tag name is itself a valid npm spec; a content template must
+    // never silently drop to `latest` (which lacks the runtime helpers).
+    expect(pkg.dependencies["nextly"]).toBe("alpha");
+    expect(pkg.dependencies["@nextlyhq/admin"]).toBe("alpha");
+  });
+
+  it("keeps a blog scaffold on the alpha tag when the alpha tag is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ latest: LATEST }),
+      }))
+    );
+    const { generatePackageJson: gen } = await import("../utils/template");
+    const pkg = JSON.parse(await gen("blog-app", pgDatabase, false, "blog"));
+    expect(pkg.dependencies["nextly"]).toBe("alpha");
+  });
+});
