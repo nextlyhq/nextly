@@ -1765,36 +1765,48 @@ export class SingleMutationService extends BaseService {
               id: existingDoc.id,
               ...(eventLocale != null ? { locale: eventLocale } : {}),
             };
-            recorded = await recordMutationEvent(tx, {
-              type: "single.updated",
-              resource,
-              data: dataDoc,
-              previous: previousDoc,
-              fields: webhookFields,
-              actor,
-            });
-            // A publish emits BOTH `single.updated` and `single.published` (and
-            // an unpublish both `single.updated` and `single.unpublished`), so a
-            // consumer subscribes to whichever it needs.
-            if (publishedTransition) {
-              await recordMutationEvent(tx, {
-                type: "single.published",
+            // Record only when the same opt-out decision that gated the payload
+            // assembly still holds. `recordMutationEvent` re-derives the policy
+            // internally, but a dev HMR reload can flip `webhooks` mid-write: if
+            // it went false -> true between the check above and here, that
+            // internal re-check would record the DEGRADED opt-out payload built
+            // above (raw row, no previous, unexpanded components). Gating on the
+            // one `recordingEnabled` value read at assembly time keeps the two
+            // checks from diverging — either the full payload is recorded, or
+            // nothing is. (An opt-out that flips true -> false mid-write likewise
+            // records nothing here, which is the safe direction.)
+            if (recordingEnabled) {
+              recorded = await recordMutationEvent(tx, {
+                type: "single.updated",
                 resource,
                 data: dataDoc,
                 previous: previousDoc,
                 fields: webhookFields,
                 actor,
               });
-            }
-            if (unpublishedTransition) {
-              await recordMutationEvent(tx, {
-                type: "single.unpublished",
-                resource,
-                data: dataDoc,
-                previous: previousDoc,
-                fields: webhookFields,
-                actor,
-              });
+              // A publish emits BOTH `single.updated` and `single.published` (and
+              // an unpublish both `single.updated` and `single.unpublished`), so a
+              // consumer subscribes to whichever it needs.
+              if (publishedTransition) {
+                await recordMutationEvent(tx, {
+                  type: "single.published",
+                  resource,
+                  data: dataDoc,
+                  previous: previousDoc,
+                  fields: webhookFields,
+                  actor,
+                });
+              }
+              if (unpublishedTransition) {
+                await recordMutationEvent(tx, {
+                  type: "single.unpublished",
+                  resource,
+                  data: dataDoc,
+                  previous: previousDoc,
+                  fields: webhookFields,
+                  actor,
+                });
+              }
             }
 
             return rows;
