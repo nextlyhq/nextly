@@ -682,6 +682,14 @@ export class SingleQueryService extends BaseService {
           // fields blank instead of showing default-language text.
           locale: options.locale,
           fallbackLocale: options.fallbackLocale,
+          // A component's relationship fields copy whole rows out of the target
+          // collection, which a Single's field list never describes — so the
+          // caller travels down to reach the related row's own rules.
+          access: {
+            enforceFieldAccess: true,
+            user: options.user as Record<string, unknown> | undefined,
+            overrideAccess: options.overrideAccess,
+          },
         })) as SingleDocument;
       }
 

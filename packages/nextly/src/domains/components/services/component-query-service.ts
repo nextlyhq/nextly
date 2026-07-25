@@ -32,6 +32,16 @@ import {
 /**
  * Parameters for populating component data on a single parent entry.
  */
+/**
+ * The caller context a component's related rows are judged against, mirroring
+ * the relationship service's own options so it can be forwarded unchanged.
+ */
+export interface ComponentReadAccess {
+  enforceFieldAccess?: boolean;
+  user?: Record<string, unknown>;
+  overrideAccess?: boolean;
+}
+
 export interface PopulateComponentDataParams {
   /** The entry to populate with component data */
   entry: Record<string, unknown>;
@@ -88,6 +98,21 @@ export interface PopulateComponentDataParams {
    * than shipping a payload with silently-missing component data.
    */
   strict?: boolean;
+  /**
+   * The caller a related row reached THROUGH this component is redacted for.
+   *
+   * Component population expands the component's own relationship fields, which
+   * copy whole rows out of the target collection. Neither the parent entity's
+   * field registry nor the component's describes that collection's fields, so
+   * without the caller here a field the target collection protects is returned
+   * inside the populated component to anyone who reads the parent.
+   *
+   * Enforcement is opt-in for the reason established in the relationship
+   * service: a caller that supplies no context is indistinguishable from an
+   * anonymous one, and enforcing for the former strips fields from everybody.
+   * The read paths opt in; write-side callers assembling payloads do not.
+   */
+  access?: ComponentReadAccess;
 }
 
 /**
@@ -104,6 +129,8 @@ export interface PopulateComponentDataManyParams {
   locale?: string;
   /** i18n: per-request fallback control (see PopulateComponentDataParams.fallbackLocale). */
   fallbackLocale?: string | false;
+  /** See PopulateComponentDataParams.access. */
+  access?: ComponentReadAccess;
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
@@ -313,6 +340,7 @@ export class ComponentQueryService extends BaseService {
       fallbackLocale,
       executor,
       strict = false,
+      access = {},
     } = params;
     const entryId = entry.id as string;
     if (!entryId) return entry;
@@ -339,7 +367,8 @@ export class ComponentQueryService extends BaseService {
             locale,
             fallbackLocale,
             executor,
-            strict
+            strict,
+            access
           );
         } else if (field.component) {
           if (field.repeatable) {
@@ -353,7 +382,8 @@ export class ComponentQueryService extends BaseService {
               locale,
               fallbackLocale,
               executor,
-              strict
+              strict,
+              access
             );
           } else {
             result[fieldName] = await this.populateSingleField(
@@ -366,7 +396,8 @@ export class ComponentQueryService extends BaseService {
               locale,
               fallbackLocale,
               executor,
-              strict
+              strict,
+              access
             );
           }
         }
@@ -400,6 +431,7 @@ export class ComponentQueryService extends BaseService {
       select,
       locale,
       fallbackLocale,
+      access = {},
     } = params;
     if (entries.length === 0) return entries;
 
@@ -432,7 +464,8 @@ export class ComponentQueryService extends BaseService {
             depth,
             currentDepth,
             locale,
-            fallbackLocale
+            fallbackLocale,
+            access
           );
           fieldDataMaps.set(field.name, dataMap);
         } else if (field.component) {
@@ -445,7 +478,8 @@ export class ComponentQueryService extends BaseService {
               depth,
               currentDepth,
               locale,
-              fallbackLocale
+              fallbackLocale,
+              access
             );
             fieldDataMaps.set(field.name, dataMap);
           } else {
@@ -457,7 +491,8 @@ export class ComponentQueryService extends BaseService {
               depth,
               currentDepth,
               locale,
-              fallbackLocale
+              fallbackLocale,
+              access
             );
             fieldDataMaps.set(field.name, dataMap);
           }
@@ -499,7 +534,8 @@ export class ComponentQueryService extends BaseService {
     locale?: string,
     fallbackLocale?: string | false,
     executor?: unknown,
-    strict = false
+    strict = false,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -532,7 +568,8 @@ export class ComponentQueryService extends BaseService {
       componentSlug,
       componentFields,
       depth,
-      currentDepth + 1
+      currentDepth + 1,
+      access
     );
 
     return data;
@@ -548,7 +585,8 @@ export class ComponentQueryService extends BaseService {
     locale?: string,
     fallbackLocale?: string | false,
     executor?: unknown,
-    strict = false
+    strict = false,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -583,7 +621,8 @@ export class ComponentQueryService extends BaseService {
       componentSlug,
       componentFields,
       depth,
-      currentDepth + 1
+      currentDepth + 1,
+      access
     );
 
     return dataArray;
@@ -599,7 +638,8 @@ export class ComponentQueryService extends BaseService {
     locale?: string,
     fallbackLocale?: string | false,
     executor?: unknown,
-    strict = false
+    strict = false,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>[]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
@@ -655,7 +695,8 @@ export class ComponentQueryService extends BaseService {
         slug,
         fields,
         depth,
-        currentDepth + 1
+        currentDepth + 1,
+        access
       );
       results.push(data);
     }
@@ -671,7 +712,8 @@ export class ComponentQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false
+    fallbackLocale?: string | false,
+    access: ComponentReadAccess = {}
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -711,7 +753,8 @@ export class ComponentQueryService extends BaseService {
           componentSlug,
           componentFields,
           depth,
-          currentDepth + 1
+          currentDepth + 1,
+          access
         )
       );
     }
@@ -726,7 +769,8 @@ export class ComponentQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false
+    fallbackLocale?: string | false,
+    access: ComponentReadAccess = {}
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -763,7 +807,8 @@ export class ComponentQueryService extends BaseService {
             componentSlug,
             componentFields,
             depth,
-            currentDepth + 1
+            currentDepth + 1,
+            access
           )
         );
     }
@@ -778,7 +823,8 @@ export class ComponentQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false
+    fallbackLocale?: string | false,
+    access: ComponentReadAccess = {}
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
 
@@ -836,7 +882,8 @@ export class ComponentQueryService extends BaseService {
           slug,
           fields,
           depth,
-          currentDepth + 1
+          currentDepth + 1,
+          access
         );
         expandedItems.push(data);
       }
@@ -999,7 +1046,8 @@ export class ComponentQueryService extends BaseService {
     componentSlug: string,
     componentFields: FieldConfig[],
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>> {
     if (!this.relationshipService) {
       return componentData;
@@ -1020,7 +1068,15 @@ export class ComponentQueryService extends BaseService {
         componentData,
         `comp:${componentSlug}`,
         fields,
-        { depth, currentDepth }
+        {
+          depth,
+          currentDepth,
+          // The related row belongs to another collection, so it is judged by
+          // that collection's field rules for this caller.
+          enforceFieldAccess: access.enforceFieldAccess,
+          user: access.user,
+          overrideAccess: access.overrideAccess,
+        }
       );
 
       return expanded;
@@ -1038,7 +1094,8 @@ export class ComponentQueryService extends BaseService {
     componentSlug: string,
     componentFields: FieldConfig[],
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>[]> {
     if (!this.relationshipService || depth === 0 || currentDepth >= depth) {
       return componentDataArray;
@@ -1051,7 +1108,8 @@ export class ComponentQueryService extends BaseService {
           componentSlug,
           componentFields,
           depth,
-          currentDepth
+          currentDepth,
+          access
         )
       )
     );
