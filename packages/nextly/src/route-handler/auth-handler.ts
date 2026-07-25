@@ -81,6 +81,13 @@ export async function ensureServicesInitialized(): Promise<void> {
       if (nextlyConfig.plugins) serviceConfig.plugins = nextlyConfig.plugins;
       if (nextlyConfig.collections)
         serviceConfig.collections = nextlyConfig.collections;
+      // Forward singles and components too: the request-path boot otherwise
+      // registers neither, so app-defined Singles never reach registerServices
+      // — their runtime schema, and their webhook recording opt-out, silently
+      // fall back to defaults (a `webhooks: false` Single would record PII).
+      if (nextlyConfig.singles) serviceConfig.singles = nextlyConfig.singles;
+      if (nextlyConfig.components)
+        serviceConfig.components = nextlyConfig.components;
       if (nextlyConfig.storage)
         serviceConfig.storagePlugins = nextlyConfig.storage;
       if (nextlyConfig.email) serviceConfig.email = nextlyConfig.email;

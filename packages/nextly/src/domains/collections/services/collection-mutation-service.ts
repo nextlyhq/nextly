@@ -94,6 +94,7 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 
 import type { CollectionAccessService } from "./collection-access-service";
@@ -342,6 +343,23 @@ export class CollectionMutationService extends BaseService {
     return expandComponentFields(fields, async slug =>
       dataService ? await dataService.getComponentFields(slug, executor) : null
     );
+  }
+
+  /**
+   * {@link webhookFieldTree}, but SKIPPED when the collection opted out of
+   * recording. Component expansion issues a registry read per component slug, and
+   * `recordMutationEvent` short-circuits on the opt-out before it ever reads
+   * `fields` — so for a `webhooks: false` collection that work is pure waste, and
+   * a scalar write should never be able to fail on a component/relation read it
+   * does not need. Returns the raw fields unchanged in that case (they go unread).
+   */
+  private async webhookFieldTreeIfRecording(
+    collectionSlug: string,
+    fields: readonly SensitiveFieldSource[],
+    executor?: unknown
+  ): Promise<readonly SensitiveFieldSource[]> {
+    if (!isWebhookRecordingEnabled("collection", collectionSlug)) return fields;
+    return this.webhookFieldTree(fields, executor);
   }
 
   /**
@@ -1404,6 +1422,11 @@ export class CollectionMutationService extends BaseService {
     // committed-but-hook-failed write as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
     let eventRecorded = false;
+    // Set once the insert transaction commits, independent of whether the write
+    // recorded an event or produced a revalidation intent — the durable-write
+    // signal the retention pass keys off, so a create that opts out of BOTH still
+    // triggers write-path cleanup.
+    let committedWrite = false;
     // Computed alongside the event so a committed-but-hook-failed write (which
     // returns from the catch) still flushes its revalidation, matching how
     // `eventRecorded` is carried.
@@ -1846,10 +1869,17 @@ export class CollectionMutationService extends BaseService {
       // definitions from the registry on the pooled connection, and doing that
       // inside the transaction would hold this write's connection while waiting
       // for a second one. It depends only on static field config, so nothing is
-      // gained by deferring it.
-      const webhookFields = await this.webhookFieldTree(fields);
+      // gained by deferring it. Skipped entirely when the collection opted out.
+      const webhookFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields
+      );
 
       const entry: Record<string, unknown> = {};
+      // Whether the outbox event was actually appended (false when the
+      // collection opted out of recording), so the post-commit fast drain is
+      // scheduled only for a write that recorded something.
+      let recorded = false;
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -2017,7 +2047,7 @@ export class CollectionMutationService extends BaseService {
 
         // Append the outbox event in the same transaction, so it commits with
         // the entry and is never recorded for a write that later rolls back.
-        await recordMutationEvent(tx, {
+        recorded = await recordMutationEvent(tx, {
           type: "entry.created",
           resource: {
             kind: "entry",
@@ -2037,7 +2067,10 @@ export class CollectionMutationService extends BaseService {
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
       // there; from here a post-commit hook failure must not hide the delivery.
-      eventRecorded = true;
+      // False when the collection opted out — nothing was recorded to drain.
+      eventRecorded = recorded;
+      // The row is durable regardless of the opt-out flags above.
+      committedWrite = true;
 
       // The tags this create invalidates: derived from the collection, the new
       // id, and the new slug (plus the write locale), so a tagged read of the
@@ -2162,6 +2195,7 @@ export class CollectionMutationService extends BaseService {
         data: responseEntry,
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     } catch (error: unknown) {
       // Legacy per-kind override messages ("Duplicate value: ...",
@@ -2178,6 +2212,7 @@ export class CollectionMutationService extends BaseService {
         ),
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     }
   }
@@ -2915,6 +2950,10 @@ export class CollectionMutationService extends BaseService {
     // committed-but-hook-failed update as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
     let eventRecorded = false;
+    // Set once the update transaction commits, independent of the recording and
+    // revalidation opt-outs — the durable-write signal the retention pass keys
+    // off, so an update that opts out of BOTH still triggers write-path cleanup.
+    let committedWrite = false;
     // The revalidation intent, and the pre-write slug it needs for old-path
     // busting. `previousSlug` is captured inside the transaction (where the
     // assembled previous document is in scope) and read out here so the intent,
@@ -3465,8 +3504,11 @@ export class CollectionMutationService extends BaseService {
       // Resolved BEFORE the transaction opens, for the reason given on the
       // create path: expansion reads the component registry on the pooled
       // connection. Hoisting it also keeps a conflict retry from re-running the
-      // same registry reads on every attempt.
-      const webhookFields = await this.webhookFieldTree(fields);
+      // same registry reads on every attempt. Skipped when the collection opted out.
+      const webhookFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields
+      );
 
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
@@ -3952,7 +3994,8 @@ export class CollectionMutationService extends BaseService {
 
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
-              await recordMutationEvent(tx, {
+              // `recorded` is false when the collection opted out of recording.
+              recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
                 resource: {
                   kind: "entry",
@@ -3968,7 +4011,6 @@ export class CollectionMutationService extends BaseService {
                 fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
-              recorded = true;
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.
               previousSlug = readStringField(previousDocument, "slug");
@@ -4013,22 +4055,27 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Past the 404 guard the row exists and the transaction committed, so this
+      // is a durable write — flagged for the retention pass independent of the
+      // recording/revalidation opt-outs below.
+      committedWrite = true;
+
       // The tags this update invalidates: the id and current-slug tags, plus the
       // previous-slug tag when the slug changed (captured in the transaction), so
-      // a read cached under the old URL clears. Only when the write recorded an
-      // event — a no-op update revalidates nothing.
-      if (eventRecorded) {
-        revalidationIntent = buildEntryRevalidationIntent(
-          params.collectionName,
-          readRevalidateConfig(collection),
-          {
-            id: params.entryId,
-            slug: readStringField(updated as Record<string, unknown>, "slug"),
-            previousSlug,
-            locale: localizedUpdate?.writeLocale,
-          }
-        );
-      }
+      // a read cached under the old URL clears. Built on the committed write, NOT
+      // the outbox-event flag: reaching here past the 404 guard means the row was
+      // written, so an opted-out (`webhooks: false`) update — which records no
+      // event — must still bust its tags, exactly as create and delete do.
+      revalidationIntent = buildEntryRevalidationIntent(
+        params.collectionName,
+        readRevalidateConfig(collection),
+        {
+          id: params.entryId,
+          slug: readStringField(updated as Record<string, unknown>, "slug"),
+          previousSlug,
+          locale: localizedUpdate?.writeLocale,
+        }
+      );
 
       // Execute afterUpdate hooks (code-registered)
       // Hooks run after database update completes (for side effects)
@@ -4185,6 +4232,7 @@ export class CollectionMutationService extends BaseService {
         // update commits without one), so a no-op does not kick the drain.
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     } catch (error: unknown) {
       // A publish-transition refused against the row-locked status aborts the
@@ -4205,6 +4253,7 @@ export class CollectionMutationService extends BaseService {
         ),
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     }
   }
@@ -4243,6 +4292,10 @@ export class CollectionMutationService extends BaseService {
     // committed-but-hook-failed delete as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
     let eventRecorded = false;
+    // Set once the row is actually removed, independent of the recording and
+    // revalidation opt-outs — the durable-write signal the retention pass keys
+    // off, so a delete that opts out of BOTH still triggers write-path cleanup.
+    let committedWrite = false;
     // The tags this delete invalidates, computed post-commit and flushed with the
     // result. Hoisted so the catch return carries it too.
     let revalidationIntent: RevalidationIntent | undefined;
@@ -4357,8 +4410,12 @@ export class CollectionMutationService extends BaseService {
         collection.fields ||
         []) as FieldDefinition[];
       // Resolved before the transaction opens: the expansion reads the component
-      // registry on the pooled connection (see the create/update paths).
-      const webhookFields = await this.webhookFieldTree(snapshotFields);
+      // registry on the pooled connection (see the create/update paths). Skipped
+      // when the collection opted out.
+      const webhookFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        snapshotFields
+      );
 
       // Delete the entry, cascade its component subtrees, and append the
       // `entry.deleted` event in one transaction, so the event commits with the
@@ -4387,6 +4444,9 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           params.entryId
         );
+      // False when the collection opted out of recording, so the post-commit
+      // drain is not scheduled for a delete that recorded nothing.
+      let recorded = false;
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -4444,7 +4504,7 @@ export class CollectionMutationService extends BaseService {
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
         // so a receiver knows which translation the payload represents.
-        await recordMutationEvent(tx, {
+        recorded = await recordMutationEvent(tx, {
           type: "entry.deleted",
           resource: {
             kind: "entry",
@@ -4459,9 +4519,14 @@ export class CollectionMutationService extends BaseService {
         });
       });
       // Set only after the transaction resolves: `deletedRow` is true exactly
-      // when the delete + event committed, so a commit failure never flags a
-      // durable event that isn't there; a later hook failure must not hide it.
-      eventRecorded = deletedRow;
+      // when the delete committed, so a commit failure never flags a durable
+      // event that isn't there; a later hook failure must not hide it. `recorded`
+      // is false when the collection opted out, so an opted-out delete schedules
+      // no drain.
+      eventRecorded = deletedRow && recorded;
+      // The row is durable-gone exactly when it was removed, independent of the
+      // opt-out flags — the retention-pass signal.
+      committedWrite = deletedRow;
 
       // A concurrent delete removed the row first: report not-found rather than
       // a second success (and a duplicate event) for a deletion this call did
@@ -4532,6 +4597,7 @@ export class CollectionMutationService extends BaseService {
         data: { deleted: true },
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     } catch (error: unknown) {
       return {
@@ -4542,6 +4608,7 @@ export class CollectionMutationService extends BaseService {
         data: null,
         eventRecorded,
         revalidationIntent,
+        committed: committedWrite,
       };
     }
   }
@@ -5692,7 +5759,11 @@ export class CollectionMutationService extends BaseService {
         },
         data: deletedDocument,
         previous: null,
-        fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
+        fields: await this.webhookFieldTreeIfRecording(
+          params.collectionName,
+          snapshotFields,
+          tx.getDrizzle()
+        ),
         actor: actorForWrite(params.actor, params.user),
       });
       // The event is recorded, so the delete + event are now consistent; a later
@@ -7024,7 +7095,7 @@ export class CollectionMutationService extends BaseService {
       // single-delete path. Resolve component schemas on this transaction's
       // connection to avoid taking a second pooled connection. `locale` is set
       // only for a localized collection.
-      await recordMutationEvent(tx, {
+      const deleteRecorded = await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
           kind: "entry",
@@ -7034,13 +7105,18 @@ export class CollectionMutationService extends BaseService {
         },
         data: deletedDocument,
         previous: null,
-        fields: await this.webhookFieldTree(snapshotFields, tx.getDrizzle()),
+        fields: await this.webhookFieldTreeIfRecording(
+          params.collectionName,
+          snapshotFields,
+          tx.getDrizzle()
+        ),
         actor: actorForWrite(params.actor, params.user),
       });
       // The event is recorded, so the delete + event are now consistent; a later
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;
-      eventRecorded = true;
+      // False when the collection opted out — nothing to drain post-commit.
+      eventRecorded = deleteRecorded;
 
       // The tags this delete invalidates, collected by the batch caller and
       // flushed once the shared transaction commits. Slug read from the assembled

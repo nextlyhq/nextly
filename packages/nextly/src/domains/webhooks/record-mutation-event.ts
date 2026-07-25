@@ -18,11 +18,28 @@ import type { RequestActor } from "../../auth/request-actor";
 
 import { buildEnvelope } from "./envelope";
 import { recordEvent } from "./record-event";
+import { isWebhookRecordingEnabled } from "./recording-policy";
 import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
 import type { WebhookEventType, WebhookResource } from "./types";
+
+/**
+ * Whether the changed resource opted out of webhook recording. Resolves the
+ * per-entity policy from the event `resource`: an entry is gated by its
+ * collection slug, a single by its own slug. Other kinds (media, user, ...)
+ * carry no per-entity opt-out and always record.
+ */
+function resourceRecordingEnabled(resource: WebhookResource): boolean {
+  if (resource.kind === "entry") {
+    return isWebhookRecordingEnabled("collection", resource.collection);
+  }
+  if (resource.kind === "single" && resource.slug !== undefined) {
+    return isWebhookRecordingEnabled("single", resource.slug);
+  }
+  return true;
+}
 
 /** Arguments for recording one mutation as a durable outbox event. */
 export interface RecordMutationEventArgs {
@@ -53,11 +70,23 @@ export interface RecordMutationEventArgs {
  *
  * The insert shares the caller's transaction, so the event commits with the
  * content change and is never recorded for a write that later rolls back.
+ *
+ * @returns `true` when an outbox event was appended; `false` when the resource
+ * opted out of recording. Callers gate their post-commit webhook work (fast
+ * drain, retention pass) on this, so an opted-out write schedules nothing.
  */
 export async function recordMutationEvent(
   tx: TransactionContext,
   args: RecordMutationEventArgs
-): Promise<void> {
+): Promise<boolean> {
+  // Collection/single opt-out: a resource whose entity set `webhooks: false`
+  // records nothing, so PII-bearing content (e.g. form submissions carrying
+  // ipAddress/userAgent) never enters the outbox or the delivery path. Enforced
+  // here at the single seam so every write path inherits it.
+  if (!resourceRecordingEnabled(args.resource)) {
+    return false;
+  }
+
   const envelope = buildEnvelope({
     id: (args.newId ?? (() => crypto.randomUUID()))(),
     type: args.type,
@@ -71,4 +100,5 @@ export async function recordMutationEvent(
   });
 
   await recordEvent(tx, { envelope });
+  return true;
 }

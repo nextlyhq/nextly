@@ -89,6 +89,7 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
 import type { WebhookResource } from "../../webhooks/types";
 import type {
   SingleDocument,
@@ -431,6 +432,11 @@ export class SingleMutationService extends BaseService {
     // return report a committed-but-post-hook-failed write as `eventRecorded`
     // even when `success` is false. Declared out here so every return sees it.
     let eventRecorded = false;
+    // Whether the outbox event was actually appended: false when the Single
+    // opted out of recording (`webhooks: false`), so the post-commit drain is
+    // scheduled only for a write that recorded something. The three single.*
+    // events share one resource, so the first call's result covers them all.
+    let recorded = false;
     // The tags this write invalidates (`nextly:single:{slug}`), computed after
     // the event is recorded and carried on every post-event return so a
     // committed-but-hook-failed write still flushes its revalidation.
@@ -1692,17 +1698,22 @@ export class SingleMutationService extends BaseService {
             // secret/hidden strip descends into fields declared inside a
             // component. Resolved on the transaction's connection (components
             // already read on it) to avoid taking a second pooled connection
-            // while this write still holds one.
-            const webhookFields = await expandComponentFields(
-              fieldConfigs,
-              async slug =>
-                this.componentDataService
-                  ? await this.componentDataService.getComponentFields(
-                      slug,
-                      tx.getDrizzle()
-                    )
-                  : null
-            );
+            // while this write still holds one. Skipped when the single opted out
+            // of recording: recordMutationEvent short-circuits before it reads
+            // `fields`, so the per-component registry reads would be pure waste and
+            // a scalar write should not be able to fail on them.
+            const webhookFields = isWebhookRecordingEnabled("single", slug)
+              ? await expandComponentFields(
+                  fieldConfigs,
+                  async componentSlug =>
+                    this.componentDataService
+                      ? await this.componentDataService.getComponentFields(
+                          componentSlug,
+                          tx.getDrizzle()
+                        )
+                      : null
+                )
+              : fieldConfigs;
 
             // A publish/unpublish is a status change, so only a write that
             // ASSIGNS a status can trigger one — the `writtenStatus` gate keeps
@@ -1734,7 +1745,7 @@ export class SingleMutationService extends BaseService {
               id: existingDoc.id,
               ...(eventLocale != null ? { locale: eventLocale } : {}),
             };
-            await recordMutationEvent(tx, {
+            recorded = await recordMutationEvent(tx, {
               type: "single.updated",
               resource,
               data: dataDoc,
@@ -1782,11 +1793,16 @@ export class SingleMutationService extends BaseService {
       }
 
       // The transaction committed (a throw would have propagated above), so a
-      // real write is now durable together with its outbox event. Gate on the
-      // written row: the empty-rows path returns from the tx before recording
-      // anything, so it owes no delivery.
-      eventRecorded = updatedRows.length > 0;
-      if (eventRecorded) {
+      // real write is now durable. Cache revalidation follows the CONTENT write,
+      // so build its intent whenever a row was written — including an opted-out
+      // Single, whose committed content must still bust its ISR tag even though
+      // it records no outbox event.
+      const wroteRow = updatedRows.length > 0;
+      // `eventRecorded` additionally requires that recording actually happened:
+      // the empty-rows path returns before recording, and an opted-out Single
+      // records nothing — either way it owes no delivery/drain.
+      eventRecorded = wroteRow && recorded;
+      if (wroteRow) {
         // A single is consumed sitewide, so its one tag is the whole cascade.
         revalidationIntent = buildSingleRevalidationIntent(
           slug,

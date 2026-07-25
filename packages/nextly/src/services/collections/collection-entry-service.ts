@@ -254,22 +254,6 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * The post-write side effects, run after every write that appends an event.
-   *
-   * The drain fast path goes first so the `after()` callback is scheduled
-   * promptly (it only runs post-response, so it adds no latency); the retention
-   * pass follows. Both absorb their own failures, so this never turns a
-   * successful save into an error. `offer()` is synchronous — it only registers
-   * the post-response callback, whose work `after()` owns — so it is not awaited;
-   * the retention pass is awaited for the reason `offerRetentionPass` documents:
-   * a detached promise may not survive a serverless response.
-   */
-  private async afterWrite(): Promise<void> {
-    this.fastDrainScheduler?.offer();
-    await this.offerRetentionPass();
-  }
-
-  /**
    * Run the post-write side effects only when the mutation actually recorded a
    * change (and therefore appended an outbox event). A rejected write — a
    * validation or access failure surfaced as `success: false`, or a bulk/batch
@@ -298,15 +282,60 @@ export class CollectionEntryService extends BaseService {
     // bust their tags.
     await this.flushRevalidation(result);
 
-    const recorded =
-      "success" in result
-        ? result.eventRecorded === true
-        : "successCount" in result
-          ? result.successCount > 0 || result.eventRecorded === true
-          : result.successful > 0 || result.eventRecorded === true;
-    if (recorded) {
-      await this.afterWrite();
+    // Retention is opportunistic write-path cleanup — the write path is the only
+    // prune trigger for installs with no webhook drain, so even a write to only
+    // opted-out (`webhooks: false`) entities must still offer a pass. It is NOT
+    // the outbox gate, but it IS gated on a committed write: a rejected request
+    // (validation / access / not-found) — and a no-op that wrote nothing —
+    // committed no content, so paying for an awaited outbox-deletion pass on its
+    // behalf is wasted latency. An opted-out write still qualifies (it carries a
+    // revalidation intent even though it recorded no event), so coverage holds.
+    if (CollectionEntryService.hasCommittedWrite(result)) {
+      await this.offerRetentionPass();
     }
+
+    // The fast drain, by contrast, only matters when an outbox event was actually
+    // recorded to deliver. Every result — single, bulk (`successCount`), and
+    // batch (`successful`) — carries an aggregated `eventRecorded`, so a write of
+    // only opted-out entries records nothing and schedules no drain, rather than
+    // draining unrelated pending events off a positive success count.
+    if (result.eventRecorded === true) {
+      this.fastDrainScheduler?.offer();
+    }
+  }
+
+  /**
+   * Whether a mutation result represents at least one committed content write.
+   * A single create/update/delete carries the explicit `committed` flag (set the
+   * moment its transaction commits, independent of the recording and revalidation
+   * opt-outs), so even a write that opts out of BOTH — no event, no intent — is
+   * covered, while a rejected request (validation / access / not-found) and a
+   * `publishAllLocales` no-op are not. Bulk/batch results use their positive
+   * counts; `eventRecorded` covers a committed-but-hook-failed batch. NOT keyed
+   * off `success`, which a no-op update also reports.
+   */
+  private static hasCommittedWrite(
+    result:
+      | CollectionServiceResult<unknown>
+      | BulkOperationResult<unknown>
+      | BatchOperationResult
+  ): boolean {
+    if ("committed" in result && result.committed === true) return true;
+    if (result.eventRecorded === true) return true;
+    if ("successCount" in result && result.successCount > 0) return true;
+    if ("successful" in result && result.successful > 0) return true;
+    // Covers single ops that flush an intent without setting `committed` (e.g. a
+    // publish-all-locales transition) — a present intent means content changed.
+    if ("revalidationIntent" in result && result.revalidationIntent != null) {
+      return true;
+    }
+    if (
+      "revalidationIntents" in result &&
+      (result.revalidationIntents?.length ?? 0) > 0
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**

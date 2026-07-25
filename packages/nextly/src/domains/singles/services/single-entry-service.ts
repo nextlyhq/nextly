@@ -140,15 +140,31 @@ export class SingleEntryService extends BaseService {
     options?: UpdateSingleOptions
   ): Promise<SingleResult> {
     const result = await this.mutationService.update(slug, data, options);
-    // A successful update always appends an outbox event (single.updated, plus a
-    // publish/unpublish transition), so kick the post-write side effects; a
-    // rejected write (access/404) recorded nothing and skips them. A write that
-    // committed its event but then failed a post-commit hook reports
-    // `success:false` with `eventRecorded:true`, so key off either — otherwise a
-    // committed event would miss its fast-drain and retention pass.
-    if (result.success || result.eventRecorded === true) {
+    // Cache revalidation AND the opportunistic retention pass both follow the
+    // CONTENT write, not the webhook event: a successful write (even one that
+    // opted out of recording) must still bust its ISR tags, and — since the
+    // write path is the only prune trigger for installs with no webhook drain —
+    // must still offer a retention pass. A committed-but-post-hook-failed write
+    // reports `success:false`; it sets `eventRecorded:true` when it recorded, but
+    // an OPTED-OUT such write records nothing yet still committed content — a
+    // populated `revalidationIntent` is the durable-write signal in that case, so
+    // key off all three or its ISR tag would be left stale.
+    if (
+      result.success ||
+      result.eventRecorded === true ||
+      result.revalidationIntent != null
+    ) {
       await this.flushRevalidation(result);
-      await this.afterWrite();
+      await this.retentionRunner?.maybeRun(
+        SingleEntryService.WRITE_PATH_PRUNE_BATCHES
+      );
+    }
+    // The fast drain, by contrast, only matters when an outbox event was
+    // actually recorded. A successful opted-out write (`webhooks: false`)
+    // records nothing, so scheduling it would only drain unrelated pending
+    // events — gate strictly on `eventRecorded`.
+    if (result.eventRecorded === true) {
+      this.fastDrainScheduler?.offer();
     }
     return result;
   }
@@ -166,22 +182,6 @@ export class SingleEntryService extends BaseService {
     } catch (error) {
       this.logger.error("Cache revalidation failed after a write", { error });
     }
-  }
-
-  /**
-   * Post-write side effects run after a write that recorded an outbox event: the
-   * drain fast path goes first so the `after()` callback is scheduled promptly
-   * (it runs post-response, adding no latency), then a bounded retention pass.
-   * Both absorb their own failures, so this never turns a successful save into an
-   * error. `offer()` is synchronous — it only registers the post-response
-   * callback — so it is not awaited; retention is awaited because a detached
-   * promise may not survive a serverless response.
-   */
-  private async afterWrite(): Promise<void> {
-    this.fastDrainScheduler?.offer();
-    await this.retentionRunner?.maybeRun(
-      SingleEntryService.WRITE_PATH_PRUNE_BATCHES
-    );
   }
 
   /** Retention batches to attempt per write, matching the collection path. */

@@ -41,6 +41,16 @@ export interface CollectionServiceResult<T = unknown> {
    * when the write recorded nothing or revalidation is disabled for the target.
    */
   revalidationIntent?: RevalidationIntent;
+  /**
+   * Whether this operation committed a content write to the database — true for a
+   * create/update/delete that reached and committed its transaction (even one
+   * that opted out of BOTH recording and revalidation, and even one whose
+   * post-commit hook then threw), false for a rejected request (validation /
+   * access / not-found). The write-path retention pass keys off this so it runs
+   * for every durable write yet skips a request that changed nothing, without
+   * conflating `success` (a no-op reports success) with a committed write.
+   */
+  committed?: boolean;
 }
 
 /**

@@ -789,6 +789,18 @@ export interface CollectionConfig {
   localized?: boolean;
 
   /**
+   * Webhook recording policy for this collection. When `false` (or
+   * `{ record: false }`), writes to this collection record NO event to the
+   * webhook outbox, so nothing is ever delivered to subscribed endpoints. Used
+   * to keep PII-bearing content — form submissions carry `ipAddress`/`userAgent`
+   * — out of the delivery path. The object form leaves room for finer policy
+   * later without a breaking change.
+   *
+   * @default true (writes are recorded)
+   */
+  webhooks?: boolean | { record?: boolean };
+
+  /**
    * Admin panel configuration options.
    */
   admin?: CollectionAdminOptions;
