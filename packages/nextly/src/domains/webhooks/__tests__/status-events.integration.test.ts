@@ -162,4 +162,59 @@ describe("collection status webhook events (integration)", () => {
       )
     ).toBe(false);
   });
+
+  it("publishAllLocales emits entry.published per transitioned locale", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    // Default (en) content, draft.
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { title: "hi", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    // German content, still draft.
+    await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "de",
+      },
+      { title: "hallo" }
+    );
+
+    const pub = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(pub.success).toBe(true);
+
+    const published = (await events(current)).filter(
+      r => r.type === "entry.published"
+    );
+    const locales = published
+      .map(r => (envelopeOf(r).resource as { locale?: string }).locale)
+      .sort();
+    expect(locales).toEqual(["de", "en"]);
+    // Each carries a draft->published delta.
+    for (const row of published) {
+      expect(envelopeOf(row).statusChange).toEqual({
+        from: "draft",
+        to: "published",
+      });
+    }
+  });
 });
