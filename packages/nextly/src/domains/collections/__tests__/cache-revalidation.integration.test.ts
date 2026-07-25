@@ -430,6 +430,28 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain("nextly:builderon:slug:on");
   });
 
+  it("resolves a cache adapter registered AFTER construction (lazy, codex-194)", async () => {
+    // The Next cache adapter registers at request time, well after boot. A write
+    // must resolve the revalidator at flush time, not capture the boot-time
+    // default at construction — otherwise a boot path that touches the entry
+    // service memoizes the no-op and ignores the adapter that registers later.
+    const entries = await boot([openCollection("late")]);
+    // Register a second revalidator AFTER the service was constructed; it must
+    // win. With an eager capture, `spy` (registered pre-boot) would receive the
+    // flush and `lateSpy` would get nothing — this fails there and passes here.
+    const lateSpy = new RecordingRevalidator();
+    container.registerSingleton<CacheRevalidator>(
+      "cacheRevalidator",
+      () => lateSpy
+    );
+    await entries.createEntry(
+      { collectionName: "late", overrideAccess: true },
+      { title: "T", slug: "z" }
+    );
+    expect(lateSpy.tags).toContain("nextly:late:slug:z");
+    expect(spy.flushed).toHaveLength(0);
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
@@ -464,6 +486,79 @@ describe("cache revalidation — write path (sqlite)", () => {
       { overrideAccess: true }
     );
     expect(spy.tags).toContain("nextly:single:header");
+  });
+
+  it("flushes nothing when a collection write sets disableRevalidate", async () => {
+    // The per-operation escape hatch: a caller that owns its cache strategy (a
+    // CLI / seed / bulk-import write) skips revalidation for that write.
+    const entries = await boot([openCollection("skip")]);
+    await entries.createEntry(
+      { collectionName: "skip", overrideAccess: true, disableRevalidate: true },
+      { title: "T", slug: "s" }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("forwards disableRevalidate through the public handler surface", async () => {
+    // The Direct API (`nx.create`) reaches the write path through this handler,
+    // so the flag has to survive the handler's field-by-field param rebuild —
+    // without this forwarding the documented opt-out would silently revalidate.
+    await boot([openCollection("hskip")]);
+    const handler =
+      handle!.getService<CollectionsHandler>("collectionsHandler");
+    await handler.createEntry(
+      {
+        collectionName: "hskip",
+        overrideAccess: true,
+        disableRevalidate: true,
+      },
+      { title: "T", slug: "h" }
+    );
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("forwards disableRevalidate through the public bulkDelete surface", async () => {
+    // `nx.bulkDelete` reaches the write path through this handler method, which
+    // rebuilds its params field by field — so the flag has to be forwarded here
+    // too, or the documented opt-out silently revalidates every deleted row.
+    const entries = await boot([openCollection("bskip")]);
+    const created = await entries.createEntry(
+      { collectionName: "bskip", overrideAccess: true },
+      { title: "T", slug: "b" }
+    );
+    const id = (created.data as { id: string }).id;
+    spy.flushed.length = 0; // ignore the create's flush
+    const handler =
+      handle!.getService<CollectionsHandler>("collectionsHandler");
+    await handler.bulkDeleteEntries({
+      collectionName: "bskip",
+      ids: [id],
+      overrideAccess: true,
+      disableRevalidate: true,
+    });
+    expect(spy.flushed).toHaveLength(0);
+  });
+
+  it("flushes nothing when a single write sets disableRevalidate", async () => {
+    const adapter = await memoryAdapter();
+    handle = await createTestNextly({
+      adapter,
+      singles: [
+        defineSingle({
+          slug: "footer",
+          access: { read: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singleEntry =
+      handle.getService<SingleEntryService>("singleEntryService");
+    await singleEntry.update(
+      "footer",
+      { title: "Site" },
+      { overrideAccess: true, disableRevalidate: true }
+    );
+    expect(spy.flushed).toHaveLength(0);
   });
 
   it("flushes nothing when the single's revalidate config is disabled", async () => {

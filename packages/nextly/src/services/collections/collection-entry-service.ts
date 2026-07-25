@@ -107,11 +107,16 @@ export class CollectionEntryService extends BaseService {
      */
     private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
     /**
-     * Flushes a write's cache-revalidation intent post-commit. Wired at the same
-     * seam as `fastDrainScheduler` because every event-appending write runs
-     * through this service. Defaults to a no-op when no cache adapter is present.
+     * Resolves the cache revalidator that flushes a write's revalidation intent
+     * post-commit. Wired at the same seam as `fastDrainScheduler` because every
+     * event-appending write runs through this service. A resolver (not the
+     * instance) so it is read at flush time: this service is constructed during
+     * boot, before a Next cache adapter registers, and an eager capture would
+     * memoize the no-op default. Returns undefined when no adapter is present.
      */
-    private readonly cacheRevalidator?: CacheRevalidator
+    private readonly resolveCacheRevalidator?: () =>
+      | CacheRevalidator
+      | undefined
   ) {
     super(adapter, logger);
 
@@ -273,14 +278,19 @@ export class CollectionEntryService extends BaseService {
     result:
       | CollectionServiceResult<unknown>
       | BulkOperationResult<unknown>
-      | BatchOperationResult
+      | BatchOperationResult,
+    disableRevalidate = false
   ): Promise<void> {
     // Revalidation flushes whenever a committed write produced intents. It is
     // NOT tied to the outbox-event gate below: an intent is only ever set after
     // a write commits, so its presence is the "content changed" signal, and a
     // publish-all-locales or a batch create (which record no outbox event) still
-    // bust their tags.
-    await this.flushRevalidation(result);
+    // bust their tags. The per-operation `disableRevalidate` escape hatch skips
+    // it (a CLI / seed / bulk-import write that owns its own cache strategy);
+    // the outbox drain still runs, so webhooks and retention are unaffected.
+    if (!disableRevalidate) {
+      await this.flushRevalidation(result);
+    }
 
     // Retention is opportunistic write-path cleanup — the write path is the only
     // prune trigger for installs with no webhook drain, so even a write to only
@@ -369,11 +379,15 @@ export class CollectionEntryService extends BaseService {
    * a revalidator fault never turns a committed write into a failure.
    */
   async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
-    if (!this.cacheRevalidator || intents.length === 0) return;
+    if (intents.length === 0) return;
+    // Resolve at flush time so a Next cache adapter registered after this
+    // service was constructed (at request time, well after boot) is honored.
+    const revalidator = this.resolveCacheRevalidator?.();
+    if (!revalidator) return;
     try {
       // Await so a Promise-returning revalidator finishes here; `revalidateTag`
       // is synchronous, so this adds no latency for the common case.
-      await this.cacheRevalidator.flush(intents);
+      await revalidator.flush(intents);
     } catch (error) {
       this.logger.error("Cache revalidation failed after a write", { error });
     }
@@ -382,6 +396,12 @@ export class CollectionEntryService extends BaseService {
   async createEntry(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       user?: UserContext;
       /** Who performed the write, recorded on the outbox event. */
       actor?: RequestActor;
@@ -399,7 +419,7 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.createEntry(params, body, depth);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -424,6 +444,12 @@ export class CollectionEntryService extends BaseService {
   async updateEntry(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       entryId: string;
       user?: UserContext;
       /** Who performed the write, recorded on the outbox event. */
@@ -447,13 +473,19 @@ export class CollectionEntryService extends BaseService {
     depth?: number
   ) {
     const result = await this.mutationService.updateEntry(params, body, depth);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   /** i18n M7: publish every language of an entry at once (spec §10). */
   async publishAllLocales(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     entryId: string;
     user?: UserContext;
     overrideAccess?: boolean;
@@ -466,12 +498,18 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async deleteEntry(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     entryId: string;
     user?: UserContext;
     /** Who performed the delete, recorded on the outbox event. */
@@ -483,7 +521,7 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.deleteEntry(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -518,6 +556,12 @@ export class CollectionEntryService extends BaseService {
 
   async duplicateEntry(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     entryId: string;
     user?: UserContext;
     overrides?: Record<string, unknown>;
@@ -529,7 +573,7 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.bulkService.duplicateEntry(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -537,6 +581,12 @@ export class CollectionEntryService extends BaseService {
   // the post-mutation values) and minimal {id} records on delete.
   async bulkDeleteEntries(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     ids: string[];
     user?: UserContext;
     /** Who performed the delete, recorded on each entry's outbox event. */
@@ -548,12 +598,18 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteEntries(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async bulkUpdateEntries(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     ids: string[];
     data: Record<string, unknown>;
     user?: UserContext;
@@ -566,13 +622,19 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateEntries(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async bulkUpdateByQuery(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       where: WhereFilter;
       data: Record<string, unknown>;
       user?: UserContext;
@@ -588,13 +650,19 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateByQuery(params, options);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async bulkDeleteByQuery(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       where: WhereFilter;
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
@@ -608,13 +676,19 @@ export class CollectionEntryService extends BaseService {
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteByQuery(params, options);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async createEntries(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       user?: UserContext;
       overrideAccess?: boolean;
       authenticatedScope?: AuthenticatedScope;
@@ -627,7 +701,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -652,6 +726,12 @@ export class CollectionEntryService extends BaseService {
   async updateEntries(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       user?: UserContext;
       authenticatedScope?: AuthenticatedScope;
     },
@@ -663,7 +743,7 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -688,6 +768,12 @@ export class CollectionEntryService extends BaseService {
   async deleteEntries(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
@@ -696,7 +782,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
     const result = await this.bulkService.deleteEntries(params, ids, options);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 

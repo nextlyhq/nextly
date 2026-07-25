@@ -98,6 +98,7 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
+import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
 import {
@@ -1396,6 +1397,12 @@ export function createDynamicHandlers(options?: {
   if (options?.config) {
     setHandlerConfig(options.config);
   }
+
+  // Enable Next cache-tag revalidation: every content write now busts the tags
+  // a read carries (see `nextly/runtime` `nextlyTags` / `cachedFind`). Runs here
+  // because this is the app's Next entry point; idempotent and safe to omit for
+  // a non-Next runtime (the write path just no-ops the flush).
+  registerNextCacheRevalidator();
 
   // --- Security middleware (created once at init time, not per-request) ---
   const securityConfig = options?.config?.security;

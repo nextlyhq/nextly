@@ -188,10 +188,14 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
         ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
         : undefined,
       // Cache revalidator that flushes each write's revalidation intents
-      // post-commit (a no-op unless a Next cache adapter registered one).
-      container.has("cacheRevalidator")
-        ? container.get<CacheRevalidator>("cacheRevalidator")
-        : undefined
+      // post-commit. Resolved lazily at flush time (not captured here) because
+      // this service is constructed during boot, before a Next cache adapter
+      // registers — an eager capture would memoize the no-op and ignore the
+      // real adapter that registers later, at request time.
+      () =>
+        container.has("cacheRevalidator")
+          ? container.get<CacheRevalidator>("cacheRevalidator")
+          : undefined
     );
 
     return new CollectionService(

@@ -1,0 +1,169 @@
+---
+title: ISR and caching
+description: Cache your content pages and revalidate them the moment content changes. Tag reads with nextlyTags/cachedFind and Nextly busts them on every write.
+---
+
+Nextly turns every content change into a cache invalidation. Tag a page's data
+with the collection/entry it reads, and a create, update, publish, unpublish,
+delete, or slug change busts exactly those tags — the page regenerates on the
+next visit, with no rebuild and no `force-dynamic`.
+
+This is [Next.js Incremental Static Regeneration](https://nextjs.org/docs/app/guides/incremental-static-regeneration)
+driven by your content, not a timer.
+
+## How it works
+
+1. A read tags its cached data with the `nextly:*` tags for the collection (and,
+   for a detail page, the entry id).
+2. A write computes the same tags and, after it commits, calls Next's
+   `revalidateTag` for each — so any page tagged with them is invalidated.
+
+The write side is automatic once the admin route is wired (see below). You only
+add the read-side tags.
+
+## Enable it
+
+Register the adapter once per server process. The most reliable place is Next's
+[`instrumentation.ts`](https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation),
+whose `register()` runs at startup, before any route, Server Action, or
+serverless worker handles a request — so **every** write context busts tags,
+not just the ones that happen to have loaded the admin route:
+
+```ts
+// instrumentation.ts (project root, next to your app/ directory)
+export async function register() {
+  const { registerNextCacheRevalidator } = await import("nextly/runtime");
+  registerNextCacheRevalidator();
+}
+```
+
+Mounting the admin route handler also registers it, which is enough if every
+content write goes through the admin API in the same process:
+
+```ts
+// app/admin/[[...params]]/route.ts
+import { createDynamicHandlers } from "nextly/runtime";
+
+export const { GET, POST, PATCH, DELETE } = createDynamicHandlers();
+```
+
+If you write content through the Direct API (`nextly.create(...)`) from a Server
+Action, a custom route, or the admin API, register from `instrumentation.ts` as
+above — relying on the admin route alone leaves those contexts on the no-op
+revalidator, and their writes would not refresh cached pages. A write in a
+context with no adapter registered is a silent no-op for revalidation (never an
+error), so it is safe but stale.
+
+### Writes must run inside a request
+
+Automatic revalidation fires for a write that runs **inside a Next.js request or
+render** — a Route Handler, a Server Action, or the admin API. That is where
+`revalidateTag` is valid, and it covers how content is normally edited.
+
+A write from **outside** a request — a cron job, a CLI, or a background worker
+with no request in flight — cannot call `revalidateTag` (there is no cache scope
+to invalidate), so the adapter safely skips it (the write still succeeds). Those
+callers should either run the write in a Route Handler / Server Action, or
+invalidate the cache themselves. This mirrors how on-demand ISR works in Next.js
+generally: revalidation is request-scoped.
+
+## Tag a read
+
+Use `cachedFind` to cache a data read and `nextlyTags` to tag it:
+
+```tsx
+// app/(site)/blog/[slug]/page.tsx
+import { getNextly } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
+
+export default async function Post({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+  const nx = await getNextly();
+
+  const post = await cachedFind(
+    async () => {
+      const { items } = await nx.find({
+        collection: "posts",
+        where: { slug: { equals: slug }, status: { equals: "published" } },
+        limit: 1,
+      });
+      return items[0] ?? null;
+    },
+    { tags: nextlyTags("posts"), keyParts: ["posts", "detail", slug] }
+  );
+
+  if (!post) return null;
+  return <article>{/* ... */}</article>;
+}
+```
+
+Publishing or editing any post now busts `nextly:posts` and this page
+regenerates. For a listing page, tag it the same way — `nextlyTags("posts")` —
+and it revalidates on any change in the collection.
+
+### `nextlyTags(collection, id?, locale?)`
+
+Builds the tags a read should carry:
+
+- `nextlyTags("posts")` — the collection tag; for lists, indexes, sitemaps.
+- `nextlyTags("posts", id)` — adds the entry-id tag; for a detail page, so a
+  change to that one entry invalidates it. Tags by the **immutable id**, so a
+  slug rename or a status change still invalidates.
+- `nextlyTags("posts", id, locale)` — adds the per-locale id tag.
+
+A detail read intentionally carries the collection tag too, so it also refreshes
+when the collection changes around it. Because a match on **any** tag
+invalidates the entry, that broadens invalidation: any change in the collection
+(or any locale of the entry) refreshes the read, rather than only that one
+locale's page. That is safe — a stale read is never served, only re-fetched more
+often. If you need strictly per-entry or per-locale granularity on a
+high-traffic route, tag with the entry/locale tag alone rather than this helper's
+broad, safe default.
+
+For a singleton (global) use `nextlySingleTags("header")`.
+
+## Security: caching a per-user read
+
+`cachedFind`'s `keyParts` decide which requests share a cache entry. **Include
+anything the result varies by** — and for a read that applies per-caller access
+rules (owner-only scoping, role-based visibility, an API key's narrowed scope),
+that means the caller's identity:
+
+```tsx
+// Per-user list — the caller's id is in the key, so it never leaks.
+const mine = await cachedFind(() => nx.find({ collection: "orders", user }), {
+  tags: nextlyTags("orders"),
+  keyParts: ["orders", "list", user.id], // <-- caller identity
+});
+```
+
+If you cache an owner-filtered read under a stable key that omits the caller, two
+different users share one cache entry and one is served the other's rows — a
+cross-tenant data leak, not a stale-cache annoyance. For genuinely public content
+(the same for every reader, like a published blog post) a stable key is correct
+and gives the full caching benefit.
+
+## Opt a write out of revalidation
+
+A bulk import, seed, or CLI write that owns its own cache strategy can skip the
+per-row revalidation with `disableRevalidate`:
+
+```ts
+await nx.create({ collection: "posts", data, disableRevalidate: true });
+```
+
+The write still records its outbox event (webhooks and retention are
+unaffected); it just does not bust any cache tags.
+
+## Notes
+
+- Works across the supported Next range (`^14 || ^15 || ^16`) on the stable
+  `revalidateTag` / `unstable_cache` primitives.
+- `cachedFind` runs the reader directly (no caching) outside a Next runtime, so
+  the same code works in tests and non-Next callers.
+- Add `revalidate: <seconds>` to `cachedFind` for a time-based safety net on top
+  of tag-based busting.

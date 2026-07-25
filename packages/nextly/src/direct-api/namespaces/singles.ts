@@ -83,6 +83,7 @@ export async function updateSingle<TSlug extends SingleSlug>(
       : undefined,
     overrideAccess: config.overrideAccess,
     context: config.context,
+    disableRevalidate: config.disableRevalidate,
   });
 
   if (!result.success) {

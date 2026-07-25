@@ -198,6 +198,15 @@ export interface CreateArgs<TSlug extends CollectionSlug = CollectionSlug>
    * @default false
    */
   disableVerificationEmail?: boolean;
+
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs, so
+   * webhooks are unaffected). Set by a CLI, seed, or bulk-import caller that
+   * owns its own cache strategy and does not want a revalidation per row.
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
 }
 
 /**
@@ -261,6 +270,14 @@ export interface UpdateArgs<TSlug extends CollectionSlug = CollectionSlug>
    * @default false
    */
   overwriteExistingFiles?: boolean;
+
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs). Set by
+   * a CLI, seed, or bulk-import caller that owns its own cache strategy.
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
 }
 
 /**
@@ -301,6 +318,14 @@ export interface DeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
    * Either `id` or `where` must be provided.
    */
   where?: WhereFilter;
+
+  /**
+   * Skip cache revalidation for this delete (the outbox drain still runs). Set
+   * by a CLI, seed, or bulk-import caller that owns its own cache strategy.
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
 }
 
 /**
@@ -341,6 +366,14 @@ export interface BulkDeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
 
   /** Array of document IDs to delete (required) */
   ids: string[];
+
+  /**
+   * Skip cache revalidation for this bulk delete (the outbox drain still runs).
+   * Set by a CLI, seed, or bulk-import caller that owns its cache strategy.
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
 }
 
 /**
@@ -369,6 +402,14 @@ export interface DuplicateArgs<TSlug extends CollectionSlug = CollectionSlug>
    * These values override the copied data.
    */
   overrides?: Record<string, unknown>;
+
+  /**
+   * Skip cache revalidation for this duplicate (the outbox drain still runs).
+   * Set by a CLI, seed, or bulk-import caller that owns its cache strategy.
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
 }
 
 /**
