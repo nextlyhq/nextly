@@ -105,6 +105,11 @@ function fail(code: string, message: string): never {
   throw new Error(`${code}: ${message}`);
 }
 
+/** A key/value object — not null, not an array, not a function. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Check one definition against the rules registration enforces. Split out so a
  * caller can validate a definition without committing it to the registry.
@@ -146,12 +151,20 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
   if (
     typeof def.example !== "object" ||
     def.example === null ||
-    typeof def.example.props !== "object" ||
-    def.example.props === null
+    // Props must be a plain record: a stored node's props are a key/value map,
+    // and document validation rejects an array, so an array-shaped example
+    // could never become a valid node.
+    !isPlainRecord(def.example.props)
   ) {
     fail(
       "NEXTLY_BLOCK_INVALID",
-      `block "${def.name}" must declare an example with props.`
+      `block "${def.name}" must declare an example whose props are a plain object.`
+    );
+  }
+  if (def.defaultProps !== undefined && !isPlainRecord(def.defaultProps)) {
+    fail(
+      "NEXTLY_BLOCK_INVALID",
+      `block "${def.name}" defaultProps must be a plain object.`
     );
   }
   if (typeof def.render !== "function") {
@@ -182,12 +195,26 @@ function assertKnownSupports(
 ): void {
   if (!supports) return;
   const known = supportStore();
-  for (const key of Object.keys(supports)) {
-    if (!known.has(key)) {
+  for (const [key, value] of Object.entries(supports)) {
+    const support = known.get(key);
+    if (!support) {
       fail(
         "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
         `block "${blockName}" declares unknown support "${key}". Register it with registerSupport() first.`
       );
+    }
+    // When a support enumerates its sub-flags, an unrecognized nested flag is
+    // as much a typo as an unknown support key and would silently enable
+    // nothing, so it is rejected the same way.
+    if (support.flags && isPlainRecord(value)) {
+      for (const flag of Object.keys(value)) {
+        if (!support.flags.includes(flag)) {
+          fail(
+            "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
+            `block "${blockName}" declares unknown "${key}" flag "${flag}". Known flags: ${support.flags.join(", ")}.`
+          );
+        }
+      }
     }
   }
 }

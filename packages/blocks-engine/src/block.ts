@@ -54,7 +54,7 @@ export type BlockSupports = Record<string, boolean | Record<string, unknown>>;
 export type ComponentPath = string;
 
 /** Editor-only metadata. Never serialized into a document. */
-export interface BlockEditorMeta {
+export interface BlockEditorMeta<P extends object = Record<string, unknown>> {
   label?: string;
   icon?: string;
   /** Palette grouping, e.g. "structure" | "content" | "media". */
@@ -62,15 +62,20 @@ export interface BlockEditorMeta {
   /** Extra search terms for the block palette. */
   keywords?: string[];
   /** Named preset variations offered when inserting. */
-  variations?: BlockVariation[];
+  variations?: BlockVariation<P>[];
   /** Custom inspector/canvas component for this block. */
   component?: ComponentPath;
 }
 
-export interface BlockVariation {
+/**
+ * A named preset for inserting a block. Its props are typed against the
+ * block's own props, so a preset cannot introduce a value the renderer does
+ * not accept.
+ */
+export interface BlockVariation<P extends object = Record<string, unknown>> {
   name: string;
   label?: string;
-  props?: Record<string, unknown>;
+  props?: Partial<P>;
 }
 
 /** What a block's `render` receives. */
@@ -147,7 +152,7 @@ export interface BlockDefinition<P extends object = Record<string, unknown>> {
   /** Optional editor-side data hydration before rendering. */
   resolve?(props: P, ctx: unknown): unknown;
   /** Editor-only metadata; never serialized. */
-  editor?: BlockEditorMeta;
+  editor?: BlockEditorMeta<P>;
 }
 
 /**
@@ -176,6 +181,12 @@ export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
  * types (the registry above all) accept this erased shape instead, so a fully
  * typed definition can be registered without discarding its prop types at the
  * definition site.
+ *
+ * The prop-consuming members widen to `object` and are declared as methods, so
+ * this type works in both directions: any typed definition is assignable to it
+ * (bivariant parameter checking), and a consumer holding a stored node can
+ * still call `render`/`resolve` with that node's runtime props. Narrowing them
+ * to `never` would make the collection accept definitions it could never use.
  */
 export interface AnyBlockDefinition
   extends Omit<
@@ -186,6 +197,6 @@ export interface AnyBlockDefinition
   defaultProps?: object;
   props?: Partial<Record<string, PropSchema>>;
   localized?: string[];
-  render(args: BlockRenderArgs<never>): BlockRenderResult;
-  resolve?(props: never, ctx: unknown): unknown;
+  render(args: BlockRenderArgs<object>): BlockRenderResult;
+  resolve?(props: object, ctx: unknown): unknown;
 }

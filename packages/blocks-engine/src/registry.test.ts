@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import type { BlockDefinition, InferBlockProps } from "./block";
+import type { BlockNode } from "./document";
 import { defineBlock } from "./block";
 import { migrateDocument } from "./migration";
 import {
@@ -74,6 +75,48 @@ describe("the define-then-register workflow keeps its prop types", () => {
     expect(getBlock("core/typed-heading")).toBeDefined();
   });
 
+  it("lets a consumer call render on a definition read back from the registry", () => {
+    // The other half of the contract: a renderer holds a stored node and must
+    // be able to invoke the registered block with that node's runtime props.
+    const greeter = defineBlock({
+      name: "core/greeter",
+      version: 1,
+      description: "Greets.",
+      example: { props: { who: "world" } },
+      render: args => `hello ${args.props.who}`,
+    });
+    registerBlocks([greeter]);
+
+    const node: BlockNode = {
+      id: "n1",
+      type: "core/greeter",
+      version: 1,
+      props: { who: "reader" },
+    };
+    const def = getBlock(node.type);
+    const output = def?.render({
+      props: node.props,
+      node,
+      slots: {},
+      className: "nx-pb-x",
+    });
+    expect(output).toBe("hello reader");
+  });
+
+  it("types variation props against the block's own props", () => {
+    const withVariation = defineBlock({
+      name: "core/varied",
+      version: 1,
+      description: "Has presets.",
+      example: { props: { tone: "calm" } },
+      render: args => args.props.tone,
+      editor: {
+        variations: [{ name: "loud", props: { tone: "LOUD" } }],
+      },
+    });
+    expect(withVariation.editor?.variations?.[0]?.props?.tone).toBe("LOUD");
+  });
+
   it("registers a definition whose props come from a named interface", () => {
     // Interfaces carry no implicit index signature, so the prop constraint has
     // to accept plain object shapes for ordinary author code to compile.
@@ -133,6 +176,38 @@ describe("registration rules", () => {
     expect(() =>
       registerBlocks([block({ name: "core/huge", version: 5000 })])
     ).toThrow(/NEXTLY_BLOCK_INVALID.*between 1 and/s);
+  });
+
+  it("rejects an example whose props are not a plain object", () => {
+    // Document validation rejects array props, so such an example could never
+    // become a valid node.
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/arr",
+          example: { props: [] as unknown as object },
+        }),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*plain object/s);
+  });
+
+  it("rejects an unknown sub-flag on a support that enumerates its flags", () => {
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/typo", supports: { spacing: { paddding: true } } }),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_UNKNOWN_SUPPORT.*paddding/s);
+  });
+
+  it("accepts known sub-flags", () => {
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/ok-flags",
+          supports: { spacing: { padding: true } },
+        }),
+      ])
+    ).not.toThrow();
   });
 
   it("refuses to register a name the engine reserves", () => {
