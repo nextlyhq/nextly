@@ -998,4 +998,37 @@ describe("reloadNextlyConfig", () => {
       expect(pipelineApplySpy).not.toHaveBeenCalled();
     });
   });
+
+  describe("webhook recording policy reconciliation", () => {
+    it("prunes a removed code-first opt-out when the config empties out", async () => {
+      const {
+        setWebhookRecording,
+        isWebhookRecordingEnabled,
+        resetWebhookRecordingPolicy,
+      } = await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // A code-first Single/collection previously opted OUT of recording. It is
+      // then deleted from the config, so this reload sees zero managed targets
+      // and takes the empty-target early return.
+      setWebhookRecording("collection", "leads", false, "code");
+      setWebhookRecording("single", "settings", false, "code");
+      // A plugin opt-out must survive the code-first reconcile untouched.
+      setWebhookRecording("collection", "form-submissions", false, "plugin");
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [], singles: [], components: [] },
+      });
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The removed code-first entities revert to the default (record)...
+      expect(isWebhookRecordingEnabled("collection", "leads")).toBe(true);
+      expect(isWebhookRecordingEnabled("single", "settings")).toBe(true);
+      // ...while the plugin opt-out is preserved.
+      expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
+        false
+      );
+      resetWebhookRecordingPolicy();
+    });
+  });
 });

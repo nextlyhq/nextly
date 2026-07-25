@@ -605,8 +605,18 @@ export async function reloadNextlyConfig(opts?: {
     targets.length === 0 &&
     singleTargets.length === 0 &&
     componentTargets.length === 0
-  )
+  ) {
+    // Nothing managed remains, but a reload that removed the LAST code-first
+    // collection/single still has to reconcile the recording policy before
+    // bailing: the removed entity's DB table can stay writable, so a lingering
+    // `webhooks: false` opt-out would silently suppress its events until
+    // restart. Prune both code-first namespaces against the now-empty config
+    // (present sets are empty, so every code-sourced opt-out is dropped;
+    // plugin decisions are preserved). No metadata to sync here, so this is the
+    // only reconciliation the empty-target path needs.
+    republishRecordingPolicies(newConfig, { collections: true, singles: true });
     return;
+  }
 
   // Extracted once so the same list is passed to introspectLiveSnapshot
   // AND registered in the live-snapshot cache for the pipeline to reuse.
