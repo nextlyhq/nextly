@@ -186,6 +186,7 @@ function buildFieldConfigs(
       );
       continue;
     }
+    if (!rejectUnknownOptions(declaration, resolved, path, ctx)) continue;
     const config = BUILDERS[resolved](name, declaration, path, ctx, depth);
     if (config) configs.push(config);
   }
@@ -208,6 +209,82 @@ function resolvePropType(type: string): BlockFieldCatalogType | null {
 }
 
 /**
+ * The options each prop type accepts, beside its `type`.
+ *
+ * Anything else is refused rather than dropped. A silently ignored option is
+ * the worst outcome available here: a declaration that reads as if it
+ * constrains its values while validating nothing. That covers both misspelled
+ * options and rule shapes this surface does not take — the nested
+ * `validation: { ... }` object the Schema Builder stores, whose flat
+ * equivalents are listed below, and a `validate` function, which a block
+ * declaration cannot carry because it must serialize into the generated
+ * manifest.
+ */
+const ALLOWED_OPTIONS: Readonly<
+  Record<BlockFieldCatalogType, readonly string[]>
+> = {
+  text: [
+    "label",
+    "required",
+    "minLength",
+    "maxLength",
+    "hasMany",
+    "minRows",
+    "maxRows",
+  ],
+  textarea: ["label", "required", "minLength", "maxLength"],
+  richText: ["label", "required"],
+  email: ["label", "required"],
+  number: ["label", "required", "min", "max", "hasMany", "minRows", "maxRows"],
+  code: ["label", "required"],
+  date: ["label", "required"],
+  select: ["label", "required", "options", "hasMany"],
+  radio: ["label", "required", "options"],
+  checkbox: ["label", "required"],
+  json: ["label", "required"],
+  chips: ["label", "required", "minChips", "maxChips"],
+  upload: ["label", "required", "relationTo", "hasMany"],
+  relationship: ["label", "required", "relationTo", "hasMany"],
+  repeater: ["label", "required", "fields", "minRows", "maxRows"],
+  group: ["label", "required", "fields"],
+};
+
+/** Whether every option on a declaration is one its type accepts. */
+function rejectUnknownOptions(
+  declaration: BlockPropDeclaration,
+  resolved: BlockFieldCatalogType,
+  path: string,
+  ctx: ConversionContext
+): boolean {
+  const allowed = ALLOWED_OPTIONS[resolved];
+  let ok = true;
+  for (const key of Object.keys(declaration)) {
+    if (key === "type" || allowed.includes(key)) continue;
+    ok = false;
+    record(
+      ctx,
+      `${path}.${key}`,
+      "UNKNOWN_OPTION",
+      `A ${resolved} prop does not accept \`${key}\`. Accepted options: ${allowed.join(", ")}.`
+    );
+  }
+  return ok;
+}
+
+/**
+ * The plugin type a declaration named, when conversion resolved it to a
+ * storage primitive. Carried on the config so an inspector can still dispatch
+ * the plugin's own component instead of the primitive's built-in control.
+ */
+function pluginIdentity(
+  type: string
+): { custom: { pluginFieldType: string } } | undefined {
+  return isBlockFieldType(type)
+    ? undefined
+    : { custom: { pluginFieldType: type } };
+}
+
+/**
  * The options every prop type carries. `defaultValue` is deliberately absent:
  * a block's defaults live in its `defaultProps`, applied by the engine when a
  * block is inserted, so duplicating them onto the field config would give one
@@ -218,9 +295,16 @@ function base(
   declaration: BlockPropDeclaration,
   path: string,
   ctx: ConversionContext
-): { name: string; label?: string; required?: boolean; localized?: boolean } {
+): {
+  name: string;
+  label?: string;
+  required?: boolean;
+  localized?: boolean;
+  custom?: { pluginFieldType: string };
+} {
   return {
     name,
+    ...pluginIdentity(declaration.type),
     label: optionalString(declaration, "label", path, ctx),
     required: optionalBoolean(declaration, "required", path, ctx),
     // A block declares its translatable props by top-level name, so the flag
@@ -231,11 +315,16 @@ function base(
 }
 
 const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
-  text: (name, declaration, path, ctx) => ({
-    ...base(name, declaration, path, ctx),
-    type: "text",
-    ...lengthBounds(declaration, path, ctx),
-  }),
+  text: (name, declaration, path, ctx) => {
+    const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
+    return {
+      ...base(name, declaration, path, ctx),
+      type: "text",
+      ...lengthBounds(declaration, path, ctx),
+      hasMany,
+      ...rowBounds(declaration, path, ctx),
+    };
+  },
   textarea: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "textarea",
@@ -253,12 +342,16 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
   number: (name, declaration, path, ctx) => {
     const min = optionalNumber(declaration, "min", path, ctx);
     const max = optionalNumber(declaration, "max", path, ctx);
+    const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
     // A number prop is free to range below zero and to hold fractions, so
     // ordering is the only rule its bounds must satisfy.
     return {
       ...base(name, declaration, path, ctx),
       type: "number",
       ...orderedPair(min, max, "min", "max", path, ctx),
+      hasMany,
+      ...rowBounds(declaration, path, ctx),
+      validate: finiteValidator(hasMany),
     };
   },
   code: (name, declaration, path, ctx) => ({
@@ -304,6 +397,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       ...base(name, declaration, path, ctx),
       type: "chips",
       ...orderedPair(minChips, maxChips, "minChips", "maxChips", path, ctx),
+      validate: isTextList,
     };
   },
   upload: (name, declaration, path, ctx) => {
@@ -315,7 +409,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       type: "upload",
       relationTo,
       hasMany,
-      validate: referenceValidator(hasMany),
+      validate: referenceValidator(hasMany, relationTo),
     };
   },
   relationship: (name, declaration, path, ctx) => {
@@ -327,7 +421,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       type: "relationship",
       relationTo,
       hasMany,
-      validate: referenceValidator(hasMany),
+      validate: referenceValidator(hasMany, relationTo),
     };
   },
   repeater: (name, declaration, path, ctx, depth) => {
@@ -362,6 +456,17 @@ function lengthBounds(
   const minLength = countOption(declaration, "minLength", path, ctx);
   const maxLength = countOption(declaration, "maxLength", path, ctx);
   return orderedPair(minLength, maxLength, "minLength", "maxLength", path, ctx);
+}
+
+/** Row bounds for the prop types that hold a list of values. */
+function rowBounds(
+  declaration: BlockPropDeclaration,
+  path: string,
+  ctx: ConversionContext
+): { minRows?: number; maxRows?: number } {
+  const minRows = countOption(declaration, "minRows", path, ctx);
+  const maxRows = countOption(declaration, "maxRows", path, ctx);
+  return orderedPair(minRows, maxRows, "minRows", "maxRows", path, ctx);
 }
 
 /**
@@ -508,46 +613,92 @@ function countOption(
   return undefined;
 }
 
-/** Whether a value is shaped like editor content: a root node with children. */
+/**
+ * Whether a value is shaped like editor content: a `root` node of type
+ * `"root"` whose children are nodes. The admin hands the stored value to the
+ * editor as-is, so a value that only resembles editor content fails there
+ * instead of here unless the whole envelope is checked.
+ *
+ * The check is one level deep on purpose: node types are open (plugins add
+ * their own), so validating the full tree would encode the editor's node
+ * catalog into the field system.
+ */
 function isEditorContent(value: unknown): string | true {
   if (!isPlainObject(value)) return "must be editor content";
   const root = value.root;
-  if (!isPlainObject(root) || !Array.isArray(root.children)) {
+  if (!isPlainObject(root) || root.type !== "root") {
     return "must be editor content with a root node";
   }
-  return true;
+  if (!Array.isArray(root.children)) {
+    return "must be editor content whose root has a list of children";
+  }
+  return root.children.every(
+    child => isPlainObject(child) && typeof child.type === "string"
+  )
+    ? true
+    : "must be editor content whose root children are nodes";
+}
+
+/** Whether every entry of a list value is text. */
+function isTextList(value: unknown): string | true {
+  if (!Array.isArray(value)) return "must be a list";
+  return value.every(entry => typeof entry === "string")
+    ? true
+    : "must contain only text entries";
 }
 
 /**
- * Whether a value is a stored reference: an id, or the polymorphic
- * `{ relationTo, value }` pair a multi-collection relation stores.
+ * Finite-value check for a number prop, honoring its cardinality. The shared
+ * number rules reject `NaN` but accept the infinities, which JSON writes as
+ * `null` — so an accepted value would not survive being stored.
  */
-function isReference(value: unknown): boolean {
+function finiteValidator(
+  hasMany: boolean | undefined
+): (value: unknown) => string | true {
+  const finite = (entry: unknown) =>
+    typeof entry === "number" && Number.isFinite(entry);
+  return value => {
+    if (!hasMany) {
+      return finite(value) ? true : "must be a finite number";
+    }
+    if (!Array.isArray(value)) return "must be a list of numbers";
+    return value.every(finite) ? true : "must contain only finite numbers";
+  };
+}
+
+/**
+ * Whether a value is a stored reference to one of `targets`: an id, or the
+ * polymorphic `{ relationTo, value }` pair a multi-collection relation stores.
+ * A polymorphic reference naming a collection the prop does not relate to is
+ * rejected, since nothing downstream would resolve it.
+ */
+function isReference(value: unknown, targets: readonly string[]): boolean {
   if (typeof value === "string") return value.length > 0;
   if (typeof value === "number") return Number.isFinite(value);
   if (!isPlainObject(value)) return false;
   return (
     typeof value.relationTo === "string" &&
-    value.relationTo.length > 0 &&
+    targets.includes(value.relationTo) &&
     (typeof value.value === "string" || typeof value.value === "number")
   );
 }
 
-/** Reference-shape check for one prop, honoring its cardinality. */
+/** Reference-shape check for one prop, honoring its cardinality and targets. */
 function referenceValidator(
-  hasMany: boolean | undefined
+  hasMany: boolean | undefined,
+  relationTo: string | string[]
 ): (value: unknown) => string | true {
+  const targets = Array.isArray(relationTo) ? relationTo : [relationTo];
+  const expected = `an id or a { relationTo, value } reference to ${targets.join(" or ")}`;
   return value => {
     if (hasMany) {
       if (!Array.isArray(value)) return "must be a list of references";
-      return value.every(isReference)
+      return value.every(entry => isReference(entry, targets))
         ? true
-        : "must contain only ids or { relationTo, value } references";
+        : `must contain only ${expected}`;
     }
     if (Array.isArray(value)) return "must be a single reference, not a list";
-    return isReference(value)
-      ? true
-      : "must be an id or a { relationTo, value } reference";
+    return isReference(value, targets) ? true : `must be ${expected}`;
   };
 }
 
@@ -563,14 +714,15 @@ function isSerializable(value: unknown): string | true {
     return "must be JSON-serializable";
   }
   return containsUnserializable(value)
-    ? "must not contain functions, symbols, or undefined values"
+    ? "must not contain functions, symbols, undefined, or non-finite numbers"
     : true;
 }
 
 /**
- * Whether any part of a value is a type `JSON.stringify` drops rather than
- * rejects. Stringify succeeds on these by omitting object keys and writing
- * array holes as `null`, so the loss is invisible without an explicit walk.
+ * Whether any part of a value is something `JSON.stringify` drops rather than
+ * rejects. Stringify succeeds on these by omitting object keys, writing array
+ * holes as `null`, and turning `NaN` and the infinities into `null`, so the
+ * loss is invisible without an explicit walk.
  */
 function containsUnserializable(value: unknown): boolean {
   const pending: unknown[] = [value];
@@ -579,7 +731,8 @@ function containsUnserializable(value: unknown): boolean {
     if (
       typeof current === "function" ||
       typeof current === "symbol" ||
-      current === undefined
+      current === undefined ||
+      (typeof current === "number" && !Number.isFinite(current))
     ) {
       return true;
     }

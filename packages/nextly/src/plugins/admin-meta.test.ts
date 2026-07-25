@@ -67,6 +67,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].fieldTypes?.[0]).toEqual({
       type: "rating",
       component: "@acme/p/admin#Rating",
+      storage: "number",
       label: "Star Rating",
       description: "A 1-5 star rating",
       icon: "Star",
@@ -92,6 +93,9 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].fieldTypes?.[0]).toEqual({
       type: "rating",
       component: "@p#R",
+      // Storage is not presentation: it decides how the type's values behave,
+      // so it always travels even when every optional key is omitted.
+      storage: "number",
     });
   });
 
@@ -311,7 +315,7 @@ describe("buildPluginAdminMeta", () => {
       undefined
     );
     expect(enabled[0].fieldTypes).toEqual([
-      { type: "rating", component: "@acme/p/admin#Rating" },
+      { type: "rating", component: "@acme/p/admin#Rating", storage: "number" },
     ]);
 
     // Disabled plugins keep their collections + custom field types so the admin
@@ -321,7 +325,7 @@ describe("buildPluginAdminMeta", () => {
       undefined
     );
     expect(disabled[0].fieldTypes).toEqual([
-      { type: "rating", component: "@acme/p/admin#Rating" },
+      { type: "rating", component: "@acme/p/admin#Rating", storage: "number" },
     ]);
   });
 

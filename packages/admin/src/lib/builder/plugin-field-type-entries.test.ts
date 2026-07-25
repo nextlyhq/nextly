@@ -29,6 +29,7 @@ describe("pluginFieldTypeCatalogEntries", () => {
         {
           type: "rating",
           component: "RatingInput",
+          storage: "text",
           label: "Star Rating",
           description: "A 1-5 star rating",
           icon: "Star",
@@ -52,7 +53,12 @@ describe("pluginFieldTypeCatalogEntries", () => {
   it("fills sensible defaults when presentation fields are omitted", () => {
     const plugins = [
       pluginWith([
-        { type: "star-rating", component: "C", surfaces: ["entries"] },
+        {
+          type: "star-rating",
+          component: "C",
+          storage: "text",
+          surfaces: ["entries"],
+        },
       ]),
     ];
 
@@ -70,7 +76,9 @@ describe("pluginFieldTypeCatalogEntries", () => {
   });
 
   it("treats an omitted surfaces list as the entries surface only", () => {
-    const plugins = [pluginWith([{ type: "rating", component: "C" }])];
+    const plugins = [
+      pluginWith([{ type: "rating", component: "C", storage: "text" }]),
+    ];
 
     expect(pluginFieldTypeCatalogEntries(plugins, "entries")).toHaveLength(1);
     expect(pluginFieldTypeCatalogEntries(plugins, "users")).toEqual([]);
@@ -80,7 +88,12 @@ describe("pluginFieldTypeCatalogEntries", () => {
   it("offers a type only on the surfaces it opted into", () => {
     const plugins = [
       pluginWith([
-        { type: "rating", component: "C", surfaces: ["users", "forms"] },
+        {
+          type: "rating",
+          component: "C",
+          storage: "text",
+          surfaces: ["users", "forms"],
+        },
       ]),
     ];
 
@@ -95,13 +108,27 @@ describe("pluginFieldTypeCatalogEntries", () => {
         name: "@acme/disabled",
         collections: [],
         enabled: false,
-        fieldTypes: [{ type: "rating", component: "C", surfaces: ["entries"] }],
+        fieldTypes: [
+          {
+            type: "rating",
+            component: "C",
+            storage: "text",
+            surfaces: ["entries"],
+          },
+        ],
       },
       {
         name: "@acme/enabled",
         collections: [],
         enabled: true,
-        fieldTypes: [{ type: "color", component: "C", surfaces: ["entries"] }],
+        fieldTypes: [
+          {
+            type: "color",
+            component: "C",
+            storage: "text",
+            surfaces: ["entries"],
+          },
+        ],
       },
     ];
     expect(
@@ -111,8 +138,22 @@ describe("pluginFieldTypeCatalogEntries", () => {
 
   it("flattens field types across multiple plugins in registration order", () => {
     const plugins = [
-      pluginWith([{ type: "rating", component: "C", surfaces: ["entries"] }]),
-      pluginWith([{ type: "color", component: "C", surfaces: ["entries"] }]),
+      pluginWith([
+        {
+          type: "rating",
+          component: "C",
+          storage: "text",
+          surfaces: ["entries"],
+        },
+      ]),
+      pluginWith([
+        {
+          type: "color",
+          component: "C",
+          storage: "text",
+          surfaces: ["entries"],
+        },
+      ]),
     ];
 
     expect(

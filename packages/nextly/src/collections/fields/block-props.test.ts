@@ -92,6 +92,13 @@ describe("blockPropsToFieldConfigs", () => {
     ).toBeUndefined();
   });
 
+  it("leaves built-in props without a plugin identity", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: { text: { type: "text" } },
+    });
+    expect(configs[0]).not.toHaveProperty("custom");
+  });
+
   it("does not copy defaults onto the field configs", () => {
     const configs = blockPropsToFieldConfigs({
       name: "core/heading",
@@ -414,6 +421,171 @@ describe("validateBlockPropValues shape checks", () => {
   });
 });
 
+describe("blockPropsToFieldConfigs unknown options", () => {
+  it("refuses the nested validation object rather than dropping it", () => {
+    // Silently ignoring it would leave a declaration that reads as if it
+    // constrains its values while validating nothing.
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { text: { type: "text", validation: { maxLength: 5 } } },
+        })
+      )
+    ).toEqual([{ path: "text.validation", code: "UNKNOWN_OPTION" }]);
+  });
+
+  it("refuses a validate function, which cannot reach the manifest", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { text: { type: "text", validate: () => "nope" } },
+        })
+      )
+    ).toEqual([{ path: "text.validate", code: "UNKNOWN_OPTION" }]);
+  });
+
+  it("refuses a misspelled option and an option belonging to another type", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { text: { type: "text", maxLenght: 5 } },
+        })
+      )
+    ).toEqual([{ path: "text.maxLenght", code: "UNKNOWN_OPTION" }]);
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { note: { type: "richText", maxLength: 5 } },
+        })
+      )
+    ).toEqual([{ path: "note.maxLength", code: "UNKNOWN_OPTION" }]);
+  });
+
+  it("names every unknown option, not only the first", () => {
+    const issues = issuesOf(() =>
+      blockPropsToFieldConfigs({
+        props: { text: { type: "text", nope: 1, alsoNope: 2 } },
+      })
+    );
+    expect(issues.map(issue => issue.path)).toEqual([
+      "text.nope",
+      "text.alsoNope",
+    ]);
+  });
+});
+
+describe("blockPropsToFieldConfigs cardinality", () => {
+  it("carries hasMany and row bounds onto text and number props", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: {
+        tags: { type: "text", hasMany: true, minRows: 1, maxRows: 3 },
+        scores: { type: "number", hasMany: true, minRows: 2 },
+      },
+    });
+    expect(configs[0]).toMatchObject({
+      type: "text",
+      hasMany: true,
+      minRows: 1,
+      maxRows: 3,
+    });
+    expect(configs[1]).toMatchObject({
+      type: "number",
+      hasMany: true,
+      minRows: 2,
+    });
+  });
+
+  it("keeps validation in step with what the binding API allows", async () => {
+    // canBindFieldToProp accepts a many-valued source for a many-valued prop,
+    // so validation must accept the array that binding would deliver.
+    const source: BlockPropsSource = {
+      props: { tags: { type: "text", hasMany: true } },
+    };
+    expect(await validateBlockPropValues({ tags: ["a", "b"] }, source)).toEqual(
+      []
+    );
+    expect(await validateBlockPropValues({ tags: "a" }, source)).toHaveLength(
+      1
+    );
+  });
+});
+
+describe("validateBlockPropValues value shapes", () => {
+  it("rejects non-finite numbers, which JSON stores as null", async () => {
+    const source: BlockPropsSource = { props: { count: { type: "number" } } };
+    expect(
+      await validateBlockPropValues({ count: Number.POSITIVE_INFINITY }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ count: Number.NEGATIVE_INFINITY }, source)
+    ).toHaveLength(1);
+    expect(await validateBlockPropValues({ count: 42 }, source)).toEqual([]);
+  });
+
+  it("rejects non-finite numbers inside a json prop", async () => {
+    const source: BlockPropsSource = { props: { data: { type: "json" } } };
+    expect(
+      await validateBlockPropValues({ data: { n: Number.NaN } }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { data: [Number.POSITIVE_INFINITY] },
+        source
+      )
+    ).toHaveLength(1);
+  });
+
+  it("requires every chips entry to be text", async () => {
+    const source: BlockPropsSource = { props: { tags: { type: "chips" } } };
+    expect(
+      await validateBlockPropValues({ tags: [1, {}] }, source)
+    ).toHaveLength(1);
+    expect(await validateBlockPropValues({ tags: ["a", "b"] }, source)).toEqual(
+      []
+    );
+  });
+
+  it("requires the rich-text root to be a root node with node children", async () => {
+    const source: BlockPropsSource = { props: { body: { type: "richText" } } };
+    expect(
+      await validateBlockPropValues(
+        { body: { root: { type: "paragraph", children: [] } } },
+        source
+      )
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { body: { root: { type: "root", children: [42] } } },
+        source
+      )
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { body: { root: { type: "root", children: [{ type: "paragraph" }] } } },
+        source
+      )
+    ).toEqual([]);
+  });
+
+  it("rejects a reference to a collection the prop does not relate to", async () => {
+    const source: BlockPropsSource = {
+      props: { related: { type: "relationship", relationTo: ["posts"] } },
+    };
+    expect(
+      await validateBlockPropValues(
+        { related: { relationTo: "users", value: "u1" } },
+        source
+      )
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { related: { relationTo: "posts", value: "p1" } },
+        source
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("plugin field types as block props", () => {
   afterEach(() => {
     clearFieldTypes();
@@ -430,11 +602,17 @@ describe("plugin field types as block props", () => {
       name: "core/review",
       props: { score: { type: "rating", min: 1, max: 5 } },
     });
-    // The prop keeps its name and validates as the storage primitive the
-    // plugin declared; the plugin's own component renders it.
-    expect(configs).toEqual([
-      { name: "score", type: "number", min: 1, max: 5 },
-    ]);
+    // The prop keeps its name, validates as the storage primitive the plugin
+    // declared, and carries the contributed type so an inspector can still
+    // dispatch the plugin's own component instead of the number control.
+    expect(configs).toHaveLength(1);
+    expect(configs[0]).toMatchObject({
+      name: "score",
+      type: "number",
+      min: 1,
+      max: 5,
+      custom: { pluginFieldType: "rating" },
+    });
   });
 
   it("refuses a plugin type that did not opt into the blocks surface", () => {
