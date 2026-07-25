@@ -47,6 +47,17 @@ export const MAX_RELATIONSHIP_DEPTH = 5;
  * down would let a depth value leak into a redaction decision.
  */
 interface RelatedRowAccess {
+  /**
+   * Whether to evaluate the target collection's field read rules at all.
+   *
+   * Off unless a caller opts in, because "no user supplied" and "anonymous
+   * caller" are indistinguishable here and they demand opposite outcomes: an
+   * anonymous REST read must be judged (and denied), while an expansion entry
+   * point that simply has not been given the caller yet must keep behaving as
+   * it does today rather than start stripping fields from everyone. Every entry
+   * point opts in as its own caller forwarding lands.
+   */
+  enforceFieldAccess?: boolean;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
 }
@@ -89,6 +100,12 @@ export interface RelationshipExpansionOptions {
    * skipped — a system caller has no reason to receive a password hash.
    */
   overrideAccess?: boolean;
+
+  /**
+   * Opt in to evaluating the target collection's field read rules. Set by the
+   * read paths that forward a real caller; see {@link RelatedRowAccess}.
+   */
+  enforceFieldAccess?: boolean;
 }
 
 /**
@@ -808,6 +825,7 @@ export class CollectionRelationshipService extends BaseService {
     // The caller travels with every fetch below so each related row is judged
     // by its own collection's field rules.
     const access: RelatedRowAccess = {
+      enforceFieldAccess: options.enforceFieldAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
     };
@@ -1136,12 +1154,17 @@ export class CollectionRelationshipService extends BaseService {
           .from(targetSchema)
           .where(inArray(targetSchema.id, relatedIds));
 
-        // Build map for O(1) lookups
-        for (const entry of entries) {
-          const normalized = convertTimestampsToCamelCase({ ...entry });
-          resultMap.set(entry.id, {
-            ...normalized,
-            label: entry[labelField] || entry.id,
+        // Redact before labelling, for the same reason as the dynamic branch
+        // below: the label copies a field value under another key, so it must
+        // be taken from a row that has already been stripped.
+        const rows = entries.map((entry: Record<string, unknown>) =>
+          convertTimestampsToCamelCase({ ...entry })
+        );
+        await this.redactRelatedRows(targetCollection, rows, access);
+        for (const row of rows) {
+          resultMap.set(row.id as string, {
+            ...row,
+            label: row[labelField] || row.id,
           });
         }
       } else {
@@ -1159,12 +1182,20 @@ export class CollectionRelationshipService extends BaseService {
           .from(targetSchema)
           .where(inArray(targetSchema.id, relatedIds));
 
-        // Build map for O(1) lookups — include all fields from the related entry
-        for (const entry of entries) {
-          const normalized = convertTimestampsToCamelCase({ ...entry });
-          resultMap.set(entry.id, {
-            ...normalized,
-            label: entry[labelField] || entry.id,
+        // Redact BEFORE deriving the label. The label is a copy of a field's
+        // value under a different key, so a label taken from a row that has not
+        // been redacted yet survives the redaction of its own source field and
+        // hands back the protected value under `label`.
+        const rows = entries.map((entry: Record<string, unknown>) =>
+          convertTimestampsToCamelCase({ ...entry })
+        );
+        await this.redactRelatedRows(targetCollection, rows, access);
+        for (const row of rows) {
+          resultMap.set(row.id as string, {
+            ...row,
+            // Falls back to the id when the label's source field did not
+            // survive redaction, so a related row stays identifiable.
+            label: row[labelField] || row.id,
           });
         }
       }
@@ -1174,14 +1205,6 @@ export class CollectionRelationshipService extends BaseService {
         error
       );
     }
-
-    // Strip related-row secrets and fields the caller may not read before the
-    // map is spread into responses.
-    await this.redactRelatedRows(
-      targetCollection,
-      [...resultMap.values()],
-      access
-    );
 
     return resultMap;
   }
@@ -1292,15 +1315,24 @@ export class CollectionRelationshipService extends BaseService {
         );
       }
 
+      // Redact before labelling: the label copies a field's value under
+      // another key, so taking it from an unredacted row would return a
+      // protected value that the redaction of its source field cannot reach.
+      const targetRows = targetEntries.map((entry: Record<string, unknown>) =>
+        convertTimestampsToCamelCase({ ...entry })
+      );
+      await this.redactRelatedRows(targetCollectionName, targetRows, access);
+
       // Build target entry map
       const targetEntryMap = new Map(
-        targetEntries.map((entry: Record<string, unknown>) => {
-          const label = entry[labelField] || entry.id;
+        targetRows.map((row: Record<string, unknown>) => {
+          // Falls back to the id when the label's source field did not survive
+          // redaction.
+          const label = row[labelField] || row.id;
           console.log(
-            `[ManyToMany Expand] Entry ${String(entry.id)}: labelField="${labelField}", value="${String(label)}"`
+            `[ManyToMany Expand] Entry ${String(row.id)}: labelField="${labelField}", value="${String(label)}"`
           );
-          const normalized = convertTimestampsToCamelCase({ ...entry });
-          return [entry.id, { ...normalized, label }];
+          return [row.id, { ...row, label }];
         })
       );
 
@@ -1322,14 +1354,6 @@ export class CollectionRelationshipService extends BaseService {
         resultMap.set(sourceId, []);
       }
     }
-
-    // Strip related-row secrets and fields the caller may not read before the
-    // map is spread into responses.
-    await this.redactRelatedRows(
-      targetCollectionName,
-      [...resultMap.values()].flat(),
-      access
-    );
 
     return resultMap;
   }
@@ -1361,6 +1385,7 @@ export class CollectionRelationshipService extends BaseService {
     // Travels with every nested expansion and row fetch, so a related row at
     // any depth is judged by its own collection's field rules.
     const access: RelatedRowAccess = {
+      enforceFieldAccess: options.enforceFieldAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
     };
@@ -1417,7 +1442,9 @@ export class CollectionRelationshipService extends BaseService {
           const relatedEntries = await this.fetchManyToManyRelations(
             collectionName,
             entry.id as string,
-            field
+            field,
+            undefined,
+            access
           );
 
           const labelField = await this.getBestLabelField(
@@ -1816,6 +1843,7 @@ export class CollectionRelationshipService extends BaseService {
     rows: Record<string, unknown>[],
     access: RelatedRowAccess
   ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
     if (access.overrideAccess) return;
     for (const row of rows) {
       await applyFieldReadAccess({
@@ -1922,7 +1950,8 @@ export class CollectionRelationshipService extends BaseService {
     // snapshot captured inside the write transaction sees the junction rows just
     // written in it. The target-entry fetch stays on the pool: related rows live
     // in another (already-committed) collection, so they need no tx visibility.
-    executor?: RelationshipDbExecutor
+    executor?: RelationshipDbExecutor,
+    access: RelatedRowAccess = {}
   ): Promise<Record<string, unknown>[]> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.
@@ -1981,7 +2010,7 @@ export class CollectionRelationshipService extends BaseService {
         convertTimestampsToCamelCase({ ...entry })
       );
       // Strip related-row secrets before rows are spread into responses.
-      await this.redactRelatedRows(targetCollectionName, normalized);
+      await this.redactRelatedRows(targetCollectionName, normalized, access);
       return normalized;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);

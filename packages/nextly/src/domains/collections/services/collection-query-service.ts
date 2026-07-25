@@ -1127,6 +1127,7 @@ export class CollectionQueryService extends BaseService {
             // Expansion spreads whole related rows into these entries, and this
             // collection's field rules say nothing about another collection's
             // fields — so the caller has to reach the related row's own rules.
+            enforceFieldAccess: true,
             user: params.user,
             overrideAccess: params.overrideAccess,
           }
@@ -1959,6 +1960,7 @@ export class CollectionQueryService extends BaseService {
           depth: params.depth,
           // Same reasoning as the list path: a related row is redacted by its
           // own collection's field rules, for this caller.
+          enforceFieldAccess: true,
           user: params.user,
           overrideAccess: params.overrideAccess,
         }
