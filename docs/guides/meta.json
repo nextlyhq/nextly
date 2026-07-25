@@ -6,6 +6,7 @@
     "authentication",
     "media-storage",
     "email",
-    "draft-published-status"
+    "draft-published-status",
+    "isr-caching"
   ]
 }

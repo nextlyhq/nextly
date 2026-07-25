@@ -10,12 +10,9 @@ import {
 } from "@nextlyhq/plugin-page-builder/render";
 import { notFound } from "next/navigation";
 import { getNextly } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
 
 import nextlyConfig from "../../../../../nextly.config";
-
-// DB-backed page: render per-request; never prerendered at build (the build
-// environment has no database).
-export const dynamic = "force-dynamic";
 
 type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 
@@ -25,13 +22,12 @@ function makeDataProvider(nx: NextlyInstance): DataProvider {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Direct API arg shapes vary by slug
       const result = await nx.find(args as any);
       return {
-        items: (result.items ?? []) as unknown as Record<string, unknown>[],
+        items: result.items ?? [],
       };
     },
     findOne: async ({ collection, id }) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- slug is a generated union
-      const doc = await nx.findByID({ collection, id } as any);
-      return (doc ?? null) as Record<string, unknown> | null;
+      const doc = await nx.findByID({ collection, id });
+      return doc ?? null;
     },
     resolveMedia: async () => null,
   };
@@ -51,12 +47,22 @@ export default async function BlogPost({
 }) {
   const { slug } = await params;
   const nx = await getNextly({ config: nextlyConfig });
-  const { items } = await nx.find({
-    collection: "posts",
-    where: { slug: { equals: slug }, status: { equals: "published" } },
-    limit: 1,
-  });
-  const post = items[0] as PostData | undefined;
+  // ISR via F1: cache the published-post read and tag it with the collection
+  // tag, so publishing or editing a post busts the cache and this page
+  // regenerates on the next visit — no rebuild, no `force-dynamic`. The read
+  // filters by `status: published` only (not by caller), so it is public and
+  // safe to cache under a stable, slug-keyed entry shared by every reader.
+  const post = await cachedFind<PostData | null>(
+    async () => {
+      const { items } = await nx.find({
+        collection: "posts",
+        where: { slug: { equals: slug }, status: { equals: "published" } },
+        limit: 1,
+      });
+      return items[0] ?? null;
+    },
+    { tags: nextlyTags("posts"), keyParts: ["posts", "detail", slug] }
+  );
   if (!post) notFound();
 
   // Page-builder mode → render the visual layout.
