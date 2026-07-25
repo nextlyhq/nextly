@@ -77,6 +77,7 @@ import {
   readAuthenticatedScope,
 } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -958,8 +959,19 @@ const COLLECTIONS_METHODS: Record<
           ? p.status
           : "all";
 
+      // Forward the caller so the service evaluates the collection's stored
+      // read rules for them: role-based rules, and owner-only scoping folded
+      // into the SQL predicate. Without a user the service can only apply the
+      // rule-less default, so an admin-configured "owner-only read" silently
+      // returned every row over HTTP. `routeAuthorized` attests that the route
+      // already ran the coarse RBAC gate, so only that re-check is skipped:
+      // stored rules still run (mirrors the write paths and singles).
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.listEntries({
         collectionName: p.collectionName,
+        user,
+        routeAuthorized: !!user,
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
           rawLimit !== undefined ? parseInt(String(rawLimit), 10) : undefined,
@@ -1004,8 +1016,16 @@ const COLLECTIONS_METHODS: Record<
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
           : "all";
+      // The same caller context listEntries forwards. A count that ignored the
+      // read rules while the list obeyed them would report totals for rows the
+      // caller cannot see, which both leaks how much data exists and breaks
+      // pagination in the UI.
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.countEntries({
         collectionName: p.collectionName,
+        user,
+        routeAuthorized: !!user,
         search: p.search,
         where: parseWhereParam(p.where),
         status,
@@ -1071,9 +1091,22 @@ const COLLECTIONS_METHODS: Record<
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
           : "all";
+      // Same caller context as listEntries. Fetching one document by id is the
+      // path where a missing user matters most: without it an owner-only rule
+      // could not deny a direct read of someone else's entry.
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.getEntry({
         collectionName: p.collectionName,
         entryId: p.entryId,
+        user,
+        routeAuthorized: !!user,
+        // A scoped API key is judged on its own read grant rather than on the
+        // permissions of the user that owns it, matching the publish gate from
+        // #290/#297. Only getEntry takes this today; list/count judge the owning
+        // user, so a scoped key can still inherit a stored rule written for
+        // them there (tracked as a follow-up, not widened here).
+        authenticatedScope: readAuthenticatedScope(p),
         depth:
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
