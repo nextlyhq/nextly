@@ -187,7 +187,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
  * here beside the surface catalogs so both the built-in surface types and
  * plugin-declared `surfaces` reference one definition.
  */
-export type FieldSurface = "entries" | "users" | "forms";
+export type FieldSurface = "entries" | "users" | "forms" | "blocks";
 
 /**
  * The surface a plugin field type targets when its author declares none. Shared
@@ -339,6 +339,285 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
     combined.push(HIDDEN_SURFACE_ENTRY, FILE_SURFACE_ENTRY);
     return combined;
   })();
+
+/**
+ * The block-prop surface's field types: everything a collection can declare
+ * except two deliberate exclusions.
+ *
+ * - `password` is excluded because a block document is public page content
+ *   rendered to every visitor, so a secret must never be authorable as a
+ *   block prop.
+ * - `component` is excluded because reusable composition inside a block
+ *   document happens through slots and component-instance nodes; admitting the
+ *   component field type as well would give one concept two storage shapes.
+ *
+ * Link-shaped props keep using `text` until the dedicated link picker joins
+ * the catalog with its admin component.
+ */
+export type BlockFieldCatalogType = Exclude<
+  FieldType,
+  "password" | "component"
+>;
+
+/** Every block-prop field type, in catalog order. */
+export const BLOCK_FIELD_TYPES: readonly BlockFieldCatalogType[] = [
+  "text",
+  "textarea",
+  "richText",
+  "email",
+  "number",
+  "code",
+  "date",
+  "select",
+  "radio",
+  "checkbox",
+  "json",
+  "chips",
+  "upload",
+  "relationship",
+  "repeater",
+  "group",
+];
+
+/**
+ * The block-prop picker's catalog: the shared catalog narrowed to the types a
+ * block prop may declare. Unlike the user and form surfaces it adds no
+ * surface-only types, so every entry here maps to a real `FieldConfig`.
+ */
+export const BLOCK_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<BlockFieldCatalogType>[] =
+  narrowFieldTypeCatalog(BLOCK_FIELD_TYPES);
+
+/** Whether a field type may be declared as a block prop. */
+export function isBlockFieldType(type: string): type is BlockFieldCatalogType {
+  return (BLOCK_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * The storage shapes a plugin-contributed field type can persist as. A plugin
+ * type is not a member of the built-in union, so everything that needs to
+ * reason about its values (validation, bindings) goes through the primitive it
+ * declared.
+ */
+export type FieldStoragePrimitive =
+  | "text"
+  | "longText"
+  | "boolean"
+  | "number"
+  | "timestamp"
+  | "json";
+
+/**
+ * The built-in field type each storage primitive behaves as. A plugin type
+ * validates by its primitive's rules and binds by its primitive's value kind,
+ * while its own admin component renders it.
+ */
+export const STORAGE_PRIMITIVE_AS_FIELD_TYPE: Readonly<
+  Record<FieldStoragePrimitive, BlockFieldCatalogType>
+> = {
+  text: "text",
+  longText: "textarea",
+  boolean: "checkbox",
+  number: "number",
+  timestamp: "date",
+  json: "json",
+};
+
+/**
+ * The value shapes a binding can carry. A binding connects a data field to a
+ * block prop, so both sides are described in this one vocabulary and
+ * compatibility is a set membership test rather than a per-pair table.
+ */
+export type BindingValueKind =
+  | "text"
+  | "richText"
+  | "number"
+  | "boolean"
+  | "date"
+  | "media"
+  | "option"
+  | "reference"
+  | "list"
+  | "json";
+
+/**
+ * The kind of value a field of each type produces when it is a binding
+ * SOURCE. `null` means the type cannot be bound from at all: `password` never
+ * leaves the server, `component` and `group` are containers whose parts are
+ * bound individually, and a `repeater` is a to-many collection that a loop
+ * iterates rather than a binding flattens.
+ */
+export const FIELD_TYPE_BINDING_KIND: Readonly<
+  Record<FieldType, BindingValueKind | null>
+> = {
+  text: "text",
+  textarea: "text",
+  richText: "richText",
+  email: "text",
+  password: null,
+  code: "text",
+  number: "number",
+  checkbox: "boolean",
+  date: "date",
+  select: "option",
+  radio: "option",
+  upload: "media",
+  relationship: "reference",
+  repeater: null,
+  group: null,
+  json: "json",
+  component: null,
+  chips: "list",
+};
+
+/**
+ * The value kinds each block-prop type accepts from a binding. This map IS the
+ * bindability rule: a prop's binding affordance is derived from its declared
+ * TYPE and never from a per-block opt-in, so a new block gets binding support
+ * on every compatible prop the moment it is written.
+ *
+ * String-valued props accept numbers and dates because a binding carries an
+ * optional formatter that renders them as text. Rich text accepts only rich
+ * text: its stored value is structured editor content, and a plain string
+ * would not survive the round trip. Structured props (`repeater`, `group`) are
+ * composed rather than bound, so they accept nothing.
+ */
+export const BINDABLE_KINDS: Readonly<
+  Record<BlockFieldCatalogType, readonly BindingValueKind[]>
+> = {
+  text: ["text", "option", "number", "date"],
+  textarea: ["text", "option", "number", "date"],
+  richText: ["richText"],
+  email: ["text"],
+  number: ["number"],
+  code: ["text"],
+  date: ["date"],
+  select: ["option", "text"],
+  radio: ["option", "text"],
+  checkbox: ["boolean"],
+  json: ["json"],
+  chips: ["list"],
+  upload: ["media"],
+  relationship: ["reference"],
+  repeater: [],
+  group: [],
+};
+
+/**
+ * One end of a candidate binding: a field being bound from, or a block prop
+ * being bound into.
+ *
+ * `hasMany` matters because a multi-valued field produces an array, so type
+ * agreement alone does not make two ends compatible. `storage` describes a
+ * plugin-contributed type, which is not a member of the built-in union but
+ * persists as one of the primitives; supplying it lets a plugin type take part
+ * in bindings on the same terms as a built-in. `relationTo` carries the
+ * collection identity of a reference or media endpoint, which the value kind
+ * alone does not express.
+ */
+export interface BindingEndpoint {
+  type: string;
+  hasMany?: boolean;
+  storage?: FieldStoragePrimitive;
+  relationTo?: string | string[];
+}
+
+/**
+ * The built-in field type an endpoint resolves to, or `null` when the type is
+ * neither a built-in nor a plugin type whose storage primitive was supplied.
+ */
+function resolveEndpointType(endpoint: BindingEndpoint): FieldType | null {
+  if (isFieldType(endpoint.type)) return endpoint.type;
+  return endpoint.storage
+    ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[endpoint.storage]
+    : null;
+}
+
+/**
+ * The value kind an endpoint produces when it is a binding source, or `null`
+ * when it cannot be bound from.
+ */
+export function bindingKindOf(
+  endpoint: BindingEndpoint
+): BindingValueKind | null {
+  const resolved = resolveEndpointType(endpoint);
+  return resolved ? FIELD_TYPE_BINDING_KIND[resolved] : null;
+}
+
+/** Whether a block prop can be bound to a data field at all. */
+export function isBindablePropType(prop: BindingEndpoint): boolean {
+  const resolved = resolveEndpointType(prop);
+  return (
+    resolved !== null &&
+    isBlockFieldType(resolved) &&
+    BINDABLE_KINDS[resolved].length > 0
+  );
+}
+
+/**
+ * Whether a field can be bound into a block prop. Pickers use this to filter
+ * the field list they offer, so a user is never shown a binding that the
+ * renderer would then have to coerce.
+ *
+ * Both the value kind and the cardinality must agree: a multi-valued source
+ * produces an array, which a single-valued prop cannot render, and a
+ * single-valued source cannot fill a prop that expects a list.
+ *
+ * Reference and media endpoints must also agree on the collections they point
+ * at, and on how a reference to them is stored. Binding does not rewrite a
+ * reference, so a source that can yield a document the prop does not relate
+ * to would put an unresolvable value in the prop even though both ends are of
+ * kind `reference`, and a source whose target arity differs stores a shape the
+ * prop cannot read. The checks apply only when both ends name their targets,
+ * since an endpoint that omits them is saying nothing about collection
+ * identity rather than claiming to accept any.
+ */
+export function canBindFieldToProp(
+  source: BindingEndpoint,
+  prop: BindingEndpoint
+): boolean {
+  const propType = resolveEndpointType(prop);
+  if (propType === null || !isBlockFieldType(propType)) return false;
+  if (Boolean(source.hasMany) !== Boolean(prop.hasMany)) return false;
+  const kind = bindingKindOf(source);
+  if (kind === null || !BINDABLE_KINDS[propType].includes(kind)) return false;
+  return targetsAreCompatible(source, prop);
+}
+
+/**
+ * Whether every collection the source can yield is one the prop accepts, and
+ * whether both ends store a reference the same way. An endpoint without
+ * declared targets is not checked.
+ *
+ * Target arity decides the stored shape — a single target stores a bare id, a
+ * list of targets stores a `{ relationTo, value }` pair — so two endpoints
+ * that name the same collection still hold incompatible values when one
+ * declares it as a string and the other as a one-element array.
+ */
+function targetsAreCompatible(
+  source: BindingEndpoint,
+  prop: BindingEndpoint
+): boolean {
+  if (source.relationTo === undefined || prop.relationTo === undefined) {
+    return true;
+  }
+  if (Array.isArray(source.relationTo) !== Array.isArray(prop.relationTo)) {
+    return false;
+  }
+  const propTargets = targetList(prop.relationTo);
+  return targetList(source.relationTo).every(target =>
+    propTargets.includes(target)
+  );
+}
+
+function targetList(relationTo: string | string[] | undefined): string[] {
+  if (relationTo === undefined) return [];
+  return Array.isArray(relationTo) ? relationTo : [relationTo];
+}
+
+/** Narrowing guard for the built-in field-type union. */
+function isFieldType(type: string): type is FieldType {
+  return Object.prototype.hasOwnProperty.call(FIELD_TYPE_BINDING_KIND, type);
+}
 
 /** Look up one catalog entry by its type key. */
 export function getFieldTypeCatalogEntry(
