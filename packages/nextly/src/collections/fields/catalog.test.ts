@@ -278,6 +278,53 @@ describe("binding kinds", () => {
     ).toBe(false);
   });
 
+  it("requires reference endpoints to agree on their collections", () => {
+    // Binding does not rewrite a reference, so a users document cannot fill a
+    // prop that relates to posts even though both ends are of kind reference.
+    expect(
+      canBindFieldToProp(
+        { type: "relationship", relationTo: "users" },
+        { type: "relationship", relationTo: "posts" }
+      )
+    ).toBe(false);
+    expect(
+      canBindFieldToProp(
+        { type: "relationship", relationTo: "posts" },
+        { type: "relationship", relationTo: ["posts", "pages"] }
+      )
+    ).toBe(true);
+    // A source that can yield pages cannot fill a posts-only prop.
+    expect(
+      canBindFieldToProp(
+        { type: "relationship", relationTo: ["posts", "pages"] },
+        { type: "relationship", relationTo: "posts" }
+      )
+    ).toBe(false);
+    expect(
+      canBindFieldToProp(
+        { type: "upload", relationTo: "media" },
+        { type: "upload", relationTo: "media" }
+      )
+    ).toBe(true);
+  });
+
+  it("skips the target check when an endpoint declares no collections", () => {
+    // Omitting targets says nothing about collection identity, so it must not
+    // be read as a claim to accept any.
+    expect(
+      canBindFieldToProp(
+        { type: "relationship" },
+        { type: "relationship", relationTo: "posts" }
+      )
+    ).toBe(true);
+    expect(
+      canBindFieldToProp(
+        { type: "relationship", relationTo: "posts" },
+        { type: "relationship" }
+      )
+    ).toBe(true);
+  });
+
   it("rejects unknown types on either side", () => {
     expect(bindingKindOf({ type: "nope" })).toBeNull();
     expect(canBindFieldToProp({ type: "nope" }, { type: "text" })).toBe(false);

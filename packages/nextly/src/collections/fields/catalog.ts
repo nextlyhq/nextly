@@ -510,12 +510,15 @@ export const BINDABLE_KINDS: Readonly<
  * agreement alone does not make two ends compatible. `storage` describes a
  * plugin-contributed type, which is not a member of the built-in union but
  * persists as one of the primitives; supplying it lets a plugin type take part
- * in bindings on the same terms as a built-in.
+ * in bindings on the same terms as a built-in. `relationTo` carries the
+ * collection identity of a reference or media endpoint, which the value kind
+ * alone does not express.
  */
 export interface BindingEndpoint {
   type: string;
   hasMany?: boolean;
   storage?: FieldStoragePrimitive;
+  relationTo?: string | string[];
 }
 
 /**
@@ -558,6 +561,13 @@ export function isBindablePropType(prop: BindingEndpoint): boolean {
  * Both the value kind and the cardinality must agree: a multi-valued source
  * produces an array, which a single-valued prop cannot render, and a
  * single-valued source cannot fill a prop that expects a list.
+ *
+ * Reference and media endpoints must also agree on the collections they point
+ * at. Binding does not rewrite a reference, so a source that can yield a
+ * document the prop does not relate to would put an unresolvable value in the
+ * prop even though both ends are of kind `reference`. The check applies only
+ * when both ends name their targets, since an endpoint that omits them is
+ * saying nothing about collection identity rather than claiming to accept any.
  */
 export function canBindFieldToProp(
   source: BindingEndpoint,
@@ -567,7 +577,27 @@ export function canBindFieldToProp(
   if (propType === null || !isBlockFieldType(propType)) return false;
   if (Boolean(source.hasMany) !== Boolean(prop.hasMany)) return false;
   const kind = bindingKindOf(source);
-  return kind !== null && BINDABLE_KINDS[propType].includes(kind);
+  if (kind === null || !BINDABLE_KINDS[propType].includes(kind)) return false;
+  return targetsAreCompatible(source, prop);
+}
+
+/**
+ * Whether every collection the source can yield is one the prop accepts. An
+ * endpoint without declared targets is not checked.
+ */
+function targetsAreCompatible(
+  source: BindingEndpoint,
+  prop: BindingEndpoint
+): boolean {
+  const sourceTargets = targetList(source.relationTo);
+  const propTargets = targetList(prop.relationTo);
+  if (sourceTargets.length === 0 || propTargets.length === 0) return true;
+  return sourceTargets.every(target => propTargets.includes(target));
+}
+
+function targetList(relationTo: string | string[] | undefined): string[] {
+  if (relationTo === undefined) return [];
+  return Array.isArray(relationTo) ? relationTo : [relationTo];
 }
 
 /** Narrowing guard for the built-in field-type union. */

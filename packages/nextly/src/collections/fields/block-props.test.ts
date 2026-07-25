@@ -388,7 +388,7 @@ describe("validateBlockPropValues shape checks", () => {
       await validateBlockPropValues(
         {
           image: "media-1",
-          related: [{ relationTo: "posts", value: "p1" }, "p2"],
+          related: [{ relationTo: "posts", value: "p1" }],
         },
         source
       )
@@ -400,6 +400,32 @@ describe("validateBlockPropValues shape checks", () => {
         source
       )
     ).toHaveLength(2);
+  });
+
+  it("ties the stored reference shape to the target arity", async () => {
+    // A single target fixes the collection, so the id stands alone; several
+    // targets make a bare id ambiguous, so the reference must name its own.
+    const single: BlockPropsSource = {
+      props: { image: { type: "upload", relationTo: "media" } },
+    };
+    expect(await validateBlockPropValues({ image: "m1" }, single)).toEqual([]);
+    expect(
+      await validateBlockPropValues(
+        { image: { relationTo: "media", value: "m1" } },
+        single
+      )
+    ).toHaveLength(1);
+
+    const many: BlockPropsSource = {
+      props: { ref: { type: "relationship", relationTo: ["posts", "pages"] } },
+    };
+    expect(
+      await validateBlockPropValues(
+        { ref: { relationTo: "pages", value: "p1" } },
+        many
+      )
+    ).toEqual([]);
+    expect(await validateBlockPropValues({ ref: "p1" }, many)).toHaveLength(1);
   });
 
   it("rejects a json prop value JSON cannot represent", async () => {
@@ -583,6 +609,129 @@ describe("validateBlockPropValues value shapes", () => {
         source
       )
     ).toEqual([]);
+  });
+});
+
+describe("validateBlockPropValues structural shapes", () => {
+  it("enforces the row bounds a scalar list prop advertises", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        tags: { type: "text", hasMany: true, minRows: 2, maxRows: 3 },
+        scores: { type: "number", hasMany: true, maxRows: 1 },
+      },
+    };
+    expect(
+      await validateBlockPropValues({ tags: ["only-one"] }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ tags: ["a", "b", "c", "d"] }, source)
+    ).toHaveLength(1);
+    expect(await validateBlockPropValues({ tags: ["a", "b"] }, source)).toEqual(
+      []
+    );
+    expect(
+      await validateBlockPropValues({ scores: [1, 2] }, source)
+    ).toHaveLength(1);
+  });
+
+  it("requires structured props to hold plain JSON records", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        meta: { type: "group", fields: { note: { type: "text" } } },
+        items: { type: "repeater", fields: { note: { type: "text" } } },
+      },
+    };
+    // A Date survives the shared object check but becomes a string once the
+    // document is encoded.
+    expect(
+      await validateBlockPropValues({ meta: new Date() }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ items: [new Date()] }, source)
+    ).toHaveLength(1);
+    const cyclic: Record<string, unknown> = { note: "a" };
+    cyclic.self = cyclic;
+    expect(
+      await validateBlockPropValues({ meta: cyclic }, source)
+    ).toHaveLength(1);
+    expect(
+      await validateBlockPropValues(
+        { meta: { note: "a" }, items: [{ note: "b" }] },
+        source
+      )
+    ).toEqual([]);
+  });
+
+  it("rejects an empty list supplied for a prop holding one value", async () => {
+    // The shared validator reads [] as an absent value and returns before any
+    // type rule runs, so this is the one array shape it never inspects.
+    const source: BlockPropsSource = {
+      props: {
+        title: { type: "text" },
+        body: { type: "richText" },
+        data: { type: "json" },
+        tags: { type: "chips" },
+      },
+    };
+    expect(await validateBlockPropValues({ title: [] }, source)).toEqual([
+      {
+        path: "title",
+        code: "INVALID_TYPE",
+        message: "title must not be a list.",
+      },
+    ]);
+    expect(await validateBlockPropValues({ body: [] }, source)).toHaveLength(1);
+    // An array is a legitimate JSON value, and chips are a list by definition.
+    expect(
+      await validateBlockPropValues({ data: [], tags: [] }, source)
+    ).toEqual([]);
+  });
+
+  it("reaches empty lists nested inside groups and repeater rows", async () => {
+    const source: BlockPropsSource = {
+      props: {
+        meta: { type: "group", fields: { note: { type: "text" } } },
+        items: { type: "repeater", fields: { note: { type: "text" } } },
+      },
+    };
+    const issues = await validateBlockPropValues(
+      { meta: { note: [] }, items: [{ note: [] }] },
+      source
+    );
+    expect(issues.map(issue => issue.path).sort()).toEqual([
+      "items[0].note",
+      "meta.note",
+    ]);
+  });
+});
+
+describe("blockPropsToFieldConfigs relation targets", () => {
+  it("rejects a relationTo that no collection could be named", () => {
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { ref: { type: "relationship", relationTo: "Not valid!" } },
+        })
+      )
+    ).toEqual([{ path: "ref", code: "MISSING_RELATION_TARGET" }]);
+    expect(
+      issuesOf(() =>
+        blockPropsToFieldConfigs({
+          props: { ref: { type: "upload", relationTo: ["media", "Bad Slug"] } },
+        })
+      )
+    ).toEqual([{ path: "ref", code: "MISSING_RELATION_TARGET" }]);
+  });
+
+  it("accepts canonical slugs in both forms", () => {
+    const configs = blockPropsToFieldConfigs({
+      props: {
+        image: { type: "upload", relationTo: "media_files" },
+        ref: { type: "relationship", relationTo: ["blog-posts", "pages"] },
+      },
+    });
+    expect(configs[0]).toMatchObject({ relationTo: "media_files" });
+    expect(configs[1]).toMatchObject({ relationTo: ["blog-posts", "pages"] });
   });
 });
 

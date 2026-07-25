@@ -40,6 +40,7 @@ import {
 } from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ValidationPublicData } from "../../errors/public-data";
+import { SLUG_PATTERN } from "../../shared/base-validator";
 import { validateEntryData } from "../../shared/lib/entry-validation";
 
 import type { BlockFieldCatalogType } from "./catalog";
@@ -145,7 +146,76 @@ export async function validateBlockPropValues(
   const fields = blockPropsToFieldConfigs(source);
   // Block props are always written whole: a stored node carries every prop it
   // has, so absent means unset rather than untouched, which is create mode.
-  return validateEntryData(values, fields, { mode: "create" });
+  const issues = await validateEntryData(values, fields, { mode: "create" });
+  collectEmptyListIssues(fields, values, "", issues);
+  return issues;
+}
+
+/**
+ * Report an empty array supplied for a prop that holds a single value.
+ *
+ * The shared validator classifies `[]` as an absent value and returns before
+ * any type rule runs, including a field's own `validate`, so `[]` is the one
+ * array shape the per-type checks never see. For an entry that is harmless —
+ * the value is on its way to a typed column. A block prop is stored as JSON
+ * exactly as given, so the empty array would reach a renderer expecting text.
+ */
+function collectEmptyListIssues(
+  fields: readonly WalkableField[],
+  values: Record<string, unknown>,
+  basePath: string,
+  issues: ConversionIssue[]
+): void {
+  for (const field of fields) {
+    if (!field.name) continue;
+    const value = values[field.name];
+    if (value === undefined) continue;
+    const path = basePath ? `${basePath}.${field.name}` : field.name;
+    if (Array.isArray(value) && value.length === 0 && !holdsList(field)) {
+      issues.push({
+        path,
+        code: "INVALID_TYPE",
+        message: `${field.label ?? field.name} must not be a list.`,
+      });
+      continue;
+    }
+    const nested = field.fields;
+    if (!nested) continue;
+    if (field.type === "group" && isPlainObject(value)) {
+      collectEmptyListIssues(nested, value, path, issues);
+      continue;
+    }
+    if (field.type === "repeater" && Array.isArray(value)) {
+      value.forEach((row, index) => {
+        if (isPlainObject(row)) {
+          collectEmptyListIssues(nested, row, `${path}[${index}]`, issues);
+        }
+      });
+    }
+  }
+}
+
+/**
+ * Whether a field's value is a list. `json` counts because an array is a
+ * legitimate JSON value, not a cardinality mistake.
+ */
+function holdsList(field: WalkableField): boolean {
+  if (field.type === "chips" || field.type === "repeater") return true;
+  if (field.type === "json") return true;
+  return field.hasMany === true;
+}
+
+/**
+ * The part of a field config the empty-list walk reads. Nested fields inside a
+ * group or repeater are typed permissively by their own configs, so the walk
+ * describes what it needs rather than requiring the concrete union.
+ */
+interface WalkableField {
+  name?: string;
+  type: string;
+  label?: string;
+  hasMany?: boolean;
+  fields?: readonly WalkableField[];
 }
 
 function buildFieldConfigs(
@@ -317,12 +387,14 @@ function base(
 const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
   text: (name, declaration, path, ctx) => {
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
+    const rows = rowBounds(declaration, path, ctx);
     return {
       ...base(name, declaration, path, ctx),
       type: "text",
       ...lengthBounds(declaration, path, ctx),
       hasMany,
-      ...rowBounds(declaration, path, ctx),
+      ...rows,
+      validate: listBoundsValidator(rows.minRows, rows.maxRows),
     };
   },
   textarea: (name, declaration, path, ctx) => ({
@@ -343,6 +415,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
     const min = optionalNumber(declaration, "min", path, ctx);
     const max = optionalNumber(declaration, "max", path, ctx);
     const hasMany = optionalBoolean(declaration, "hasMany", path, ctx);
+    const rows = rowBounds(declaration, path, ctx);
     // A number prop is free to range below zero and to hold fractions, so
     // ordering is the only rule its bounds must satisfy.
     return {
@@ -350,8 +423,11 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       type: "number",
       ...orderedPair(min, max, "min", "max", path, ctx),
       hasMany,
-      ...rowBounds(declaration, path, ctx),
-      validate: finiteValidator(hasMany),
+      ...rows,
+      validate: allOf(
+        finiteValidator(hasMany),
+        listBoundsValidator(rows.minRows, rows.maxRows)
+      ),
     };
   },
   code: (name, declaration, path, ctx) => ({
@@ -434,6 +510,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       type: "repeater",
       fields,
       ...orderedPair(minRows, maxRows, "minRows", "maxRows", path, ctx),
+      validate: isJsonRecordList,
     };
   },
   group: (name, declaration, path, ctx, depth) => {
@@ -443,6 +520,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       ...base(name, declaration, path, ctx),
       type: "group",
       fields,
+      validate: isJsonRecord,
     };
   },
 };
@@ -533,26 +611,28 @@ function choiceOptions(
   return options;
 }
 
-/** The collection(s) an `upload` or `relationship` prop points at. */
+/**
+ * The collection(s) an `upload` or `relationship` prop points at. Targets are
+ * held to the canonical slug rule, so a target no collection could ever have
+ * fails at conversion instead of producing a reference nothing can resolve.
+ */
 function relationTarget(
   declaration: BlockPropDeclaration,
   path: string,
   ctx: ConversionContext
 ): string | string[] | null {
   const raw = declaration.relationTo;
-  if (typeof raw === "string" && raw.length > 0) return raw;
-  if (
-    Array.isArray(raw) &&
-    raw.length > 0 &&
-    raw.every(entry => typeof entry === "string" && entry.length > 0)
-  ) {
+  const isSlug = (entry: unknown): entry is string =>
+    typeof entry === "string" && SLUG_PATTERN.test(entry);
+  if (isSlug(raw)) return raw;
+  if (Array.isArray(raw) && raw.length > 0 && raw.every(isSlug)) {
     return [...raw];
   }
   record(
     ctx,
     path,
     "MISSING_RELATION_TARGET",
-    "An upload or relationship prop must declare `relationTo` as a collection slug or a non-empty array of slugs."
+    "An upload or relationship prop must declare `relationTo` as a collection slug or a non-empty array of slugs, each starting with a lowercase letter and containing only lowercase letters, digits, underscores, and hyphens."
   );
   return null;
 }
@@ -666,40 +746,110 @@ function finiteValidator(
   };
 }
 
-/**
- * Whether a value is a stored reference to one of `targets`: an id, or the
- * polymorphic `{ relationTo, value }` pair a multi-collection relation stores.
- * A polymorphic reference naming a collection the prop does not relate to is
- * rejected, since nothing downstream would resolve it.
- */
-function isReference(value: unknown, targets: readonly string[]): boolean {
+/** Whether a value is a document id. */
+function isDocumentId(value: unknown): boolean {
   if (typeof value === "string") return value.length > 0;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (!isPlainObject(value)) return false;
-  return (
-    typeof value.relationTo === "string" &&
-    targets.includes(value.relationTo) &&
-    (typeof value.value === "string" || typeof value.value === "number")
-  );
+  return typeof value === "number" && Number.isFinite(value);
 }
 
-/** Reference-shape check for one prop, honoring its cardinality and targets. */
+/**
+ * Reference-shape check for one prop, honoring its cardinality and targets.
+ *
+ * The stored shape follows the target arity, the same rule that decides
+ * whether the field needs JSON storage: a single-target relation stores a bare
+ * id, because the collection is already fixed by the declaration, while a
+ * multi-target relation stores `{ relationTo, value }` so the reference
+ * carries the collection identity a bare id could not express.
+ */
 function referenceValidator(
   hasMany: boolean | undefined,
   relationTo: string | string[]
 ): (value: unknown) => string | true {
-  const targets = Array.isArray(relationTo) ? relationTo : [relationTo];
-  const expected = `an id or a { relationTo, value } reference to ${targets.join(" or ")}`;
+  const polymorphic = Array.isArray(relationTo);
+  const expected = polymorphic
+    ? `a { relationTo, value } reference to ${relationTo.join(" or ")}`
+    : `an id of a ${relationTo} document`;
+  const isOne = (entry: unknown): boolean =>
+    polymorphic
+      ? isPlainObject(entry) &&
+        typeof entry.relationTo === "string" &&
+        relationTo.includes(entry.relationTo) &&
+        isDocumentId(entry.value)
+      : isDocumentId(entry);
   return value => {
     if (hasMany) {
       if (!Array.isArray(value)) return "must be a list of references";
-      return value.every(entry => isReference(entry, targets))
-        ? true
-        : `must contain only ${expected}`;
+      return value.every(isOne) ? true : `must contain only ${expected}`;
     }
     if (Array.isArray(value)) return "must be a single reference, not a list";
-    return isReference(value, targets) ? true : `must be ${expected}`;
+    return isOne(value) ? true : `must be ${expected}`;
   };
+}
+
+/** Runs validators in order, reporting the first failure. */
+function allOf(
+  ...validators: Array<(value: unknown) => string | true>
+): (value: unknown) => string | true {
+  return value => {
+    for (const validator of validators) {
+      const result = validator(value);
+      if (result !== true) return result;
+    }
+    return true;
+  };
+}
+
+/**
+ * Row-count check for a list-shaped scalar prop. The shared rules read row
+ * bounds for repeaters and chips but not for a `hasMany` text or number field,
+ * so without this the declaration would advertise a constraint nothing
+ * enforces.
+ */
+function listBoundsValidator(
+  minRows: number | undefined,
+  maxRows: number | undefined
+): (value: unknown) => string | true {
+  return value => {
+    if (!Array.isArray(value)) return true;
+    if (minRows !== undefined && value.length < minRows) {
+      return `must have at least ${minRows} entries`;
+    }
+    if (maxRows !== undefined && value.length > maxRows) {
+      return `must have at most ${maxRows} entries`;
+    }
+    return true;
+  };
+}
+
+/**
+ * Whether a structured value is a plain JSON record. The shared rules accept
+ * any non-array object, which lets a `Date` through — it becomes a string once
+ * the document is encoded — and a cyclic object, which makes encoding throw.
+ */
+function isJsonRecord(value: unknown): string | true {
+  if (!isPlainRecord(value)) return "must be a plain object";
+  return isSerializable(value);
+}
+
+/**
+ * Whether a value is an object literal rather than a class instance. The
+ * looser object check is not enough here: a `Date` or a `Map` passes it while
+ * encoding turns the first into a string and the second into `{}`.
+ */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) return false;
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** The same check applied to every row of a repeater value. */
+function isJsonRecordList(value: unknown): string | true {
+  if (!Array.isArray(value)) return true;
+  for (const row of value) {
+    const result = isJsonRecord(row);
+    if (result !== true) return `rows ${result}`;
+  }
+  return true;
 }
 
 /**
