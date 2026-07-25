@@ -173,9 +173,12 @@ export class CollectionsHandler {
       ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
       : undefined;
 
-    const cacheRevalidator = container.has("cacheRevalidator")
-      ? container.get<CacheRevalidator>("cacheRevalidator")
-      : undefined;
+    // Resolved lazily at flush time (not captured here) so a Next cache adapter
+    // registered after this handler was constructed at boot is still honored.
+    const resolveCacheRevalidator = () =>
+      container.has("cacheRevalidator")
+        ? container.get<CacheRevalidator>("cacheRevalidator")
+        : undefined;
 
     // Late-inject relationshipService if componentDataService was created before it was available
     if (componentDataService) {
@@ -205,7 +208,7 @@ export class CollectionsHandler {
       this.localization,
       retentionRunner,
       fastDrainScheduler,
-      cacheRevalidator
+      resolveCacheRevalidator
     );
   }
 

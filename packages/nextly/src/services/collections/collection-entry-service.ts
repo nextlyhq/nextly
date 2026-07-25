@@ -107,11 +107,16 @@ export class CollectionEntryService extends BaseService {
      */
     private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
     /**
-     * Flushes a write's cache-revalidation intent post-commit. Wired at the same
-     * seam as `fastDrainScheduler` because every event-appending write runs
-     * through this service. Defaults to a no-op when no cache adapter is present.
+     * Resolves the cache revalidator that flushes a write's revalidation intent
+     * post-commit. Wired at the same seam as `fastDrainScheduler` because every
+     * event-appending write runs through this service. A resolver (not the
+     * instance) so it is read at flush time: this service is constructed during
+     * boot, before a Next cache adapter registers, and an eager capture would
+     * memoize the no-op default. Returns undefined when no adapter is present.
      */
-    private readonly cacheRevalidator?: CacheRevalidator
+    private readonly resolveCacheRevalidator?: () =>
+      | CacheRevalidator
+      | undefined
   ) {
     super(adapter, logger);
 
@@ -340,11 +345,15 @@ export class CollectionEntryService extends BaseService {
    * a revalidator fault never turns a committed write into a failure.
    */
   async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
-    if (!this.cacheRevalidator || intents.length === 0) return;
+    if (intents.length === 0) return;
+    // Resolve at flush time so a Next cache adapter registered after this
+    // service was constructed (at request time, well after boot) is honored.
+    const revalidator = this.resolveCacheRevalidator?.();
+    if (!revalidator) return;
     try {
       // Await so a Promise-returning revalidator finishes here; `revalidateTag`
       // is synchronous, so this adds no latency for the common case.
-      await this.cacheRevalidator.flush(intents);
+      await revalidator.flush(intents);
     } catch (error) {
       this.logger.error("Cache revalidation failed after a write", { error });
     }

@@ -80,10 +80,15 @@ export class SingleEntryService extends BaseService {
      */
     private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
     /**
-     * Flushes a single write's cache-revalidation intent post-commit. Shared
-     * with the collection write path; a no-op when no cache adapter is present.
+     * Resolves the cache revalidator that flushes a single write's revalidation
+     * intent post-commit. Shared with the collection write path. A resolver (not
+     * the instance) so it is read at flush time: this service is constructed
+     * during boot, before a Next cache adapter registers, and an eager capture
+     * would memoize the no-op default. Returns undefined when no adapter present.
      */
-    private readonly cacheRevalidator?: CacheRevalidator
+    private readonly resolveCacheRevalidator?: () =>
+      | CacheRevalidator
+      | undefined
   ) {
     super(adapter, logger);
 
@@ -160,9 +165,13 @@ export class SingleEntryService extends BaseService {
    * revalidation never turns a committed write into an error.
    */
   private async flushRevalidation(result: SingleResult): Promise<void> {
-    if (!this.cacheRevalidator || !result.revalidationIntent) return;
+    if (!result.revalidationIntent) return;
+    // Resolve at flush time so a Next cache adapter registered after this
+    // service was constructed (at request time, well after boot) is honored.
+    const revalidator = this.resolveCacheRevalidator?.();
+    if (!revalidator) return;
     try {
-      await this.cacheRevalidator.flush([result.revalidationIntent]);
+      await revalidator.flush([result.revalidationIntent]);
     } catch (error) {
       this.logger.error("Cache revalidation failed after a write", { error });
     }

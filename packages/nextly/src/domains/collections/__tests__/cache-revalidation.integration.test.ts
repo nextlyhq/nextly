@@ -430,6 +430,28 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain("nextly:builderon:slug:on");
   });
 
+  it("resolves a cache adapter registered AFTER construction (lazy, codex-194)", async () => {
+    // The Next cache adapter registers at request time, well after boot. A write
+    // must resolve the revalidator at flush time, not capture the boot-time
+    // default at construction — otherwise a boot path that touches the entry
+    // service memoizes the no-op and ignores the adapter that registers later.
+    const entries = await boot([openCollection("late")]);
+    // Register a second revalidator AFTER the service was constructed; it must
+    // win. With an eager capture, `spy` (registered pre-boot) would receive the
+    // flush and `lateSpy` would get nothing — this fails there and passes here.
+    const lateSpy = new RecordingRevalidator();
+    container.registerSingleton<CacheRevalidator>(
+      "cacheRevalidator",
+      () => lateSpy
+    );
+    await entries.createEntry(
+      { collectionName: "late", overrideAccess: true },
+      { title: "T", slug: "z" }
+    );
+    expect(lateSpy.tags).toContain("nextly:late:slug:z");
+    expect(spy.flushed).toHaveLength(0);
+  });
+
   it("flushes nothing when a write records no event (update of a missing entry)", async () => {
     const entries = await boot([openCollection("nope")]);
     const result = await entries.updateEntry(
