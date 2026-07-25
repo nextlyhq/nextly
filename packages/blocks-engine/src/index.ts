@@ -76,6 +76,39 @@ export type {
   ValidationMode,
 } from "./validation";
 
+export { defineBlock } from "./block";
+export type {
+  AnyBlockDefinition,
+  BlockDefinition,
+  BlockEditorMeta,
+  BlockExample,
+  BlockRenderArgs,
+  BlockRenderResult,
+  BlockSupports,
+  BlockVariation,
+  ComponentPath,
+  InferBlockProps,
+  PropSchema,
+  SlotLock,
+  SlotSpec,
+} from "./block";
+
+export {
+  registerBlocks,
+  registerSupport,
+  getBlock,
+  hasBlock,
+  allBlocks,
+  getBlockSource,
+  getSupport,
+  allSupports,
+  clearBlocks,
+  MAX_BLOCK_VERSION,
+  registryLookup,
+  registryMigrationSource,
+} from "./registry";
+export type { RegisterOptions, SupportDefinition } from "./registry";
+
 export { migrateDocument, migrateProps, findMigrationGaps } from "./migration";
 export type {
   BlockMigrationInfo,
