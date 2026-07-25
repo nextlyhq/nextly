@@ -177,10 +177,14 @@ export function buildSingleHookContext<T>(
  * Whether a loaded row satisfies an access constraint of the
  * `{ field: { equals: value } }` shape the access service emits for reads.
  *
- * Reads are expected to fold that predicate into a LIST query, so a caller that
- * holds a single row has to check it directly instead. An unrecognized
- * constraint shape denies: a predicate that cannot be checked is not a
- * predicate that has been satisfied.
+ * Reads are expected to fold that predicate into a LIST query, which compiles
+ * the full Where grammar; a caller holding one row has to check it directly
+ * instead. Only a lone `equals` per field is checked, and **anything else
+ * denies** — a compound condition whose other operators went unchecked would
+ * admit a row the predicate excludes, and re-implementing the rest of the
+ * grammar here would be a second, drifting evaluator. Owner-only, the rule this
+ * exists for, emits exactly this shape. A custom rule returning any other
+ * operator is refused rather than half-evaluated.
  */
 function documentSatisfiesConstraint(
   document: Record<string, unknown>,
@@ -190,14 +194,14 @@ function documentSatisfiesConstraint(
   for (const [field, condition] of Object.entries(
     query as Record<string, unknown>
   )) {
-    if (
-      condition === null ||
-      typeof condition !== "object" ||
-      !("equals" in condition)
-    ) {
+    if (condition === null || typeof condition !== "object") return false;
+    const operators = Object.keys(condition);
+    // Exactly one operator, and it must be `equals`: a condition carrying more
+    // than that is only partly checkable, and partly checked is not satisfied.
+    if (operators.length !== 1 || operators[0] !== "equals") {
       return false;
     }
-    const expected = condition.equals;
+    const expected = (condition as Record<string, unknown>).equals;
     // Singles default their owner column to camelCase `createdBy` while the row
     // may carry the snake_case column the database stores, so a constraint is
     // matched against either spelling of the same column rather than missing it
@@ -481,13 +485,8 @@ export class SingleQueryService extends BaseService {
       message: `Access denied: read on single "${slug}" is not permitted`,
     };
 
-    // No row means ownership cannot be established. Auto-create would otherwise
-    // materialize an unowned document for a caller the rule may not admit, so
-    // fail closed and leave the Single uncreated.
-    if (!document) return denied;
-
     const documentId =
-      typeof document.id === "string" ? document.id : undefined;
+      typeof document?.id === "string" ? document.id : undefined;
     const result = await this.accessControlService.evaluateAccess(
       accessRules,
       "read",
@@ -502,7 +501,7 @@ export class SingleQueryService extends BaseService {
           : undefined,
       },
       documentId,
-      document
+      document ?? undefined
     );
 
     if (!result.allowed) {
@@ -514,6 +513,17 @@ export class SingleQueryService extends BaseService {
     // Single is one document, so there is nothing to filter — the predicate has
     // to be checked against the row itself or every authenticated caller reads
     // it. Custom rules that return a constraint are held to the same check.
+    if (result.query === undefined || result.query === null) {
+      // No predicate to satisfy. A custom rule that admits the caller on user
+      // context alone lands here, including on a Single that has never been
+      // materialized — so its first permitted read can still auto-create it.
+      return null;
+    }
+
+    // A predicate with no row cannot be satisfied. Denying here also stops
+    // auto-create from materializing a document the predicate would exclude.
+    if (!document) return denied;
+
     if (!documentSatisfiesConstraint(document, result.query)) {
       return denied;
     }

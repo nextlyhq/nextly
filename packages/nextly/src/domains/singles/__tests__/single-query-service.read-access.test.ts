@@ -248,6 +248,139 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
 });
 
 /**
+ * Constraint-returning read rules.
+ *
+ * These stub the evaluator's RESULT, which is legitimate where the owner-only
+ * tests' stubbing was not: what is under test here is the constraint checker,
+ * and the shapes fed in are the ones the real evaluator actually emits —
+ * `{ allowed: true, query }` for a rule that returns a constraint and
+ * `{ allowed: true }` for one that decides on the caller alone. Custom rules
+ * load from a `functionPath` at runtime, so an inline function cannot be
+ * exercised end to end here; the owner-only suite above covers the real
+ * evaluator for the rule that produces constraints in practice.
+ */
+describe("SingleQueryService.get — constraint-returning read rules", () => {
+  function createConstraintService(
+    evaluation: Record<string, unknown>,
+    row: Record<string, unknown> | null
+  ) {
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({
+        accessRules: { read: { type: "custom", functionPath: "./rule" } },
+      }),
+      fields: [textField("siteName")],
+    });
+    const insert = vi.fn().mockResolvedValue({ id: "doc1" });
+    const service = new SingleQueryService(
+      createMockAdapter({
+        selectOne: vi.fn().mockResolvedValue(row),
+        insert,
+      }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      undefined,
+      createMockRBACService(true) as unknown as Ctor[5],
+      undefined,
+      {
+        evaluateAccess: vi.fn().mockResolvedValue(evaluation),
+      } as unknown as Ctor[7]
+    );
+    return { service, insert };
+  }
+
+  it("admits a rule that decides on the caller alone, even with no row yet", async () => {
+    // Such a rule never inspects the document, so refusing it outright would
+    // leave a Single with a custom read rule impossible to initialize: its
+    // first permitted read is what auto-creates it.
+    const { service } = createConstraintService({ allowed: true }, null);
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("refuses a constraint carrying an operator it cannot check", async () => {
+    // A list read compiles the whole Where grammar; this path checks one row.
+    // Honouring `equals` while ignoring a sibling operator would return a row
+    // the predicate excludes, so a partly-checkable condition is refused.
+    const { service } = createConstraintService(
+      { allowed: true, query: { age: { equals: 5, greater_than: 10 } } },
+      { id: "doc1", age: 5 }
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("refuses a constraint using an operator other than equals", async () => {
+    const { service } = createConstraintService(
+      { allowed: true, query: { age: { in: [5, 6] } } },
+      { id: "doc1", age: 5 }
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("honours a plain equals constraint the row satisfies", async () => {
+    const { service } = createConstraintService(
+      { allowed: true, query: { tenant: { equals: "acme" } } },
+      { id: "doc1", tenant: "acme" }
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("denies a plain equals constraint the row fails", async () => {
+    const { service } = createConstraintService(
+      { allowed: true, query: { tenant: { equals: "acme" } } },
+      { id: "doc1", tenant: "other" }
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("denies a constraint when the row does not exist, without auto-creating", async () => {
+    const { service, insert } = createConstraintService(
+      { allowed: true, query: { tenant: { equals: "acme" } } },
+      null
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(insert).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * Enforcement of related-row field rules is opt-in, and the default matters: a
  * caller that supplies no access context cannot be told apart from an anonymous
  * one, so enforcing by default would strip protected related fields from every
