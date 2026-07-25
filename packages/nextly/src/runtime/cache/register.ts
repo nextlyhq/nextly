@@ -11,11 +11,14 @@ import type { CacheRevalidator } from "../../revalidation/types";
 
 import { NextCacheRevalidator } from "./next-cache-revalidator";
 
-let registered = false;
-
 /**
  * Register {@link NextCacheRevalidator} as the active `cacheRevalidator`,
- * replacing the no-op default. Idempotent.
+ * replacing the no-op default. Safe to call any number of times.
+ *
+ * Registration is driven off the container, not a module-level flag: a flag
+ * would go stale after `clearServices()` / `shutdownServices()` clears the
+ * container, leaving the no-op default in place after a reinitialisation. Each
+ * call simply (re)installs the factory, so a fresh container is always covered.
  *
  * Uses a plain factory (not a memoised singleton) so the registration wins even
  * if the no-op default was already resolved once during boot — the write path
@@ -24,10 +27,8 @@ let registered = false;
  * module scope), so a fresh instance per resolve costs nothing.
  */
 export function registerNextCacheRevalidator(): void {
-  if (registered) return;
   container.register<CacheRevalidator>(
     "cacheRevalidator",
     () => new NextCacheRevalidator()
   );
-  registered = true;
 }

@@ -21,12 +21,20 @@ import {
  * - `nextlyTags("posts", id)` → the collection tag + the entry-id tag: for an
  *   entry detail read, invalidated when that entry changes in any locale (tag by
  *   the immutable id, not the slug, so a rename still invalidates).
- * - `nextlyTags("posts", id, locale)` → adds the per-locale id tag, so a
- *   publish-one-locale busts only that locale's read.
+ * - `nextlyTags("posts", id, locale)` → also adds the per-locale id tag.
  *
  * Tag reads by the entry's immutable id (available after the fetch resolves),
  * not its slug: the write busts the id tag on every change, so the read stays
  * invalidatable across slug and status changes.
+ *
+ * A detail read intentionally carries the collection tag too, so it also
+ * refreshes when the collection changes around it (a new sibling, a reorder).
+ * Because a match on ANY tag invalidates the entry, that broadens invalidation:
+ * a change to one entry (which busts `nextly:{collection}`) refreshes every
+ * detail read in the collection. That is safe — a stale read is never served,
+ * only re-fetched more often. A high-traffic site that wants strictly per-entry
+ * (or per-locale) granularity should tag with the entry/locale tag alone rather
+ * than this helper's broad, safe default.
  */
 export function nextlyTags(
   collection: string,

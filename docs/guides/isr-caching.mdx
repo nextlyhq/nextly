@@ -23,7 +23,22 @@ add the read-side tags.
 
 ## Enable it
 
-Cache revalidation turns on wherever you mount the admin route handler:
+Register the adapter once per server process. The most reliable place is Next's
+[`instrumentation.ts`](https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation),
+whose `register()` runs at startup, before any route, Server Action, or
+serverless worker handles a request — so **every** write context busts tags,
+not just the ones that happen to have loaded the admin route:
+
+```ts
+// instrumentation.ts (project root, next to your app/ directory)
+export async function register() {
+  const { registerNextCacheRevalidator } = await import("nextly/runtime");
+  registerNextCacheRevalidator();
+}
+```
+
+Mounting the admin route handler also registers it, which is enough if every
+content write goes through the admin API in the same process:
 
 ```ts
 // app/admin/[[...params]]/route.ts
@@ -32,14 +47,12 @@ import { createDynamicHandlers } from "nextly/runtime";
 export const { GET, POST, PATCH, DELETE } = createDynamicHandlers();
 ```
 
-If your app writes content through the Direct API but never mounts that handler,
-enable it explicitly once at startup:
-
-```ts
-import { registerNextCacheRevalidator } from "nextly/runtime";
-
-registerNextCacheRevalidator();
-```
+If you write content through the Direct API (`nextly.create(...)`) from a Server
+Action, a custom route, or a background worker, register from
+`instrumentation.ts` as above — relying on the admin route alone leaves those
+contexts on the no-op revalidator, and their writes would not refresh cached
+pages. A write in a context with no adapter registered is a silent no-op for
+revalidation (never an error), so it is safe but stale.
 
 ## Tag a read
 
