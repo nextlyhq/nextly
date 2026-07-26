@@ -22,6 +22,10 @@ import { resetEmailProviderRegistry } from "../domains/email/services/email-prov
 import { normalizeLocalization } from "../domains/i18n/config/normalize";
 import type { LocalizationConfig } from "../domains/i18n/config/types";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
+import {
+  resetWebhookActivation,
+  setWebhookAuditEnabled,
+} from "../domains/webhooks/recording-activation";
 import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-policy";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
@@ -124,6 +128,7 @@ export async function createTestNextly(
   clearFieldTypes();
   resetFilterRegistry();
   resetWebhookRecordingPolicy();
+  resetWebhookActivation();
   resetPluginRouteRegistry();
   resetNextlyInstance();
   // Each boot is a fresh, distinct in-memory database. The schema-snapshot
@@ -170,6 +175,10 @@ export async function createTestNextly(
       ? normalizeLocalization(opts.localization)
       : undefined,
   });
+
+  // Record every event by default so machinery tests are independent of webhook
+  // endpoint setup; suites that exercise the endpoint gate turn this off.
+  setWebhookAuditEnabled(true);
 
   // Physical tables for code-first + plugin-contributed collections are created
   // non-interactively by the runtime auto-sync during registerServices (the

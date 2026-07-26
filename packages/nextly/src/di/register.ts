@@ -58,6 +58,7 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
   resetWebhookRecordingPolicy,
   setWebhookRecording,
@@ -2367,6 +2368,10 @@ export async function shutdownServices(): Promise<void> {
     // DB/Builder-backed inherits a prior instance's stale opt-out and silently
     // stops recording.
     resetWebhookRecordingPolicy();
+    // The recording activation (audit flag + endpoint-presence provider) is
+    // process-global too, and its provider closes over this container's
+    // registry; clear it so a later instance never resolves a dead one.
+    resetWebhookActivation();
     globalForReg.__nextly_isRegistered = false;
   }
 }
@@ -2381,6 +2386,9 @@ export function clearServices(): void {
   // Clear the process-global recording policy alongside the container so a
   // re-initialization does not inherit a prior config's opt-outs.
   resetWebhookRecordingPolicy();
+  // Clear the process-global recording activation for the same reason; its
+  // provider closes over this container's registry.
+  resetWebhookActivation();
   globalForReg.__nextly_isRegistered = false;
 }
 

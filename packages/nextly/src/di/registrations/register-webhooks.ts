@@ -21,6 +21,10 @@ import {
   WebhookEndpointRegistry,
   type WebhookEndpointReader,
 } from "../../domains/webhooks/endpoint-registry";
+import {
+  setEndpointPresenceProvider,
+  setWebhookAuditEnabled,
+} from "../../domains/webhooks/recording-activation";
 import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookDeliveryQueryService } from "../../domains/webhooks/services/webhook-delivery-query-service";
 import { WebhookEndpointService } from "../../domains/webhooks/services/webhook-endpoint-service";
@@ -48,6 +52,17 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
         container.get<WebhookEndpointReader>("adapter"),
         { ttlMs: ENDPOINT_REGISTRY_TTL_MS }
       )
+  );
+
+  // Publish the outbox recording gate inputs so the recording choke point can
+  // skip events no endpoint would receive. Audit forces recording regardless;
+  // endpoint presence is resolved through the shared registry (its cache carries
+  // the CRUD invalidation and TTL), so the gate needs no second cache.
+  setWebhookAuditEnabled(ctx.config.webhookAuditEnabled ?? false);
+  setEndpointPresenceProvider(() =>
+    container
+      .get<WebhookEndpointRegistry>("webhookEndpointRegistry")
+      .hasEnabledEndpoints()
   );
 
   container.registerSingleton<WebhookEndpointService>(
