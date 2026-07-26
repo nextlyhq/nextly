@@ -108,6 +108,13 @@ export async function ensureServicesInitialized(): Promise<void> {
       // must not be mistaken for absent.
       if (nextlyConfig.webhookRetention !== undefined)
         serviceConfig.webhookRetention = nextlyConfig.webhookRetention;
+      // Webhook audit seam: carry it so a request-path boot publishes the same
+      // recording-gate override an instrumentation boot would. Without it, an
+      // install configured `webhooks: { audit: true }` that cold-boots through
+      // this path would default audit off and drop events while it has no
+      // endpoint.
+      if (nextlyConfig.webhookAuditEnabled !== undefined)
+        serviceConfig.webhookAuditEnabled = nextlyConfig.webhookAuditEnabled;
       if (nextlyConfig.db) {
         const dbConfig = nextlyConfig.db as Record<string, unknown>;
         if (dbConfig.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;
