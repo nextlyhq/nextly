@@ -64,6 +64,8 @@ GET /api/plugins/@nextlyhq/plugin-seo/sitemap.xml
 
 It reads live content, so a publish or an edit is reflected on the next request. Drafts and any entry with `seo.noindex` set are left out.
 
+The published filter targets Nextly's built-in draft/published lifecycle (`status: true` on the collection). A collection without that lifecycle has no unpublished state, so all of its entries are listed.
+
 ```ts
 seoPlugin({
   collections: ["pages", "posts"],
