@@ -22,7 +22,8 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { FieldConfig } from "nextly/config";
+import type { DocumentKind, FieldConfig } from "nextly/config";
+import { emptyBlockDocument } from "nextly/config";
 import type React from "react";
 import { useEffect, useMemo, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
@@ -268,12 +269,23 @@ function getDefaultValues(
       case "chips":
         defaults[fieldName] = [];
         break;
-      case "blocks":
+      case "blocks": {
         // The form control for a blocks field is read-only, so a declared
-        // default dropped here could not be restored by hand.
+        // default dropped here could not be restored by hand, and a required
+        // field left null could never be satisfied — the single would be
+        // unsavable with no control to fill in.
+        const blocksField = field as {
+          defaultValue?: unknown;
+          required?: boolean;
+          blocks?: { kinds?: DocumentKind[] };
+        };
         defaults[fieldName] =
-          (field as { defaultValue?: unknown }).defaultValue ?? null;
+          blocksField.defaultValue ??
+          (blocksField.required
+            ? emptyBlockDocument(blocksField.blocks?.kinds)
+            : null);
         break;
+      }
       case "group": {
         const groupField = field as { fields: FieldConfig[] };
         defaults[fieldName] = getDefaultValues(groupField.fields);
