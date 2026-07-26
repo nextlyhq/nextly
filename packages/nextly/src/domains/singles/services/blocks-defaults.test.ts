@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
+import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+
 import type { FieldConfig } from "../../../collections/fields/types";
 import { validateBlocksValue } from "../../../collections/fields/validators/blocks-validator";
+import { NextlyError } from "../../../errors";
 
-import { getDefaultValue } from "./single-utils";
+import { assertValidBlocksDefault, getDefaultValue } from "./single-utils";
 
 /**
  * A single is auto-created on first read, so a required field with no declared
@@ -53,5 +57,79 @@ describe("getDefaultValue for a blocks field", () => {
     } as unknown as FieldConfig;
     const seeded: unknown = JSON.parse(String(getDefaultValue(many)));
     expect((seeded as { kind?: string }).kind).toBe("page");
+  });
+});
+
+/**
+ * A single's defaults are inserted directly on first read, so a declared
+ * default never meets the write path's validation. A function default is the
+ * case that matters: its value exists only once resolved against real data, so
+ * config-load validation cannot see it.
+ */
+describe("assertValidBlocksDefault", () => {
+  const blocksField = (blocks?: {
+    allow?: string[];
+    kinds?: DocumentKind[];
+  }): FieldConfig =>
+    ({
+      name: "content",
+      type: "blocks",
+      ...(blocks ? { blocks } : {}),
+    }) as FieldConfig;
+
+  const emptyPage = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page" as const,
+    nodes: [],
+  };
+
+  it("accepts a valid document", () => {
+    expect(() =>
+      assertValidBlocksDefault(blocksField(), emptyPage, "homepage")
+    ).not.toThrow();
+  });
+
+  it("rejects a value that is not a document", () => {
+    expect(() =>
+      assertValidBlocksDefault(blocksField(), { nodes: [] }, "homepage")
+    ).toThrow(NextlyError);
+  });
+
+  it("rejects a document whose kind the field does not accept", () => {
+    expect(() =>
+      assertValidBlocksDefault(
+        blocksField({ kinds: ["template"] }),
+        emptyPage,
+        "homepage"
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("reports the field's own issues rather than a generic failure", () => {
+    // The engine's issue codes travel through unchanged, so the same defect
+    // carries the same name here as it does on the write path.
+    const issues = validateBlocksValue(emptyPage, "content", "content", {
+      kinds: ["template"],
+    });
+    expect(issues.length).toBeGreaterThan(0);
+
+    try {
+      assertValidBlocksDefault(
+        blocksField({ kinds: ["template"] }),
+        emptyPage,
+        "homepage"
+      );
+      expect.unreachable("expected a validation error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      expect((error as NextlyError).publicData).toEqual({ errors: issues });
+    }
+  });
+
+  it("ignores fields of every other type", () => {
+    const text = { name: "title", type: "text" } as FieldConfig;
+    expect(() =>
+      assertValidBlocksDefault(text, { anything: true }, "homepage")
+    ).not.toThrow();
   });
 });

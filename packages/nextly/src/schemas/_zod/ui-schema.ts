@@ -238,7 +238,16 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       blocks: z
         .object({
           allow: z.array(z.string()).optional(),
-          kinds: z.array(z.enum(DOCUMENT_KINDS)).optional(),
+          // An empty list would accept no document at all, while required-field
+          // seeding still has to synthesize one — leaving a stored value the
+          // same field's validator rejects. Omit the key to accept a page.
+          kinds: z
+            .array(z.enum(DOCUMENT_KINDS))
+            .min(
+              1,
+              "blocks.kinds cannot be empty: the field would accept no document at all. Omit it to accept a page."
+            )
+            .optional(),
         })
         .optional(),
       defaultValue: z.unknown().optional(),

@@ -83,6 +83,21 @@ describe("parseUiSchema — blocks fields", () => {
     ).toBe(false);
   });
 
+  it("rejects an empty kinds list", () => {
+    // A field accepting no kind can hold no document, yet required-field
+    // seeding still has to synthesize one — so the row would carry a value
+    // this same field rejects.
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: [] },
+        })
+      ).success
+    ).toBe(false);
+  });
+
   it("rejects a default that is an object but not a document", () => {
     // The admin seeds a read-only control from this value, so a malformed
     // default leaves something the user cannot correct on the form.

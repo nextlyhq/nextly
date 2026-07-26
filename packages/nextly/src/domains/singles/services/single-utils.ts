@@ -19,6 +19,7 @@ import type { DocumentKind } from "@nextlyhq/blocks-engine";
 
 import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { validateBlocksValue } from "../../../collections/fields/validators/blocks-validator";
 import { NextlyError } from "../../../errors";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import type { Logger } from "../../../shared/types";
@@ -97,6 +98,37 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
   }
 
   return false;
+}
+
+/** The subset of a blocks field's policy the value validator reads. */
+type BlocksPolicy = { allow?: string[]; kinds?: DocumentKind[] };
+
+/**
+ * Rejects a blocks default the field's own policy would not accept.
+ *
+ * A single is auto-created on first read by inserting its defaults directly,
+ * so this value never passes through the write path that validates ordinary
+ * writes. A static default is already caught when the config loads, but a
+ * function default produces its value only when resolved against real data,
+ * which first happens here. Left unchecked it would be persisted, and the
+ * admin's blocks control is read-only, so the row could not then be repaired
+ * from the UI.
+ */
+export function assertValidBlocksDefault(
+  field: FieldConfig,
+  value: unknown,
+  singleSlug: string
+): void {
+  if (field.type !== "blocks") return;
+  const policy = (field as { blocks?: BlocksPolicy }).blocks ?? {};
+  const issues = validateBlocksValue(value, field.name, field.name, policy);
+  if (issues.length === 0) return;
+  // The engine's own issue codes are carried through unchanged, so one defect
+  // keeps one name wherever it surfaces.
+  throw NextlyError.validation({
+    errors: issues,
+    logContext: { single: singleSlug, field: field.name, reason: "default" },
+  });
 }
 
 /**

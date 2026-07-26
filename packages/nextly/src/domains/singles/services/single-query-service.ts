@@ -88,6 +88,7 @@ import type {
 
 import type { SingleRegistryService } from "./single-registry-service";
 import {
+  assertValidBlocksDefault,
   buildSingleErrorResult,
   collectAllMediaIds,
   deserializeJsonFields,
@@ -838,6 +839,13 @@ export class SingleQueryService extends BaseService {
           typeof field.defaultValue === "function"
             ? field.defaultValue(defaults)
             : field.defaultValue;
+        // A blocks default is checked here rather than only at config load,
+        // because a function default can only be resolved against real data.
+        // This row is inserted directly on first read, without going through
+        // the write path, so nothing downstream would catch a document the
+        // field's own policy rejects — and the admin control is read-only, so
+        // the stored value could not be corrected from the UI.
+        assertValidBlocksDefault(field, resolved, singleMeta.slug);
         defaults[field.name] =
           shouldTreatAsJson(field) && typeof resolved === "object"
             ? JSON.stringify(resolved)
