@@ -70,7 +70,7 @@ export function writeSelection(selection: Selection): void {
 }
 
 /**
- * Applies the selection as data attributes on the admin root, which is what
+ * Applies the selection as data attributes on every admin root, which is what
  * the generated theme/layout/density stylesheets are all scoped to.
  * Reapplied via a MutationObserver because the admin shell remounts its root
  * element between route navigations, which would otherwise drop whatever
@@ -87,25 +87,41 @@ export function useThemeLab() {
 
   useEffect(() => {
     const apply = () => {
-      const root = document.querySelector(".nextly-admin");
-      if (!(root instanceof HTMLElement)) return;
-      // Only touch attributes that actually changed: the same `apply` runs
-      // from the MutationObserver below on any attribute mutation, and
-      // writing an unchanged value would otherwise retrigger that observer.
-      if (root.dataset.theme !== selection.theme) {
-        root.dataset.theme = selection.theme;
-      }
-      if (root.dataset.layout !== selection.layout) {
-        root.dataset.layout = selection.layout;
-      }
-      if (root.dataset.density !== selection.density) {
-        root.dataset.density = selection.density;
-      }
+      // Every `.nextly-admin` element, not just the first. The admin renders
+      // two of them (packages/admin/src/layout/RootLayout.tsx): the shell
+      // itself, and `#nextly-admin-portal-root`, the container every Radix
+      // portal mounts into -- dropdowns, selects, dialogs, tooltips,
+      // popovers, the command palette and toasts. The compiled admin
+      // stylesheet re-declares the full `--nx-*` token set on EVERY
+      // `.nextly-admin` element, so a token only resolves to the theme's
+      // value on the element that carries `data-theme`; attributing only the
+      // first would leave every overlay rendering the shipped defaults. The
+      // admin's own ThemeProvider syncs its `dark` class the same way, for
+      // the same reason.
+      document.querySelectorAll(".nextly-admin").forEach(root => {
+        if (!(root instanceof HTMLElement)) return;
+        // Only touch attributes that actually changed: the same `apply` runs
+        // from the MutationObserver below on any attribute mutation, and
+        // writing an unchanged value would otherwise retrigger that observer.
+        if (root.dataset.theme !== selection.theme) {
+          root.dataset.theme = selection.theme;
+        }
+        if (root.dataset.layout !== selection.layout) {
+          root.dataset.layout = selection.layout;
+        }
+        if (root.dataset.density !== selection.density) {
+          root.dataset.density = selection.density;
+        }
+      });
     };
 
     apply();
     writeSelection(selection);
 
+    // Observes the whole body subtree deliberately. The portal container is
+    // created lazily by a ref callback after the shell's first commit, and
+    // route changes remount the shell, so an observer scoped to either root
+    // would miss the very elements this needs to attribute.
     const observer = new MutationObserver(apply);
     observer.observe(document.body, {
       childList: true,
