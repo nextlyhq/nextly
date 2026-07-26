@@ -2,16 +2,17 @@
  * `@nextlyhq/plugin-seo` — the first-party SEO plugin for Nextly.
  *
  * Opt-in and framework-agnostic (zero `next` dependency): it adds an SEO field
- * group to the collections you name and declares a `manage-seo` permission. A
- * later Tier-0 PR adds the agnostic sitemap; the Next-only metadata/routing
- * bridges live in `nextly/runtime`, never here, so this plugin is safe in every
- * deployment mode (integrated site, headless, internal admin).
+ * group to the collections you name. A later Tier-0 PR adds the agnostic
+ * sitemap; the Next-only metadata/routing bridges live in `nextly/runtime`,
+ * never here, so this plugin is safe in every deployment mode (integrated site,
+ * headless, internal admin).
  *
  * @module plugin
  */
 import { createRequire } from "node:module";
 
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import { group } from "nextly";
 import type { FieldConfig } from "nextly";
 
 import { defaultSeoFields } from "./fields";
@@ -31,8 +32,11 @@ export interface SeoPluginOptions {
    */
   collections: string[];
   /**
-   * Override the contributed SEO fields. Defaults to {@link defaultSeoFields}
-   * (a `seo` group: metaTitle, metaDescription, ogImage, canonical, noindex).
+   * The fields placed INSIDE the `seo` group. Defaults to
+   * {@link defaultSeoFields} (metaTitle, metaDescription, ogImage, canonical,
+   * noindex). Custom fields are still nested under `seo` (e.g. a `focusKeyword`
+   * override lands at `entry.seo.focusKeyword`), so consumers always read SEO
+   * data from one predictable place.
    */
   fields?: FieldConfig[];
 }
@@ -51,7 +55,13 @@ export interface SeoPluginOptions {
  * ```
  */
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
-  const fields = options.fields ?? defaultSeoFields();
+  // Always nest the fields (default or custom) under a single `seo` group so
+  // every project exposes SEO consistently at `entry.seo.*`.
+  const seoGroup = group({
+    name: "seo",
+    label: "SEO",
+    fields: options.fields ?? defaultSeoFields(),
+  });
 
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
@@ -66,18 +76,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     category: "seo",
     tags: ["seo", "sitemap", "metadata"],
     contributes: {
-      // Add the SEO field group to each named collection (D12 extend).
-      extend: [{ target: options.collections, fields }],
-      // A custom, non-CRUD permission for gating SEO management. Declared here,
-      // granted per-role by the project (never auto-granted).
-      permissions: [
-        {
-          action: "manage",
-          resource: "seo",
-          label: "Manage SEO",
-          description: "Edit SEO metadata and control search-engine indexing.",
-        },
-      ],
+      // Add the SEO group to each named collection (D12 extend).
+      extend: [{ target: options.collections, fields: [seoGroup] }],
     },
   });
 }

@@ -4,7 +4,7 @@
 
 First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
-This package owns the SEO **data**: the meta fields, the sitemap contents, and the `manage-seo` permission. The Next-only **behavior** (turning those fields into `generateMetadata`, delivering the canonical `/sitemap.xml`, and content routing) ships separately from `nextly/runtime`, so this plugin never drags Next.js into a headless or admin-only project.
+This package owns the SEO **data**: the meta fields and (in a later Tier-0 PR) the sitemap contents. The Next-only **behavior** (turning those fields into `generateMetadata`, delivering the canonical `/sitemap.xml`, and content routing) ships separately from `nextly/runtime`, so this plugin never drags Next.js into a headless or admin-only project.
 
 ## Install
 
@@ -40,11 +40,9 @@ That adds an `seo` field group to each named collection:
 
 Entries expose the data nested under `seo` (e.g. `entry.seo.metaTitle`). Collections you do not name are untouched.
 
-It also declares a `manage-seo` permission you can grant to roles that should manage SEO.
-
 ### Custom fields
 
-Override the whole field set when your project needs a different shape:
+Override the fields inside the `seo` group when your project needs a different shape. Overrides stay nested under `seo` (so this lands at `entry.seo.focusKeyword`):
 
 ```ts
 import { text } from "nextly";

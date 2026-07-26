@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 
 import { text } from "nextly";
+import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
 
 import { defaultSeoFields } from "../fields";
@@ -9,14 +10,17 @@ import { seoPlugin } from "../plugin";
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-/** Read the field names inside the default `seo` group. */
-function seoGroupFieldNames(plugin: ReturnType<typeof seoPlugin>): string[] {
-  const extend = plugin.contributes?.extend?.[0];
-  const group = extend?.fields?.[0];
+/** The `seo` group the plugin contributes to its first target. */
+function seoGroup(plugin: ReturnType<typeof seoPlugin>) {
+  const group = plugin.contributes?.extend?.[0]?.fields?.[0];
   if (!group || group.type !== "group") {
-    throw new Error("expected the extend payload to start with the seo group");
+    throw new Error("expected the extend payload to be a single seo group");
   }
-  return group.fields.map(f => ("name" in f ? (f.name ?? "") : ""));
+  return group;
+}
+
+function fieldNames(fields: FieldConfig[]): (string | undefined)[] {
+  return fields.map(f => ("name" in f ? f.name : undefined));
 }
 
 describe("seoPlugin", () => {
@@ -30,18 +34,18 @@ describe("seoPlugin", () => {
     expect(typeof plugin.nextly).toBe("string");
   });
 
-  it("extends exactly the named collections with the seo group", () => {
+  it("extends exactly the named collections with a single seo group", () => {
     const plugin = seoPlugin({ collections: ["pages", "posts"] });
     const extend = plugin.contributes?.extend?.[0];
     expect(extend?.target).toEqual(["pages", "posts"]);
-    const group = extend?.fields?.[0];
-    expect(group?.type).toBe("group");
-    expect(group && "name" in group ? group.name : undefined).toBe("seo");
+    expect(extend?.fields).toHaveLength(1);
+    expect(seoGroup(plugin).name).toBe("seo");
   });
 
   it("ships canonical + noindex in the default fields (edge over other plugins)", () => {
-    const names = seoGroupFieldNames(seoPlugin({ collections: ["pages"] }));
-    expect(names).toEqual([
+    expect(
+      fieldNames(seoGroup(seoPlugin({ collections: ["pages"] })).fields)
+    ).toEqual([
       "metaTitle",
       "metaDescription",
       "ogImage",
@@ -50,23 +54,20 @@ describe("seoPlugin", () => {
     ]);
   });
 
-  it("declares a non-CRUD manage-seo permission", () => {
-    const plugin = seoPlugin({ collections: ["pages"] });
-    const perms = plugin.contributes?.permissions ?? [];
-    expect(perms).toContainEqual(
-      expect.objectContaining({ action: "manage", resource: "seo" })
-    );
-  });
-
-  it("lets a project override the contributed fields", () => {
+  it("nests custom fields under the seo group too", () => {
     const custom = [text({ name: "focusKeyword" })];
     const plugin = seoPlugin({ collections: ["pages"], fields: custom });
-    expect(plugin.contributes?.extend?.[0]?.fields).toBe(custom);
+    // Custom overrides stay under `seo`, not at the collection's top level.
+    expect(seoGroup(plugin).fields).toBe(custom);
   });
 
-  it("defaultSeoFields is a single seo group", () => {
-    const fields = defaultSeoFields();
-    expect(fields).toHaveLength(1);
-    expect(fields[0]?.type).toBe("group");
+  it("defaultSeoFields returns the inner seo fields", () => {
+    expect(fieldNames(defaultSeoFields())).toEqual([
+      "metaTitle",
+      "metaDescription",
+      "ogImage",
+      "canonical",
+      "noindex",
+    ]);
   });
 });

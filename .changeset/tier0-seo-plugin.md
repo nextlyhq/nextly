@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Add the first-party @nextlyhq/plugin-seo package. Register it in your config to add SEO meta fields (title, description, OG image, canonical, noindex) to the collections you name, plus a manage-seo permission. It is opt-in and framework-agnostic (no Next.js dependency), so it is safe in headless and admin-only projects.
+Add the first-party @nextlyhq/plugin-seo package. Register it in your config to add an SEO field group (title, description, OG image, canonical, noindex) to the collections you name. It is opt-in and framework-agnostic (no Next.js dependency), so it is safe in headless and admin-only projects.
