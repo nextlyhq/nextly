@@ -18,6 +18,11 @@ import type { RequestActor } from "../../auth/request-actor";
 
 import { buildEnvelope } from "./envelope";
 import { recordEvent } from "./record-event";
+import {
+  endpointsPresent,
+  isWebhookAuditEnabled,
+  shouldRecordEvent,
+} from "./recording-activation";
 import { isWebhookRecordingEnabled } from "./recording-policy";
 import {
   sensitiveFieldPaths,
@@ -87,6 +92,30 @@ export async function recordMutationEvent(
   // here at the single seam so every write path inherits it.
   if (!resourceRecordingEnabled(args.resource)) {
     return false;
+  }
+
+  // Endpoint/audit gate: an install with no enabled endpoint and the audit seam
+  // off records nothing, so a mutation never pays the outbox INSERT + full
+  // document serialization for an event no subscriber would receive. Audit is
+  // checked first (sync) so an audit-on install never consults the registry.
+  // `endpointsPresent()` reads the registry's cached list (shared with the
+  // drain, so its CRUD invalidation and TTL apply here) and fails open, so this
+  // adds one resolved microtask on the warm path and never aborts the write on
+  // a lookup error. Race contract: a same-process endpoint create invalidates
+  // immediately; an endpoint created in another process is picked up within the
+  // registry TTL; a few events recorded just before the last endpoint is removed
+  // may remain and are pruned by retention.
+  if (!isWebhookAuditEnabled()) {
+    const hasEndpoints = await endpointsPresent();
+    if (
+      !shouldRecordEvent({
+        collectionAllows: true,
+        auditEnabled: false,
+        hasEndpoints,
+      })
+    ) {
+      return false;
+    }
   }
 
   const envelope = buildEnvelope({

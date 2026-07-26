@@ -4,12 +4,18 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { recordMutationEvent } from "../record-mutation-event";
 import {
+  resetWebhookActivation,
+  setEndpointPresenceProvider,
+  setWebhookAuditEnabled,
+} from "../recording-activation";
+import {
   resetWebhookRecordingPolicy,
   setWebhookRecording,
 } from "../recording-policy";
 
 afterEach(() => {
   resetWebhookRecordingPolicy();
+  resetWebhookActivation();
 });
 
 // A minimal tx: only `insert` is exercised (recordEvent appends one outbox row).
@@ -53,5 +59,51 @@ describe("recordMutationEvent recording gate", () => {
       fields: [],
     });
     expect(insert).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordMutationEvent endpoint/audit gate", () => {
+  it("does not record when there are no endpoints and audit is off", async () => {
+    setEndpointPresenceProvider(() => Promise.resolve(false));
+    const { tx, insert } = makeTx();
+    const recorded = await recordMutationEvent(tx, entryArgs("posts"));
+    expect(insert).not.toHaveBeenCalled();
+    expect(recorded).toBe(false);
+  });
+
+  it("records when an endpoint is present", async () => {
+    setEndpointPresenceProvider(() => Promise.resolve(true));
+    const { tx, insert } = makeTx();
+    const recorded = await recordMutationEvent(tx, entryArgs("posts"));
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(recorded).toBe(true);
+  });
+
+  it("records when audit is on even with no endpoints (skips the endpoint check)", async () => {
+    const provider = vi.fn(() => Promise.resolve(false));
+    setEndpointPresenceProvider(provider);
+    setWebhookAuditEnabled(true);
+    const { tx, insert } = makeTx();
+    const recorded = await recordMutationEvent(tx, entryArgs("posts"));
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(recorded).toBe(true);
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it("records (fail-open) when the endpoint provider throws", async () => {
+    setEndpointPresenceProvider(() => Promise.reject(new Error("db down")));
+    const { tx, insert } = makeTx();
+    const recorded = await recordMutationEvent(tx, entryArgs("posts"));
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(recorded).toBe(true);
+  });
+
+  it("the per-entity opt-out still wins over a present endpoint", async () => {
+    setEndpointPresenceProvider(() => Promise.resolve(true));
+    setWebhookRecording("collection", "submissions", false);
+    const { tx, insert } = makeTx();
+    const recorded = await recordMutationEvent(tx, entryArgs("submissions"));
+    expect(insert).not.toHaveBeenCalled();
+    expect(recorded).toBe(false);
   });
 });
