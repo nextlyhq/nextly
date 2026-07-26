@@ -24,6 +24,26 @@
  * before screenshotting -- confirming the theme applied rather than assuming
  * a load event implies it did.
  *
+ * The admin fetches its data client-side after hydration (React Query), so
+ * `waitForLoadState("networkidle")` resolves while a screen is still showing
+ * its loading skeleton -- the network has genuinely gone quiet, it just went
+ * quiet before the fetched rows finished rendering. Each screen below has its
+ * own explicit real-content check instead: dashboard/media/users/settings
+ * route their loading state through the shared `<Skeleton>` component
+ * (`packages/ui/src/components/skeleton.tsx`, `data-slot="skeleton"` on every
+ * placeholder div), so waiting for zero of those is conclusive. Collections
+ * and builder render their tables' loading state with a local, unmarked
+ * `animate-pulse` div instead (`EntryTableSkeleton.tsx` / `CollectionTableSkeleton`),
+ * so those two wait for a specific piece of real, seeded text instead --
+ * chosen to not collide with the sidebar's own static nav labels ("Posts",
+ * capitalized, vs. the table's lowercase slug text "posts"; "Collections" as
+ * a nav label vs. a seeded post's actual title). Every screen also waits for
+ * the skeleton count first, since the sidebar's own user-footer widget loads
+ * asynchronously on every route and would otherwise leave that corner of the
+ * screenshot stale. A screen that never reaches ready within `READY_TIMEOUT`
+ * throws, naming the theme/screen/mode, rather than silently capturing
+ * whatever was on screen at timeout.
+ *
  * Counts are derived from NEXTLY_THEMES / TWEAKCN_THEMES at run time and
  * logged at the end rather than asserted anywhere, so this script does not
  * go stale the next time a theme is added or retired.
@@ -70,6 +90,97 @@ const FULL_SCREENS = [
   ["builder", "/admin/builder/collections"],
 ];
 const BRIEF_SCREENS = FULL_SCREENS.slice(0, 2);
+
+const READY_TIMEOUT = 20_000;
+
+/**
+ * Per-screen proof that real data rendered, not a loading skeleton. Verified
+ * against the actual admin source rather than guessed:
+ *
+ *   - dashboard/media/users/settings: every widget on these routes gates its
+ *     loading state on the shared `<Skeleton>` (data-slot="skeleton"), so
+ *     absence of that marker is enough. Confirmed each also imports it --
+ *     CollectionQuickLinks.tsx / TeamSummary.tsx / SinglesQuickLinks.tsx
+ *     (dashboard), MediaLibrarySkeleton (media), UserTable.tsx (users),
+ *     GeneralSettingsSkeleton (settings) -- not assumed from the route name.
+ *   - collections/users/builder: all three route through the shared
+ *     `DataTableView` (packages/admin/src/components/ui/table/data-table/),
+ *     whose own loading state (`EntryTableSkeleton.tsx` /
+ *     `CollectionTableSkeleton`) is a local `animate-pulse` div, not the
+ *     shared component, so the skeleton-count check can't see it. These wait
+ *     for specific seeded text instead: a real post title for collections
+ *     (apps/playground/seed/seed-data.json has 5 seeded posts; "Welcome to
+ *     Nextly Playground" is the published one, least likely to be affected by
+ *     a future seed edit to the drafts), the seeded dev user's email for
+ *     users, and the "posts" collection's slug subtext for builder --
+ *     deliberately lowercase to avoid matching the sidebar's own "Posts" nav
+ *     label, which renders immediately regardless of whether the table has
+ *     loaded.
+ *
+ * `DataTableView` renders BOTH a desktop table and a `@md/table:hidden`
+ * mobile card list for the same rows (a container-query breakpoint, not a
+ * media query, so it's still in the DOM and matches `getByText` even though
+ * `display: none` hides it at this script's 1440px viewport). Every seeded-
+ * text check below is intersected with Playwright's own `:visible` selector
+ * so a match against the hidden mobile duplicate can't stand in for the row
+ * that's actually on screen -- confirmed live: without this, `.first()`
+ * resolved to the hidden card copy every time, so the wait technically
+ * "passed" while the visible half of the DOM was still on its skeleton.
+ *
+ * Every screen also waits for the skeleton count to hit zero first: the
+ * sidebar's user-footer widget fetches the current user independently of
+ * whatever the main content area is doing, on every route, so skipping this
+ * for collections/users/builder would leave that corner of the frame stale
+ * even though the table itself is ready.
+ */
+const SCREEN_READY = {
+  dashboard: async page => {
+    await waitForNoSkeletons(page);
+  },
+  collections: async page => {
+    await waitForNoSkeletons(page);
+    await waitForVisibleText(page, "Welcome to Nextly Playground", {
+      exact: true,
+    });
+  },
+  media: async page => {
+    await waitForNoSkeletons(page);
+    await waitForVisibleText(page, /sample-(1|2)\.webp/);
+  },
+  users: async page => {
+    await waitForNoSkeletons(page);
+    await waitForVisibleText(page, "dev@nextly.local", { exact: true });
+  },
+  settings: async page => {
+    await waitForNoSkeletons(page);
+    await waitForVisibleText(page, "Timezone", { exact: true });
+  },
+  builder: async page => {
+    await waitForNoSkeletons(page);
+    await waitForVisibleText(page, "posts", { exact: true });
+  },
+};
+
+async function waitForNoSkeletons(page) {
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-slot="skeleton"]').length === 0,
+    undefined,
+    { timeout: READY_TIMEOUT }
+  );
+}
+
+/**
+ * Waits for a match of `textOrPattern` that is actually visible, not just
+ * present anywhere in the DOM -- see the `DataTableView` note above for why
+ * a plain `getByText(...).first()` isn't safe on these screens.
+ */
+async function waitForVisibleText(page, textOrPattern, options) {
+  await page
+    .getByText(textOrPattern, options)
+    .and(page.locator(":visible"))
+    .first()
+    .waitFor({ state: "visible", timeout: READY_TIMEOUT });
+}
 
 const args = process.argv.slice(2);
 const captureAllTweakcn = args.includes("--all-tweakcn");
@@ -153,6 +264,24 @@ for (const theme of themes) {
         },
         [theme.id, mode === "dark"]
       );
+
+      // Proves the screen rendered real fetched data, not the loading
+      // skeleton `waitForLoadState`/`waitForSelector` above can't see --
+      // React Query's fetch happens after hydration, well after the page's
+      // own load event fires. A screen with no ready check here would be a
+      // silent gap in this guarantee, so an unrecognized name fails loudly
+      // instead of screenshotting on blind trust.
+      const ready = SCREEN_READY[name];
+      if (!ready) {
+        throw new Error(`capture-themes: no readiness check defined for screen "${name}"`);
+      }
+      try {
+        await ready(page);
+      } catch (error) {
+        throw new Error(
+          `capture-themes: theme "${theme.id}" (${mode}) never reached ready state on screen "${name}" within ${READY_TIMEOUT}ms -- likely still showing a loading skeleton. ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
 
       const shotPath = resolvePath(dir, `${name}-${mode}.png`);
       await page.screenshot({ path: shotPath });
