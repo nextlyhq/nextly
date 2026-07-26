@@ -374,6 +374,29 @@ export function validateFieldTypeShared(
  * page document on a template-only field, or a block outside `allow`, would
  * otherwise reach the admin and fail only on submit.
  */
+/**
+ * A blocks field declaring `kinds: []` accepts no document at all, so nothing
+ * could ever be stored in it — including the empty document required fields
+ * are seeded with. It is rejected here rather than left to fail per write,
+ * because the contradiction is in the declaration, not in any value.
+ */
+export function validateBlocksPolicyShared(
+  field: { type?: string; blocks?: unknown },
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  if (field.type !== "blocks") return;
+  const policy = field.blocks as { kinds?: unknown } | undefined;
+  if (Array.isArray(policy?.kinds) && policy.kinds.length === 0) {
+    errors.push({
+      path: `${path}.blocks.kinds`,
+      message:
+        "blocks.kinds cannot be empty: the field would accept no document at all. Omit it to accept a page.",
+      code: "FIELD_TYPE_INVALID",
+    });
+  }
+}
+
 export function validateBlocksDefaultShared(
   field: { type?: string; defaultValue?: unknown; blocks?: unknown },
   path: string,

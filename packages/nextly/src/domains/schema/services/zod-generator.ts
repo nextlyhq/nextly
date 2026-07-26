@@ -728,6 +728,10 @@ export class ZodGenerator {
         zodSchema = "z.any()";
       } else if (isChipsField(field)) {
         zodSchema = this.buildChipsSchema(field);
+      } else if (isBlocksField(field)) {
+        // A nested blocks field is emitted like a top-level one: omitted, the
+        // generated schema would strip the document from a group or row.
+        zodSchema = this.buildBlocksSchema(field);
       } else {
         continue;
       }

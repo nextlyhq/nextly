@@ -35,6 +35,7 @@ import {
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validateBlocksDefaultShared,
+  validateBlocksPolicyShared,
   validateSelectOptionsShared,
   validateSlugShared,
 } from "../../shared/base-validator";
@@ -388,6 +389,7 @@ function validateField(
     case "radio":
       validateSelectOptionsShared(f, path, errsBase, "radio");
       // A blocks default must satisfy the same field policy the write applies.
+      validateBlocksPolicyShared(f, path, errsBase);
       validateBlocksDefaultShared(f, path, errsBase);
       break;
 

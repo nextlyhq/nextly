@@ -168,11 +168,17 @@ function disallowedBlockIssues(
   ];
 }
 
-/** Exact name match, or a namespace match when the pattern ends in `*`. */
+/**
+ * Exact name match, or a namespace match for a `namespace/*` pattern.
+ *
+ * The wildcard binds to the namespace separator rather than to raw characters:
+ * `core/*` matches `core/heading` and never `coreevil/banner`. A bare prefix
+ * test would quietly admit any namespace that merely starts with the same
+ * letters, which is a wider policy than the declaration reads as.
+ */
 function isAllowed(type: string, allow: readonly string[]): boolean {
-  return allow.some(pattern =>
-    pattern.endsWith("*")
-      ? type.startsWith(pattern.slice(0, -1))
-      : type === pattern
-  );
+  return allow.some(pattern => {
+    if (!pattern.endsWith("/*")) return type === pattern;
+    return type.startsWith(pattern.slice(0, -1));
+  });
 }
