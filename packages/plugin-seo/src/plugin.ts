@@ -39,6 +39,14 @@ export interface SeoPluginOptions {
    * data from one predictable place.
    */
   fields?: FieldConfig[];
+  /**
+   * Store SEO data per-locale (so translated pages get their own meta title,
+   * description, canonical, etc.). Enable this ONLY when the target collections
+   * have localization configured (`locales` + `defaultLocale`) — Nextly rejects
+   * a localized field on a non-localized entity at config time. Defaults to
+   * `false`, so the plugin is safe on monolingual projects.
+   */
+  localized?: boolean;
 }
 
 /**
@@ -60,6 +68,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const seoGroup = group({
     name: "seo",
     label: "SEO",
+    // Per-locale SEO is opt-in: localizing the group on a non-localized
+    // collection would fail config validation, so default to non-localized.
+    localized: options.localized === true,
     fields: options.fields ?? defaultSeoFields(),
   });
 

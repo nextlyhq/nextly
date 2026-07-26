@@ -70,4 +70,15 @@ describe("seoPlugin", () => {
       "noindex",
     ]);
   });
+
+  it("localizes the seo group only when opted in", () => {
+    // Non-localized by default (safe on monolingual collections).
+    expect(seoGroup(seoPlugin({ collections: ["pages"] })).localized).toBe(
+      false
+    );
+    // Opt-in per-locale SEO for localized collections.
+    expect(
+      seoGroup(seoPlugin({ collections: ["pages"], localized: true })).localized
+    ).toBe(true);
+  });
 });
