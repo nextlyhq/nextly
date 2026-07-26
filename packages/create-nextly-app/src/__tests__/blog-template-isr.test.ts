@@ -65,6 +65,17 @@ describe("blog template — tag-based ISR", () => {
     expect(src).toContain('nextlyTags("categories")');
     expect(src).toContain('nextlyTags("tags")');
     expect(src).toContain('nextlyTags("users")');
+    // Posts embed media via featuredImage / seo.ogImage (depth>=1).
+    expect(src).toContain('nextlyTags("media")');
+  });
+
+  it("registers the Next cache adapter via instrumentation for serverless writes", () => {
+    // A serverless seed function never loads the admin catch-all route, so
+    // instrumentation.ts must register the adapter or its writes silently use
+    // the no-op revalidator and never bust the timerless singleton caches.
+    const src = read("src/instrumentation.ts");
+    expect(src).toContain("export async function register(");
+    expect(src).toContain("registerNextCacheRevalidator");
   });
 
   it("by-slug detail lookups rethrow transient errors instead of caching a 404", () => {

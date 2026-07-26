@@ -132,7 +132,7 @@ Pages pre-render at build time via `generateStaticParams`, then stay fresh throu
 
 - Every published post, author, category, and tag is pre-rendered at build.
 - Every read in `src/lib/queries/` is wrapped in Nextly's `cachedFind` and tagged with `nextlyTags(...)` / `nextlySingleTags(...)`.
-- When you publish, edit, or delete content in `/admin`, the write busts the matching tag and the affected pages regenerate on the **next** request. The admin route registers the Next cache adapter for you (via `createDynamicHandlers`), so this works out of the box — no `instrumentation.ts` to wire up.
+- When you publish, edit, or delete content in `/admin`, the write busts the matching tag and the affected pages regenerate on the **next** request. `src/instrumentation.ts` registers the Next cache adapter when any server process boots, so every write path busts tags — the admin API, the seed endpoint, and Server Actions — including in split serverless deployments where those run as separate functions.
 - Slugs published after the last build render on first request (`dynamicParams`).
 
 ### What a write refreshes
@@ -151,7 +151,7 @@ A bulk import or seed script can skip the cache bust by passing `disableRevalida
 
 ### Time-based safety net
 
-Tag busting is exact, so posts, categories, tags, and the singles need no timer. The exception is **authors**: the `users` collection does not emit cache tags yet, so `src/lib/queries/authors.ts` ships a time-based backstop (`AUTHOR_REVALIDATE_SECONDS`, one hour) that makes a profile edit appear within that window — lower it for fresher author pages. To add a backstop to any other read, pass `revalidate: <seconds>` to its `cachedFind` call.
+Tag busting is exact, so post, category, tag, and single edits need no timer. The exceptions are the system collections that do not emit cache tags yet — `users` (authors) and `media`. So the author page (`src/lib/queries/authors.ts`) and the post reads that embed author or image records (`src/lib/queries/posts.ts`) ship a one-hour backstop (`AUTHOR_REVALIDATE_SECONDS` / `RELATION_REVALIDATE_SECONDS`) so an author-profile or image-metadata edit appears within that window — lower it for fresher pages. To add a backstop to any other read, pass `revalidate: <seconds>` to its `cachedFind` call.
 
 Images use `next/image` with a `sizes` attribute so phones don't download desktop-sized files. The `unoptimized` prop is set on avatar images since they can come from arbitrary remote URLs that aren't in `next.config.images.remotePatterns`.
 
