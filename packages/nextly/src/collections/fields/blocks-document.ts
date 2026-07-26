@@ -44,6 +44,11 @@ export function emptyBlockDocumentJson(
 }
 
 function pickKind(kinds?: readonly DocumentKind[]): DocumentKind {
+  // Omitting `kinds` means the field takes a page. An empty list means it
+  // accepts nothing, which no document can satisfy — the validator reads it
+  // that way, so seeding a page here would hand back a value the same field
+  // rejects. The page is still returned as the only sane placeholder, and the
+  // field's own validation is what surfaces the contradiction.
   if (!kinds || kinds.length === 0) return DEFAULT_KIND;
   return kinds.includes(DEFAULT_KIND) ? DEFAULT_KIND : kinds[0];
 }

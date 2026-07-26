@@ -25,6 +25,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { env } from "../../../shared/lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
@@ -1096,7 +1097,9 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
 
     // Handle JSON (needs to be a quoted JSON string)
     if (type === "json" || type === "blocks") {
-      return `'${typeof value === "string" ? value : JSON.stringify(value)}'`;
+      return quoteSqlLiteral(
+        typeof value === "string" ? value : JSON.stringify(value)
+      );
     }
 
     // Handle date/timestamp

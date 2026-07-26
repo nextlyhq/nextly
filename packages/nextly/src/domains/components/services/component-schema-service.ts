@@ -69,6 +69,7 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
+import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -346,7 +347,7 @@ export class ComponentSchemaService {
       if ("defaultValue" in field && field.defaultValue !== undefined) {
         defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, field.type)}`;
       } else if ("required" in field && field.required) {
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type)}`;
+        defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
       }
 
       statements.push(
@@ -1316,7 +1317,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
   }
 
   // Used when adding NOT NULL columns to existing tables.
-  private getDefaultValueForType(type: string): string {
+  private getDefaultValueForType(type: string, field?: FieldConfig): string {
     switch (type) {
       case "text":
       case "textarea":
@@ -1328,7 +1329,11 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       case "radio":
         return "''";
       case "blocks":
-        return `'${emptyBlockDocumentJson()}'`;
+        return quoteSqlLiteral(
+          emptyBlockDocumentJson(
+            field && isBlocksField(field) ? field.blocks?.kinds : undefined
+          )
+        );
       case "number":
         return "0";
       case "checkbox":
@@ -1373,7 +1378,9 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       type === "group" ||
       type === "blocks"
     ) {
-      return `'${typeof value === "string" ? value : JSON.stringify(value)}'`;
+      return quoteSqlLiteral(
+        typeof value === "string" ? value : JSON.stringify(value)
+      );
     }
     if (type === "date") {
       if (this.dialect === "sqlite" && typeof value === "string") {

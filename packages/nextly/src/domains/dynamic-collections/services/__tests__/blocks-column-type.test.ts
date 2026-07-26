@@ -63,6 +63,36 @@ describe("blocks column type", () => {
     }
   });
 
+  it("escapes quotes in a default so the DDL stays parseable", () => {
+    // A heading like O'Reilly would otherwise close the literal early and
+    // produce a statement the database rejects.
+    for (const dialect of DIALECTS) {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const generated = service.formatDefaultValue(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              type: "core/heading",
+              version: 1,
+              props: { text: "O'Reilly" },
+            },
+          ],
+        },
+        "blocks"
+      );
+      // Every embedded quote is doubled, so the literal opens and closes once.
+      expect(generated.startsWith("'"), dialect).toBe(true);
+      expect(generated.endsWith("'"), dialect).toBe(true);
+      expect(generated.slice(1, -1).includes("''"), dialect).toBe(true);
+      expect(generated.slice(1, -1).replace(/''/g, "").includes("'")).toBe(
+        false
+      );
+    }
+  });
+
   it("matches how json and chips are already mapped", () => {
     // A new JSON-backed type that diverged from its siblings would be a bug in
     // this map rather than a deliberate difference.

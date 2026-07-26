@@ -24,6 +24,10 @@
 // arises when this file imports from collections/config/validate-config and
 // validate-config in turn imports from this file. See shared/sql-reserved.ts
 // for the full rationale.
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
+
+import { validateBlocksValue } from "../collections/fields/validators/blocks-validator";
+
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
 // ============================================================
@@ -364,6 +368,40 @@ export function validateFieldTypeShared(
  * present, an array, and non-empty. Error codes are suffixed with
  * `SELECT_` or `RADIO_` so domain validators surface the correct tag.
  */
+/**
+ * A blocks field's default must be a document the same field would accept on
+ * write. A code-first default is type-checked but not policy-checked, so a
+ * page document on a template-only field, or a block outside `allow`, would
+ * otherwise reach the admin and fail only on submit.
+ */
+export function validateBlocksDefaultShared(
+  field: { type?: string; defaultValue?: unknown; blocks?: unknown },
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  if (field.type !== "blocks") return;
+  const value = field.defaultValue;
+  // A function default is resolved per entry, so there is nothing to check
+  // here; the write path validates whatever it produces.
+  if (value === undefined || typeof value === "function") return;
+  const policy = (field.blocks ?? {}) as {
+    allow?: string[];
+    kinds?: DocumentKind[];
+  };
+  for (const issue of validateBlocksValue(
+    value,
+    `${path}.defaultValue`,
+    "defaultValue",
+    policy
+  )) {
+    errors.push({
+      path: `${path}.defaultValue`,
+      message: issue.message,
+      code: "FIELD_DEFAULT_INVALID",
+    });
+  }
+}
+
 export function validateSelectOptionsShared(
   field: Record<string, unknown>,
   path: string,

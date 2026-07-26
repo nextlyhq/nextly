@@ -5,9 +5,10 @@
  * their props, styles, and slots, stored as a single JSON value.
  *
  * The block TYPES a document may use are not declared here. They are
- * registered once for the whole app (`defineBlock` plus a plugin's
- * `contributes.blocks`), and a field only narrows which of the registered
- * blocks it will accept. Declaring block shapes on the field instead would
+ * registered once for the whole app with `defineBlock`, and a field only
+ * narrows which of the registered blocks it will accept. (The plugin
+ * contribution key that feeds that registry at boot is not wired yet, so for
+ * now `allow` narrows a set nothing has populated.) Declaring block shapes on the field instead would
  * mean the same block described differently in two collections, with no way to
  * migrate either — the reason the field carries an allow-list of names rather
  * than definitions.
