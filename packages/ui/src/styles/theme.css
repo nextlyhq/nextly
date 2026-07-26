@@ -404,17 +404,26 @@
 
   /* ============================================
    * BOX SHADOWS (Tailwind v4.1)
+   * The ramp's geometry is fixed but its color is a token, so a theme can
+   * restyle elevation. Mapped with a bare var() (like --color-*) so the
+   * reference is inlined into the utility and resolves at the element,
+   * which is what makes a runtime theme override take effect.
    * ============================================ */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 2px 0
+    color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-md:
-    0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    0 4px 6px -1px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 2px 4px -1px color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-lg:
-    0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    0 10px 15px -3px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 4px 6px -2px color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-xl:
-    0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    0 20px 25px -5px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 10px 10px -5px color-mix(in srgb, var(--nx-shadow-color) 4%, transparent);
 
   /* Custom Functional Shadows (Fixes build warnings from arbitrary values) */
-  --shadow-inner-subtle: 0 -4px 6px -1px rgba(0, 0, 0, 0.05);
+  --shadow-inner-subtle: 0 -4px 6px -1px
+    color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-glow-success: 0 0 10px
     color-mix(in srgb, var(--nx-success) 10%, transparent);
   --shadow-glow-primary: 0 0 15px
@@ -423,7 +432,8 @@
     color-mix(in srgb, var(--nx-primary) 40%, transparent);
   --shadow-soft-primary: 0 8px 30px
     color-mix(in srgb, var(--nx-primary) 6%, transparent);
-  --shadow-neo: 4px 4px 0px 0px rgba(0, 0, 0, 0.1);
+  --shadow-neo: 4px 4px 0px 0px
+    color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);
 
   /* ============================================
    * FLUID TYPOGRAPHY (Tailwind v4.1)
@@ -747,6 +757,14 @@
   --nx-table-row-hover: oklch(0.9848 0 0);
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
+
+  /* Elevation color. A theme sets --nx-shadow-color; the three strengths are
+   * mixed from it so a warm theme's shadows warm with it instead of staying
+   * black, which reads as dirt on a tinted surface. */
+  --nx-shadow-color: oklch(0 0 0);
+  --nx-shadow-faint: color-mix(in srgb, var(--nx-shadow-color) 4%, transparent);
+  --nx-shadow-weak: color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
+  --nx-shadow-base: color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);
 }
 
 /* Dark theme overrides when using class-based theming */
@@ -890,4 +908,15 @@
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
+
+  /* Dark surfaces need a denser shadow than light ones to read as elevation at
+   * all; the same 5-10% black that works on white is invisible on near-black. */
+  --nx-shadow-color: oklch(0 0 0);
+  --nx-shadow-faint: color-mix(
+    in srgb,
+    var(--nx-shadow-color) 20%,
+    transparent
+  );
+  --nx-shadow-weak: color-mix(in srgb, var(--nx-shadow-color) 25%, transparent);
+  --nx-shadow-base: color-mix(in srgb, var(--nx-shadow-color) 40%, transparent);
 }
