@@ -127,3 +127,34 @@ function fillRepeaterRows(
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/**
+ * A comparable signature of every default a field list declares.
+ *
+ * Code-first sync decides whether to rewrite stored field definitions from
+ * `calculateSchemaHash`, which deliberately excludes `defaultValue` because it
+ * may be a function. Defaults are read from those stored definitions on the
+ * write path, so without a separate comparison, changing only a default on an
+ * existing collection would never reach the database: the entry would keep
+ * being created with the previous value until some unrelated change forced a
+ * re-sync.
+ *
+ * A function default is treated as no default at all. It cannot be stored, so
+ * the config side would otherwise differ from the stored side forever and
+ * re-sync the registry on every boot — and it is not applied by this path
+ * either, so there is nothing about it for the stored definitions to carry.
+ */
+export function fieldDefaultsSignature(
+  fields: readonly ValidatableField[] | undefined
+): string {
+  if (!fields) return "";
+  const parts: string[] = [];
+  for (const field of fields) {
+    const raw = (field as { defaultValue?: unknown }).defaultValue;
+    const declared = typeof raw === "function" ? undefined : raw;
+    const nested = field.fields ? fieldDefaultsSignature(field.fields) : "";
+    if (declared === undefined && nested === "") continue;
+    parts.push(`${field.name ?? ""}:${JSON.stringify(declared)}:${nested}`);
+  }
+  return parts.join("|");
+}

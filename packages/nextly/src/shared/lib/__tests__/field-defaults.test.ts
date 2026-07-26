@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ValidatableField } from "../entry-validation";
-import { applyFieldDefaults } from "../field-defaults";
+import { applyFieldDefaults, fieldDefaultsSignature } from "../field-defaults";
 
 const field = (f: Record<string, unknown>): ValidatableField =>
   f as unknown as ValidatableField;
@@ -209,5 +209,67 @@ describe("applyFieldDefaults", () => {
       ).not.toThrow();
       expect(data.rows).toEqual([null, "x", [], { label: "dl" }]);
     });
+  });
+});
+
+/**
+ * The schema hash omits `defaultValue`, so code-first sync needs a separate
+ * signal or a changed default never reaches the stored definitions the write
+ * path reads.
+ */
+describe("fieldDefaultsSignature", () => {
+  const withDefault = (v: unknown) => [
+    field({ name: "a", type: "text", defaultValue: v }),
+  ];
+
+  it("changes when a default changes", () => {
+    expect(fieldDefaultsSignature(withDefault("one"))).not.toBe(
+      fieldDefaultsSignature(withDefault("two"))
+    );
+  });
+
+  it("changes when a default is added or removed", () => {
+    const none = [field({ name: "a", type: "text" })];
+    expect(fieldDefaultsSignature(none)).not.toBe(
+      fieldDefaultsSignature(withDefault("one"))
+    );
+  });
+
+  it("is stable for identical declarations", () => {
+    expect(fieldDefaultsSignature(withDefault({ a: [1, 2] }))).toBe(
+      fieldDefaultsSignature(withDefault({ a: [1, 2] }))
+    );
+  });
+
+  it("ignores fields that declare no default", () => {
+    expect(
+      fieldDefaultsSignature([
+        field({ name: "a", type: "text" }),
+        field({ name: "b", type: "text" }),
+      ])
+    ).toBe("");
+  });
+
+  it("treats a function the same on both sides of a comparison", () => {
+    // The config holds a function; the stored definition lost it. Reporting a
+    // change every boot would rewrite the registry on every start.
+    const config = [
+      field({ name: "a", type: "text", defaultValue: () => "x" }),
+    ];
+    const stored = [field({ name: "a", type: "text" })];
+    expect(fieldDefaultsSignature(config)).toBe(fieldDefaultsSignature(stored));
+  });
+
+  it("sees a change inside a group", () => {
+    const make = (v: string) => [
+      field({
+        name: "seo",
+        type: "group",
+        fields: [field({ name: "title", type: "text", defaultValue: v })],
+      }),
+    ];
+    expect(fieldDefaultsSignature(make("a"))).not.toBe(
+      fieldDefaultsSignature(make("b"))
+    );
   });
 });
