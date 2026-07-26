@@ -1,0 +1,82 @@
+/**
+ * Layout variations for the admin shell.
+ *
+ * The dual sidebar renders as a flex row of two <aside> elements (a 72px
+ * icon rail followed by a 256px detail panel), several wrapper divs below
+ * `.nextly-admin` (route guards, sidebar context, a responsive
+ * desktop-only wrapper). Selectors below don't count those levels, since a
+ * new provider anywhere in that chain would silently break a fixed-depth
+ * selector without an error. Instead each rule locates its target
+ * structurally:
+ *   - `aside:first-of-type:has(~ aside)` is the icon rail - the first of a
+ *     pair of asides, which excludes the unrelated single <aside> the
+ *     settings email-template editor renders elsewhere in the admin.
+ *   - `aside:nth-of-type(2)` is the detail panel - it only matches where a
+ *     first aside precedes it, so it has the same exclusion for free.
+ *   - `div:has(> aside:first-of-type ~ aside)` is the flex row the two
+ *     share.
+ * Selectors carry the data attribute so they outrank the utility classes
+ * they override without needing !important.
+ */
+
+/* Rail + panel: the shipped arrangement, declared so resetting to it is
+ * explicit rather than the absence of a rule. */
+.nextly-admin[data-layout="rail-panel"] aside:first-of-type:has(~ aside) {
+  width: 72px;
+}
+
+/* Single wide sidebar: the rail collapses and the panel widens to be the
+ * one column carrying navigation. */
+.nextly-admin[data-layout="single-sidebar"] aside:first-of-type:has(~ aside) {
+  display: none;
+}
+.nextly-admin[data-layout="single-sidebar"] aside:nth-of-type(2) {
+  width: 20rem;
+}
+
+/* Top bar + sidebar: the rail restacks above the panel as a horizontal
+ * strip, splitting global icon navigation from the panel's detail list.
+ * The strip spans the sidebar's own column, not the full viewport width -
+ * reaching further would mean overriding the row that also positions the
+ * main content, a level above the one this rule can reach without forking
+ * the shell component. */
+.nextly-admin[data-layout="topbar-sidebar"]
+  div:has(> aside:first-of-type ~ aside) {
+  flex-direction: column;
+}
+.nextly-admin[data-layout="topbar-sidebar"] aside:first-of-type:has(~ aside) {
+  width: 100%;
+  height: 56px;
+  flex-direction: row;
+  align-items: center;
+  padding: 0 1rem;
+  border-right: 0;
+  border-bottom: 1px solid var(--nx-border);
+}
+.nextly-admin[data-layout="topbar-sidebar"]
+  aside:first-of-type:has(~ aside)
+  nav {
+  flex-direction: row;
+  flex: 0 1 auto;
+  gap: 0.5rem;
+}
+
+/* Right-hand panel: the rail and panel swap places within their shared
+ * row, so the detail panel leads and the icon rail trails. Both still sit
+ * left of the main content - moving the pair past it would mean reordering
+ * the row above this one, out of reach for the same reason as the top bar
+ * variant above. */
+.nextly-admin[data-layout="right-panel"]
+  div:has(> aside:first-of-type ~ aside) {
+  flex-direction: row-reverse;
+}
+.nextly-admin[data-layout="right-panel"] aside:first-of-type:has(~ aside) {
+  border-right: 0;
+  border-left: 1px solid var(--nx-border);
+}
+
+/* Rail only: the panel is suppressed for maximum content width, leaving the
+ * icon rail plus the command palette as the way around. */
+.nextly-admin[data-layout="rail-only"] aside:nth-of-type(2) {
+  display: none;
+}
