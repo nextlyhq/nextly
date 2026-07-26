@@ -1,7 +1,7 @@
 {
   "name": "@nextlyhq/plugin-seo",
   "version": "0.0.2-alpha.41",
-  "description": "First-party SEO plugin for Nextly: SEO meta fields, sitemap, and metadata helpers for content collections",
+  "description": "First-party SEO plugin for Nextly: adds an SEO meta field group to content collections",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

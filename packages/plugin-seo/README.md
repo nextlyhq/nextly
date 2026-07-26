@@ -54,16 +54,6 @@ seoPlugin({
 });
 ```
 
-### Localized SEO
-
-For multilingual sites, opt into per-locale SEO so each translation gets its own meta title, description, canonical, etc.:
-
-```ts
-seoPlugin({ collections: ["pages"], localized: true });
-```
-
-Enable this **only** when the target collections have localization configured (`locales` + `defaultLocale`); Nextly rejects a localized field on a non-localized entity. It defaults to `false`, so the plugin is safe on monolingual projects.
-
 ## License
 
 MIT © Nextly
