@@ -4,6 +4,9 @@ import config from "../../../../nextly.config";
 import { themesToStylesheet } from "../../../theme-lab/generate-css";
 import "../../../theme-lab/layouts.css";
 import "../../../theme-lab/densities.css";
+// Makes the font and radius a theme declares actually reach the admin, which
+// reads neither `--font-sans` nor `--radius` on its own.
+import "../../../theme-lab/harness.css";
 import { NEXTLY_THEMES } from "../../../theme-lab/themes";
 import { TWEAKCN_THEMES } from "../../../theme-lab/themes/tweakcn.generated";
 import { ThemeSwitcher } from "../../../theme-lab/ThemeSwitcher";
