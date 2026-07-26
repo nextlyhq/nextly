@@ -404,8 +404,10 @@ export function validateBlocksDefaultShared(
 ): void {
   if (field.type !== "blocks") return;
   const value = field.defaultValue;
-  // A function default is resolved per entry, so there is nothing to check
-  // here; the write path validates whatever it produces.
+  // A function default produces its value per entry, against data this
+  // validator does not have, so there is nothing to check at config time. It
+  // is checked where it is resolved instead — for a single, before the
+  // auto-created row is inserted.
   if (value === undefined || typeof value === "function") return;
   const policy = (field.blocks ?? {}) as {
     allow?: string[];

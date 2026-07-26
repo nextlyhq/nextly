@@ -25,7 +25,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { env } from "../../../shared/lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
+import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
@@ -1050,13 +1050,16 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "json":
       case "repeater":
       case "group":
-        return "'{}'";
+        return quoteJsonSqlDefault("{}", this.dialect);
       case "blocks":
         // A required blocks column needs a document, not an empty object: the
         // generic `{}` has no formatVersion, kind, or nodes.
-        return `'${emptyBlockDocumentJson(field?.blocks?.kinds)}'`;
+        return quoteJsonSqlDefault(
+          emptyBlockDocumentJson(field?.blocks?.kinds),
+          this.dialect
+        );
       case "chips":
-        return "'[]'";
+        return quoteJsonSqlDefault("[]", this.dialect);
       case "relationship":
       case "upload":
         // Relations are nullable by nature when adding to existing tables
@@ -1097,7 +1100,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
 
     // Handle JSON (needs to be a quoted JSON string)
     if (type === "json" || type === "blocks") {
-      return quoteSqlLiteral(
+      return quoteJsonSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect
       );

@@ -91,6 +91,8 @@ export type ComponentValidationErrorCode =
   | "FIELD_NAME_DUPLICATE"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
+  // A declared default the field's own rules reject.
+  | "FIELD_DEFAULT_INVALID"
   // Field-specific errors
   | "SELECT_OPTIONS_REQUIRED"
   | "SELECT_OPTIONS_EMPTY"

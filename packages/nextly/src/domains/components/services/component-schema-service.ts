@@ -69,7 +69,7 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
-import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
+import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -1329,7 +1329,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       case "radio":
         return "''";
       case "blocks":
-        return quoteSqlLiteral(
+        return quoteJsonSqlDefault(
           emptyBlockDocumentJson(
             field && isBlocksField(field) ? field.blocks?.kinds : undefined
           ),
@@ -1347,7 +1347,9 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       case "json":
       case "repeater":
       case "group":
-        return "'{}'";
+        // These share the blocks column type, so they share its restriction on
+        // how a default may be written.
+        return quoteJsonSqlDefault("{}", this.dialect);
       case "relationship":
       case "upload":
         return "NULL";
@@ -1379,7 +1381,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       type === "group" ||
       type === "blocks"
     ) {
-      return quoteSqlLiteral(
+      return quoteJsonSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect
       );

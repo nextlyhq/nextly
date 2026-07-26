@@ -37,3 +37,24 @@ export function quoteSqlLiteral(
   const escaped = dialect === "mysql" ? value.replace(/\\/g, "\\\\") : value;
   return `'${escaped.replace(/'/g, "''")}'`;
 }
+
+/**
+ * The DEFAULT clause value for a JSON-backed column.
+ *
+ * MySQL refuses a literal default on a JSON column outright — `DEFAULT '{}'`
+ * fails with "BLOB, TEXT, GEOMETRY or JSON column can't have a default value"
+ * — and accepts only an expression default, which is the same literal in
+ * parentheses. PostgreSQL and SQLite take the literal directly, so they are
+ * left as they are rather than given an equivalent-but-different form.
+ *
+ * The parenthesized form requires MySQL 8.0.13 or later, which introduced
+ * expression defaults. On anything older no default is expressible for these
+ * columns at all, so there is no earlier syntax to fall back to.
+ */
+export function quoteJsonSqlDefault(
+  value: string,
+  dialect: SupportedDialect
+): string {
+  const literal = quoteSqlLiteral(value, dialect);
+  return dialect === "mysql" ? `(${literal})` : literal;
+}
