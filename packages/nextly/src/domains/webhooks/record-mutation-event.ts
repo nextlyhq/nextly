@@ -96,29 +96,24 @@ export async function recordMutationEvent(
 
   // Endpoint/audit gate: an install with no enabled endpoint and the audit seam
   // off records nothing, so a mutation never pays the outbox INSERT + full
-  // document serialization for an event no subscriber would receive. Audit is
-  // checked first (sync) so an audit-on install never consults the registry.
-  // `endpointsPresent()` reads the registry's cached list (shared with the
-  // drain, so its CRUD invalidation and TTL apply here) and fails open, so this
-  // adds one resolved microtask on the warm path and never aborts the write on
-  // a lookup error. Race contract: a same-process endpoint create invalidates
-  // immediately; an endpoint created in another process is picked up within the
-  // registry TTL; a few events recorded just before the last endpoint is removed
-  // may remain and are pruned by retention.
-  if (!isWebhookAuditEnabled()) {
-    // Pass `tx` so a cold endpoint lookup reads on this transaction's own
-    // connection, never a second pooled one (which deadlocks a 1-connection
-    // pool while this transaction holds its connection).
-    const hasEndpoints = await endpointsPresent(tx);
-    if (
-      !shouldRecordEvent({
-        collectionAllows: true,
-        auditEnabled: false,
-        hasEndpoints,
-      })
-    ) {
-      return false;
-    }
+  // document serialization for an event no subscriber would receive. Both inputs
+  // are read synchronously with NO database access — safe inside this write
+  // transaction, where a read would deadlock a single-connection pool, cache a
+  // stale transaction snapshot, or poison the transaction on failure. Endpoint
+  // presence is a flag refreshed out of band (boot, endpoint CRUD, and a stale-
+  // read background reload), and fails open until primed. Race contract: a same-
+  // process endpoint change refreshes the flag immediately; an endpoint changed
+  // in another process is picked up within the flag TTL; a few events recorded
+  // just before the last endpoint is removed may remain and are pruned by
+  // retention.
+  if (
+    !shouldRecordEvent({
+      collectionAllows: true,
+      auditEnabled: isWebhookAuditEnabled(),
+      hasEndpoints: endpointsPresent(),
+    })
+  ) {
+    return false;
   }
 
   const envelope = buildEnvelope({

@@ -167,7 +167,7 @@ describePg(
       }
     }
 
-    it("completes a gated write whose cold endpoint lookup binds to the caller's transaction", async () => {
+    it("completes a gated write without any endpoint read inside the transaction", async () => {
       const adapter = await connectSingleConnection();
       let handle: TestNextly | undefined;
       try {
@@ -175,11 +175,11 @@ describePg(
           adapter,
           collections: [openCollection(GATE_SLUG)],
         });
-        // Turn the harness's audit default off so the recording gate actually
-        // consults endpoint presence — the read that must bind to the caller's
-        // transaction. No endpoint is seeded, so the gate loads a cold registry;
-        // that load must run on the transaction's own connection, never a second
-        // pooled one, which would block forever on this `max: 1` pool.
+        // Turn the harness's audit default off so the recording gate consults
+        // endpoint presence. It reads a synchronous, out-of-band-refreshed flag —
+        // NOT the database — so the write never checks out a second connection.
+        // A regression that made the gate read endpoints inside the write
+        // transaction would deadlock forever on this `max: 1` pool.
         setWebhookAuditEnabled(false);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")

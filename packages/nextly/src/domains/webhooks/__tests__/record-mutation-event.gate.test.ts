@@ -4,8 +4,9 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { recordMutationEvent } from "../record-mutation-event";
 import {
+  refreshEndpointPresence,
   resetWebhookActivation,
-  setEndpointPresenceProvider,
+  setEndpointPresenceRefresher,
   setWebhookAuditEnabled,
 } from "../recording-activation";
 import {
@@ -62,9 +63,14 @@ describe("recordMutationEvent recording gate", () => {
   });
 });
 
+async function primePresence(present: boolean): Promise<void> {
+  setEndpointPresenceRefresher(() => Promise.resolve(present));
+  await refreshEndpointPresence();
+}
+
 describe("recordMutationEvent endpoint/audit gate", () => {
   it("does not record when there are no endpoints and audit is off", async () => {
-    setEndpointPresenceProvider(() => Promise.resolve(false));
+    await primePresence(false);
     const { tx, insert } = makeTx();
     const recorded = await recordMutationEvent(tx, entryArgs("posts"));
     expect(insert).not.toHaveBeenCalled();
@@ -72,26 +78,23 @@ describe("recordMutationEvent endpoint/audit gate", () => {
   });
 
   it("records when an endpoint is present", async () => {
-    setEndpointPresenceProvider(() => Promise.resolve(true));
+    await primePresence(true);
     const { tx, insert } = makeTx();
     const recorded = await recordMutationEvent(tx, entryArgs("posts"));
     expect(insert).toHaveBeenCalledTimes(1);
     expect(recorded).toBe(true);
   });
 
-  it("records when audit is on even with no endpoints (skips the endpoint check)", async () => {
-    const provider = vi.fn(() => Promise.resolve(false));
-    setEndpointPresenceProvider(provider);
+  it("records when audit is on even with no endpoints", async () => {
+    await primePresence(false);
     setWebhookAuditEnabled(true);
     const { tx, insert } = makeTx();
     const recorded = await recordMutationEvent(tx, entryArgs("posts"));
     expect(insert).toHaveBeenCalledTimes(1);
     expect(recorded).toBe(true);
-    expect(provider).not.toHaveBeenCalled();
   });
 
-  it("records (fail-open) when the endpoint provider throws", async () => {
-    setEndpointPresenceProvider(() => Promise.reject(new Error("db down")));
+  it("records (fail-open) before the presence flag is primed", async () => {
     const { tx, insert } = makeTx();
     const recorded = await recordMutationEvent(tx, entryArgs("posts"));
     expect(insert).toHaveBeenCalledTimes(1);
@@ -99,7 +102,7 @@ describe("recordMutationEvent endpoint/audit gate", () => {
   });
 
   it("the per-entity opt-out still wins over a present endpoint", async () => {
-    setEndpointPresenceProvider(() => Promise.resolve(true));
+    await primePresence(true);
     setWebhookRecording("collection", "submissions", false);
     const { tx, insert } = makeTx();
     const recorded = await recordMutationEvent(tx, entryArgs("submissions"));

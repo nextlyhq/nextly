@@ -13,7 +13,10 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { WebhookEndpointRegistry } from "../endpoint-registry";
-import { setWebhookAuditEnabled } from "../recording-activation";
+import {
+  refreshEndpointPresence,
+  setWebhookAuditEnabled,
+} from "../recording-activation";
 
 let current: TestNextly | undefined;
 
@@ -51,11 +54,12 @@ async function seedEnabledEndpoint(handle: TestNextly): Promise<void> {
     created_at: new Date("2020-01-01T00:00:00.000Z"),
     updated_at: new Date("2020-01-01T00:00:00.000Z"),
   });
-  // The gate reads the registry's cached list; force a reload so the just-seeded
-  // row is visible, exactly as the CRUD surface does on create.
+  // Invalidate the registry cache and re-derive the recording gate's presence
+  // flag, exactly as the CRUD surface does on create.
   handle
     .getService<WebhookEndpointRegistry>("webhookEndpointRegistry")
     .invalidate();
+  await refreshEndpointPresence();
 }
 
 describe("endpoint-gated outbox recording (integration)", () => {
@@ -66,8 +70,10 @@ describe("endpoint-gated outbox recording (integration)", () => {
       ],
     });
     // The harness defaults audit on so machinery tests are endpoint-independent;
-    // this suite tests the gate, so turn it off.
+    // this suite tests the gate, so turn it off. Prime the presence flag so it
+    // reflects the actual (empty) endpoint set rather than the fail-open default.
     setWebhookAuditEnabled(false);
+    await refreshEndpointPresence();
     await makePost(current);
     expect(await eventCount(current)).toBe(0);
   });
@@ -106,14 +112,15 @@ describe("endpoint-gated outbox recording (integration)", () => {
     await makePost(current);
     expect(await eventCount(current)).toBe(1);
 
-    // Disable the endpoint (SQLite stores booleans as 0/1) and invalidate, as a
-    // disable through the CRUD surface would.
+    // Disable the endpoint (SQLite stores booleans as 0/1), invalidate, and
+    // re-derive the presence flag, as a disable through the CRUD surface would.
     await current.adapter.executeQuery(
       "UPDATE nextly_webhooks SET enabled = 0"
     );
     current
       .getService<WebhookEndpointRegistry>("webhookEndpointRegistry")
       .invalidate();
+    await refreshEndpointPresence();
     await makePost(current);
     expect(await eventCount(current)).toBe(1); // no new row recorded
   });
