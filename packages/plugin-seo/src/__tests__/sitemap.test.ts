@@ -5,6 +5,7 @@ import {
   defaultUrlForEntry,
   escapeXml,
   generateSitemap,
+  MAX_SITEMAP_URLS,
   serializeSitemap,
   type SitemapServices,
 } from "../sitemap";
@@ -290,6 +291,66 @@ describe("buildSitemapUrls", () => {
 
     const [, query] = spy.mock.calls[0];
     expect(query.pagination?.limit).toBe(500);
+  });
+
+  it("projects only the sitemap columns for the default urlFor", async () => {
+    const spy = vi.fn();
+    const services = stubServices({ posts: [[{ slug: "a" }]] }, spy);
+
+    await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    const [, query] = spy.mock.calls[0];
+    expect(query.select).toEqual({ slug: true, seo: true, updatedAt: true });
+  });
+
+  it("fetches full rows (no projection) for a custom urlFor", async () => {
+    const spy = vi.fn();
+    const services = stubServices({ posts: [[{ slug: "a" }]] }, spy);
+
+    await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      urlFor: entry => `/${entry.slug}`,
+    });
+
+    const [, query] = spy.mock.calls[0];
+    expect(query.select).toBeUndefined();
+  });
+
+  it("throws on a baseUrl that is not an absolute http(s) URL", async () => {
+    const services = stubServices({ posts: [[{ slug: "a" }]] });
+
+    await expect(
+      buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "example.com",
+      })
+    ).rejects.toThrow(/absolute http/i);
+  });
+
+  it("bounds the document to the sitemap URL limit", async () => {
+    // One page per 500 rows; produce one more than the limit and confirm the
+    // output stops at the cap (removing the cap would return them all).
+    const overflowPages: Record<string, string>[][] = [];
+    let made = 0;
+    while (made <= MAX_SITEMAP_URLS) {
+      const page = Array.from({ length: 500 }, (_, i) => ({
+        slug: `s${made + i}`,
+      }));
+      overflowPages.push(page);
+      made += 500;
+    }
+    const services = stubServices({ posts: overflowPages });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls).toHaveLength(MAX_SITEMAP_URLS);
   });
 
   it("skips entries with no usable slug (default urlFor) rather than emitting duplicates", async () => {

@@ -90,6 +90,23 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     fields: options.fields ?? defaultSeoFields(),
   });
 
+  // A configured baseUrl must be an absolute http(s) origin — otherwise every
+  // `<loc>` is invalid. Fail fast at construction rather than at request time.
+  if (options.baseUrl !== undefined) {
+    let validBase = false;
+    try {
+      const parsed = new URL(options.baseUrl);
+      validBase = parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      validBase = false;
+    }
+    if (!validBase) {
+      throw new Error(
+        `seoPlugin: baseUrl must be an absolute http(s) URL, got: ${options.baseUrl}`
+      );
+    }
+  }
+
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
   // twice (a duplicate-field error), and would list the same URLs twice in the
   // sitemap.

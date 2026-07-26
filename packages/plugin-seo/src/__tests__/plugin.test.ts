@@ -91,6 +91,12 @@ describe("seoPlugin", () => {
     ).toThrow(/subset/i);
   });
 
+  it("rejects a baseUrl that is not an absolute http(s) URL", () => {
+    expect(() =>
+      seoPlugin({ collections: ["pages"], baseUrl: "example.com" })
+    ).toThrow(/absolute http/i);
+  });
+
   it("defaultSeoFields returns the inner seo fields", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",

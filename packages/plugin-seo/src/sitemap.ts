@@ -39,6 +39,10 @@ export interface SitemapServices {
       query: {
         where?: Record<string, unknown>;
         depth?: number;
+        // Field projection — narrow the columns fetched to just what the default
+        // mapper reads, so a collection's large content columns are not
+        // transferred on every public request.
+        select?: Record<string, boolean>;
         // A stable, unique sort so consecutive pages don't overlap or skip
         // rows: the managed service adds `ORDER BY` only when `sort` is passed.
         sort?: { field: string; direction: "asc" | "desc" };
@@ -143,6 +147,39 @@ function toLastModified(value: unknown): string | undefined {
 export const MAX_PAGE_SIZE = 500;
 
 /**
+ * The sitemap protocol allows at most 50,000 URLs (and 50 MB uncompressed) per
+ * document. Collection is bounded to this so the single `<urlset>` is always
+ * valid; sharding a larger corpus into a sitemap index belongs to the Next
+ * delivery layer (`generateSitemaps()`).
+ */
+export const MAX_SITEMAP_URLS = 50_000;
+
+/** The columns the default mapper reads — used to project the query. */
+const DEFAULT_SELECT: Record<string, boolean> = {
+  slug: true,
+  seo: true,
+  updatedAt: true,
+};
+
+/** Resolve `baseUrl` to an origin, rejecting anything but an absolute http(s) URL. */
+function resolveBaseOrigin(baseUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error(
+      `sitemap: baseUrl must be an absolute http(s) URL, got: ${baseUrl}`
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `sitemap: baseUrl must be an absolute http(s) URL, got: ${baseUrl}`
+    );
+  }
+  return url.origin;
+}
+
+/**
  * List every configured collection's PUBLISHED entries and map them to sitemap
  * URLs. Reads as system (a sitemap is public derived data), and pages through
  * ALL matches by advancing the 1-indexed `page` — no silent cap — so a large
@@ -161,6 +198,9 @@ export async function buildSitemapUrls(
   services: SitemapServices,
   options: SitemapOptions
 ): Promise<SitemapUrl[]> {
+  // A custom urlFor may read arbitrary fields, so only project the columns when
+  // using the built-in mapper; a custom callback gets full rows.
+  const usingDefaultUrlFor = options.urlFor === undefined;
   const urlFor = options.urlFor ?? defaultUrlForEntry;
   const pageSize =
     options.pageSize && options.pageSize > 0
@@ -170,14 +210,8 @@ export async function buildSitemapUrls(
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
   // The sitemap's own origin (scheme + host + port) — a `<loc>` must live on it,
   // so a canonical on a different origin is dropped rather than mixed in.
-  // Compare origins, not hosts: `http://x.com` and `https://x.com` are distinct
-  // URLs to a crawler.
-  let baseOrigin = "";
-  try {
-    baseOrigin = new URL(baseUrl).origin;
-  } catch {
-    baseOrigin = "";
-  }
+  // Rejects an empty/relative baseUrl up front so `<loc>` is never invalid.
+  const baseOrigin = resolveBaseOrigin(baseUrl);
   const urls: SitemapUrl[] = [];
 
   for (const collection of options.collections) {
@@ -201,6 +235,7 @@ export async function buildSitemapUrls(
         {
           where,
           depth: 0,
+          ...(usingDefaultUrlFor ? { select: DEFAULT_SELECT } : {}),
           // Deterministic paging: without an explicit sort the service pages an
           // unordered query, so rows could repeat or vanish between pages. `id`
           // is unique and stable on every collection.
@@ -248,6 +283,9 @@ export async function buildSitemapUrls(
           if (offHost) continue;
         }
         urls.push({ loc, lastModified: toLastModified(row.updatedAt) });
+        // Bound the document to the protocol limit so the single `<urlset>`
+        // stays valid; a larger corpus needs a sitemap index (delivery layer).
+        if (urls.length >= MAX_SITEMAP_URLS) return urls;
       }
 
       if (!result.pagination.hasMore) break;
