@@ -209,6 +209,60 @@ describe("collection status webhook events (integration)", () => {
     expect(changed).toHaveLength(1);
   });
 
+  it("a coerced non-string default-locale status update reports the main-row transition in changedFields", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { title: "hi", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // A non-string status is not written to the companion `_status` (only string
+    // statuses are), so the DB coerces it onto the main `status` text column and
+    // the transition is recorded from the main row. The event document must
+    // reflect that coerced value, not the untouched companion status, or a
+    // status-filtered endpoint would never match the change.
+    await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "en",
+      },
+      { status: 0 }
+    );
+
+    const changed = (await events(current)).find(
+      r => r.type === "entry.status_changed"
+    )!;
+    const envelope = envelopeOf(changed);
+    // The coerced string the DB stores for a numeric input is dialect-specific
+    // (SQLite yields "0.0"), so assert the transition against the value the DB
+    // actually persisted rather than a hardcoded literal: the document status
+    // must equal `statusChange.to` (the coerced main-row value), not the stale
+    // companion "published", and the change must surface in changedFields.
+    const coerced = (envelope.statusChange as { from: string; to: string }).to;
+    expect((envelope.statusChange as { from: string }).from).toBe("published");
+    expect(coerced).not.toBe("published");
+    expect((envelope.data as { status?: unknown }).status).toBe(coerced);
+    expect((envelope.previous as { status?: unknown }).status).toBe(
+      "published"
+    );
+    expect(envelope.changedFields).toContain("status");
+  });
+
   it("a webhooks:false collection emits no status events on publish", async () => {
     current = await createTestNextly({
       collections: [

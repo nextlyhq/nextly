@@ -2614,10 +2614,11 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // NOTE: publishAllLocales records no webhook events yet — this path
-          // emits no base `entry.updated` either. Its lifecycle + base events
-          // land together in task 017 (tx/bulk/publishAllLocales write
-          // recording), so status-only events are not added here.
+          // This path writes no base `entry.updated` outbox event, so recording
+          // a status-only lifecycle event here would ship an inconsistent
+          // partial surface (a status change with no corresponding write event).
+          // Its lifecycle events belong with its base write event, not in
+          // isolation, so none are recorded here.
         })
       );
 
@@ -4151,6 +4152,23 @@ export class CollectionMutationService extends BaseService {
               // `status: 0`) — the main row holds the transition, so use it.
               const companionStatusWritten =
                 typeof localizedUpdate?.companionData._status === "string";
+              // The main-row event must describe the main `status` column's
+              // transition, but `updatedDocument`/`previousDocument` carry the
+              // write-locale companion status overlaid — and for a default-locale
+              // write whose status the DB coerced onto the main row (e.g.
+              // `status: 0`), that overlay still reads the prior value. Overlay
+              // the persisted main-row statuses so `data`/`previous` match
+              // `statusChange` and `changedFields` reports `status` as changed.
+              // For a non-localized collection these already equal the row values,
+              // so the overlay is a no-op there.
+              const mainRowData =
+                mainTo !== undefined
+                  ? { ...updatedDocument, status: mainTo }
+                  : updatedDocument;
+              const mainRowPrevious =
+                previousDocument !== null
+                  ? { ...previousDocument, status: mainFrom }
+                  : previousDocument;
               const mainStatusRecorded =
                 collectionHasStatusLifecycle && !companionStatusWritten
                   ? await this.recordStatusEvents(tx, {
@@ -4159,8 +4177,8 @@ export class CollectionMutationService extends BaseService {
                       from: mainFrom,
                       to: mainTo,
                       isCreate: false,
-                      data: updatedDocument,
-                      previous: previousDocument,
+                      data: mainRowData,
+                      previous: mainRowPrevious,
                       fields: webhookFields,
                       actor,
                     })
