@@ -26,6 +26,9 @@ const JSON_BACKED_TYPES = new Set([
   "json",
   "chips",
   "richText",
+  // A page document is stored as one JSON value, so version history has to
+  // parse it back before rendering, exactly like the other structured types.
+  "blocks",
 ]);
 
 function hasMany(field: FieldConfig): boolean {
