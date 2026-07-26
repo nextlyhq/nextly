@@ -127,6 +127,52 @@ describe("stored read constraints are applied in full (integration)", () => {
     ]);
   });
 
+  it("refuses a constraint whose members are only partly translatable", async () => {
+    // A geo predicate beside a normal one: the translators drop the geo member
+    // and keep `tenant`, so the read would run under a weaker predicate than the
+    // rule requires and return rows outside the permitted area. Non-empty is not
+    // the same as complete, so the constraint is refused instead.
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "partial-geo" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    // An authorization decision, not a server fault.
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("refuses a constraint naming a column the table does not have", async () => {
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "partial-unknown-field" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("refuses the matching count too", async () => {
+    const handler = await bootWithStoredRule();
+
+    const counted = await handler.countEntries({
+      collectionName: "docs",
+      user: { id: "partial-geo" },
+      routeAuthorized: true,
+    });
+
+    // A count that succeeded where the list refused would disclose the size of
+    // a result set the caller may not read.
+    expect(counted.success).toBe(false);
+    expect(counted.statusCode).toBe(403);
+  });
+
   it("counts the same rows it lists", async () => {
     const handler = await bootWithStoredRule();
 

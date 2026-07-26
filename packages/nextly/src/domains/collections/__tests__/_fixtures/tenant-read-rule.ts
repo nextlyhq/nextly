@@ -25,6 +25,18 @@ export default function tenantReadRule({
     // An operator other than `equals`.
     case "in-operator":
       return { region: { in: ["eu", "uk"] } };
+    // A valid predicate beside one the translators cannot handle. Geo operators
+    // reach SQL through a separate extractor, so `buildWhereClause` drops them
+    // and keeps the sibling — leaving a weaker predicate that looks translated.
+    case "partial-geo":
+      return {
+        tenant: { equals: "acme" },
+        location: { within: { lat: 0, lng: 0, radius: 1 } },
+      };
+    // A valid predicate beside a field that is not on the table at all, which
+    // `buildDrizzleCondition` skips while keeping the sibling.
+    case "partial-unknown-field":
+      return { tenant: { equals: "acme" }, nosuchcolumn: { equals: "x" } };
     default:
       return true;
   }

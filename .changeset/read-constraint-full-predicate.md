@@ -25,4 +25,4 @@ Read rules that narrow by a filter are now applied in full. A stored read rule c
 
 Filters now go through the same translation your own `where` clauses use, so every field and every supported operator binds. Owner-only rules are unaffected: a single non-empty owner id was the one shape the old path handled correctly, which is why this went unnoticed.
 
-If a rule returns a filter that cannot be translated, the read is now refused rather than returning everything.
+A filter is applied only if **all** of it can be applied. If any part cannot be — an operator that needs a different query path, or a field that is not on the table — the read is refused rather than run under a weaker filter that binds some parts and drops others. The refusal is reported as forbidden, and the matching count refuses identically.
