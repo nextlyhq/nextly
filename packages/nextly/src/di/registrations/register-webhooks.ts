@@ -59,10 +59,10 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   // endpoint presence is resolved through the shared registry (its cache carries
   // the CRUD invalidation and TTL), so the gate needs no second cache.
   setWebhookAuditEnabled(ctx.config.webhookAuditEnabled ?? false);
-  setEndpointPresenceProvider(() =>
+  setEndpointPresenceProvider(reader =>
     container
       .get<WebhookEndpointRegistry>("webhookEndpointRegistry")
-      .hasEnabledEndpoints()
+      .hasEnabledEndpoints(reader)
   );
 
   container.registerSingleton<WebhookEndpointService>(

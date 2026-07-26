@@ -106,7 +106,10 @@ export async function recordMutationEvent(
   // registry TTL; a few events recorded just before the last endpoint is removed
   // may remain and are pruned by retention.
   if (!isWebhookAuditEnabled()) {
-    const hasEndpoints = await endpointsPresent();
+    // Pass `tx` so a cold endpoint lookup reads on this transaction's own
+    // connection, never a second pooled one (which deadlocks a 1-connection
+    // pool while this transaction holds its connection).
+    const hasEndpoints = await endpointsPresent(tx);
     if (
       !shouldRecordEvent({
         collectionAllows: true,

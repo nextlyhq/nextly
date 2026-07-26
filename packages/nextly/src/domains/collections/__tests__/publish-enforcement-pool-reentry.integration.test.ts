@@ -22,6 +22,7 @@ import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { setWebhookAuditEnabled } from "../../../domains/webhooks/recording-activation";
 import { NextlyError } from "../../../errors/nextly-error";
 import { registerHook, unregisterHook } from "../../../hooks";
 import type { HookHandler } from "../../../hooks/types";
@@ -52,6 +53,9 @@ const BEFOREOP_SLUG = "poolreentrybeforeop";
 // transaction — the binding this fixture exercises. Its teardown also drops the
 // companion table (see `drop`).
 const LOCALIZED_DELETE_SLUG = "poolreentrylocdel";
+// A write whose outbox recording gate must read endpoint presence on the
+// caller's transaction, not a second pooled connection, when its cache is cold.
+const GATE_SLUG = "poolreentrygate";
 const SLUGS = [
   RBAC_SLUG,
   BULK_CREATE_SLUG,
@@ -64,6 +68,7 @@ const SLUGS = [
   DIRECT_DELETE_SLUG,
   BEFOREOP_SLUG,
   LOCALIZED_DELETE_SLUG,
+  GATE_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -161,6 +166,44 @@ describePg(
         }
       }
     }
+
+    it("completes a gated write whose cold endpoint lookup binds to the caller's transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(GATE_SLUG)],
+        });
+        // Turn the harness's audit default off so the recording gate actually
+        // consults endpoint presence — the read that must bind to the caller's
+        // transaction. No endpoint is seeded, so the gate loads a cold registry;
+        // that load must run on the transaction's own connection, never a second
+        // pooled one, which would block forever on this `max: 1` pool.
+        setWebhookAuditEnabled(false);
+        const entries = handle
+          .getService<CollectionsHandler>("collectionsHandler")
+          .getEntryService() as CollectionEntryService;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.createEntriesInTransaction(
+              tx,
+              { collectionName: GATE_SLUG, user: { id: "editor" } },
+              [{ title: "t" }]
+            )
+          ),
+          15_000
+        );
+
+        // The write reached completion instead of deadlocking on a second
+        // connection; with no endpoint and audit off, no event is recorded.
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
 
     it("resolves a publish RBAC check on the transaction's own connection", async () => {
       const adapter = await connectSingleConnection();

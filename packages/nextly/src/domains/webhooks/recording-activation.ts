@@ -23,9 +23,21 @@
  * @module domains/webhooks/recording-activation
  */
 
+import type { WebhookEndpointReader } from "./endpoint-registry";
+
+/**
+ * Resolves whether any enabled endpoint exists. Receives the caller's executor
+ * (the open write transaction) so a cold lookup reads on that transaction's own
+ * connection instead of checking out a second pooled one — which would deadlock
+ * a single-connection pool while the transaction holds its connection.
+ */
+type EndpointPresenceProvider = (
+  reader?: WebhookEndpointReader
+) => Promise<boolean>;
+
 interface ActivationState {
   auditEnabled: boolean;
-  endpointPresenceProvider: (() => Promise<boolean>) | null;
+  endpointPresenceProvider: EndpointPresenceProvider | null;
 }
 
 const globalForActivation = globalThis as unknown as {
@@ -67,22 +79,26 @@ export function isWebhookAuditEnabled(): boolean {
  * write path.
  */
 export function setEndpointPresenceProvider(
-  provider: () => Promise<boolean>
+  provider: EndpointPresenceProvider
 ): void {
   state.endpointPresenceProvider = provider;
 }
 
 /**
- * Whether the install has an enabled endpoint. FAILS OPEN: no provider (webhooks
- * not registered, or pre-boot) or a throwing provider returns `true`, so a
- * content write is never gated off — and never aborted — on incomplete or failed
+ * Whether the install has an enabled endpoint. Pass the caller's transaction as
+ * `reader` so a cold lookup reads on its connection (see
+ * {@link EndpointPresenceProvider}). FAILS OPEN: no provider (webhooks not
+ * registered, or pre-boot) or a throwing provider returns `true`, so a content
+ * write is never gated off — and never aborted — on incomplete or failed
  * endpoint knowledge.
  */
-export async function endpointsPresent(): Promise<boolean> {
+export async function endpointsPresent(
+  reader?: WebhookEndpointReader
+): Promise<boolean> {
   const provider = state.endpointPresenceProvider;
   if (provider === null) return true;
   try {
-    return await provider();
+    return await provider(reader);
   } catch {
     return true;
   }

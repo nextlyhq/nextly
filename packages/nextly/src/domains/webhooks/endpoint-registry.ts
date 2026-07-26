@@ -10,6 +10,8 @@
  * @module domains/webhooks/endpoint-registry
  */
 
+import type { SelectOptions } from "@nextlyhq/adapter-drizzle/types";
+
 import { normalizeSecretEntries } from "./secret-entries";
 import type {
   FilterSpec,
@@ -40,16 +42,16 @@ function normalizeFilter(raw: unknown): FilterSpec | null {
   };
 }
 
-/** The narrow read surface the registry needs (satisfied by the DB adapter). */
+/**
+ * The narrow read surface the registry needs. Satisfied by the DB adapter and,
+ * crucially, by a `TransactionContext`: the recording gate passes its open
+ * transaction here so a cold endpoint load reads on that transaction's own
+ * connection. Uses the adapter's `SelectOptions` verbatim so both are assignable
+ * (a hand-rolled subset with `op: string` would reject the transaction, whose
+ * `op` is the stricter `WhereOperator`).
+ */
 export interface WebhookEndpointReader {
-  select<T = unknown>(
-    table: string,
-    options?: {
-      where?: {
-        and: Array<{ column: string; op: string; value: unknown }>;
-      };
-    }
-  ): Promise<T[]>;
+  select<T = unknown>(table: string, options?: SelectOptions): Promise<T[]>;
 }
 
 /**
@@ -177,13 +179,34 @@ export class WebhookEndpointRegistry {
    * Whether any enabled endpoint exists, from the same cached list the drain
    * reads (so this shares its invalidation and TTL). Used by the outbox
    * recording gate to skip writing events no endpoint would receive.
+   *
+   * The gate calls this from inside an open write transaction, so `reader` — the
+   * caller's transaction — is used for a cold/expired load instead of the pooled
+   * adapter: reading through the pool while the transaction holds its connection
+   * deadlocks a single-connection pool. A warm cache answers without any read,
+   * so the executor only matters on the load path. This deliberately does not
+   * join the pooled in-flight load: a transaction-bound caller must never await
+   * a pooled read, and an occasional extra count is harmless.
    */
-  async hasEnabledEndpoints(): Promise<boolean> {
-    return (await this.getEnabledEndpoints()).length > 0;
+  async hasEnabledEndpoints(reader?: WebhookEndpointReader): Promise<boolean> {
+    if (this.cache !== null && !this.isExpired()) {
+      return this.cache.length > 0;
+    }
+    const gen = this.generation;
+    const rows = await this.load(reader ?? this.reader);
+    // Commit to the cache only if no invalidation happened while loading, so a
+    // concurrent CRUD change is not overwritten by this in-flight snapshot.
+    if (gen === this.generation) {
+      this.cache = rows;
+      this.cachedAtMs = this.now();
+    }
+    return rows.length > 0;
   }
 
-  private async load(): Promise<WebhookEndpoint[]> {
-    const rows = await this.reader.select<Record<string, unknown>>(
+  private async load(
+    reader: WebhookEndpointReader = this.reader
+  ): Promise<WebhookEndpoint[]> {
+    const rows = await reader.select<Record<string, unknown>>(
       "nextly_webhooks",
       {
         where: {
