@@ -1,5 +1,8 @@
-import { checkbox, text, textarea, upload } from "nextly";
+// Field factories come from the curated `nextly/config` field-authoring surface
+// rather than the root `nextly` barrel. `FieldConfig` is a type-only import, so
+// it is erased at build and adds no runtime coupling.
 import type { FieldConfig } from "nextly";
+import { checkbox, text, textarea, upload } from "nextly/config";
 
 /**
  * The default fields placed INSIDE the `seo` group on each target collection
