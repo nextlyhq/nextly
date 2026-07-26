@@ -82,6 +82,40 @@ describe("buildSitemapUrls", () => {
     expect(opts).toEqual({ as: "system" });
   });
 
+  it("pages with a stable unique sort so pages never overlap or skip", async () => {
+    const spy = vi.fn();
+    const services = stubServices({ posts: [[{ slug: "a" }]] }, spy);
+
+    await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    const [, query] = spy.mock.calls[0];
+    expect(query.sort).toEqual({ field: "id", direction: "asc" });
+  });
+
+  it("advertises a declared canonical URL instead of the generated one", async () => {
+    const services = stubServices({
+      posts: [
+        [
+          { slug: "a", seo: { canonical: "https://canonical.example/a" } },
+          { slug: "b" },
+        ],
+      ],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://canonical.example/a",
+      "https://x.com/posts/b",
+    ]);
+  });
+
   it("maps entries to absolute loc + ISO lastModified", async () => {
     const services = stubServices({
       posts: [[{ slug: "a", updatedAt: "2026-01-02T03:04:05.000Z" }]],

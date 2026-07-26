@@ -29,6 +29,9 @@ export interface SitemapServices {
       query: {
         where?: Record<string, unknown>;
         depth?: number;
+        // A stable, unique sort so consecutive pages don't overlap or skip
+        // rows: the managed service adds `ORDER BY` only when `sort` is passed.
+        sort?: { field: string; direction: "asc" | "desc" };
         // Paged by 1-indexed `page`: the managed service reads a page from
         // `page`, not `offset`, so pagination MUST advance `page` to progress.
         pagination?: { limit?: number; page?: number };
@@ -167,6 +170,10 @@ export async function buildSitemapUrls(
         {
           where: { status: { equals: "published" } },
           depth: 0,
+          // Deterministic paging: without an explicit sort the service pages an
+          // unordered query, so rows could repeat or vanish between pages. `id`
+          // is unique and stable on every collection.
+          sort: { field: "id", direction: "asc" },
           pagination: { limit: pageSize, page },
         },
         { as: "system" }
@@ -177,14 +184,22 @@ export async function buildSitemapUrls(
         const seo = isRecord(row.seo) ? row.seo : undefined;
         // A noindexed page is intentionally kept out of the sitemap.
         if (seo?.noindex === true) continue;
-        // A falsy path means the entry has no stable URL (no slug, or a custom
-        // urlFor opted it out) — skip it rather than advertise a bogus loc.
-        const path = urlFor(row, collection);
-        if (!path) continue;
-        urls.push({
-          loc: `${baseUrl}${path}`,
-          lastModified: toLastModified(row.updatedAt),
-        });
+        // Honor a declared canonical: a sitemap should list canonical URLs, so
+        // when the entry sets one, advertise THAT rather than the generated URL
+        // it points away from.
+        const canonical =
+          typeof seo?.canonical === "string" ? seo.canonical.trim() : "";
+        let loc: string;
+        if (canonical) {
+          loc = canonical;
+        } else {
+          // A falsy path means the entry has no stable URL (no slug, or a
+          // custom urlFor opted it out) — skip it rather than emit a bogus loc.
+          const path = urlFor(row, collection);
+          if (!path) continue;
+          loc = `${baseUrl}${path}`;
+        }
+        urls.push({ loc, lastModified: toLastModified(row.updatedAt) });
       }
 
       if (!result.pagination.hasMore) break;

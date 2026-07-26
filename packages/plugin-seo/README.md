@@ -58,11 +58,11 @@ seoPlugin({
 
 The plugin serves a sitemap of your **published** entries — one `<url>` per entry across the named collections — at a public HTTP route:
 
-```
+```text
 GET /api/plugins/@nextlyhq/plugin-seo/sitemap.xml
 ```
 
-It reads live content, so a publish or an edit is reflected on the next request. Drafts and any entry with `seo.noindex` set are left out.
+It reads live content, so a publish or an edit is reflected on the next request. Drafts, entries with `seo.noindex` set, and entries with no usable slug are left out. When an entry declares a `seo.canonical` URL, the sitemap advertises that canonical URL instead of the generated one.
 
 The published filter targets Nextly's built-in draft/published lifecycle (`status: true` on the collection). A collection without that lifecycle has no unpublished state, so all of its entries are listed.
 
@@ -79,7 +79,25 @@ seoPlugin({
 });
 ```
 
-A headless frontend can point crawlers at this URL (or proxy it to `/sitemap.xml`). An integrated Next.js app can also read the data through the planned Next helpers to serve the canonical `/sitemap.xml`.
+### Exposing it to crawlers
+
+Plugin routes are always namespaced under `/api/plugins/<name>/`. Search engines scope a sitemap to URLs beneath its own path unless it is submitted through Search Console or referenced in `robots.txt`, so a sitemap at `/api/plugins/...` whose `<loc>` values live at `/<collection>/...` may be ignored. Expose it at the site root instead — for a Next.js app, add a rewrite:
+
+```ts
+// next.config.ts
+export default {
+  async rewrites() {
+    return [
+      {
+        source: "/sitemap.xml",
+        destination: "/api/plugins/@nextlyhq/plugin-seo/sitemap.xml",
+      },
+    ];
+  },
+};
+```
+
+Then reference `https://example.com/sitemap.xml` from `robots.txt` or submit it in Search Console. An integrated Next.js app can also read the data through the planned Next helpers to serve the canonical `/sitemap.xml` directly. A pure-headless frontend can proxy the route to its own root the same way.
 
 ## License
 
