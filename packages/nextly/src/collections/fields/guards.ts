@@ -30,6 +30,7 @@ import type {
   // Structured field types
   RepeaterFieldConfig,
   GroupFieldConfig,
+  BlocksFieldConfig,
   JSONFieldConfig,
   // Component field types
   ComponentFieldConfig,
@@ -293,6 +294,18 @@ export const isGroupField = createTypeGuard<GroupFieldConfig>("group");
  * ```
  */
 export const isJSONField = createTypeGuard<JSONFieldConfig>("json");
+
+/**
+ * Type guard for blocks fields.
+ *
+ * @example
+ * ```typescript
+ * if (isBlocksField(field)) {
+ *   // field is BlocksFieldConfig
+ * }
+ * ```
+ */
+export const isBlocksField = createTypeGuard<BlocksFieldConfig>("blocks");
 
 // ============================================================
 // Individual Type Guards - Component Fields

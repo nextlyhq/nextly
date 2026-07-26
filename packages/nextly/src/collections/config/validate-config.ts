@@ -34,6 +34,8 @@ import {
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
+  validateBlocksDefaultShared,
+  validateBlocksPolicyShared,
   validateSelectOptionsShared,
   validateSlugShared,
 } from "../../shared/base-validator";
@@ -81,6 +83,8 @@ export type ValidationErrorCode =
   | "FIELD_NAME_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
+  // A declared default the field's own rules reject.
+  | "FIELD_DEFAULT_INVALID"
   // Field-specific errors
   | "SELECT_OPTIONS_REQUIRED"
   | "SELECT_OPTIONS_EMPTY"
@@ -386,6 +390,12 @@ function validateField(
 
     case "radio":
       validateSelectOptionsShared(f, path, errsBase, "radio");
+      break;
+
+    case "blocks":
+      // A blocks default must satisfy the same field policy the write applies.
+      validateBlocksPolicyShared(f, path, errsBase);
+      validateBlocksDefaultShared(f, path, errsBase);
       break;
 
     case "relationship":

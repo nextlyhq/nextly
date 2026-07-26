@@ -37,8 +37,19 @@ export interface SensitiveFieldSource {
   admin?: unknown;
   /** Inline sub-fields of a group/repeater field, if any. */
   fields?: SensitiveFieldSource[];
-  /** Block definitions of a blocks field; each carries its own `fields`. */
-  blocks?: { fields?: SensitiveFieldSource[] }[];
+  /**
+   * Whatever a field puts under `blocks`. Narrowed at runtime for the same
+   * reason `admin` is: a blocks field declares which registered block types it
+   * accepts (an object), while a field that inlines block definitions carries
+   * an array of them, and no structural annotation accepts both without a cast
+   * at the call site.
+   *
+   * A Nextly blocks field contributes no static paths either way — its values
+   * are block props, declared on the block type rather than on the field, so
+   * nothing here can know them. Those are stripped at the document level, not
+   * by walking the field tree.
+   */
+  blocks?: unknown;
 }
 
 /**
@@ -83,8 +94,20 @@ export function sensitiveFieldPaths(
       if (Array.isArray(field.fields)) walk(field.fields, path, childHidden);
       if (Array.isArray(field.blocks)) {
         for (const block of field.blocks) {
-          if (Array.isArray(block.fields))
-            walk(block.fields, path, childHidden);
+          if (typeof block !== "object" || block === null) continue;
+          const nested = (block as { fields?: unknown }).fields;
+          if (!Array.isArray(nested)) continue;
+          // Each element is checked before it is walked: this tree comes from
+          // stored schema data, and one malformed entry must not stop the
+          // sensitive-path scan that decides what a webhook may reveal.
+          walk(
+            nested.filter(
+              (entry): entry is SensitiveFieldSource =>
+                typeof entry === "object" && entry !== null
+            ),
+            path,
+            childHidden
+          );
         }
       }
     }

@@ -131,12 +131,12 @@ describe("FORM_FIELD_TYPE_CATALOG", () => {
 });
 
 describe("BLOCK_FIELD_TYPE_CATALOG", () => {
-  it("is the canonical catalog minus password and component", () => {
+  it("is the canonical catalog minus password, component, and blocks", () => {
     const types = BLOCK_FIELD_TYPE_CATALOG.map(entry => entry.type);
     expect(new Set(types).size).toBe(types.length);
     expect([...types].sort()).toEqual(
       ALL_FIELD_TYPES.filter(
-        type => type !== "password" && type !== "component"
+        type => type !== "password" && type !== "component" && type !== "blocks"
       ).sort()
     );
   });
@@ -154,6 +154,16 @@ describe("BLOCK_FIELD_TYPE_CATALOG", () => {
         (BLOCK_FIELD_TYPES as readonly string[]).includes(type)
       )
     );
+  });
+
+  it("keeps the blocks field out of the block-prop surface", () => {
+    // A prop holding a whole nested document is what slots already express.
+    expect(isBlockFieldType("blocks")).toBe(false);
+    expect(
+      BLOCK_FIELD_TYPE_CATALOG.some(entry => entry.type === "blocks")
+    ).toBe(false);
+    // It is still a real field type, describable by the canonical catalog.
+    expect(getFieldTypeCatalogEntry("blocks")?.category).toBe("Structured");
   });
 
   it("recognizes block prop types and rejects everything else", () => {

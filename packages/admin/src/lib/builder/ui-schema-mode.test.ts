@@ -29,6 +29,8 @@ describe("UI_SCHEMA_FIELD_TYPES", () => {
         "password",
         "radio",
         "repeater",
+        // a page built from blocks
+        "blocks",
       ].sort()
     );
   });

@@ -83,20 +83,38 @@ async function resolveOnce(
   return resolved;
 }
 
+/**
+ * Expand component references inside inlined block definitions.
+ *
+ * `blocks` is only walked when it is an array of definitions carrying their
+ * own fields. A Nextly blocks field puts an options object there naming the
+ * registered block types it accepts, which holds no fields to expand, so it
+ * passes through untouched.
+ */
 async function expandBlocks(
   blocks: SensitiveFieldSource["blocks"],
   resolve: ComponentFieldResolver,
   seen: ReadonlySet<string>,
   cache: ResolutionCache
 ): Promise<SensitiveFieldSource["blocks"]> {
-  if (!blocks) return blocks;
+  if (!Array.isArray(blocks)) return blocks;
   return Promise.all(
-    blocks.map(async block => ({
-      ...block,
-      fields: block.fields
-        ? await expandComponentFields(block.fields, resolve, seen, cache)
-        : block.fields,
-    }))
+    blocks.map(async entry => {
+      // Untrusted shape: only an object carrying an array of object fields is
+      // walked, so a malformed entry passes through instead of crashing the
+      // webhook payload build.
+      if (typeof entry !== "object" || entry === null) return entry;
+      const nested = (entry as { fields?: unknown }).fields;
+      if (!Array.isArray(nested)) return entry;
+      const fields = nested.filter(
+        (field): field is SensitiveFieldSource =>
+          typeof field === "object" && field !== null
+      );
+      return {
+        ...(entry as object),
+        fields: await expandComponentFields(fields, resolve, seen, cache),
+      };
+    })
   );
 }
 

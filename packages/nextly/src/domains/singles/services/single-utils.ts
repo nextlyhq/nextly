@@ -15,7 +15,11 @@
  * @since 1.0.0
  */
 
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
+
+import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { validateBlocksValue } from "../../../collections/fields/validators/blocks-validator";
 import { NextlyError } from "../../../errors";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import type { Logger } from "../../../shared/types";
@@ -58,7 +62,11 @@ export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
  * Mirrors the logic in RuntimeSchemaGenerator to ensure consistent handling.
  */
 export function shouldTreatAsJson(field: FieldConfig): boolean {
-  if (["json", "repeater", "group", "richText", "chips"].includes(field.type)) {
+  if (
+    ["json", "repeater", "group", "richText", "chips", "blocks"].includes(
+      field.type
+    )
+  ) {
     return true;
   }
 
@@ -92,6 +100,55 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
   return false;
 }
 
+/** The subset of a blocks field's policy the value validator reads. */
+type BlocksPolicy = { allow?: string[]; kinds?: DocumentKind[] };
+
+/**
+ * Rejects a blocks default the field's own policy would not accept.
+ *
+ * A single is auto-created on first read by inserting its defaults directly,
+ * so this value never passes through the write path that validates ordinary
+ * writes. A static default is already caught when the config loads, but a
+ * function default produces its value only when resolved against real data,
+ * which first happens here. Left unchecked it would be persisted, and the
+ * admin's blocks control is read-only, so the row could not then be repaired
+ * from the UI.
+ */
+export function assertValidBlocksDefault(
+  field: FieldConfig,
+  value: unknown,
+  singleSlug: string
+): void {
+  if (field.type !== "blocks") return;
+  // `validateBlocksValue` treats an absent value as an empty field and leaves
+  // requiredness to the shared rules, which this path never reaches: the row
+  // is inserted straight from these defaults. A required column would take the
+  // null and fail at the database, reporting a constraint rather than the
+  // configuration that caused it.
+  if (value === null || value === undefined) {
+    if (!("required" in field && field.required)) return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: field.name,
+          code: "REQUIRED",
+          message: `${field.name} is required, but its default produced no document.`,
+        },
+      ],
+      logContext: { single: singleSlug, field: field.name, reason: "default" },
+    });
+  }
+  const policy = (field as { blocks?: BlocksPolicy }).blocks ?? {};
+  const issues = validateBlocksValue(value, field.name, field.name, policy);
+  if (issues.length === 0) return;
+  // The engine's own issue codes are carried through unchanged, so one defect
+  // keeps one name wherever it surfaces.
+  throw NextlyError.validation({
+    errors: issues,
+    logContext: { single: singleSlug, field: field.name, reason: "default" },
+  });
+}
+
 /**
  * Get a type-appropriate default value for a field type.
  * Used when a required field has no explicit defaultValue.
@@ -99,6 +156,14 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
 export function getDefaultValue(field: FieldConfig): unknown {
   if (field.type === "richText") {
     return EMPTY_LEXICAL_DOCUMENT;
+  }
+
+  if (field.type === "blocks") {
+    // The kind is read from the field's own policy: seeding a page document
+    // into a field that only accepts templates would violate its own rule.
+    const kinds = (field as { blocks?: { kinds?: DocumentKind[] } }).blocks
+      ?.kinds;
+    return emptyBlockDocumentJson(kinds);
   }
 
   if (shouldTreatAsJson(field)) {

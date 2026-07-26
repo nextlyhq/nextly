@@ -874,6 +874,9 @@ importers:
       '@nextlyhq/adapter-drizzle':
         specifier: workspace:*
         version: link:../adapter-drizzle
+      '@nextlyhq/blocks-engine':
+        specifier: workspace:*
+        version: link:../blocks-engine
       bcryptjs:
         specifier: ^3.0.2
         version: 3.0.2

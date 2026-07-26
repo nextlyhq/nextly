@@ -33,7 +33,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
-import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
+import type {
+  RepeaterFieldConfig,
+  FieldConfig,
+  DocumentKind,
+} from "nextly/config";
+import { emptyBlockDocument } from "nextly/config";
 import { useCallback, useState } from "react";
 import {
   useFieldArray,
@@ -152,6 +157,19 @@ function createDefaultRowValues(
         case "repeater":
           defaultValues[fieldName] = [];
           break;
+        case "blocks": {
+          // The blocks control is read-only, so a required nested field left
+          // null could never be filled in — the row would be unsubmittable
+          // the moment it is added.
+          const blocksField = subField as {
+            required?: boolean;
+            blocks?: { kinds?: DocumentKind[] };
+          };
+          defaultValues[fieldName] = blocksField.required
+            ? emptyBlockDocument(blocksField.blocks?.kinds)
+            : null;
+          break;
+        }
         case "group":
           // Recursively create defaults for group fields
           if ("fields" in subField) {
