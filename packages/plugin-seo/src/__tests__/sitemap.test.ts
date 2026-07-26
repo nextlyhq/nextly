@@ -142,6 +142,22 @@ describe("buildSitemapUrls", () => {
     expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
   });
 
+  it("treats a scheme mismatch as a different origin and drops the entry", async () => {
+    // Same host but http vs https is a distinct URL to a crawler.
+    const services = stubServices({
+      posts: [
+        [{ slug: "a", seo: { canonical: "http://x.com/a" } }, { slug: "b" }],
+      ],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
+  });
+
   it("honors a urlFor exclusion even when the entry has a canonical", async () => {
     const services = stubServices({
       posts: [[{ slug: "drop", seo: { canonical: "https://x.com/keep" } }]],

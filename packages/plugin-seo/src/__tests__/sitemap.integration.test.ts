@@ -48,13 +48,17 @@ afterEach(async () => {
 
 async function fetchSitemap(
   host = "localhost"
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; cacheControl: string | null }> {
   const handlers = createDynamicHandlers();
   const res = await handlers.GET(
     new Request(`http://${host}/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`),
     { params: Promise.resolve({ params: SITEMAP_PARAMS }) }
   );
-  return { status: res.status, body: await res.text() };
+  return {
+    status: res.status,
+    body: await res.text(),
+    cacheControl: res.headers.get("cache-control"),
+  };
 }
 
 /** A probe plugin that captures the real `ctx.services` for provider tests. */
@@ -117,13 +121,15 @@ describe("seo sitemap route (integration)", () => {
       },
     });
 
-    const { status, body } = await fetchSitemap();
+    const { status, body, cacheControl } = await fetchSitemap();
 
     expect(status).toBe(200);
     expect(body).toContain(`<loc>${base}/pages/published</loc>`);
     // A draft is not public, and a noindexed page must not be advertised.
     expect(body).not.toContain("/pages/draft");
     expect(body).not.toContain("/pages/hidden");
+    // A configured baseUrl yields a stable, cacheable document.
+    expect(cacheControl).not.toBe("no-store");
   });
 
   it("reflects a newly published entry (uncached data provider)", async () => {
@@ -266,7 +272,9 @@ describe("seo sitemap route (integration)", () => {
       data: { slug: "home", title: "H", status: "published" },
     });
 
-    const { body } = await fetchSitemap(host);
+    const { body, cacheControl } = await fetchSitemap(host);
     expect(body).toContain(`<loc>http://${host}/pages/home</loc>`);
+    // A request-derived origin is spoofable, so the response is uncacheable.
+    expect(cacheControl).toBe("no-store");
   });
 });

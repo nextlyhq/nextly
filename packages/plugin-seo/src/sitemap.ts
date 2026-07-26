@@ -168,13 +168,15 @@ export async function buildSitemapUrls(
       : MAX_PAGE_SIZE;
   // Trim a trailing slash so `${baseUrl}${"/path"}` never yields `//path`.
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
-  // The sitemap's own host — a `<loc>` must live on it, so a canonical on a
-  // different host is dropped rather than mixed in.
-  let baseHost = "";
+  // The sitemap's own origin (scheme + host + port) — a `<loc>` must live on it,
+  // so a canonical on a different origin is dropped rather than mixed in.
+  // Compare origins, not hosts: `http://x.com` and `https://x.com` are distinct
+  // URLs to a crawler.
+  let baseOrigin = "";
   try {
-    baseHost = new URL(baseUrl).host;
+    baseOrigin = new URL(baseUrl).origin;
   } catch {
-    baseHost = "";
+    baseOrigin = "";
   }
   const urls: SitemapUrl[] = [];
 
@@ -235,7 +237,7 @@ export async function buildSitemapUrls(
             const resolved = new URL(canonical, baseUrl);
             const isHttp =
               resolved.protocol === "http:" || resolved.protocol === "https:";
-            if (isHttp && resolved.host === baseHost) {
+            if (isHttp && resolved.origin === baseOrigin) {
               loc = resolved.href;
             } else if (isHttp) {
               offHost = true;

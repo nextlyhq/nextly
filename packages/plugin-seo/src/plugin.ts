@@ -139,15 +139,23 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           // A single-origin deployment can rely on the request origin; a
           // proxied one must configure `baseUrl` so `<loc>` uses the public
           // host rather than the internal one.
-          const baseUrl = options.baseUrl ?? new URL(req.url).origin;
+          const configuredBaseUrl = options.baseUrl;
+          const baseUrl = configuredBaseUrl ?? new URL(req.url).origin;
           const xml = await generateSitemap(ctx.services, {
             collections: sitemapTargets,
             baseUrl,
             urlFor: options.urlFor,
           });
-          return new Response(xml, {
-            headers: { "content-type": "application/xml; charset=utf-8" },
-          });
+          const headers: Record<string, string> = {
+            "content-type": "application/xml; charset=utf-8",
+          };
+          if (!configuredBaseUrl) {
+            // The origin came from the (spoofable) request Host — keep an
+            // intermediary from caching a host-derived document and serving it
+            // for a different host. Configure `baseUrl` for a cacheable sitemap.
+            headers["cache-control"] = "no-store";
+          }
+          return new Response(xml, { headers });
         },
       },
     ];
