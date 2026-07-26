@@ -30,6 +30,11 @@
  * @module domains/webhooks/recording-activation
  */
 
+import {
+  isWebhookRecordingEnabled,
+  type WebhookRecordingScope,
+} from "./recording-policy";
+
 /**
  * How long a primed presence value is trusted before a stale read schedules a
  * background reload. Matches the endpoint registry TTL so a cross-process
@@ -47,6 +52,8 @@ interface ActivationState {
   presenceAtMs: number;
   refresher: EndpointPresenceRefresher | null;
   refreshing: boolean;
+  /** A refresh was requested while one was in flight; run once more after it. */
+  refreshPending: boolean;
   now: () => number;
 }
 
@@ -60,6 +67,7 @@ if (!globalForActivation.__nextly_webhookActivation) {
     presenceAtMs: 0,
     refresher: null,
     refreshing: false,
+    refreshPending: false,
     now: () => Date.now(),
   };
 }
@@ -105,15 +113,33 @@ export function setActivationClock(now: () => number): void {
 
 async function runRefresh(): Promise<void> {
   const refresher = state.refresher;
-  if (refresher === null || state.refreshing) return;
+  if (refresher === null) return;
+  // Coalesce: a refresh requested while one is in flight (e.g. endpoint CRUD
+  // during the boot/TTL refresh) must not be discarded, or the in-flight read
+  // could commit a pre-mutation result after the change. Mark it pending so the
+  // active refresh runs once more and picks up the newest state.
+  if (state.refreshing) {
+    state.refreshPending = true;
+    return;
+  }
   state.refreshing = true;
   try {
-    const present = await refresher();
-    state.endpointsPresent = present;
-    state.presenceAtMs = state.now();
+    do {
+      state.refreshPending = false;
+      const present = await refresher();
+      state.endpointsPresent = present;
+      state.presenceAtMs = state.now();
+    } while (state.refreshPending);
   } catch {
-    // Leave the last value in place; a transient read failure must not flip the
-    // flag. If it was never primed it stays `null` (fail open).
+    // A failed read must not pin a stale value. Keep a known-POSITIVE value (a
+    // transient blip should not disable delivery), but drop a negative/unknown
+    // value to `null` so the next read fails open and retries — otherwise a
+    // cross-process endpoint create whose refresh failed would keep dropping
+    // events irreversibly.
+    if (state.endpointsPresent !== true) {
+      state.endpointsPresent = null;
+    }
+    state.refreshPending = false;
   } finally {
     state.refreshing = false;
   }
@@ -150,6 +176,33 @@ export function endpointsPresent(): boolean {
   return present;
 }
 
+/**
+ * Whether a write to this collection/single would be recorded — the full gate,
+ * read synchronously: the per-entity opt-out AND (audit OR endpoint presence).
+ * Write paths call this BEFORE assembling a webhook payload so a gated-off write
+ * skips component expansion and document assembly (and cannot abort the content
+ * write on a webhook-only read). The recording choke point re-checks the same
+ * inputs, so a change between prep and record only costs a discarded payload.
+ */
+export function isOutboxRecordingActive(
+  scope: WebhookRecordingScope,
+  slug: string
+): boolean {
+  return (
+    isWebhookRecordingEnabled(scope, slug) &&
+    (state.auditEnabled || endpointsPresent())
+  );
+}
+
+/**
+ * Whether an UNSCOPED resource (media, user — no per-entity opt-out) would be
+ * recorded: audit OR endpoint presence. For gating post-write webhook work
+ * (e.g. a media fast-drain) on a path that cannot thread the recorder's boolean.
+ */
+export function isUnscopedRecordingActive(): boolean {
+  return state.auditEnabled || endpointsPresent();
+}
+
 /** Clear activation state (boot/test reset). */
 export function resetWebhookActivation(): void {
   state.auditEnabled = false;
@@ -157,5 +210,6 @@ export function resetWebhookActivation(): void {
   state.presenceAtMs = 0;
   state.refresher = null;
   state.refreshing = false;
+  state.refreshPending = false;
   state.now = () => Date.now();
 }

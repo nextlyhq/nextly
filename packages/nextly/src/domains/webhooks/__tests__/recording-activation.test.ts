@@ -87,13 +87,49 @@ describe("endpoint presence flag", () => {
     expect(endpointsPresent()).toBe(true);
   });
 
-  it("keeps the last known value when a refresh throws", async () => {
+  it("keeps a known-positive value when a refresh throws (a blip must not disable delivery)", async () => {
     const refresher = vi.fn().mockResolvedValue(true);
     setEndpointPresenceRefresher(refresher);
     await refreshEndpointPresence();
 
     refresher.mockRejectedValue(new Error("db down"));
     await refreshEndpointPresence();
+    expect(endpointsPresent()).toBe(true);
+  });
+
+  it("drops a cached negative to fail-open when its refresh fails", async () => {
+    const refresher = vi.fn().mockResolvedValue(false);
+    setEndpointPresenceRefresher(refresher);
+    await refreshEndpointPresence();
+    expect(endpointsPresent()).toBe(false);
+
+    // A cross-process endpoint create whose presence re-read fails must not keep
+    // dropping events on a stale `false`; the unknown state fails open.
+    refresher.mockRejectedValue(new Error("db down"));
+    await refreshEndpointPresence();
+    expect(endpointsPresent()).toBe(true);
+  });
+
+  it("coalesces a refresh requested while one is in flight", async () => {
+    const resolvers: Array<(v: boolean) => void> = [];
+    const refresher = vi.fn(
+      () => new Promise<boolean>(res => resolvers.push(res))
+    );
+    setEndpointPresenceRefresher(refresher);
+
+    const first = refreshEndpointPresence();
+    // Requested during the in-flight refresh (e.g. endpoint CRUD): must not be
+    // discarded, so the active refresh runs once more afterward.
+    const second = refreshEndpointPresence();
+    expect(refresher).toHaveBeenCalledTimes(1);
+
+    resolvers[0](false);
+    await flush();
+    expect(refresher).toHaveBeenCalledTimes(2);
+
+    resolvers[1](true);
+    await first;
+    await second;
     expect(endpointsPresent()).toBe(true);
   });
 
