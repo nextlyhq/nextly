@@ -656,12 +656,20 @@ export interface WebhookConfig {
   /**
    * How long recorded events and delivery attempts are kept.
    *
-   * Enabled by default. A row is appended to the event ledger on every content
-   * write, whether or not this install uses webhooks at all, so leaving it
-   * unbounded would tax people who never opted in. `false` keeps everything
-   * forever and accepts that growth.
+   * Enabled by default. Events are recorded only when the install has an enabled
+   * endpoint (or the audit seam is on), so an install with no webhooks writes
+   * nothing to bound; when recording is active, this limits how long the rows
+   * are kept. `false` keeps everything forever and accepts that growth.
    */
   retention?: WebhookRetentionConfig | false;
+
+  /**
+   * Force-record every content event to the outbox even when no webhook
+   * endpoint is configured. Off by default: with no endpoints and this off,
+   * writes record nothing. The org-wide audit log turns this on so it captures
+   * events regardless of delivery subscriptions.
+   */
+  audit?: boolean;
 }
 
 /**
@@ -737,6 +745,12 @@ export interface SanitizedNextlyConfig {
    * Always present after sanitization so consumers never re-resolve it.
    */
   webhookRetention: ResolvedWebhookRetentionConfig | null;
+
+  /**
+   * Whether the audit seam forces outbox recording regardless of endpoints.
+   * Always present after sanitization; defaults to false.
+   */
+  webhookAuditEnabled: boolean;
 }
 
 // ============================================================
@@ -908,5 +922,8 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.
     webhookRetention: resolveWebhookRetentionConfig(config.webhooks?.retention),
+    // Off unless explicitly enabled; the org-wide audit log flips this to keep
+    // recording events when an install has no delivery endpoints.
+    webhookAuditEnabled: config.webhooks?.audit ?? false,
   };
 }

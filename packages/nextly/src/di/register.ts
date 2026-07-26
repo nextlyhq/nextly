@@ -269,6 +269,12 @@ export interface NextlyServiceConfig {
    * retention off; absent when this container was built without app config.
    */
   webhookRetention?: ResolvedWebhookRetentionConfig | null;
+
+  /**
+   * Whether the audit seam forces outbox recording regardless of endpoints.
+   * Carried from the sanitized config; absent when built without app config.
+   */
+  webhookAuditEnabled?: boolean;
 }
 
 // ============================================================
