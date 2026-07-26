@@ -15,8 +15,9 @@
  * @since 1.0.0
  */
 
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
 
+import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -99,18 +100,6 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
 }
 
 /**
- * An empty page document. The generic `"{}"` every other JSON type gets is not
- * a document — it has no `formatVersion`, `kind`, or `nodes` — so a single
- * auto-created with a required blocks field would hold a value its own
- * validator rejects.
- */
-export const EMPTY_PAGE_DOCUMENT: string = JSON.stringify({
-  formatVersion: DOCUMENT_FORMAT_VERSION,
-  kind: "page",
-  nodes: [],
-});
-
-/**
  * Get a type-appropriate default value for a field type.
  * Used when a required field has no explicit defaultValue.
  */
@@ -120,7 +109,11 @@ export function getDefaultValue(field: FieldConfig): unknown {
   }
 
   if (field.type === "blocks") {
-    return EMPTY_PAGE_DOCUMENT;
+    // The kind is read from the field's own policy: seeding a page document
+    // into a field that only accepts templates would violate its own rule.
+    const kinds = (field as { blocks?: { kinds?: DocumentKind[] } }).blocks
+      ?.kinds;
+    return emptyBlockDocumentJson(kinds);
   }
 
   if (shouldTreatAsJson(field)) {

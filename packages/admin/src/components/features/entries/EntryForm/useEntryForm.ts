@@ -12,7 +12,8 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { FieldConfig } from "nextly/config";
+import type { DocumentKind, FieldConfig } from "nextly/config";
+import { emptyBlockDocument } from "nextly/config";
 import { useMemo, useCallback, useEffect } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
@@ -450,13 +451,24 @@ function getDefaultValues(
           (field as { defaultValue?: unknown }).defaultValue ?? null;
         break;
 
-      case "blocks":
+      case "blocks": {
         // The form control for a blocks field is read-only, so a declared
-        // default that was dropped here could not be restored by hand — and a
-        // required field would fail validation despite having a valid default.
+        // default that was dropped here could not be restored by hand. A
+        // required field with no default gets an empty document rather than
+        // null, or the entry could never be created — and creating it is how
+        // the user reaches the builder to fill it in.
+        const blocksField = field as {
+          defaultValue?: unknown;
+          required?: boolean;
+          blocks?: { kinds?: DocumentKind[] };
+        };
         defaults[fieldName] =
-          (field as { defaultValue?: unknown }).defaultValue ?? null;
+          blocksField.defaultValue ??
+          (blocksField.required
+            ? emptyBlockDocument(blocksField.blocks?.kinds)
+            : null);
         break;
+      }
 
       case "component": {
         // Component fields: get nested defaults from componentFields

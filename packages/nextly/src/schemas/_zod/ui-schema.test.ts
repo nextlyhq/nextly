@@ -102,6 +102,46 @@ describe("parseUiSchema — blocks fields", () => {
     }
   });
 
+  it("rejects a default whose nodes are malformed", () => {
+    // An envelope check alone would pass this, and the read-only control
+    // leaves the user no way to repair what it seeds.
+    for (const nodes of [[null], [42], [{ id: "" }], [{ type: "core/x" }]]) {
+      expect(
+        parseUiSchema(
+          withBlocks({
+            name: "content",
+            type: "blocks",
+            defaultValue: { formatVersion: 1, kind: "page", nodes },
+          })
+        ).success,
+        JSON.stringify(nodes)
+      ).toBe(false);
+    }
+  });
+
+  it("accepts a default whose nodes are well formed", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          defaultValue: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                type: "core/heading",
+                version: 1,
+                props: {},
+              },
+            ],
+          },
+        })
+      ).success
+    ).toBe(true);
+  });
+
   it("accepts a document as a blocks default", () => {
     expect(
       parseUiSchema(

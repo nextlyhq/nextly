@@ -29,4 +29,29 @@ describe("getDefaultValue for a blocks field", () => {
     const seeded: unknown = JSON.parse(String(getDefaultValue(field)));
     expect(validateBlocksValue(seeded, "content", "Content", {})).toEqual([]);
   });
+
+  it("seeds a kind the field actually accepts", () => {
+    // Seeding a page document into a template-only field would put a value in
+    // the field that its own policy rejects.
+    const templateOnly = {
+      name: "content",
+      type: "blocks",
+      blocks: { kinds: ["template"] },
+    } as unknown as FieldConfig;
+    const seeded: unknown = JSON.parse(String(getDefaultValue(templateOnly)));
+    expect((seeded as { kind?: string }).kind).toBe("template");
+    expect(
+      validateBlocksValue(seeded, "content", "Content", { kinds: ["template"] })
+    ).toEqual([]);
+  });
+
+  it("prefers page when the field accepts several kinds", () => {
+    const many = {
+      name: "content",
+      type: "blocks",
+      blocks: { kinds: ["pattern", "page"] },
+    } as unknown as FieldConfig;
+    const seeded: unknown = JSON.parse(String(getDefaultValue(many)));
+    expect((seeded as { kind?: string }).kind).toBe("page");
+  });
 });

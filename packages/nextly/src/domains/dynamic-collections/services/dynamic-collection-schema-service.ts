@@ -22,6 +22,7 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { env } from "../../../shared/lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 
@@ -1046,6 +1047,10 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "repeater":
       case "group":
         return "'{}'";
+      case "blocks":
+        // A required blocks column needs a document, not an empty object: the
+        // generic `{}` has no formatVersion, kind, or nodes.
+        return `'${emptyBlockDocumentJson()}'`;
       case "chips":
         return "'[]'";
       case "relationship":
@@ -1087,7 +1092,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     }
 
     // Handle JSON (needs to be a quoted JSON string)
-    if (type === "json") {
+    if (type === "json" || type === "blocks") {
       return `'${typeof value === "string" ? value : JSON.stringify(value)}'`;
     }
 

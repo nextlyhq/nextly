@@ -840,7 +840,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return pgText(colName);
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
     }
 
@@ -892,7 +897,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return mysqlVarchar(colName, { length: 36 });
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
     }
 
@@ -939,7 +949,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return sqliteText(colName);
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
     }
 
@@ -999,7 +1014,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return `text('${colName}')`;
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return `jsonb('${colName}')`;
     }
     return `text('${colName}')`;
@@ -1040,7 +1060,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return `varchar('${colName}', { length: 36 })`;
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return `json('${colName}')`;
     }
     return `varchar('${colName}', { length: 255 })`;

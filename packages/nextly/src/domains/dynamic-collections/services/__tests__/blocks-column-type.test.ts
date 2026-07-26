@@ -49,6 +49,20 @@ describe("blocks column type", () => {
     }
   });
 
+  it("emits a JSON default a required column can actually take", () => {
+    // `JSONB NOT NULL DEFAULT ''` does not apply, and an object default
+    // stringified naively becomes [object Object].
+    for (const dialect of DIALECTS) {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const generated = service.formatDefaultValue(
+        { formatVersion: 1, kind: "page", nodes: [] },
+        "blocks"
+      );
+      expect(generated, dialect).toContain('"formatVersion"');
+      expect(generated, dialect).not.toContain("[object Object]");
+    }
+  });
+
   it("matches how json and chips are already mapped", () => {
     // A new JSON-backed type that diverged from its siblings would be a bug in
     // this map rather than a deliberate difference.

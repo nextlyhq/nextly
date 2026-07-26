@@ -149,3 +149,9 @@ export type {
   BlockNode,
   DocumentKind,
 } from "@nextlyhq/blocks-engine";
+
+// A starting document for a blocks field with no declared default.
+export {
+  emptyBlockDocument,
+  emptyBlockDocumentJson,
+} from "./collections/fields/blocks-document";

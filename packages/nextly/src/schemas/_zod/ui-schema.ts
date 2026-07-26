@@ -12,7 +12,11 @@
  * @module schemas/_zod/ui-schema
  * @since v0.0.3-alpha (Plan D1)
  */
-import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  DOCUMENT_KINDS,
+  validate as validateDocument,
+} from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 /**
@@ -43,11 +47,14 @@ export const UI_FIELD_TYPES = [
 ] as const;
 
 /**
- * Whether a value carries the document envelope every stored page has. The
- * node tree itself is validated on write by the engine; this is the shape a
- * schema author must get right for the default to be usable at all.
+ * Whether a value is a document the write path would accept.
+ *
+ * The envelope alone is not enough: a default carrying a malformed node passes
+ * a shape check, seeds the read-only control on a create form, and is then
+ * rejected on submit with nothing the user can do about it. So the engine's
+ * own validator decides, which is the same rule the write applies.
  */
-function isDocumentEnvelope(value: unknown): boolean {
+function isValidDocumentDefault(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
@@ -56,12 +63,19 @@ function isDocumentEnvelope(value: unknown): boolean {
     kind?: unknown;
     nodes?: unknown;
   };
-  return (
+  const envelopeOk =
     typeof doc.formatVersion === "number" &&
     typeof doc.kind === "string" &&
     (DOCUMENT_KINDS as readonly string[]).includes(doc.kind) &&
-    Array.isArray(doc.nodes)
-  );
+    Array.isArray(doc.nodes);
+  if (!envelopeOk) return false;
+  // Breakpoints are supplied by the page-builder plugin at write time, so a
+  // reference to one warns rather than errors here; only errors disqualify a
+  // default.
+  return !validateDocument(value as BlockDocument, {
+    breakpoints: { viewport: [], container: [] },
+    mode: "forgiving",
+  }).some(issue => issue.severity === "error");
 }
 
 /** Field names the framework reserves (system columns). */
@@ -350,7 +364,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           // object would let a malformed default seed the read-only control on
           // a create form, leaving a value the user cannot correct and the
           // write-time validator rejects.
-          (f.type === "blocks" && isDocumentEnvelope(dv)) ||
+          (f.type === "blocks" && isValidDocumentDefault(dv)) ||
           ([
             "text",
             "textarea",
