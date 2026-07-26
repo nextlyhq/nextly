@@ -173,6 +173,15 @@ export class WebhookEndpointRegistry {
     return this.getEnabledEndpoints();
   }
 
+  /**
+   * Whether any enabled endpoint exists, from the same cached list the drain
+   * reads (so this shares its invalidation and TTL). Used by the outbox
+   * recording gate to skip writing events no endpoint would receive.
+   */
+  async hasEnabledEndpoints(): Promise<boolean> {
+    return (await this.getEnabledEndpoints()).length > 0;
+  }
+
   private async load(): Promise<WebhookEndpoint[]> {
     const rows = await this.reader.select<Record<string, unknown>>(
       "nextly_webhooks",
