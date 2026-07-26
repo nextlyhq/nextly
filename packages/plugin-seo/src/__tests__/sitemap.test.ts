@@ -135,6 +135,20 @@ describe("buildSitemapUrls", () => {
     expect(urls[0].loc).toBe("https://x.com/about");
   });
 
+  it("ignores a non-http(s) canonical and falls back to the generated URL", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a", seo: { canonical: "mailto:hi@example.com" } }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    // A mailto: is not a crawlable location, so the generated URL wins.
+    expect(urls[0].loc).toBe("https://x.com/posts/a");
+  });
+
   it("does not filter by status on a status-less collection", async () => {
     // `notes` has no lifecycle: the read must carry NO status filter, so a
     // user-defined `status` field is never wrongly filtered.

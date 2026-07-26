@@ -216,7 +216,16 @@ export async function buildSitemapUrls(
         let loc: string | null = null;
         if (canonical) {
           try {
-            loc = new URL(canonical, baseUrl).href;
+            const resolved = new URL(canonical, baseUrl);
+            // Only http(s) URLs are crawlable sitemap locations — a syntactically
+            // valid `mailto:` / `javascript:` / `data:` value must not become a
+            // `<loc>`; fall through to the generated URL instead.
+            if (
+              resolved.protocol === "http:" ||
+              resolved.protocol === "https:"
+            ) {
+              loc = resolved.href;
+            }
           } catch {
             loc = null;
           }

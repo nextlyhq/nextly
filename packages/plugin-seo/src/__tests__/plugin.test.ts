@@ -66,6 +66,23 @@ describe("seoPlugin", () => {
     expect(seoGroup(plugin).fields).toBe(custom);
   });
 
+  it("serves the sitemap route by default", () => {
+    const plugin = seoPlugin({ collections: ["pages"] });
+    expect(plugin.contributes?.routes?.[0]).toMatchObject({
+      method: "GET",
+      path: "/sitemap.xml",
+      public: true,
+    });
+  });
+
+  it("omits the sitemap route when sitemap is disabled", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    // No public enumeration route when the sitemap is turned off.
+    expect(plugin.contributes?.routes).toBeUndefined();
+    // The SEO fields are still contributed.
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
+  });
+
   it("defaultSeoFields returns the inner seo fields", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",

@@ -1,9 +1,16 @@
 /**
  * The sitemap route serves published content as XML over the catch-all, proven
  * end-to-end against a real boot: a published entry appears, a draft and a
- * `noindex` entry do not, and publishing a draft makes it appear on the next
- * read. Drives the real `contributes.routes` handler through
- * `createDynamicHandlers` — the same path production serves.
+ * `noindex` entry do not, only the configured subset is enumerated, and the
+ * (uncached) data provider reflects a publish. Drives the real
+ * `contributes.routes` handler through `createDynamicHandlers` — the same path
+ * production serves.
+ *
+ * The route caches its output behind the collection tags (F1). Outside a Next
+ * request scope `revalidateTag` is a no-op, and `unstable_cache` keys by
+ * `keyParts` at process scope, so each test uses a DISTINCT `baseUrl` (part of
+ * the key) to avoid cross-boot cache bleed, and publish-freshness is checked
+ * against the uncached provider rather than the cached route.
  */
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
@@ -21,6 +28,11 @@ import { buildSitemapUrls, type SitemapServices } from "../sitemap";
 // plugin name `@nextlyhq/plugin-seo` is two segments (it contains a slash).
 const SITEMAP_PARAMS = ["plugins", "@nextlyhq", "plugin-seo", "sitemap.xml"];
 
+// A distinct origin per test so the route's F1 cache key (which includes the
+// baseUrl) never collides across boots in the same process.
+let seq = 0;
+const nextBase = (): string => `https://s${(seq += 1)}.example`;
+
 const pages = () =>
   defineCollection({
     slug: "pages",
@@ -37,15 +49,38 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function fetchSitemap(): Promise<{ status: number; body: string }> {
+async function fetchSitemap(
+  host = "localhost"
+): Promise<{ status: number; body: string }> {
   const handlers = createDynamicHandlers();
   const res = await handlers.GET(
-    new Request(
-      "http://localhost/api/plugins/@nextlyhq/plugin-seo/sitemap.xml"
-    ),
+    new Request(`http://${host}/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`),
     { params: Promise.resolve({ params: SITEMAP_PARAMS }) }
   );
   return { status: res.status, body: await res.text() };
+}
+
+/** A probe plugin that captures the real `ctx.services` for provider tests. */
+function captureServices(): {
+  probe: ReturnType<typeof definePlugin>;
+  get(): SitemapServices;
+} {
+  let captured: SitemapServices | undefined;
+  const probe = definePlugin({
+    name: "@test/sitemap-probe",
+    version: "0.0.0",
+    nextly: ">=0.0.0",
+    init(ctx) {
+      captured = ctx.services;
+    },
+  });
+  return {
+    probe,
+    get() {
+      if (!captured) throw new Error("probe did not capture ctx.services");
+      return captured;
+    },
+  };
 }
 
 describe("seo sitemap route (integration)", () => {
@@ -61,11 +96,10 @@ describe("seo sitemap route (integration)", () => {
   });
 
   it("serves published entries as XML and omits drafts + noindex", async () => {
+    const base = nextBase();
     current = await createTestNextly({
       collections: [pages()],
-      plugins: [
-        seoPlugin({ collections: ["pages"], baseUrl: "https://x.com" }),
-      ],
+      plugins: [seoPlugin({ collections: ["pages"], baseUrl: base })],
     });
 
     await current.nextly.create({
@@ -89,18 +123,17 @@ describe("seo sitemap route (integration)", () => {
     const { status, body } = await fetchSitemap();
 
     expect(status).toBe(200);
-    expect(body).toContain("<loc>https://x.com/pages/published</loc>");
+    expect(body).toContain(`<loc>${base}/pages/published</loc>`);
     // A draft is not public, and a noindexed page must not be advertised.
     expect(body).not.toContain("/pages/draft");
     expect(body).not.toContain("/pages/hidden");
   });
 
-  it("reflects a newly published entry on the next read", async () => {
+  it("reflects a newly published entry (uncached data provider)", async () => {
+    const probe = captureServices();
     current = await createTestNextly({
       collections: [pages()],
-      plugins: [
-        seoPlugin({ collections: ["pages"], baseUrl: "https://x.com" }),
-      ],
+      plugins: [seoPlugin({ collections: ["pages"] }), probe.probe],
     });
 
     const created = await current.nextly.create({
@@ -109,8 +142,16 @@ describe("seo sitemap route (integration)", () => {
     });
     const id = (created.item as { id: string }).id;
 
+    const build = () =>
+      buildSitemapUrls(probe.get(), {
+        collections: ["pages"],
+        baseUrl: "https://x.com",
+      });
+
     // Not yet published: absent from the sitemap.
-    expect((await fetchSitemap()).body).not.toContain("/pages/later");
+    expect((await build()).map(u => u.loc)).not.toContain(
+      "https://x.com/pages/later"
+    );
 
     await current.nextly.update({
       collection: "pages",
@@ -118,34 +159,21 @@ describe("seo sitemap route (integration)", () => {
       data: { status: "published" },
     });
 
-    // Published now: present on the next read (the published filter responds to
-    // the transition; F1 busts the tagged read in a Next runtime).
-    expect((await fetchSitemap()).body).toContain(
-      "<loc>https://x.com/pages/later</loc>"
+    // Published now: the published filter responds to the transition.
+    expect((await build()).map(u => u.loc)).toContain(
+      "https://x.com/pages/later"
     );
   });
 
   it("pages through every published entry against the real service", async () => {
-    // Capture the real `ctx.services` so the pagination loop runs against the
-    // actual managed facade (which pages by `page`, not `offset`). With a page
-    // size of one and three entries, an offset-advancing loop would re-read
-    // page one forever; a page-advancing loop collects all three and stops.
-    let captured: SitemapServices | undefined;
-    const probe = definePlugin({
-      name: "@test/sitemap-probe",
-      version: "0.0.0",
-      nextly: ">=0.0.0",
-      init(ctx) {
-        captured = ctx.services;
-      },
-    });
-
+    // Run the pagination loop against the actual managed facade (which pages by
+    // `page`, not `offset`). With a page size of one and three entries, an
+    // offset-advancing loop would re-read page one forever; a page-advancing
+    // loop collects all three and stops.
+    const probe = captureServices();
     current = await createTestNextly({
       collections: [pages()],
-      plugins: [
-        seoPlugin({ collections: ["pages"], baseUrl: "https://x.com" }),
-        probe,
-      ],
+      plugins: [seoPlugin({ collections: ["pages"] }), probe.probe],
     });
 
     for (const slug of ["a", "b", "c"]) {
@@ -155,10 +183,7 @@ describe("seo sitemap route (integration)", () => {
       });
     }
 
-    const services = captured;
-    if (!services) throw new Error("probe did not capture ctx.services");
-
-    const urls = await buildSitemapUrls(services, {
+    const urls = await buildSitemapUrls(probe.get(), {
       collections: ["pages"],
       baseUrl: "https://x.com",
       pageSize: 1,
@@ -173,7 +198,8 @@ describe("seo sitemap route (integration)", () => {
 
   it("lists every entry of a status-less collection (no unpublished state)", async () => {
     // A collection without `status: true` has no draft/published lifecycle, so
-    // the published filter is a no-op and every (live) entry is listed.
+    // the published filter is skipped and every (live) entry is listed.
+    const base = nextBase();
     const notes = () =>
       defineCollection({
         slug: "notes",
@@ -182,9 +208,7 @@ describe("seo sitemap route (integration)", () => {
 
     current = await createTestNextly({
       collections: [notes()],
-      plugins: [
-        seoPlugin({ collections: ["notes"], baseUrl: "https://x.com" }),
-      ],
+      plugins: [seoPlugin({ collections: ["notes"], baseUrl: base })],
     });
 
     await current.nextly.create({
@@ -192,22 +216,49 @@ describe("seo sitemap route (integration)", () => {
       data: { slug: "one", title: "One" },
     });
 
-    const handlers = createDynamicHandlers();
-    const res = await handlers.GET(
-      new Request(
-        "http://localhost/api/plugins/@nextlyhq/plugin-seo/sitemap.xml"
-      ),
-      {
-        params: Promise.resolve({
-          params: ["plugins", "@nextlyhq", "plugin-seo", "sitemap.xml"],
-        }),
-      }
+    expect((await fetchSitemap()).body).toContain(
+      `<loc>${base}/notes/one</loc>`
     );
+  });
 
-    expect(await res.text()).toContain("<loc>https://x.com/notes/one</loc>");
+  it("advertises only the sitemap subset, keeping a private collection out", async () => {
+    const base = nextBase();
+    const posts = () =>
+      defineCollection({
+        slug: "posts",
+        status: true,
+        fields: [text({ name: "slug" }), text({ name: "title" })],
+      });
+
+    current = await createTestNextly({
+      collections: [pages(), posts()],
+      plugins: [
+        // Both collections get SEO fields, but only `posts` is enumerated.
+        seoPlugin({
+          collections: ["pages", "posts"],
+          baseUrl: base,
+          sitemap: { collections: ["posts"] },
+        }),
+      ],
+    });
+
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "secret", title: "S", status: "published" },
+    });
+    await current.nextly.create({
+      collection: "posts",
+      data: { slug: "hello", title: "H", status: "published" },
+    });
+
+    const { body } = await fetchSitemap();
+    expect(body).toContain(`<loc>${base}/posts/hello</loc>`);
+    expect(body).not.toContain("/pages/secret");
   });
 
   it("derives the origin from the request when baseUrl is not configured", async () => {
+    // Distinct host so the origin-derived cache key is unique to this test.
+    const host = `origin-${seq + 1}.test`;
     current = await createTestNextly({
       collections: [pages()],
       plugins: [seoPlugin({ collections: ["pages"] })],
@@ -218,7 +269,7 @@ describe("seo sitemap route (integration)", () => {
       data: { slug: "home", title: "H", status: "published" },
     });
 
-    const { body } = await fetchSitemap();
-    expect(body).toContain("<loc>http://localhost/pages/home</loc>");
+    const { body } = await fetchSitemap(host);
+    expect(body).toContain(`<loc>http://${host}/pages/home</loc>`);
   });
 });
