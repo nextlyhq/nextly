@@ -107,6 +107,19 @@ describe.each(surfaces)("$name blocks field validation", ({ codesFor }) => {
     expect(codesFor(withPolicy(["core/*"]))).toContain("FIELD_TYPE_INVALID");
   });
 
+  it("reports a malformed policy without crashing on the default", () => {
+    // Two problems at once must still produce the error list this validator
+    // exists to return, not a raw TypeError from the policy check.
+    const field = withPolicy({ allow: "core/*" });
+    field.defaultValue = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [node("core/heading")],
+    };
+    expect(() => codesFor(field)).not.toThrow();
+    expect(codesFor(field)).toContain("FIELD_TYPE_INVALID");
+  });
+
   it("rejects a default whose kind the field does not accept", () => {
     expect(
       codesFor(

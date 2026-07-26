@@ -442,6 +442,35 @@ export function validateBlocksPolicyShared(
   }
 }
 
+/**
+ * The parts of a declared blocks policy that are safe to enforce.
+ *
+ * A policy the config validator has already rejected must not also decide how
+ * a default is judged: the value checks index into `allow` and compare against
+ * `kinds`, so a wrong shape there throws rather than reports.
+ */
+function usablePolicy(blocks: unknown): {
+  allow?: string[];
+  kinds?: DocumentKind[];
+} {
+  if (typeof blocks !== "object" || blocks === null || Array.isArray(blocks)) {
+    return {};
+  }
+  const { allow, kinds } = blocks as { allow?: unknown; kinds?: unknown };
+  const policy: { allow?: string[]; kinds?: DocumentKind[] } = {};
+  if (Array.isArray(allow) && allow.every(e => typeof e === "string")) {
+    policy.allow = allow;
+  }
+  if (
+    Array.isArray(kinds) &&
+    kinds.length > 0 &&
+    kinds.every(k => (DOCUMENT_KINDS as readonly unknown[]).includes(k))
+  ) {
+    policy.kinds = kinds as DocumentKind[];
+  }
+  return policy;
+}
+
 export function validateBlocksDefaultShared(
   field: { type?: string; defaultValue?: unknown; blocks?: unknown },
   path: string,
@@ -454,10 +483,11 @@ export function validateBlocksDefaultShared(
   // is checked where it is resolved instead — for a single, before the
   // auto-created row is inserted.
   if (value === undefined || typeof value === "function") return;
-  const policy = (field.blocks ?? {}) as {
-    allow?: string[];
-    kinds?: DocumentKind[];
-  };
+  // Only the well-formed parts of the policy are forwarded. A malformed one is
+  // already reported by the policy check, and passing it on would reach
+  // `allow.some(...)` and throw — turning a config with two problems into a
+  // crash instead of the list of errors this validator exists to return.
+  const policy = usablePolicy(field.blocks);
   for (const issue of validateBlocksValue(
     value,
     `${path}.defaultValue`,

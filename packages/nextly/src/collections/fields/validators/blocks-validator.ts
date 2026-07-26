@@ -104,6 +104,7 @@ export function validateBlocksValue(
   // throw here and turn a rejected document into a server error.
   if (documentIssues.length === 0) {
     issues.push(...disallowedBlockIssues(doc, path, label, options));
+    issues.push(...unserializableIssues(doc, path, label));
   }
 
   if (issues.length <= MAX_REPORTED_ISSUES) return issues;
@@ -114,6 +115,54 @@ export function validateBlocksValue(
       path,
       code: "TOO_MANY_ISSUES",
       message: `${label} has ${withheld} further problem${withheld === 1 ? "" : "s"} not listed here.`,
+    },
+  ];
+}
+
+/**
+ * Whether every value in the document survives being stored.
+ *
+ * `BlockNode.props` is `Record<string, unknown>`, so a server-side or Direct
+ * API caller can put anything there. The column is JSON, and the write path
+ * stringifies the document on the way in: a bigint throws, while a function,
+ * a symbol, or a cycle is dropped or throws instead. Catching it here turns
+ * what would be a raw serializer error, or a document silently missing values
+ * the caller supplied, into an ordinary rejection naming the key.
+ */
+function unserializableIssues(
+  doc: BlockDocument,
+  path: string,
+  label: string
+): Issue[] {
+  const offending = new Set<string>();
+  try {
+    JSON.stringify(doc, (key, value: unknown) => {
+      const type = typeof value;
+      if (type === "bigint" || type === "function" || type === "symbol") {
+        offending.add(`${key || "(root)"} (${type})`);
+        // Replaced so the walk continues and reports every offending key
+        // rather than stopping at the first bigint.
+        return undefined;
+      }
+      return value;
+    });
+  } catch {
+    // A cycle is the remaining way stringify fails, and it has no single key
+    // to name.
+    return [
+      {
+        path,
+        code: "UNSERIALIZABLE_VALUE",
+        message: `${label} contains a circular reference and cannot be stored.`,
+      },
+    ];
+  }
+  if (offending.size === 0) return [];
+  return [
+    {
+      path,
+      code: "UNSERIALIZABLE_VALUE",
+      message: `${label} contains values that cannot be stored as JSON: ${[...offending].join(", ")}.`,
     },
   ];
 }
