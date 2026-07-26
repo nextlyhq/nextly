@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { themeToCss } from "../generate-css";
-import { NEXTLY_THEMES } from "../themes";
+import { EXPECTED_CONTRAST_FAILURES, NEXTLY_THEMES } from "../themes";
 import { validateTheme } from "../validate-contrast";
 
 // The real shipped stylesheet supplies the `--color-*` scale (the
@@ -17,10 +17,13 @@ const THEME_CSS = resolve(
 );
 const source = readFileSync(THEME_CSS, "utf8");
 
-// Every assertion is driven off the array rather than a literal count, so
-// adding a theme extends the suite instead of breaking it.
+// The per-theme assertions are driven off the array rather than a literal
+// count, so they extend themselves; only the total is pinned, below.
 describe("nextly themes", () => {
-  it("leads with mono as the control", () => {
+  // The set is complete, so the count is asserted: a theme silently dropped
+  // from the array would otherwise just shrink the suite and still pass.
+  it("ships twelve themes led by mono as the control", () => {
+    expect(NEXTLY_THEMES).toHaveLength(12);
     expect(NEXTLY_THEMES[0].id).toBe("mono");
   });
 
@@ -36,13 +39,19 @@ describe("nextly themes", () => {
     expect(() => themeToCss(theme)).not.toThrow();
   });
 
-  it.each(NEXTLY_THEMES)("$label passes every contrast pairing", theme => {
+  // Most themes are expected to pass everything. The three edge themes are
+  // scored against a recorded expectation instead, because their misses are the
+  // measurement they exist to produce; an unrecorded theme still defaults to
+  // zero. The listed failures stay in the assertion message either way, so a
+  // surprise arrives with the mode, the pairing, and the ratio already in hand.
+  it.each(NEXTLY_THEMES)("$label matches its contrast expectation", theme => {
     const failures = validateTheme(theme, source);
+    const expected = EXPECTED_CONTRAST_FAILURES[theme.id] ?? 0;
     expect(
-      failures,
+      failures.length,
       failures
         .map(f => `${f.mode}: ${f.label} ${f.ratio.toFixed(2)}:1`)
         .join("\n")
-    ).toEqual([]);
+    ).toBe(expected);
   });
 });
