@@ -44,6 +44,16 @@ export type {
 } from "nextly";
 
 /**
+ * Field authoring — the factories and `FieldConfig` type a plugin uses to build
+ * the fields it contributes (`contributes.collections` / `contributes.extend`).
+ * @public Exercised by `plugin-seo` (its `seo` field group). Field factories
+ *   graduate here as first-party plugins exercise them (D55); more can be added
+ *   the same way.
+ */
+export { text, textarea, checkbox, upload, group } from "nextly";
+export type { FieldConfig } from "nextly";
+
+/**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich
  * queries (filters/sort/pagination/relations via QueryOptions), `count`, and
  * `createMany`. Aggregations beyond `count` use the raw `ctx.db` escape hatch

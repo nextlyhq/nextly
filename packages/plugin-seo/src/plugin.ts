@@ -9,11 +9,12 @@
  */
 import { createRequire } from "node:module";
 
-import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
-// Field factory from the curated `nextly/config` surface, not the root barrel;
-// `FieldConfig` is type-only (erased at build).
-import type { FieldConfig } from "nextly";
-import { group } from "nextly/config";
+import {
+  definePlugin,
+  group,
+  type FieldConfig,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 
 import { defaultSeoFields } from "./fields";
 
