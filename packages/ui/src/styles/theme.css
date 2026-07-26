@@ -906,8 +906,10 @@
   --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
 
-  /* Elevation color for the dark theme. Same base as light mode; the inlined
-   * color-mix opacities (20-40% vs 4-10% in light) make shadows visible on
-   * dark surfaces without appearing as dirt. */
+  /* Elevation color for the dark theme, identical to the light-mode value.
+   * There is one --shadow-* ramp and it inlines a single set of color-mix
+   * opacities (4-10%) that both modes share, so this token is the only place
+   * elevation can be retuned: overriding it resolves the whole ramp to that
+   * hue. */
   --nx-shadow-color: oklch(0 0 0);
 }
