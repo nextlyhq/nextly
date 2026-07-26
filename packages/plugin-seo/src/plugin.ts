@@ -17,6 +17,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { defaultSeoFields } from "./fields";
+import { generateSitemap, type UrlForEntry } from "./sitemap";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -39,6 +40,20 @@ export interface SeoPluginOptions {
    * data from one predictable place.
    */
   fields?: FieldConfig[];
+  /**
+   * Absolute site origin used for `<loc>` in the generated sitemap
+   * (e.g. "https://example.com", no trailing slash). When omitted, the sitemap
+   * route derives the origin from the incoming request — correct for a
+   * single-origin deployment, but wrong behind a proxy that rewrites the host,
+   * so set it explicitly there.
+   */
+  baseUrl?: string;
+  /**
+   * Build the URL path for a sitemap entry (leading slash, appended to the
+   * origin). Defaults to `/<collection>/<slug>`. Override it to match your
+   * routing (e.g. posts served at `/blog/:slug`).
+   */
+  urlFor?: UrlForEntry;
 }
 
 /**
@@ -63,6 +78,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     fields: options.fields ?? defaultSeoFields(),
   });
 
+  // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
+  // twice (a duplicate-field error), and would list the same URLs twice in the
+  // sitemap. The extend targets and the sitemap collections are the same set.
+  const targets = [...new Set(options.collections)];
+
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
     version: PLUGIN_VERSION,
@@ -76,11 +96,31 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     category: "seo",
     tags: ["seo", "meta"],
     contributes: {
-      // Add the SEO group to each named collection. Dedupe the targets: a
-      // repeated slug would make the schema-extend fold add `seo` twice and
-      // throw a duplicate-field error.
-      extend: [
-        { target: [...new Set(options.collections)], fields: [seoGroup] },
+      // Add the SEO group to each named collection.
+      extend: [{ target: targets, fields: [seoGroup] }],
+      // Serve a sitemap of published entries over HTTP, mounted at
+      // /api/plugins/@nextlyhq/plugin-seo/sitemap.xml. Public so crawlers and
+      // headless frontends (which have no Next `app/sitemap.ts`) can read it.
+      routes: [
+        {
+          method: "GET",
+          path: "/sitemap.xml",
+          public: true,
+          handler: async (req, ctx) => {
+            // A single-origin deployment can rely on the request origin; a
+            // proxied one must configure `baseUrl` so `<loc>` uses the public
+            // host rather than the internal one.
+            const baseUrl = options.baseUrl ?? new URL(req.url).origin;
+            const xml = await generateSitemap(ctx.services, {
+              collections: targets,
+              baseUrl,
+              urlFor: options.urlFor,
+            });
+            return new Response(xml, {
+              headers: { "content-type": "application/xml; charset=utf-8" },
+            });
+          },
+        },
       ],
     },
   });

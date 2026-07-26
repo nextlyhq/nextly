@@ -1,0 +1,184 @@
+/**
+ * Sitemap generation for `@nextlyhq/plugin-seo`.
+ *
+ * Framework-agnostic (zero `next`): lists each configured collection's
+ * PUBLISHED entries through the managed service (as system — a sitemap is
+ * public derived data) and renders a sitemaps.org `<urlset>`. Pure given a
+ * services object, so it is unit-testable with a stub and integration-testable
+ * against a real boot.
+ *
+ * Caching lives in the delivery layer, not here: the `<loc>` set is derived
+ * from `status: published` content, which the F1 write path already busts on
+ * every create / update / publish / delete, so a cached read tagged with the
+ * collection tags refreshes on content changes without any bespoke cache.
+ *
+ * @module sitemap
+ */
+/**
+ * The minimal `listEntries` the sitemap builder calls — a structural slice of
+ * the managed collection service (`ctx.services.collections`). Declared
+ * explicitly (rather than `Pick<PluginCollectionService, ...>`) so a test can
+ * satisfy it with a plain stub, while the real, richer service stays assignable
+ * to it. Reads published rows as system; only the fields the sitemap consumes
+ * (`data` + `pagination.hasMore`) are named here.
+ */
+export interface SitemapServices {
+  collections: {
+    listEntries(
+      slug: string,
+      query: {
+        where?: Record<string, unknown>;
+        depth?: number;
+        pagination?: { limit?: number; offset?: number };
+      },
+      opts: { as: "system" }
+    ): Promise<{ data: unknown[]; pagination: { hasMore: boolean } }>;
+  };
+}
+
+/** One resolved sitemap URL. */
+export interface SitemapUrl {
+  /** Absolute location; XML-escaped at serialization time. */
+  loc: string;
+  /** ISO-8601 last-modified timestamp, when the entry carries one. */
+  lastModified?: string;
+}
+
+/**
+ * Build the URL path for an entry (leading slash, appended to the origin).
+ * Defaults to `/<collection>/<slug>`.
+ */
+export type UrlForEntry = (
+  entry: Record<string, unknown>,
+  collection: string
+) => string;
+
+/** Options for {@link buildSitemapUrls} / {@link generateSitemap}. */
+export interface SitemapOptions {
+  /** Collections whose published entries appear in the sitemap. */
+  collections: string[];
+  /**
+   * Absolute site origin for `<loc>` (e.g. "https://example.com"). A trailing
+   * slash is trimmed so a leading-slash path never produces a doubled `//`.
+   */
+  baseUrl: string;
+  /** Path builder; defaults to `/<collection>/<slug>`. */
+  urlFor?: UrlForEntry;
+  /** Page size for the paginated service reads (defaults to 1000). */
+  pageSize?: number;
+}
+
+/** Default path: `/<collection>/<slug>`. */
+export function defaultUrlForEntry(
+  entry: Record<string, unknown>,
+  collection: string
+): string {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  return `/${collection}/${slug}`;
+}
+
+/** XML-escape a text value for safe inclusion in an element body. */
+export function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/** Narrow an unknown row to an indexable object without asserting a type. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Normalize a stored timestamp to ISO-8601, or undefined when unusable. */
+function toLastModified(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    !(value instanceof Date)
+  ) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+const DEFAULT_PAGE_SIZE = 1000;
+
+/**
+ * List every configured collection's PUBLISHED entries and map them to sitemap
+ * URLs. Reads as system (a sitemap is public derived data), and pages through
+ * ALL matches — no silent cap — so a large collection is never truncated to a
+ * first-page slice. Entries flagged `seo.noindex` are excluded: a page told not
+ * to be indexed does not belong in the sitemap.
+ */
+export async function buildSitemapUrls(
+  services: SitemapServices,
+  options: SitemapOptions
+): Promise<SitemapUrl[]> {
+  const urlFor = options.urlFor ?? defaultUrlForEntry;
+  const pageSize =
+    options.pageSize && options.pageSize > 0
+      ? options.pageSize
+      : DEFAULT_PAGE_SIZE;
+  // Trim a trailing slash so `${baseUrl}${"/path"}` never yields `//path`.
+  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const urls: SitemapUrl[] = [];
+
+  for (const collection of options.collections) {
+    let offset = 0;
+    // Page until the service reports no more rows, so the whole published set
+    // is emitted rather than a first-page slice.
+    for (;;) {
+      const result = await services.collections.listEntries(
+        collection,
+        {
+          where: { status: { equals: "published" } },
+          depth: 0,
+          pagination: { limit: pageSize, offset },
+        },
+        { as: "system" }
+      );
+
+      for (const row of result.data) {
+        if (!isRecord(row)) continue;
+        const seo = isRecord(row.seo) ? row.seo : undefined;
+        // A noindexed page is intentionally kept out of the sitemap.
+        if (seo?.noindex === true) continue;
+        urls.push({
+          loc: `${baseUrl}${urlFor(row, collection)}`,
+          lastModified: toLastModified(row.updatedAt),
+        });
+      }
+
+      if (!result.pagination.hasMore) break;
+      offset += pageSize;
+    }
+  }
+
+  return urls;
+}
+
+/** Serialize resolved URLs into a sitemaps.org `<urlset>` document. */
+export function serializeSitemap(urls: SitemapUrl[]): string {
+  const body = urls
+    .map(({ loc, lastModified }) => {
+      const lastmod = lastModified
+        ? `<lastmod>${escapeXml(lastModified)}</lastmod>`
+        : "";
+      return `  <url><loc>${escapeXml(loc)}</loc>${lastmod}</url>`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>`;
+}
+
+/** Build the full sitemap XML for the configured collections. */
+export async function generateSitemap(
+  services: SitemapServices,
+  options: SitemapOptions
+): Promise<string> {
+  return serializeSitemap(await buildSitemapUrls(services, options));
+}

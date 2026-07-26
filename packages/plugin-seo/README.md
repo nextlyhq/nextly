@@ -4,7 +4,7 @@
 
 First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
-This package is **data-only** and framework-agnostic: it adds SEO fields to your content, nothing Next-specific, so it is safe in headless and admin-only projects. Turning those fields into `<meta>` tags, a sitemap, or routes is your app's job today; first-party Next.js helpers for that are planned as a separate, opt-in package.
+This package is **framework-agnostic** (zero `next`): it adds SEO fields to your content and serves a sitemap of your published content over plain HTTP, nothing Next-specific, so it is safe in headless and admin-only projects. Turning the SEO fields into `<meta>` tags and wiring a canonical `app/sitemap.ts` / `robots.ts` are your app's job today; first-party Next.js helpers for that are planned as a separate, opt-in package.
 
 ## Install
 
@@ -53,6 +53,31 @@ seoPlugin({
   fields: [text({ name: "focusKeyword" })],
 });
 ```
+
+## Sitemap
+
+The plugin serves a sitemap of your **published** entries — one `<url>` per entry across the named collections — at a public HTTP route:
+
+```
+GET /api/plugins/@nextlyhq/plugin-seo/sitemap.xml
+```
+
+It reads live content, so a publish or an edit is reflected on the next request. Drafts and any entry with `seo.noindex` set are left out.
+
+```ts
+seoPlugin({
+  collections: ["pages", "posts"],
+  // Absolute origin used for <loc>. When omitted, the route uses the request
+  // origin — correct for a single-origin deployment, wrong behind a host-
+  // rewriting proxy, so set it explicitly there.
+  baseUrl: "https://example.com",
+  // Path per entry (leading slash). Defaults to `/<collection>/<slug>`.
+  urlFor: (entry, collection) =>
+    collection === "posts" ? `/blog/${entry.slug}` : `/${entry.slug}`,
+});
+```
+
+A headless frontend can point crawlers at this URL (or proxy it to `/sitemap.xml`). An integrated Next.js app can also read the data through the planned Next helpers to serve the canonical `/sitemap.xml`.
 
 ## License
 

@@ -1,0 +1,203 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  buildSitemapUrls,
+  defaultUrlForEntry,
+  escapeXml,
+  generateSitemap,
+  serializeSitemap,
+  type SitemapServices,
+} from "../sitemap";
+
+/**
+ * A stub `listEntries` that returns fixed pages keyed by collection, so a test
+ * can assert the query passed AND the pagination loop, without a real boot.
+ */
+function stubServices(
+  pages: Record<string, Array<Record<string, unknown>[]>>,
+  spy?: ReturnType<typeof vi.fn>
+): SitemapServices {
+  return {
+    collections: {
+      async listEntries(slug, query, opts) {
+        spy?.(slug, query, opts);
+        const collectionPages = pages[slug] ?? [];
+        const limit = query.pagination?.limit ?? 1000;
+        const offset = query.pagination?.offset ?? 0;
+        const index = Math.floor(offset / limit);
+        const data = collectionPages[index] ?? [];
+        return {
+          data,
+          pagination: {
+            hasMore: index < collectionPages.length - 1,
+          },
+        };
+      },
+    },
+  };
+}
+
+describe("escapeXml", () => {
+  it("escapes all five XML entities", () => {
+    expect(escapeXml(`a & b < c > d " e ' f`)).toBe(
+      "a &amp; b &lt; c &gt; d &quot; e &apos; f"
+    );
+  });
+});
+
+describe("defaultUrlForEntry", () => {
+  it("builds /<collection>/<slug>", () => {
+    expect(defaultUrlForEntry({ slug: "hello" }, "posts")).toBe("/posts/hello");
+  });
+
+  it("tolerates a missing slug rather than emitting 'undefined'", () => {
+    expect(defaultUrlForEntry({}, "posts")).toBe("/posts/");
+  });
+});
+
+describe("buildSitemapUrls", () => {
+  it("reads only published entries, as system", async () => {
+    const spy = vi.fn();
+    const services = stubServices({ posts: [[{ slug: "a" }]] }, spy);
+
+    await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    const [, query, opts] = spy.mock.calls[0];
+    expect(query).toMatchObject({
+      where: { status: { equals: "published" } },
+    });
+    expect(opts).toEqual({ as: "system" });
+  });
+
+  it("maps entries to absolute loc + ISO lastModified", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a", updatedAt: "2026-01-02T03:04:05.000Z" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls).toEqual([
+      {
+        loc: "https://x.com/posts/a",
+        lastModified: "2026-01-02T03:04:05.000Z",
+      },
+    ]);
+  });
+
+  it("pages through every result rather than truncating at the first page", async () => {
+    // Two pages of two — a first-page-only read would drop c and d.
+    const services = stubServices({
+      posts: [
+        [{ slug: "a" }, { slug: "b" }],
+        [{ slug: "c" }, { slug: "d" }],
+      ],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      pageSize: 2,
+    });
+
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/posts/a",
+      "https://x.com/posts/b",
+      "https://x.com/posts/c",
+      "https://x.com/posts/d",
+    ]);
+  });
+
+  it("excludes entries flagged seo.noindex", async () => {
+    const services = stubServices({
+      posts: [
+        [
+          { slug: "keep" },
+          { slug: "hidden", seo: { noindex: true } },
+          { slug: "shown", seo: { noindex: false } },
+        ],
+      ],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/posts/keep",
+      "https://x.com/posts/shown",
+    ]);
+  });
+
+  it("honors a custom urlFor and multiple collections", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a" }]],
+      pages: [[{ slug: "about" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts", "pages"],
+      baseUrl: "https://x.com",
+      urlFor: (entry, collection) =>
+        collection === "posts" ? `/blog/${entry.slug}` : `/${entry.slug}`,
+    });
+
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/blog/a",
+      "https://x.com/about",
+    ]);
+  });
+
+  it("trims a trailing slash on baseUrl so paths never double up", async () => {
+    const services = stubServices({ posts: [[{ slug: "a" }]] });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com/",
+    });
+
+    expect(urls[0].loc).toBe("https://x.com/posts/a");
+  });
+});
+
+describe("serializeSitemap", () => {
+  it("wraps urls in a urlset and escapes the loc", () => {
+    const xml = serializeSitemap([
+      {
+        loc: "https://x.com/a?x=1&y=2",
+        lastModified: "2026-01-02T00:00:00.000Z",
+      },
+      { loc: "https://x.com/b" },
+    ]);
+
+    expect(xml).toContain(
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    );
+    // The ampersand in the query string must be escaped or the XML is invalid.
+    expect(xml).toContain(
+      "<loc>https://x.com/a?x=1&amp;y=2</loc><lastmod>2026-01-02T00:00:00.000Z</lastmod>"
+    );
+    // No lastmod element when the entry has no timestamp.
+    expect(xml).toContain("<loc>https://x.com/b</loc></url>");
+  });
+});
+
+describe("generateSitemap", () => {
+  it("composes build + serialize into a document", async () => {
+    const services = stubServices({ posts: [[{ slug: "a" }]] });
+
+    const xml = await generateSitemap(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);
+    expect(xml).toContain("<loc>https://x.com/posts/a</loc>");
+  });
+});
