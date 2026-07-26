@@ -42,6 +42,11 @@ describe("seoPlugin", () => {
     expect(seoGroup(plugin).name).toBe("seo");
   });
 
+  it("dedupes repeated collection slugs (a dup would double-add seo and throw)", () => {
+    const plugin = seoPlugin({ collections: ["pages", "pages", "posts"] });
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages", "posts"]);
+  });
+
   it("ships canonical + noindex in the default fields (edge over other plugins)", () => {
     expect(
       fieldNames(seoGroup(seoPlugin({ collections: ["pages"] })).fields)

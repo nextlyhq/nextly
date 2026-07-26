@@ -45,7 +45,7 @@ Entries expose the data nested under `seo` (e.g. `entry.seo.metaTitle`). Collect
 Override the fields inside the `seo` group when your project needs a different shape. Overrides stay nested under `seo` (so this lands at `entry.seo.focusKeyword`):
 
 ```ts
-import { text } from "nextly";
+import { text } from "@nextlyhq/plugin-sdk";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
 
 seoPlugin({

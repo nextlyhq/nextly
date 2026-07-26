@@ -76,8 +76,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     category: "seo",
     tags: ["seo", "meta"],
     contributes: {
-      // Add the SEO group to each named collection.
-      extend: [{ target: options.collections, fields: [seoGroup] }],
+      // Add the SEO group to each named collection. Dedupe the targets: a
+      // repeated slug would make the schema-extend fold add `seo` twice and
+      // throw a duplicate-field error.
+      extend: [
+        { target: [...new Set(options.collections)], fields: [seoGroup] },
+      ],
     },
   });
 }
