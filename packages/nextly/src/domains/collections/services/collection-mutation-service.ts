@@ -4140,16 +4140,19 @@ export class CollectionMutationService extends BaseService {
               const mainTo = (currentParent as { status?: unknown }).status as
                 | string
                 | undefined;
-              // On a LOCALIZED collection the companion `_status` is the
-              // authoritative per-locale status (the write locale's), and the
-              // main row only mirrors the default locale — which can drift from
-              // the default companion. So route every localized write through the
-              // per-locale branch below (default included) and use the main-row
-              // branch only for a NON-localized collection. This avoids both a
-              // duplicate default-locale event (main + companion) and a dropped
-              // one (main-row no-op while the companion actually transitioned).
+              // Route the event through the branch that actually holds the
+              // transition. A companion `_status` is written only for a STRING
+              // status on a localized write; when it is, it is the authoritative
+              // per-locale status (default included, since the main row can drift
+              // from the default companion), so the companion branch owns it and
+              // the main-row branch is skipped to avoid a duplicate. Otherwise —
+              // a non-localized collection, or a localized write whose status the
+              // DB coerced onto the main row without a companion write (e.g.
+              // `status: 0`) — the main row holds the transition, so use it.
+              const companionStatusWritten =
+                typeof localizedUpdate?.companionData._status === "string";
               const mainStatusRecorded =
-                collectionHasStatusLifecycle && !localizedUpdate
+                collectionHasStatusLifecycle && !companionStatusWritten
                   ? await this.recordStatusEvents(tx, {
                       collection: params.collectionName,
                       id: params.entryId,
@@ -4164,11 +4167,11 @@ export class CollectionMutationService extends BaseService {
                   : false;
 
               // Per-locale delta (i18n M6), for the write locale of a localized
-              // write — including the default locale, whose real status is the
-              // companion `_status`, not the main row. Tagged with the write
-              // locale. `_status` is present only when the patch carried a status.
+              // write whose companion `_status` was written — including the
+              // default locale, whose real status is the companion, not the main
+              // row. Tagged with the write locale.
               let localizedStatusRecorded = false;
-              if (collectionHasStatusLifecycle && localizedUpdate) {
+              if (collectionHasStatusLifecycle && companionStatusWritten) {
                 const localizedNext = localizedUpdate.companionData._status;
                 localizedStatusRecorded = await this.recordStatusEvents(tx, {
                   collection: params.collectionName,
