@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { convertToFieldDefinition } from "./field-transformers";
+import {
+  convertToBuilderField,
+  convertToFieldDefinition,
+} from "./field-transformers";
 import { mapBuilderFieldToManifest } from "./to-manifest-entity";
 
 import type { BuilderFieldInput } from "./to-manifest-entity";
@@ -30,6 +33,23 @@ describe("blocks policy round-trip through the builder", () => {
 
   it("survives conversion to a manifest field", () => {
     expect(mapBuilderFieldToManifest(FIELD).blocks).toEqual({
+      allow: ["core/*"],
+      kinds: ["page"],
+    });
+  });
+
+  it("survives a full load-then-save cycle", () => {
+    // The builder loads a stored definition into its own state and writes it
+    // back on every save, so the policy has to survive both directions or an
+    // unrelated edit drops it.
+    const stored = {
+      name: "content",
+      type: "blocks",
+      blocks: { allow: ["core/*"], kinds: ["page"] },
+    } as unknown as Parameters<typeof convertToBuilderField>[0];
+    const loaded = convertToBuilderField(stored, 0);
+    expect(loaded.blocks).toEqual({ allow: ["core/*"], kinds: ["page"] });
+    expect(convertToFieldDefinition(loaded).blocks).toEqual({
       allow: ["core/*"],
       kinds: ["page"],
     });

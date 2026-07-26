@@ -32,6 +32,15 @@ describe("generated zod schema for a blocks field", () => {
     expect(code).toContain('z.enum(["page"])');
   });
 
+  it("keeps an explicitly empty kinds policy as accepting nothing", () => {
+    // The write validator reads `kinds: []` as permitting no document at all;
+    // collapsing it to page here would generate a schema that admits what the
+    // server refuses.
+    const code = schemaFor({ kinds: [] });
+    expect(code).toContain("z.never()");
+    expect(code).not.toContain('z.enum(["page"])');
+  });
+
   it("derives the kind enum from the field's own policy", () => {
     const code = schemaFor({ kinds: ["template", "pattern"] });
     expect(code).toContain('z.enum(["template", "pattern"])');

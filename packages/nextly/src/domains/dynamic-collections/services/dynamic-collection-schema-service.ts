@@ -588,7 +588,7 @@ ${allColumnDefs.join(",\n")}
           defaultVal = `DEFAULT ${this.formatDefaultValue(field.default, field.type)}`;
         } else if (field.required) {
           // Required field without explicit default - provide sensible default for existing rows
-          defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type)}`;
+          defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
         }
 
         const addColName = this.toSnakeCase(field.name);
@@ -1025,7 +1025,10 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * Get a sensible default value for a field type.
    * Used when adding NOT NULL columns to existing tables.
    */
-  private getDefaultValueForType(type: string): string {
+  private getDefaultValueForType(
+    type: string,
+    field?: Pick<FieldDefinition, "blocks">
+  ): string {
     switch (type) {
       case "text":
       case "textarea":
@@ -1050,7 +1053,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "blocks":
         // A required blocks column needs a document, not an empty object: the
         // generic `{}` has no formatVersion, kind, or nodes.
-        return `'${emptyBlockDocumentJson()}'`;
+        return `'${emptyBlockDocumentJson(field?.blocks?.kinds)}'`;
       case "chips":
         return "'[]'";
       case "relationship":

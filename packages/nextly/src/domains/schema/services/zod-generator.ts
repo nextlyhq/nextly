@@ -648,12 +648,16 @@ export class ZodGenerator {
    */
   private buildBlocksSchema(field: DataFieldConfig): string {
     const kinds = (field as { blocks?: { kinds?: string[] } }).blocks?.kinds;
-    const accepted =
-      kinds && kinds.length > 0 ? kinds : [DEFAULT_BLOCKS_DOCUMENT_KIND];
-    const kindSchema = accepted
-      .map(kind => `"${this.escapeString(kind)}"`)
-      .join(", ");
-    return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: z.enum([${kindSchema}]), nodes: z.array(z.unknown()) }).passthrough()`;
+    // Omitting `kinds` means the field takes its entry's own page; declaring
+    // an empty list means it takes nothing, which the write validator already
+    // enforces. Collapsing the two here would generate a schema that admits
+    // documents the server refuses.
+    const accepted = kinds ?? [DEFAULT_BLOCKS_DOCUMENT_KIND];
+    const kindSchema =
+      accepted.length > 0
+        ? `z.enum([${accepted.map(kind => `"${this.escapeString(kind)}"`).join(", ")}])`
+        : "z.never()";
+    return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: ${kindSchema}, nodes: z.array(z.unknown()) }).passthrough()`;
   }
 
   /**

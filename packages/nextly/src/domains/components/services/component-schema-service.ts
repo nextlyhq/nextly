@@ -640,7 +640,8 @@ export class ComponentSchemaService {
           if (
             f.type === "json" ||
             f.type === "repeater" ||
-            f.type === "group"
+            f.type === "group" ||
+            f.type === "blocks"
           ) {
             modifiers.push(`.default(${JSON.stringify(defaultValue)})`);
           } else if (typeof defaultValue === "string") {

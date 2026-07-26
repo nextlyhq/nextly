@@ -404,6 +404,9 @@ export function convertToBuilderField(
     component: field.component,
     components: field.components ? [...field.components] : undefined,
     repeatable: field.repeatable,
+    // A blocks field's policy. Loading it is what makes writing it back
+    // meaningful: without this the outbound branch always sees undefined.
+    blocks: field.blocks,
   };
 
   // Nested fields
