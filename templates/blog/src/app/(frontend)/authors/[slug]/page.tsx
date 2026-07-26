@@ -25,12 +25,14 @@ import {
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
 
+// Pre-render known author pages at build time. Freshness afterward is
+// tag-based: the query helpers tag their reads (src/lib/queries), so an
+// author or post change busts the tag and this page regenerates on the next
+// request — no time-based `revalidate`. New authors render on demand.
 export async function generateStaticParams() {
   const slugs = await getAllAuthorSlugs();
   return slugs.map(slug => ({ slug }));
 }
-
-export const revalidate = 60;
 
 export async function generateMetadata({
   params,

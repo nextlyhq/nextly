@@ -96,6 +96,7 @@ import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
+import { statusEventsFor } from "../../webhooks/status-events";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -360,6 +361,65 @@ export class CollectionMutationService extends BaseService {
   ): Promise<readonly SensitiveFieldSource[]> {
     if (!isWebhookRecordingEnabled("collection", collectionSlug)) return fields;
     return this.webhookFieldTree(fields, executor);
+  }
+
+  /**
+   * Record the lifecycle status events for one transition
+   * (`entry.published`/`entry.unpublished`/`entry.status_changed`) into the
+   * outbox, INSIDE the caller's write transaction so they commit atomically with
+   * the content write and inherit the recording opt-out (each call routes through
+   * `recordMutationEvent`, which short-circuits on a `webhooks: false`
+   * collection). `statusEventsFor` decides the event set; a no-op transition
+   * (`from === to`, or a write that set no `status`) records nothing. Reuses the
+   * document/`previous`/`fields` the surrounding write already assembled for its
+   * `entry.created`/`entry.updated` event, so an opted-out write pays nothing
+   * extra. Returns whether any event was appended, so the caller folds it into
+   * the same `eventRecorded` signal that gates the fast-drain and retention pass.
+   */
+  private async recordStatusEvents(
+    tx: TransactionContext,
+    args: {
+      collection: string;
+      id: string;
+      locale?: string;
+      from: string | null;
+      to: string | null | undefined;
+      isCreate: boolean;
+      data: Record<string, unknown>;
+      previous: Record<string, unknown> | null;
+      fields: readonly SensitiveFieldSource[];
+      actor: RequestActor | null;
+    }
+  ): Promise<boolean> {
+    // Only a real string status can be a lifecycle transition; a write that set
+    // no status field has nothing to emit.
+    if (typeof args.to !== "string") return false;
+    const types = statusEventsFor({
+      from: args.from,
+      to: args.to,
+      isCreate: args.isCreate,
+    });
+    if (types.length === 0) return false;
+    const statusChange = { from: args.from, to: args.to };
+    let recorded = false;
+    for (const type of types) {
+      const did = await recordMutationEvent(tx, {
+        type,
+        resource: {
+          kind: "entry",
+          collection: args.collection,
+          id: args.id,
+          ...(args.locale !== undefined ? { locale: args.locale } : {}),
+        },
+        data: args.data,
+        previous: args.previous,
+        fields: args.fields,
+        actor: args.actor,
+        statusChange,
+      });
+      recorded = recorded || did;
+    }
+    return recorded;
   }
 
   /**
@@ -2047,6 +2107,7 @@ export class CollectionMutationService extends BaseService {
 
         // Append the outbox event in the same transaction, so it commits with
         // the entry and is never recorded for a write that later rolls back.
+        const createdDocument = assembleDocument(documentParts);
         recorded = await recordMutationEvent(tx, {
           type: "entry.created",
           resource: {
@@ -2058,11 +2119,45 @@ export class CollectionMutationService extends BaseService {
             // collection actually stores per-locale values.
             ...(localizedWrite ? { locale: localizedWrite.writeLocale } : {}),
           },
-          data: assembleDocument(documentParts),
+          data: createdDocument,
           previous: null,
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
+        // A create landing directly on `published` is a publish lifecycle event
+        // too (D69). Recorded in the SAME transaction, so it commits with the row
+        // and inherits the recording opt-out. `statusEventsFor` emits only
+        // `entry.published` here (no `status_changed` — nothing to change from).
+        //
+        // Gated on the collection's Draft/Published LIFECYCLE flag: a collection
+        // without it may still define an ordinary user field named `status`, and
+        // an ordinary `"published"` value there is business data, not a publish.
+        //
+        // A localized create moves the requested status to the companion, leaving
+        // the main row on its table default, so the write-locale's companion
+        // `_status` is the real transition target (same value the version capture
+        // above indexes); tag the event with that write locale.
+        const collectionHasStatusLifecycle =
+          (collection as { status?: boolean }).status === true;
+        if (collectionHasStatusLifecycle) {
+          const createdToStatus =
+            typeof createCompanionStatus === "string"
+              ? createCompanionStatus
+              : ((entry as { status?: unknown }).status as string | undefined);
+          const createdStatusRecorded = await this.recordStatusEvents(tx, {
+            collection: params.collectionName,
+            id: entry.id as string,
+            ...(localizedWrite ? { locale: localizedWrite.writeLocale } : {}),
+            from: null,
+            to: createdToStatus,
+            isCreate: true,
+            data: createdDocument,
+            previous: null,
+            fields: webhookFields,
+            actor: actorForWrite(params.actor, params.user),
+          });
+          recorded = recorded || createdStatusRecorded;
+        }
       });
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -2518,6 +2613,12 @@ export class CollectionMutationService extends BaseService {
               });
             }
           }
+
+          // This path writes no base `entry.updated` outbox event, so recording
+          // a status-only lifecycle event here would ship an inconsistent
+          // partial surface (a status change with no corresponding write event).
+          // Its lifecycle events belong with its base write event, not in
+          // isolation, so none are recorded here.
         })
       );
 
@@ -3995,6 +4096,7 @@ export class CollectionMutationService extends BaseService {
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
               // `recorded` is false when the collection opted out of recording.
+              const updatedDocument = assembleDocument(documentParts);
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
                 resource: {
@@ -4006,11 +4108,117 @@ export class CollectionMutationService extends BaseService {
                     ? { locale: localizedUpdate.writeLocale }
                     : {}),
                 },
-                data: assembleDocument(documentParts),
+                data: updatedDocument,
                 previous: previousDocument,
                 fields: webhookFields,
                 actor: actorForWrite(params.actor, params.user),
               });
+
+              // D69 status lifecycle events, recorded in the SAME transaction as
+              // entry.updated (mirrors the post-commit transitionStatus, but
+              // durable/atomic). Main-row delta: the prior status read in-tx over
+              // the pre-transaction one so a retry reports the true prior state,
+              // and the status this write persisted to the main row (`undefined`
+              // when the patch set no status, leaving to === from → no event).
+              const actor = actorForWrite(params.actor, params.user);
+              // Only a Draft/Published lifecycle collection has real status
+              // transitions. A collection without it may define an ordinary user
+              // field named `status`, whose values are business data, not publish
+              // signals — so no lifecycle event fires for those.
+              const collectionHasStatusLifecycle =
+                (collection as { status?: boolean }).status === true;
+              // Both statuses come from the ROW-LOCKED reads, not the request:
+              // `preUpdateRow` is the prior main-row status read under the lock
+              // (correct for unversioned collections and under a concurrent writer
+              // that this tx waited on), and `currentRow` is the PERSISTED value
+              // after this write — so a status the DB coerced into the text column
+              // (a numeric/boolean input) is compared as its committed string, not
+              // the raw request value.
+              const mainFrom =
+                ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                  | string
+                  | undefined) ?? null;
+              const mainTo = (currentParent as { status?: unknown }).status as
+                | string
+                | undefined;
+              // A companion `_status` is written only for a STRING status on a
+              // localized write; it is then the authoritative per-locale status
+              // and the companion branch below records its transition, tagged
+              // with the locale.
+              const companionStatusWritten =
+                typeof localizedUpdate?.companionData._status === "string";
+              const companionNext =
+                typeof localizedUpdate?.companionData._status === "string"
+                  ? localizedUpdate.companionData._status
+                  : undefined;
+              // Route so exactly one branch records each real transition. The
+              // default locale's status lives on BOTH the main row and its
+              // companion, so a normal default-locale write records the same
+              // transition on each — suppress the main-row event ONLY when the
+              // companion write encodes that identical transition (same from AND
+              // to). Otherwise the companion is a different locale's status, or a
+              // no-op rewrite that left a real main-row transition unrecorded
+              // (main row and default companion can drift after a coerced
+              // non-string write, e.g. `status: 0`), so the main row still holds
+              // a transition the companion branch will not emit — keep it.
+              const companionEncodesMainTransition =
+                companionStatusWritten &&
+                localizedPreviousStatus === mainFrom &&
+                companionNext === mainTo;
+              // The main-row event must describe the main `status` column's
+              // transition, but `updatedDocument`/`previousDocument` carry the
+              // write-locale companion status overlaid — and for a default-locale
+              // write whose status the DB coerced onto the main row (e.g.
+              // `status: 0`), that overlay still reads the prior value. Overlay
+              // the persisted main-row statuses so `data`/`previous` match
+              // `statusChange` and `changedFields` reports `status` as changed.
+              // For a non-localized collection these already equal the row values,
+              // so the overlay is a no-op there.
+              const mainRowData =
+                mainTo !== undefined
+                  ? { ...updatedDocument, status: mainTo }
+                  : updatedDocument;
+              const mainRowPrevious =
+                previousDocument !== null
+                  ? { ...previousDocument, status: mainFrom }
+                  : previousDocument;
+              const mainStatusRecorded =
+                collectionHasStatusLifecycle && !companionEncodesMainTransition
+                  ? await this.recordStatusEvents(tx, {
+                      collection: params.collectionName,
+                      id: params.entryId,
+                      from: mainFrom,
+                      to: mainTo,
+                      isCreate: false,
+                      data: mainRowData,
+                      previous: mainRowPrevious,
+                      fields: webhookFields,
+                      actor,
+                    })
+                  : false;
+
+              // Per-locale delta (i18n M6), for the write locale of a localized
+              // write whose companion `_status` was written — including the
+              // default locale, whose real status is the companion, not the main
+              // row. Tagged with the write locale.
+              let localizedStatusRecorded = false;
+              if (collectionHasStatusLifecycle && companionStatusWritten) {
+                localizedStatusRecorded = await this.recordStatusEvents(tx, {
+                  collection: params.collectionName,
+                  id: params.entryId,
+                  locale: localizedUpdate.writeLocale,
+                  from: localizedPreviousStatus,
+                  to: companionNext,
+                  isCreate: false,
+                  data: updatedDocument,
+                  previous: previousDocument,
+                  fields: webhookFields,
+                  actor,
+                });
+              }
+              recorded =
+                recorded || mainStatusRecorded || localizedStatusRecorded;
+
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.
               previousSlug = readStringField(previousDocument, "slug");

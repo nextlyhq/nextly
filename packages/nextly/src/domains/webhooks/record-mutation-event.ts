@@ -63,6 +63,8 @@ export interface RecordMutationEventArgs {
   timestamp?: Date;
   /** Event id generator; defaults to a random UUID. Injectable for tests. */
   newId?: () => string;
+  /** Status delta for a lifecycle event; forwarded to the envelope. */
+  statusChange?: { from: string | null; to: string };
 }
 
 /**
@@ -97,6 +99,9 @@ export async function recordMutationEvent(
     actor: args.actor ?? null,
     sensitiveFields: sensitiveFieldPaths(args.fields),
     ...(args.site !== undefined ? { site: args.site } : {}),
+    ...(args.statusChange !== undefined
+      ? { statusChange: args.statusChange }
+      : {}),
   });
 
   await recordEvent(tx, { envelope });
