@@ -1,16 +1,16 @@
 import { defineConfig } from "vitest/config";
 
-// Vitest config for playground-internal tooling (doctor, seed, reset).
-// The playground itself is a Next.js app and isn't unit-tested at this
-// layer; what lives under scripts/__tests__/ tests the dev-experience
-// helpers that ship alongside it.
+// Vitest config for playground-internal tooling and theme exploration.
+// Discovers unit tests under scripts/__tests__/ for dev-experience helpers
+// (doctor, seed, reset) and src/theme-lab/__tests__/ for theme-definition
+// validators.
 export default defineConfig({
   test: {
     globals: false,
     environment: "node",
     include: [
       "scripts/__tests__/**/*.test.ts",
-      "src/**/__tests__/**/*.test.ts",
+      "src/theme-lab/__tests__/**/*.test.ts",
     ],
   },
 });

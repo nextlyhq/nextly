@@ -12,7 +12,8 @@ export const MONO: ThemeDefinition = {
   recommendedDensity: "default",
   radius: "0px",
   fontSans: "var(--font-inter), Inter, sans-serif",
-  fontMono: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
+  fontMono:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
   light: {
     background: "oklch(1 0 0)",
     "page-background": "oklch(0.9818 0 0)",
