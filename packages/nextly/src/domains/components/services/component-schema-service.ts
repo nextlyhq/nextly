@@ -1332,7 +1332,8 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         return quoteSqlLiteral(
           emptyBlockDocumentJson(
             field && isBlocksField(field) ? field.blocks?.kinds : undefined
-          )
+          ),
+          this.dialect
         );
       case "number":
         return "0";
@@ -1379,7 +1380,8 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       type === "blocks"
     ) {
       return quoteSqlLiteral(
-        typeof value === "string" ? value : JSON.stringify(value)
+        typeof value === "string" ? value : JSON.stringify(value),
+        this.dialect
       );
     }
     if (type === "date") {

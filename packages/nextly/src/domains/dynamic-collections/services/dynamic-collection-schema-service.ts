@@ -1098,7 +1098,8 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     // Handle JSON (needs to be a quoted JSON string)
     if (type === "json" || type === "blocks") {
       return quoteSqlLiteral(
-        typeof value === "string" ? value : JSON.stringify(value)
+        typeof value === "string" ? value : JSON.stringify(value),
+        this.dialect
       );
     }
 
