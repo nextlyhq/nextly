@@ -33,10 +33,16 @@ function isStoredSelection(value: unknown): value is StoredSelection {
  * missing, unparsable, or no longer a theme this build knows about. Landing
  * the admin with an unrecognized data-theme value would render it with none
  * of the required tokens set at all, which is worse than picking wrong.
+ *
+ * Guarded for SSR: this runs as a useState lazy initializer, which executes
+ * during the server render too, and localStorage does not exist there.
+ * Returning the default in that case keeps the server render and the first
+ * client render identical, so hydration has nothing to reconcile.
  */
 function readStoredThemeId(): string {
+  if (typeof localStorage === "undefined") return DEFAULT_THEME_ID;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_THEME_ID;
     const parsed: unknown = JSON.parse(raw);
     if (isStoredSelection(parsed) && KNOWN_THEME_IDS.has(parsed.theme)) {
@@ -56,15 +62,15 @@ function applyThemeId(themeId: string): void {
 }
 
 export function InterimThemeSwitcher() {
-  // Start from the default on the server render and correct to the stored
-  // value on mount, since localStorage only exists in the browser.
-  const [themeId, setThemeId] = useState<string>(DEFAULT_THEME_ID);
-
-  useEffect(() => {
-    const stored = readStoredThemeId();
-    setThemeId(stored);
-    applyThemeId(stored);
-  }, []);
+  // Lazy initializer reads localStorage synchronously on mount instead of
+  // writing it in an effect: an effect that calls setState with a value
+  // computed from something other than its own dependencies (here, storage
+  // read on every mount) trips react-hooks/set-state-in-effect, and there is
+  // no reason to spend an extra render on a value known before the first
+  // paint. readStoredThemeId itself falls back to the default on the server,
+  // where localStorage does not exist, so the initializer is safe to call
+  // unconditionally here.
+  const [themeId, setThemeId] = useState<string>(() => readStoredThemeId());
 
   useEffect(() => {
     applyThemeId(themeId);
