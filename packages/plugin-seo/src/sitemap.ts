@@ -79,7 +79,11 @@ export function defaultUrlForEntry(
   collection: string
 ): string {
   const slug = typeof entry.slug === "string" ? entry.slug : "";
-  return `/${collection}/${slug}`;
+  // Percent-encode the slug so a value with spaces or non-ASCII characters is
+  // still a valid URL path segment (`<loc>` must be a valid URL, and XML
+  // escaping alone does not make ` ` or `é` URL-safe). The collection segment
+  // is a fixed, already-safe config slug.
+  return `/${collection}/${encodeURIComponent(slug)}`;
 }
 
 /** XML-escape a text value for safe inclusion in an element body. */

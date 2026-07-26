@@ -53,6 +53,15 @@ describe("defaultUrlForEntry", () => {
   it("tolerates a missing slug rather than emitting 'undefined'", () => {
     expect(defaultUrlForEntry({}, "posts")).toBe("/posts/");
   });
+
+  it("percent-encodes an unsafe slug into a valid URL segment", () => {
+    expect(defaultUrlForEntry({ slug: "hello world" }, "posts")).toBe(
+      "/posts/hello%20world"
+    );
+    expect(defaultUrlForEntry({ slug: "café" }, "posts")).toBe(
+      "/posts/caf%C3%A9"
+    );
+  });
 });
 
 describe("buildSitemapUrls", () => {
