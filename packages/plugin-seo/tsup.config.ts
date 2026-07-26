@@ -1,9 +1,8 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  // Single Node-safe entry: the plugin adds fields + a permission (and, in
-  // later Tier-0 PRs, an agnostic sitemap route). No `next`/`react` coupling —
-  // the Next-only metadata/routing bridges ship from `nextly/runtime`, not here.
+  // Single Node-safe entry: the plugin adds an SEO field group. No `next` or
+  // `react` coupling, so it stays usable in headless and admin-only projects.
   entry: ["src/index.ts"],
   format: ["esm"],
   dts: true,

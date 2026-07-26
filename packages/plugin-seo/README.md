@@ -4,7 +4,7 @@
 
 First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
-This package owns the SEO **data**: the meta fields and (in a later Tier-0 PR) the sitemap contents. The Next-only **behavior** (turning those fields into `generateMetadata`, delivering the canonical `/sitemap.xml`, and content routing) ships separately from `nextly/runtime`, so this plugin never drags Next.js into a headless or admin-only project.
+This package owns the SEO **data** — the meta fields on your content. The Next-only **behavior** (turning those fields into `generateMetadata`, delivering `/sitemap.xml`, and content routing) ships separately from `nextly/runtime`, so this plugin never drags Next.js into a headless or admin-only project.
 
 ## Install
 

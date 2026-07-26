@@ -52,6 +52,17 @@ describe("seoPlugin extend (integration)", () => {
     expect(seo?.metaDescription).toBe("Welcome to the site.");
     expect(seo?.canonical).toBe("https://example.com/");
     expect(seo?.noindex).toBe(true);
+
+    // Read it back through the public API so persistence + serialization
+    // (not just the write response) is covered.
+    const id = (created.item as { id: string }).id;
+    const fetched = await current.nextly.findByID({ collection: "pages", id });
+    const persisted = (fetched as { seo?: Record<string, unknown> } | null)
+      ?.seo;
+    expect(persisted?.metaTitle).toBe("Home — Meta");
+    expect(persisted?.metaDescription).toBe("Welcome to the site.");
+    expect(persisted?.canonical).toBe("https://example.com/");
+    expect(persisted?.noindex).toBe(true);
   });
 
   it("does not add seo when the plugin is absent (proves the plugin adds it)", async () => {

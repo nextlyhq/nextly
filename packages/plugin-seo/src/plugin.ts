@@ -2,10 +2,8 @@
  * `@nextlyhq/plugin-seo` — the first-party SEO plugin for Nextly.
  *
  * Opt-in and framework-agnostic (zero `next` dependency): it adds an SEO field
- * group to the collections you name. A later Tier-0 PR adds the agnostic
- * sitemap; the Next-only metadata/routing bridges live in `nextly/runtime`,
- * never here, so this plugin is safe in every deployment mode (integrated site,
- * headless, internal admin).
+ * group to the collections you name, so it stays usable in every deployment
+ * mode (integrated site, headless, internal admin).
  *
  * @module plugin
  */
@@ -26,9 +24,8 @@ const { version: PLUGIN_VERSION } = require("../package.json") as {
 
 export interface SeoPluginOptions {
   /**
-   * The collections to extend with the SEO field group (and, in later Tier-0
-   * PRs, include in the sitemap). SEO is added ONLY to these — collections you
-   * do not name are untouched.
+   * The collections to extend with the SEO field group. SEO is added ONLY to
+   * these — collections you do not name are untouched.
    */
   collections: string[];
   /**
@@ -74,9 +71,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     repository: "https://github.com/nextlyhq/nextly",
     license: "MIT",
     category: "seo",
-    tags: ["seo", "sitemap", "metadata"],
+    tags: ["seo", "meta"],
     contributes: {
-      // Add the SEO group to each named collection (D12 extend).
+      // Add the SEO group to each named collection.
       extend: [{ target: options.collections, fields: [seoGroup] }],
     },
   });
