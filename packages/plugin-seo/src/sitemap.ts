@@ -29,7 +29,9 @@ export interface SitemapServices {
       query: {
         where?: Record<string, unknown>;
         depth?: number;
-        pagination?: { limit?: number; offset?: number };
+        // Paged by 1-indexed `page`: the managed service reads a page from
+        // `page`, not `offset`, so pagination MUST advance `page` to progress.
+        pagination?: { limit?: number; page?: number };
       },
       opts: { as: "system" }
     ): Promise<{ data: unknown[]; pagination: { hasMore: boolean } }>;
@@ -64,7 +66,10 @@ export interface SitemapOptions {
   baseUrl: string;
   /** Path builder; defaults to `/<collection>/<slug>`. */
   urlFor?: UrlForEntry;
-  /** Page size for the paginated service reads (defaults to 1000). */
+  /**
+   * Page size for the paginated service reads. Defaults to and is capped at
+   * {@link MAX_PAGE_SIZE} (the managed service's per-page maximum).
+   */
   pageSize?: number;
 }
 
@@ -106,14 +111,26 @@ function toLastModified(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-const DEFAULT_PAGE_SIZE = 1000;
+/**
+ * The managed service caps a page at 500 rows and drops a larger `limit`, so a
+ * page never exceeds this — the pagination loop relies on the requested size
+ * matching what comes back to know when to stop.
+ */
+export const MAX_PAGE_SIZE = 500;
 
 /**
  * List every configured collection's PUBLISHED entries and map them to sitemap
  * URLs. Reads as system (a sitemap is public derived data), and pages through
- * ALL matches — no silent cap — so a large collection is never truncated to a
- * first-page slice. Entries flagged `seo.noindex` are excluded: a page told not
- * to be indexed does not belong in the sitemap.
+ * ALL matches by advancing the 1-indexed `page` — no silent cap — so a large
+ * collection is never truncated to a first-page slice. Entries flagged
+ * `seo.noindex` are excluded: a page told not to be indexed does not belong in
+ * the sitemap.
+ *
+ * The `status: published` filter applies to collections with the draft/
+ * published lifecycle (`status: true`). A collection without it has no
+ * unpublished state, so the (unknown-field) filter is a no-op there and every
+ * entry — all of which are live — is listed. That mirrors the core's own
+ * status handling (filter only when a status column exists).
  */
 export async function buildSitemapUrls(
   services: SitemapServices,
@@ -122,23 +139,24 @@ export async function buildSitemapUrls(
   const urlFor = options.urlFor ?? defaultUrlForEntry;
   const pageSize =
     options.pageSize && options.pageSize > 0
-      ? options.pageSize
-      : DEFAULT_PAGE_SIZE;
+      ? Math.min(options.pageSize, MAX_PAGE_SIZE)
+      : MAX_PAGE_SIZE;
   // Trim a trailing slash so `${baseUrl}${"/path"}` never yields `//path`.
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
   const urls: SitemapUrl[] = [];
 
   for (const collection of options.collections) {
-    let offset = 0;
-    // Page until the service reports no more rows, so the whole published set
-    // is emitted rather than a first-page slice.
+    // 1-indexed: the managed service reads by `page`, not `offset`, so the loop
+    // MUST advance `page` — advancing an ignored `offset` would re-read page 1
+    // forever while `hasMore` stayed true.
+    let page = 1;
     for (;;) {
       const result = await services.collections.listEntries(
         collection,
         {
           where: { status: { equals: "published" } },
           depth: 0,
-          pagination: { limit: pageSize, offset },
+          pagination: { limit: pageSize, page },
         },
         { as: "system" }
       );
@@ -155,7 +173,7 @@ export async function buildSitemapUrls(
       }
 
       if (!result.pagination.hasMore) break;
-      offset += pageSize;
+      page += 1;
     }
   }
 

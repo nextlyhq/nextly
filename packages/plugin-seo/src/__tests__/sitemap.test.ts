@@ -10,8 +10,9 @@ import {
 } from "../sitemap";
 
 /**
- * A stub `listEntries` that returns fixed pages keyed by collection, so a test
- * can assert the query passed AND the pagination loop, without a real boot.
+ * A stub `listEntries` that returns fixed pages keyed by collection, paging by
+ * the 1-indexed `page` exactly as the real managed facade does, so a test can
+ * assert the query passed AND the pagination loop without a real boot.
  */
 function stubServices(
   pages: Record<string, Array<Record<string, unknown>[]>>,
@@ -22,14 +23,13 @@ function stubServices(
       async listEntries(slug, query, opts) {
         spy?.(slug, query, opts);
         const collectionPages = pages[slug] ?? [];
-        const limit = query.pagination?.limit ?? 1000;
-        const offset = query.pagination?.offset ?? 0;
-        const index = Math.floor(offset / limit);
-        const data = collectionPages[index] ?? [];
+        const page = query.pagination?.page ?? 1;
+        const data = collectionPages[page - 1] ?? [];
         return {
           data,
           pagination: {
-            hasMore: index < collectionPages.length - 1,
+            // More pages remain after this 1-indexed page.
+            hasMore: page < collectionPages.length,
           },
         };
       },
@@ -111,6 +111,42 @@ describe("buildSitemapUrls", () => {
       "https://x.com/posts/c",
       "https://x.com/posts/d",
     ]);
+  });
+
+  it("advances the page number instead of re-reading page one", async () => {
+    // The managed service pages by `page`, not `offset`; advancing anything but
+    // `page` would re-request page one forever while `hasMore` stayed true.
+    const spy = vi.fn();
+    const services = stubServices(
+      { posts: [[{ slug: "a" }], [{ slug: "b" }]] },
+      spy
+    );
+
+    await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      pageSize: 1,
+    });
+
+    const pages = spy.mock.calls.map(
+      ([, query]: [string, { pagination?: { page?: number } }]) =>
+        query.pagination?.page
+    );
+    expect(pages).toEqual([1, 2]);
+  });
+
+  it("caps the requested page size at the service maximum", async () => {
+    const spy = vi.fn();
+    const services = stubServices({ posts: [[{ slug: "a" }]] }, spy);
+
+    await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      pageSize: 5000,
+    });
+
+    const [, query] = spy.mock.calls[0];
+    expect(query.pagination?.limit).toBe(500);
   });
 
   it("excludes entries flagged seo.noindex", async () => {
