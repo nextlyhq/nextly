@@ -65,6 +65,8 @@ export interface BuilderFieldInput {
   mimeTypes?: string;
   maxFileSize?: number;
   labels?: { singular?: string; plural?: string };
+  /** A blocks field's accepted block names and document kinds. */
+  blocks?: { allow?: string[]; kinds?: string[] };
   initCollapsed?: boolean;
   rowLabelField?: string;
   component?: string;
@@ -123,6 +125,8 @@ export interface ManifestField {
   mimeTypes?: string;
   maxFileSize?: number;
   labels?: { singular?: string; plural?: string };
+  /** A blocks field's accepted block names and document kinds. */
+  blocks?: { allow?: string[]; kinds?: string[] };
   initCollapsed?: boolean;
   rowLabelField?: string;
   component?: string;
@@ -167,6 +171,9 @@ const PASSTHROUGH_KEYS = [
   "mimeTypes",
   "maxFileSize",
   "labels",
+  // A blocks field's policy: which registered blocks and document kinds it
+  // accepts. Dropped here, an unrelated schema save would widen the field.
+  "blocks",
   "initCollapsed",
   "rowLabelField",
   "component",

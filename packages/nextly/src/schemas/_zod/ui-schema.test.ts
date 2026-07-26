@@ -83,6 +83,25 @@ describe("parseUiSchema — blocks fields", () => {
     ).toBe(false);
   });
 
+  it("rejects a default that is an object but not a document", () => {
+    // The admin seeds a read-only control from this value, so a malformed
+    // default leaves something the user cannot correct on the form.
+    for (const bad of [
+      { foo: "bar" },
+      { formatVersion: "1", kind: "page", nodes: [] },
+      { formatVersion: 1, kind: "nonsense", nodes: [] },
+      { formatVersion: 1, kind: "page" },
+      { formatVersion: 1, kind: "page", nodes: {} },
+    ]) {
+      expect(
+        parseUiSchema(
+          withBlocks({ name: "content", type: "blocks", defaultValue: bad })
+        ).success,
+        JSON.stringify(bad)
+      ).toBe(false);
+    }
+  });
+
   it("accepts a document as a blocks default", () => {
     expect(
       parseUiSchema(

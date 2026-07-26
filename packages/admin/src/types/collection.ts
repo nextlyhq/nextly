@@ -123,6 +123,8 @@ export interface FieldDefinition {
   defaultValue?: unknown;
   /** Nested fields for container types (array, group, etc.) */
   fields?: FieldDefinition[];
+  /** A blocks field's accepted block names and document kinds. */
+  blocks?: { allow?: string[]; kinds?: string[] };
   /** Admin UI options for the field */
   admin?: FieldDefinitionAdmin;
   /** Validation rules for the field */

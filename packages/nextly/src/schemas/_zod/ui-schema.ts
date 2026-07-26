@@ -42,6 +42,28 @@ export const UI_FIELD_TYPES = [
   "blocks",
 ] as const;
 
+/**
+ * Whether a value carries the document envelope every stored page has. The
+ * node tree itself is validated on write by the engine; this is the shape a
+ * schema author must get right for the default to be usable at all.
+ */
+function isDocumentEnvelope(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const doc = value as {
+    formatVersion?: unknown;
+    kind?: unknown;
+    nodes?: unknown;
+  };
+  return (
+    typeof doc.formatVersion === "number" &&
+    typeof doc.kind === "string" &&
+    (DOCUMENT_KINDS as readonly string[]).includes(doc.kind) &&
+    Array.isArray(doc.nodes)
+  );
+}
+
 /** Field names the framework reserves (system columns). */
 // Universal system columns present on every entity table (collection, single,
 // component). The collection-only owner column (`created_by`/`createdBy`) is
@@ -324,12 +346,11 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
         const okType =
           (f.type === "number" && typeof dv === "number") ||
           (f.type === "checkbox" && typeof dv === "boolean") ||
-          // A blocks default is a whole document, so it is an object rather
-          // than one of the scalar shapes the other types accept.
-          (f.type === "blocks" &&
-            typeof dv === "object" &&
-            dv !== null &&
-            !Array.isArray(dv)) ||
+          // A blocks default is a whole document. Checking only that it is an
+          // object would let a malformed default seed the read-only control on
+          // a create form, leaving a value the user cannot correct and the
+          // write-time validator rejects.
+          (f.type === "blocks" && isDocumentEnvelope(dv)) ||
           ([
             "text",
             "textarea",
