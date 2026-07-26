@@ -19,6 +19,7 @@
       "@nextlyhq/storage-vercel-blob",
       "@nextlyhq/plugin-form-builder",
       "@nextlyhq/plugin-page-builder",
+      "@nextlyhq/plugin-seo",
       "@nextlyhq/plugin-sdk",
       "@nextlyhq/eslint-config",
       "@nextlyhq/prettier-config",

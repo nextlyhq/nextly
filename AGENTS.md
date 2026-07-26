@@ -68,7 +68,8 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   Allowed PR scopes are package-based (`nextly`, `admin`, `ui`,
   `adapter-postgres`, `adapter-mysql`, `adapter-sqlite`, `adapter-drizzle`,
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
-  `plugin-form-builder`, `plugin-page-builder`, `plugin-sdk`, `blocks-engine`,
+  `plugin-form-builder`, `plugin-page-builder`, `plugin-seo`, `plugin-sdk`,
+  `blocks-engine`,
   `create-nextly-app`, `eslint-config`, `prettier-config`, `tsconfig`,
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase
