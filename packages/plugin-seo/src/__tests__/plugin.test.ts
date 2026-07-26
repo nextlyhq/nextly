@@ -83,6 +83,14 @@ describe("seoPlugin", () => {
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
   });
 
+  it("rejects a sitemap collection outside the configured collections", () => {
+    // A typo'd / non-extended slug would 500 the public route at request time;
+    // fail fast at construction instead.
+    expect(() =>
+      seoPlugin({ collections: ["pages"], sitemap: { collections: ["posts"] } })
+    ).toThrow(/subset/i);
+  });
+
   it("defaultSeoFields returns the inner seo fields", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",

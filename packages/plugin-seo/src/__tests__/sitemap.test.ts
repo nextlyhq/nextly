@@ -101,11 +101,11 @@ describe("buildSitemapUrls", () => {
     expect(query.sort).toEqual({ field: "id", direction: "asc" });
   });
 
-  it("advertises a declared canonical URL instead of the generated one", async () => {
+  it("advertises a same-host declared canonical instead of the generated URL", async () => {
     const services = stubServices({
       posts: [
         [
-          { slug: "a", seo: { canonical: "https://canonical.example/a" } },
+          { slug: "a", seo: { canonical: "https://x.com/real-a" } },
           { slug: "b" },
         ],
       ],
@@ -117,9 +117,44 @@ describe("buildSitemapUrls", () => {
     });
 
     expect(urls.map(u => u.loc)).toEqual([
-      "https://canonical.example/a",
+      "https://x.com/real-a",
       "https://x.com/posts/b",
     ]);
+  });
+
+  it("drops an entry whose canonical is on another host", async () => {
+    // A sitemap must only list URLs on its own host, so a cross-host canonical
+    // means the entry belongs in that other host's sitemap — exclude it here.
+    const services = stubServices({
+      posts: [
+        [
+          { slug: "a", seo: { canonical: "https://other.example/a" } },
+          { slug: "b" },
+        ],
+      ],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
+  });
+
+  it("honors a urlFor exclusion even when the entry has a canonical", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "drop", seo: { canonical: "https://x.com/keep" } }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      // urlFor opts the entry out; the canonical must not resurrect it.
+      urlFor: () => null,
+    });
+
+    expect(urls).toEqual([]);
   });
 
   it("resolves a relative canonical against baseUrl (loc must be absolute)", async () => {

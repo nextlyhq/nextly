@@ -107,6 +107,17 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       ? [...new Set(options.sitemap.collections)]
       : targets;
 
+  // A sitemap subset must be a subset of the SEO collections. A slug outside
+  // them is never extended, so it would only surface at request time as a 500
+  // (metadata lookup on an unknown collection) — fail fast at construction.
+  const unknownSitemap = sitemapTargets.filter(slug => !targets.includes(slug));
+  if (unknownSitemap.length > 0) {
+    throw new Error(
+      `seoPlugin: sitemap.collections must be a subset of collections; ` +
+        `unknown: ${unknownSitemap.join(", ")}`
+    );
+  }
+
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],

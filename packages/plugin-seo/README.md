@@ -62,7 +62,7 @@ The plugin serves a sitemap of your **published** entries — one `<url>` per en
 GET /api/plugins/@nextlyhq/plugin-seo/sitemap.xml
 ```
 
-It reads live content, so a publish or an edit is reflected on the next request. Drafts, entries with `seo.noindex` set, and entries with no usable slug are left out. When an entry declares a `seo.canonical` URL, the sitemap advertises that canonical URL instead of the generated one.
+It reads live content, so a publish or an edit is reflected on the next request. Drafts, entries with `seo.noindex` set, and entries with no usable slug are left out. When an entry declares a same-host `seo.canonical` URL, the sitemap advertises that canonical URL instead of the generated one (a canonical on another host drops the entry, since a sitemap only lists URLs on its own host).
 
 The published filter targets Nextly's built-in draft/published lifecycle (`status: true` on the collection). A collection without that lifecycle has no unpublished state, so all of its entries are listed.
 
@@ -78,6 +78,19 @@ seoPlugin({
     collection === "posts" ? `/blog/${entry.slug}` : `/${entry.slug}`,
 });
 ```
+
+> **The sitemap is public and bypasses read access.** The route is unauthenticated and lists entries as the system role, so it enumerates every published entry's URL (and `lastModified`) **regardless of per-collection read access**. Do not enumerate a collection whose entries should stay private (owner-only, role-gated, or internal). Control it with the `sitemap` option:
+>
+> ```ts
+> // Turn the sitemap route off entirely:
+> seoPlugin({ collections: ["pages", "internalDocs"], sitemap: false });
+>
+> // Or advertise only the public subset (the rest still get SEO fields):
+> seoPlugin({
+>   collections: ["pages", "internalDocs"],
+>   sitemap: { collections: ["pages"] },
+> });
+> ```
 
 ### Exposing it to crawlers
 

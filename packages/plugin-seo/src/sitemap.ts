@@ -168,6 +168,14 @@ export async function buildSitemapUrls(
       : MAX_PAGE_SIZE;
   // Trim a trailing slash so `${baseUrl}${"/path"}` never yields `//path`.
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  // The sitemap's own host — a `<loc>` must live on it, so a canonical on a
+  // different host is dropped rather than mixed in.
+  let baseHost = "";
+  try {
+    baseHost = new URL(baseUrl).host;
+  } catch {
+    baseHost = "";
+  }
   const urls: SitemapUrl[] = [];
 
   for (const collection of options.collections) {
@@ -205,37 +213,37 @@ export async function buildSitemapUrls(
         const seo = isRecord(row.seo) ? row.seo : undefined;
         // A noindexed page is intentionally kept out of the sitemap.
         if (seo?.noindex === true) continue;
-        // Honor a declared canonical: a sitemap should list canonical URLs, so
-        // when the entry sets one, advertise THAT rather than the generated URL
-        // it points away from. The `canonical` field is free text, so resolve it
-        // against `baseUrl` (a relative `/about` becomes absolute) and fall back
-        // to the generated URL if it is not a usable URL — a `<loc>` must be a
-        // valid absolute URL.
+
+        // Resolve the URL FIRST so `urlFor`'s exclusion contract is honored even
+        // for an entry that also declares a canonical: a falsy path means no
+        // stable URL (no slug, or a custom urlFor opted it out) — skip it.
+        const path = urlFor(row, collection);
+        if (!path) continue;
+        let loc = `${baseUrl}${path}`;
+
+        // A declared canonical overrides the generated URL, but only a same-host
+        // http(s) one. The `canonical` field is free text: resolve it against
+        // `baseUrl` (a relative `/about` becomes absolute); ignore a non-http
+        // scheme (`mailto:`/`javascript:`/`data:`), keeping the generated URL;
+        // and DROP the entry when the canonical is on another host, since a
+        // sitemap must only list URLs on its own host.
         const canonical =
           typeof seo?.canonical === "string" ? seo.canonical.trim() : "";
-        let loc: string | null = null;
         if (canonical) {
+          let offHost = false;
           try {
             const resolved = new URL(canonical, baseUrl);
-            // Only http(s) URLs are crawlable sitemap locations — a syntactically
-            // valid `mailto:` / `javascript:` / `data:` value must not become a
-            // `<loc>`; fall through to the generated URL instead.
-            if (
-              resolved.protocol === "http:" ||
-              resolved.protocol === "https:"
-            ) {
+            const isHttp =
+              resolved.protocol === "http:" || resolved.protocol === "https:";
+            if (isHttp && resolved.host === baseHost) {
               loc = resolved.href;
+            } else if (isHttp) {
+              offHost = true;
             }
           } catch {
-            loc = null;
+            // Malformed canonical → keep the generated URL.
           }
-        }
-        if (loc === null) {
-          // A falsy path means the entry has no stable URL (no slug, or a
-          // custom urlFor opted it out) — skip it rather than emit a bogus loc.
-          const path = urlFor(row, collection);
-          if (!path) continue;
-          loc = `${baseUrl}${path}`;
+          if (offHost) continue;
         }
         urls.push({ loc, lastModified: toLastModified(row.updatedAt) });
       }

@@ -25,8 +25,8 @@ import { buildSitemapUrls, type SitemapServices } from "../sitemap";
 // plugin name `@nextlyhq/plugin-seo` is two segments (it contains a slash).
 const SITEMAP_PARAMS = ["plugins", "@nextlyhq", "plugin-seo", "sitemap.xml"];
 
-// A distinct origin per test so the route's F1 cache key (which includes the
-// baseUrl) never collides across boots in the same process.
+// A distinct origin per test so each test's assertions stay independent (the
+// route generates fresh per request; the sequence just keeps hosts unique).
 let seq = 0;
 const nextBase = (): string => `https://s${(seq += 1)}.example`;
 
