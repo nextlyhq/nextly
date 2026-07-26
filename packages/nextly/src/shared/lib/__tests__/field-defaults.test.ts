@@ -1,0 +1,213 @@
+/**
+ * Which keys a declared default may fill, and which it must leave alone.
+ *
+ * Validation recurses into groups and repeater rows, so defaults have to reach
+ * the same places or a required child fails on an entry the caller had no way
+ * to satisfy.
+ */
+import { describe, expect, it } from "vitest";
+
+import type { ValidatableField } from "../entry-validation";
+import { applyFieldDefaults } from "../field-defaults";
+
+const field = (f: Record<string, unknown>): ValidatableField =>
+  f as unknown as ValidatableField;
+
+describe("applyFieldDefaults", () => {
+  it("fills an absent key and leaves a supplied one", () => {
+    const data: Record<string, unknown> = { b: "given" };
+    applyFieldDefaults(data, [
+      field({ name: "a", type: "text", defaultValue: "da" }),
+      field({ name: "b", type: "text", defaultValue: "db" }),
+    ]);
+    expect(data).toEqual({ a: "da", b: "given" });
+  });
+
+  it("treats falsy supplied values as supplied", () => {
+    const data: Record<string, unknown> = { n: 0, c: false, s: "" };
+    applyFieldDefaults(data, [
+      field({ name: "n", type: "number", defaultValue: 9 }),
+      field({ name: "c", type: "checkbox", defaultValue: true }),
+      field({ name: "s", type: "text", defaultValue: "x" }),
+    ]);
+    expect(data).toEqual({ n: 0, c: false, s: "" });
+  });
+
+  it("leaves an explicit null alone", () => {
+    const data: Record<string, unknown> = { a: null };
+    applyFieldDefaults(data, [
+      field({ name: "a", type: "text", defaultValue: "da" }),
+    ]);
+    expect(data.a).toBeNull();
+  });
+
+  it("treats an explicit undefined the same as an absent key", () => {
+    // `{ a: undefined }` is what spreading an unset optional produces, and it
+    // is indistinguishable from omission over JSON. `null` remains the way to
+    // say "no value" — see the test above.
+    const data: Record<string, unknown> = { a: undefined };
+    applyFieldDefaults(data, [
+      field({ name: "a", type: "text", defaultValue: "da" }),
+    ]);
+    expect(data.a).toBe("da");
+  });
+
+  it("skips a component field, whose data lives in another table", () => {
+    const data: Record<string, unknown> = {};
+    applyFieldDefaults(data, [
+      field({ name: "hero", type: "component", defaultValue: { a: 1 } }),
+    ]);
+    expect(data).toEqual({});
+  });
+
+  describe("layout containers", () => {
+    it("fills children of an unnamed container against the parent", () => {
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({
+          type: "row",
+          fields: [field({ name: "a", type: "text", defaultValue: "da" })],
+        }),
+      ]);
+      expect(data).toEqual({ a: "da" });
+    });
+  });
+
+  describe("groups", () => {
+    it("creates an absent group from its children's defaults", () => {
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({
+          name: "seo",
+          type: "group",
+          fields: [field({ name: "title", type: "text", defaultValue: "dt" })],
+        }),
+      ]);
+      expect(data).toEqual({ seo: { title: "dt" } });
+    });
+
+    it("does not create a group whose children declare no defaults", () => {
+      // Storing `{}` where the caller stored nothing is a different value.
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({
+          name: "seo",
+          type: "group",
+          fields: [field({ name: "title", type: "text" })],
+        }),
+      ]);
+      expect(data).toEqual({});
+    });
+
+    it("fills only the missing keys of a supplied group", () => {
+      const data: Record<string, unknown> = { seo: { title: "given" } };
+      applyFieldDefaults(data, [
+        field({
+          name: "seo",
+          type: "group",
+          fields: [
+            field({ name: "title", type: "text", defaultValue: "dt" }),
+            field({ name: "desc", type: "text", defaultValue: "dd" }),
+          ],
+        }),
+      ]);
+      expect(data.seo).toEqual({ title: "given", desc: "dd" });
+    });
+
+    it("leaves a group the caller cleared to null", () => {
+      const data: Record<string, unknown> = { seo: null };
+      applyFieldDefaults(data, [
+        field({
+          name: "seo",
+          type: "group",
+          fields: [field({ name: "title", type: "text", defaultValue: "dt" })],
+        }),
+      ]);
+      expect(data.seo).toBeNull();
+    });
+
+    it("prefers the group's own default over building one", () => {
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({
+          name: "seo",
+          type: "group",
+          defaultValue: { title: "own" },
+          fields: [
+            field({ name: "title", type: "text", defaultValue: "dt" }),
+            field({ name: "desc", type: "text", defaultValue: "dd" }),
+          ],
+        }),
+      ]);
+      // The declared default wins for keys it sets; children still fill gaps.
+      expect(data.seo).toEqual({ title: "own", desc: "dd" });
+    });
+
+    it("reaches a nested group", () => {
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({
+          name: "outer",
+          type: "group",
+          fields: [
+            field({
+              name: "inner",
+              type: "group",
+              fields: [
+                field({ name: "deep", type: "text", defaultValue: "dv" }),
+              ],
+            }),
+          ],
+        }),
+      ]);
+      expect(data).toEqual({ outer: { inner: { deep: "dv" } } });
+    });
+  });
+
+  describe("repeaters", () => {
+    it("fills each supplied row", () => {
+      const data: Record<string, unknown> = {
+        rows: [{ label: "given" }, {}],
+      };
+      applyFieldDefaults(data, [
+        field({
+          name: "rows",
+          type: "repeater",
+          fields: [field({ name: "label", type: "text", defaultValue: "dl" })],
+        }),
+      ]);
+      expect(data.rows).toEqual([{ label: "given" }, { label: "dl" }]);
+    });
+
+    it("never invents rows", () => {
+      // How many rows a new entry starts with is the caller's decision.
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({
+          name: "rows",
+          type: "repeater",
+          fields: [field({ name: "label", type: "text", defaultValue: "dl" })],
+        }),
+      ]);
+      expect(data.rows).toBeUndefined();
+    });
+
+    it("ignores malformed rows rather than throwing", () => {
+      // A malformed row is validation's to report; this pass must not crash
+      // on the way there.
+      const data: Record<string, unknown> = { rows: [null, "x", [], {}] };
+      expect(() =>
+        applyFieldDefaults(data, [
+          field({
+            name: "rows",
+            type: "repeater",
+            fields: [
+              field({ name: "label", type: "text", defaultValue: "dl" }),
+            ],
+          }),
+        ])
+      ).not.toThrow();
+      expect(data.rows).toEqual([null, "x", [], { label: "dl" }]);
+    });
+  });
+});

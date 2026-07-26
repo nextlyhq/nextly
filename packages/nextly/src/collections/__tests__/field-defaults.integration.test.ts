@@ -13,7 +13,15 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { blocks, checkbox, defineCollection, number, text } from "../../config";
+import {
+  blocks,
+  checkbox,
+  defineCollection,
+  group,
+  number,
+  repeater,
+  text,
+} from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
 
@@ -39,6 +47,17 @@ async function handlerFor(): Promise<CollectionsHandler> {
           number({ name: "rank", defaultValue: 7 }),
           checkbox({ name: "featured", defaultValue: true }),
           blocks({ name: "content", defaultValue: EMPTY_DOC }),
+          group({
+            name: "seo",
+            fields: [
+              text({ name: "metaTitle", required: true, defaultValue: "mt" }),
+              text({ name: "metaDesc", defaultValue: "md" }),
+            ],
+          }),
+          repeater({
+            name: "items",
+            fields: [text({ name: "label", defaultValue: "dl" })],
+          }),
         ],
       }),
     ],
@@ -92,6 +111,23 @@ describe("field defaults on a collection create (integration)", () => {
     const handler = await handlerFor();
     const data = await createAndRead(handler, { title: "Home" });
     expect(data.derived).toBeNull();
+  });
+
+  it("fills a group's children, including a required one", async () => {
+    // Validation recurses into a group, so a required child with a default
+    // was previously impossible to satisfy without sending the group.
+    const handler = await handlerFor();
+    const data = await createAndRead(handler, { title: "Home" });
+    expect(data.seo).toEqual({ metaTitle: "mt", metaDesc: "md" });
+  });
+
+  it("fills the children of each supplied repeater row", async () => {
+    const handler = await handlerFor();
+    const data = await createAndRead(handler, {
+      title: "Home",
+      items: [{ label: "given" }, {}],
+    });
+    expect(data.items).toEqual([{ label: "given" }, { label: "dl" }]);
   });
 
   it("never overwrites a value the caller supplied", async () => {

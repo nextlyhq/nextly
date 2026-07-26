@@ -49,18 +49,81 @@ export function applyFieldDefaults(
   fields: readonly ValidatableField[]
 ): void {
   for (const field of fields) {
-    if (!field.name) continue;
+    // A layout container (row, tabs, collapsible) groups fields visually
+    // without holding a value: its children are stored on the parent, so they
+    // are filled against the same object.
+    if (!field.name) {
+      if (field.fields) applyFieldDefaults(data, field.fields);
+      continue;
+    }
     if (NON_COLUMN_TYPES.has(field.type)) continue;
 
     const declared = (field as { defaultValue?: unknown }).defaultValue;
-    if (declared === undefined) continue;
-    if (data[field.name] !== undefined) continue;
+    if (declared !== undefined && data[field.name] === undefined) {
+      // Resolved against the data built so far, so a default may read the
+      // values the caller did supply, and earlier defaults in this same pass.
+      data[field.name] =
+        typeof declared === "function"
+          ? (declared as (d: Record<string, unknown>) => unknown)(data)
+          : declared;
+    }
 
-    // Resolved against the data built so far, so a default may read the values
-    // the caller did supply, and earlier defaults in this same pass.
-    data[field.name] =
-      typeof declared === "function"
-        ? (declared as (d: Record<string, unknown>) => unknown)(data)
-        : declared;
+    if (!field.fields) continue;
+
+    // Validation recurses into these, so a child's default has to be filled
+    // before it runs or a required child fails on an entry the caller could
+    // not have satisfied.
+    if (field.type === "group") {
+      fillGroup(data, field.name, field.fields);
+    } else if (field.type === "repeater") {
+      fillRepeaterRows(data[field.name], field.fields);
+    }
   }
+}
+
+/**
+ * Fill a group's children, creating the group only if something lands in it.
+ *
+ * An absent group is seeded into a scratch object first: writing `{}` for a
+ * group whose children declare no defaults would store an empty object where
+ * the caller stored nothing, which is a different value.
+ */
+function fillGroup(
+  data: Record<string, unknown>,
+  name: string,
+  fields: readonly ValidatableField[]
+): void {
+  const existing = data[name];
+  if (isPlainObject(existing)) {
+    applyFieldDefaults(existing, fields);
+    return;
+  }
+  // A group the caller set to null was cleared deliberately, exactly as for a
+  // scalar field, so it is left alone.
+  if (existing !== undefined) return;
+
+  const seeded: Record<string, unknown> = {};
+  applyFieldDefaults(seeded, fields);
+  if (Object.keys(seeded).length > 0) data[name] = seeded;
+}
+
+/**
+ * Fill each existing row's children.
+ *
+ * Rows are not invented: how many a new entry starts with is the caller's
+ * decision, and `minRows` is a validation rule rather than an instruction to
+ * fabricate content.
+ */
+function fillRepeaterRows(
+  value: unknown,
+  fields: readonly ValidatableField[]
+): void {
+  if (!Array.isArray(value)) return;
+  for (const row of value) {
+    if (isPlainObject(row)) applyFieldDefaults(row, fields);
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
