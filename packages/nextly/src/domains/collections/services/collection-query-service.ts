@@ -56,7 +56,7 @@ import {
 } from "../../../services/collections/geo-utils";
 import {
   buildWhereClause,
-  isValidOperator,
+  getSupportedOperators,
   extractGeoFilters,
   extractComponentFieldConditions,
 } from "../../../services/collections/query-operators";
@@ -135,24 +135,60 @@ interface LocalizedQueryContext {
 }
 
 /**
+ * The operators `buildWhereClause` can map, as an explicit set.
+ *
+ * `isValidOperator` tests with the `in` keyword, which also answers true for
+ * inherited names like `toString` or `constructor`. Such a member passes
+ * validation, is then dropped as unmappable, and leaves its siblings running —
+ * a narrower predicate than the rule states.
+ */
+let mappableOperators: ReadonlySet<string> | undefined;
+
+/**
+ * Built on first use rather than at module load: this module participates in an
+ * import cycle, so reading the operator list eagerly can run before that module
+ * has initialized and throw while the graph is still being wired.
+ */
+function isMappableOperator(operator: string): boolean {
+  mappableOperators ??= new Set<string>(getSupportedOperators());
+  return mappableOperators.has(operator);
+}
+
+/**
+ * Whether an operator's VALUE survives translation.
+ *
+ * `buildWhereClause` skips an `undefined` value, and an empty `IN` list is
+ * dropped downstream rather than matching nothing. Either way the member
+ * vanishes while its siblings remain, so a rule that should match no rows
+ * instead matches every row its other predicates allow.
+ */
+function isTranslatableOperatorValue(
+  operator: string,
+  value: unknown
+): boolean {
+  if (value === undefined) return false;
+  if (operator === "in" || operator === "not_in") {
+    return Array.isArray(value) && value.length > 0;
+  }
+  return true;
+}
+
+/**
  * Confirm every member of an access constraint can be translated into SQL.
  *
- * The translators drop what they cannot handle and keep the rest: an operator
- * outside `OPERATOR_MAP` (the geo operators, which reach SQL through a separate
- * extractor) is skipped by `buildWhereClause`, and a field absent from the
- * schema is skipped by `buildDrizzleCondition`. Either way a sibling predicate
- * survives, the result is non-empty, and the read runs under a WEAKER predicate
- * than the rule asked for — the same partial-application bug this whole path
- * exists to remove, one level up.
+ * The translators drop a member they cannot handle and keep the rest, so a
+ * constraint can produce a non-empty condition that binds less than it states —
+ * returning rows the rule excludes. Completeness is therefore established here,
+ * before translating, rather than inferred from a non-empty result.
  *
- * So completeness is established before translating rather than inferred from a
- * non-empty result. Returns the first untranslatable member, or null when the
- * whole constraint can be applied.
+ * A field is translatable when it is a column on the main table, or a localized
+ * field the companion context can resolve. Returns the first untranslatable
+ * member, or null when the whole constraint can be applied.
  */
 function findUntranslatableConstraintMember(
   constraint: Record<string, unknown>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-  schema: any
+  schema: Record<string, unknown>,
+  localizedCtx?: LocalizedQueryContext | null
 ): string | null {
   for (const [key, value] of Object.entries(constraint)) {
     if (key === "and" || key === "or") {
@@ -161,22 +197,29 @@ function findUntranslatableConstraintMember(
         if (branch === null || typeof branch !== "object") return key;
         const nested = findUntranslatableConstraintMember(
           branch as Record<string, unknown>,
-          schema
+          schema,
+          localizedCtx
         );
         if (nested) return nested;
       }
       continue;
     }
 
-    // A field predicate. The column has to exist on the main table: a localized
-    // or otherwise absent column is silently skipped downstream.
-    if (!schema[key.split(".")[0]]) return key;
+    const fieldName = key.split(".")[0];
+    const isLocalized = Boolean(
+      localizedCtx?.localizedFields.some(f => f.name === fieldName)
+    );
+    if (!schema[fieldName] && !isLocalized) return key;
 
     if (value === null || typeof value !== "object") return key;
     const operators = Object.keys(value);
     if (operators.length === 0) return key;
     for (const operator of operators) {
-      if (!isValidOperator(operator)) return `${key}.${operator}`;
+      if (!isMappableOperator(operator)) return `${key}.${operator}`;
+      const operatorValue = (value as Record<string, unknown>)[operator];
+      if (!isTranslatableOperatorValue(operator, operatorValue)) {
+        return `${key}.${operator}`;
+      }
     }
   }
   return null;
@@ -980,7 +1023,8 @@ export class CollectionQueryService extends BaseService {
         // non-empty condition that binds less than the rule requires.
         const untranslatable = findUntranslatableConstraintMember(
           accessConstraint,
-          schema
+          schema,
+          localizedCtx
         );
         if (untranslatable) {
           throw NextlyError.forbidden({
@@ -1462,12 +1506,11 @@ export class CollectionQueryService extends BaseService {
       // A NextlyError already carries the right status (a refused access
       // constraint is a 403); flattening it to 500 would report an authorization
       // decision as a server fault.
-      const statusCode =
-        error instanceof NextlyError
-          ? error.statusCode
-          : isNotFound
-            ? 404
-            : 500;
+      const statusCode = NextlyError.is(error)
+        ? error.statusCode
+        : isNotFound
+          ? 404
+          : 500;
       return {
         success: false,
         statusCode,
@@ -1776,7 +1819,8 @@ export class CollectionQueryService extends BaseService {
         // non-empty condition that binds less than the rule requires.
         const untranslatable = findUntranslatableConstraintMember(
           accessConstraint,
-          schema
+          schema,
+          localizedCtx
         );
         if (untranslatable) {
           throw NextlyError.forbidden({
@@ -1840,7 +1884,7 @@ export class CollectionQueryService extends BaseService {
         success: false,
         // Mirrors listEntries: a refused access constraint is a 403, not a
         // server fault, and the count must report it the same way.
-        statusCode: error instanceof NextlyError ? error.statusCode : 500,
+        statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,
       };

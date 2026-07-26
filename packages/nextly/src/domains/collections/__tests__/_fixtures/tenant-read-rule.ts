@@ -37,6 +37,14 @@ export default function tenantReadRule({
     // `buildDrizzleCondition` skips while keeping the sibling.
     case "partial-unknown-field":
       return { tenant: { equals: "acme" }, nosuchcolumn: { equals: "x" } };
+    // An empty IN list — what a rule returns when the caller has no permitted
+    // ids. It should match nothing; dropped, it leaves the sibling matching
+    // everything the sibling allows.
+    case "empty-in":
+      return { tenant: { equals: "acme" }, region: { in: [] } };
+    // An inherited property name rather than a real operator.
+    case "inherited-operator":
+      return { tenant: { equals: "acme" }, region: { toString: "x" } };
     default:
       return true;
   }

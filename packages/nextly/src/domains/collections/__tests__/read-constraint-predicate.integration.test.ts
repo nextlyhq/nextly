@@ -173,6 +173,37 @@ describe("stored read constraints are applied in full (integration)", () => {
     expect(counted.statusCode).toBe(403);
   });
 
+  it("refuses an empty IN list rather than dropping it", async () => {
+    // A rule computing "the ids you may see" can legitimately come back empty,
+    // which must match no rows. Dropped, the sibling predicate runs alone and
+    // returns everything it allows.
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "empty-in" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("refuses an inherited property posing as an operator", async () => {
+    // `toString` answers true to an `in`-keyword operator check while mapping to
+    // nothing, so it would be dropped and its sibling would still run.
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "inherited-operator" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("counts the same rows it lists", async () => {
     const handler = await bootWithStoredRule();
 
