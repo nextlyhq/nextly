@@ -59,6 +59,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
+import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
@@ -1624,6 +1625,11 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
         overrideAccess: params.overrideAccess,
       });
+
+      // Declared defaults are filled before the hooks so a hook branching on a
+      // field sees the value a new entry actually starts with, and before
+      // validation so a required field carrying a default is satisfied.
+      applyFieldDefaults(finalData, fields);
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
@@ -5010,6 +5016,11 @@ export class CollectionMutationService extends BaseService {
         overrideAccess: params.overrideAccess,
       });
 
+      // Declared defaults are filled before the hooks so a hook branching on a
+      // field sees the value a new entry actually starts with, and before
+      // validation so a required field carrying a default is satisfied.
+      applyFieldDefaults(finalData, fields);
+
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
       await runFieldHooks({
@@ -6228,6 +6239,10 @@ export class CollectionMutationService extends BaseService {
       // hook can set `slug`, so re-sanitize after it so the validated and
       // stored value stays URL-safe. When hooks are skipped the slug is still
       // the (already-sanitized) generated value, so no pass is needed.
+      // Filled regardless of `skipHooks`: a default is part of what the entry
+      // is, not a hook behaviour that a bulk path may opt out of.
+      applyFieldDefaults(finalData, fields);
+
       if (!skipHooks) {
         await runFieldHooks({
           kind: "collection",
