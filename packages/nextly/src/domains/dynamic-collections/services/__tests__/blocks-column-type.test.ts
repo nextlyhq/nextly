@@ -58,8 +58,15 @@ describe("blocks column type", () => {
         { formatVersion: 1, kind: "page", nodes: [] },
         "blocks"
       );
-      expect(generated, dialect).toContain('"formatVersion"');
-      expect(generated, dialect).not.toContain("[object Object]");
+      const text =
+        dialect === "mysql"
+          ? Buffer.from(
+              generated.match(/X'([0-9a-f]*)'/)?.[1] ?? "",
+              "hex"
+            ).toString("utf8")
+          : generated;
+      expect(text, dialect).toContain('"formatVersion"');
+      expect(text, dialect).not.toContain("[object Object]");
     }
   });
 
@@ -83,15 +90,18 @@ describe("blocks column type", () => {
         },
         "blocks"
       );
-      // MySQL takes a JSON default only as a parenthesized expression, so the
-      // literal sits inside a wrapper there and stands alone elsewhere.
-      const literal = dialect === "mysql" ? generated.slice(1, -1) : generated;
-      expect(literal.startsWith("'"), dialect).toBe(true);
-      expect(literal.endsWith("'"), dialect).toBe(true);
+      if (dialect === "mysql") {
+        // Hex carries no delimiter at all, so there is nothing to escape.
+        const hex = generated.match(/X'([0-9a-f]*)'/)?.[1] ?? "";
+        expect(Buffer.from(hex, "hex").toString("utf8")).toContain("O'Reilly");
+        continue;
+      }
       // Every embedded quote is doubled, so the literal opens and closes once.
-      expect(literal.slice(1, -1).includes("''"), dialect).toBe(true);
+      expect(generated.startsWith("'"), dialect).toBe(true);
+      expect(generated.endsWith("'"), dialect).toBe(true);
+      expect(generated.slice(1, -1).includes("''"), dialect).toBe(true);
       expect(
-        literal.slice(1, -1).replace(/''/g, "").includes("'"),
+        generated.slice(1, -1).replace(/''/g, "").includes("'"),
         dialect
       ).toBe(false);
     }

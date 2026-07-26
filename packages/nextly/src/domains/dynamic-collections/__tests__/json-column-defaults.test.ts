@@ -28,21 +28,21 @@ function alterAdding(type: string, dialect: SupportedDialect): string {
 const jsonBackedTypes = ["blocks", "json", "repeater", "group", "chips"];
 
 describe.each(jsonBackedTypes)("adding a required %s column", type => {
-  it("wraps the default in an expression for mysql", () => {
+  it("uses a mode-independent expression default for mysql", () => {
     const sql = alterAdding(type, "mysql");
-    expect(sql).toMatch(/DEFAULT \('.*'\)/);
+    expect(sql).toMatch(/DEFAULT \(CONVERT\(X'[0-9a-f]*' USING utf8mb4\)\)/);
   });
 
   it("uses a bare literal default for postgresql", () => {
     const sql = alterAdding(type, "postgresql");
     expect(sql).toContain("DEFAULT '");
-    expect(sql).not.toMatch(/DEFAULT \('/);
+    expect(sql).not.toContain("CONVERT(");
   });
 
   it("uses a bare literal default for sqlite", () => {
     const sql = alterAdding(type, "sqlite");
     expect(sql).toContain("DEFAULT '");
-    expect(sql).not.toMatch(/DEFAULT \('/);
+    expect(sql).not.toContain("CONVERT(");
   });
 });
 
@@ -57,7 +57,11 @@ describe("a required blocks column", () => {
       "sqlite",
     ] as SupportedDialect[]) {
       const sql = alterAdding("blocks", dialect);
-      const literal = sql.match(/DEFAULT \(?'(.*?)'\)?;/)?.[1];
+      const hex = sql.match(/X'([0-9a-f]*)'/)?.[1];
+      const literal =
+        hex !== undefined
+          ? Buffer.from(hex, "hex").toString("utf8")
+          : sql.match(/DEFAULT '(.*?)';/)?.[1];
       expect(literal, dialect).toBeDefined();
       expect(JSON.parse(String(literal))).toEqual({
         formatVersion: 1,

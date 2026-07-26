@@ -120,6 +120,24 @@ export function assertValidBlocksDefault(
   singleSlug: string
 ): void {
   if (field.type !== "blocks") return;
+  // `validateBlocksValue` treats an absent value as an empty field and leaves
+  // requiredness to the shared rules, which this path never reaches: the row
+  // is inserted straight from these defaults. A required column would take the
+  // null and fail at the database, reporting a constraint rather than the
+  // configuration that caused it.
+  if (value === null || value === undefined) {
+    if (!("required" in field && field.required)) return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: field.name,
+          code: "REQUIRED",
+          message: `${field.name} is required, but its default produced no document.`,
+        },
+      ],
+      logContext: { single: singleSlug, field: field.name, reason: "default" },
+    });
+  }
   const policy = (field as { blocks?: BlocksPolicy }).blocks ?? {};
   const issues = validateBlocksValue(value, field.name, field.name, policy);
   if (issues.length === 0) return;

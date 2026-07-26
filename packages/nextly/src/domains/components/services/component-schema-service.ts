@@ -344,7 +344,15 @@ export class ComponentSchemaService {
 
       // When adding NOT NULL columns to existing tables, provide a sensible default.
       let defaultVal = "";
-      if ("defaultValue" in field && field.defaultValue !== undefined) {
+      // A function default produces a different value per row, which a single
+      // DDL constant cannot express. Backfilling existing rows still needs
+      // something, so a required column falls back to its type default rather
+      // than trying to serialize the function itself.
+      const hasConstantDefault =
+        "defaultValue" in field &&
+        field.defaultValue !== undefined &&
+        typeof field.defaultValue !== "function";
+      if (hasConstantDefault) {
         defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, field.type)}`;
       } else if ("required" in field && field.required) {
         defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;

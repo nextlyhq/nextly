@@ -50,6 +50,18 @@ function node(type: string): BlockNode {
   };
 }
 
+/**
+ * A policy the type system rejects, which is the point: these cases assert the
+ * runtime still refuses configurations TypeScript cannot express as valid.
+ */
+function withPolicy(policy: unknown): BlocksFieldConfig {
+  return {
+    name: "content",
+    type: "blocks",
+    blocks: policy,
+  } as BlocksFieldConfig;
+}
+
 const surfaces = [
   { name: "collection", codesFor: collectionCodes },
   { name: "single", codesFor: singleCodes },
@@ -73,6 +85,26 @@ describe.each(surfaces)("$name blocks field validation", ({ codesFor }) => {
     expect(
       codesFor(blocks({ name: "content", blocks: { kinds: ["template"] } }))
     ).toEqual([]);
+  });
+
+  it("rejects an unknown document kind", () => {
+    // The field-level check accepts a kind purely because it is listed here,
+    // so nothing downstream would ever reject it.
+    expect(codesFor(withPolicy({ kinds: ["nonsense"] }))).toContain(
+      "FIELD_TYPE_INVALID"
+    );
+  });
+
+  it("rejects a non-array allow list", () => {
+    // The write-time check calls `.some()` on it, so a wrong shape would crash
+    // every write rather than fail the configuration.
+    expect(codesFor(withPolicy({ allow: "core/*" }))).toContain(
+      "FIELD_TYPE_INVALID"
+    );
+  });
+
+  it("rejects a non-object policy", () => {
+    expect(codesFor(withPolicy(["core/*"]))).toContain("FIELD_TYPE_INVALID");
   });
 
   it("rejects a default whose kind the field does not accept", () => {

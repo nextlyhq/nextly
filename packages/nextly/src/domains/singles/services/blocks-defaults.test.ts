@@ -126,6 +126,29 @@ describe("assertValidBlocksDefault", () => {
     }
   });
 
+  it("rejects an absent default on a required field", () => {
+    // The row is inserted straight from these defaults, so a null would reach
+    // a NOT NULL column and surface as a constraint error instead.
+    const required = {
+      name: "content",
+      type: "blocks",
+      required: true,
+    } as FieldConfig;
+    for (const absent of [null, undefined]) {
+      expect(() =>
+        assertValidBlocksDefault(required, absent, "homepage")
+      ).toThrow(NextlyError);
+    }
+  });
+
+  it("accepts an absent default on an optional field", () => {
+    for (const absent of [null, undefined]) {
+      expect(() =>
+        assertValidBlocksDefault(blocksField(), absent, "homepage")
+      ).not.toThrow();
+    }
+  });
+
   it("ignores fields of every other type", () => {
     const text = { name: "title", type: "text" } as FieldConfig;
     expect(() =>

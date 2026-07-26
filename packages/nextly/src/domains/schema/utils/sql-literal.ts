@@ -55,6 +55,13 @@ export function quoteJsonSqlDefault(
   value: string,
   dialect: SupportedDialect
 ): string {
-  const literal = quoteSqlLiteral(value, dialect);
-  return dialect === "mysql" ? `(${literal})` : literal;
+  if (dialect !== "mysql") return quoteSqlLiteral(value, dialect);
+  // Hex avoids quoting entirely. A quoted MySQL literal would have to guess
+  // whether the server treats a backslash as an escape, which depends on the
+  // session's SQL mode and cannot be known while the DDL is being written; a
+  // wrong guess silently stores different JSON than was configured. The bytes
+  // here carry no delimiter and no escape character, so they mean the same
+  // thing under every mode.
+  const hex = Buffer.from(value, "utf8").toString("hex");
+  return `(CONVERT(X'${hex}' USING utf8mb4))`;
 }

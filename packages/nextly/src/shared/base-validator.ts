@@ -25,6 +25,7 @@
 // validate-config in turn imports from this file. See shared/sql-reserved.ts
 // for the full rationale.
 import type { DocumentKind } from "@nextlyhq/blocks-engine";
+import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 
 import { validateBlocksValue } from "../collections/fields/validators/blocks-validator";
 
@@ -386,14 +387,58 @@ export function validateBlocksPolicyShared(
   errors: BaseValidationError[]
 ): void {
   if (field.type !== "blocks") return;
-  const policy = field.blocks as { kinds?: unknown } | undefined;
-  if (Array.isArray(policy?.kinds) && policy.kinds.length === 0) {
+  if (field.blocks === undefined) return;
+  const fail = (suffix: string, message: string): void => {
     errors.push({
-      path: `${path}.blocks.kinds`,
-      message:
-        "blocks.kinds cannot be empty: the field would accept no document at all. Omit it to accept a page.",
+      path: `${path}.blocks${suffix}`,
+      message,
       code: "FIELD_TYPE_INVALID",
     });
+  };
+
+  if (
+    typeof field.blocks !== "object" ||
+    field.blocks === null ||
+    Array.isArray(field.blocks)
+  ) {
+    fail("", "blocks must be an object declaring allow and/or kinds.");
+    return;
+  }
+  const policy = field.blocks as { kinds?: unknown; allow?: unknown };
+
+  // The write-time check calls `.some()` on `allow`, so a non-array here would
+  // surface as a crash on every write rather than as a configuration error.
+  if (policy.allow !== undefined) {
+    if (
+      !Array.isArray(policy.allow) ||
+      policy.allow.some(entry => typeof entry !== "string")
+    ) {
+      fail(".allow", "blocks.allow must be an array of block name strings.");
+    }
+  }
+
+  if (policy.kinds === undefined) return;
+  if (!Array.isArray(policy.kinds)) {
+    fail(".kinds", "blocks.kinds must be an array of document kinds.");
+    return;
+  }
+  if (policy.kinds.length === 0) {
+    fail(
+      ".kinds",
+      "blocks.kinds cannot be empty: the field would accept no document at all. Omit it to accept a page."
+    );
+    return;
+  }
+  // An unrecognized kind is accepted by the field-level check purely because it
+  // appears in this list, so nothing downstream would ever reject it.
+  const unknown = policy.kinds.filter(
+    kind => !(DOCUMENT_KINDS as readonly unknown[]).includes(kind)
+  );
+  if (unknown.length > 0) {
+    fail(
+      ".kinds",
+      `blocks.kinds contains unknown document kinds: ${unknown.map(String).join(", ")}. Accepted: ${DOCUMENT_KINDS.join(", ")}.`
+    );
   }
 }
 
