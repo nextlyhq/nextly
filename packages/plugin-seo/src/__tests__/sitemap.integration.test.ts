@@ -2,15 +2,12 @@
  * The sitemap route serves published content as XML over the catch-all, proven
  * end-to-end against a real boot: a published entry appears, a draft and a
  * `noindex` entry do not, only the configured subset is enumerated, and the
- * (uncached) data provider reflects a publish. Drives the real
- * `contributes.routes` handler through `createDynamicHandlers` — the same path
- * production serves.
+ * data provider reflects a publish. Drives the real `contributes.routes`
+ * handler through `createDynamicHandlers` — the same path production serves.
  *
- * The route caches its output behind the collection tags (F1). Outside a Next
- * request scope `revalidateTag` is a no-op, and `unstable_cache` keys by
- * `keyParts` at process scope, so each test uses a DISTINCT `baseUrl` (part of
- * the key) to avoid cross-boot cache bleed, and publish-freshness is checked
- * against the uncached provider rather than the cached route.
+ * Each route test uses a DISTINCT `baseUrl` (or request host) so the assertions
+ * stay independent, and publish-freshness is checked against the data provider
+ * directly.
  */
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
