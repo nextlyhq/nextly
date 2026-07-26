@@ -13,6 +13,8 @@
  * @since 1.0.0
  */
 
+import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+
 import type { FieldConfig, DataFieldConfig } from "@nextly/collections";
 
 import {
@@ -37,6 +39,9 @@ import {
   isDataField,
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
+
+/** What a blocks field accepts when it declares no kinds of its own. */
+const DEFAULT_BLOCKS_DOCUMENT_KIND = "page";
 
 // ============================================================
 // Types
@@ -405,11 +410,12 @@ export class ZodGenerator {
     else if (isChipsField(field)) {
       zodSchema = this.buildChipsSchema(field);
     }
-    // Blocks fields — a whole page document, validated in depth by the engine
-    // on write; the generated schema only asserts the envelope's own shape.
+    // Blocks fields — a whole page document. The node tree is validated in
+    // depth by the engine on write; the generated schema asserts the envelope,
+    // pinned to the format version and the kinds this field actually accepts
+    // so a value it admits is one the server will also admit.
     else if (isBlocksField(field)) {
-      zodSchema =
-        "z.object({ formatVersion: z.number(), kind: z.string(), nodes: z.array(z.unknown()) }).passthrough()";
+      zodSchema = this.buildBlocksSchema(field);
     }
     // Unknown field type
     else {
@@ -635,6 +641,19 @@ export class ZodGenerator {
         : [];
 
     return this.buildNestedObjectSchema(nestedFields);
+  }
+
+  /**
+   * Builds Zod schema for a blocks field's document envelope.
+   */
+  private buildBlocksSchema(field: DataFieldConfig): string {
+    const kinds = (field as { blocks?: { kinds?: string[] } }).blocks?.kinds;
+    const accepted =
+      kinds && kinds.length > 0 ? kinds : [DEFAULT_BLOCKS_DOCUMENT_KIND];
+    const kindSchema = accepted
+      .map(kind => `"${this.escapeString(kind)}"`)
+      .join(", ");
+    return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: z.enum([${kindSchema}]), nodes: z.array(z.unknown()) }).passthrough()`;
   }
 
   /**

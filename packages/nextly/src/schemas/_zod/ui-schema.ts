@@ -12,7 +12,7 @@
  * @module schemas/_zod/ui-schema
  * @since v0.0.3-alpha (Plan D1)
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
 import {
   DOCUMENT_KINDS,
   validate as validateDocument,
@@ -170,6 +170,13 @@ export type FieldNode = {
   hasMany?: boolean;
   relationTo?: string | string[];
   options?: { id?: string; label: string; value: string }[];
+  /**
+   * A blocks field's policy. Declared here as well as in the schema so the
+   * parsed result carries it statically — the runtime parser preserves it
+   * either way, and a type that erased it would make every consumer cast, and
+   * would let a mapper drop it without the compiler noticing.
+   */
+  blocks?: { allow?: string[]; kinds?: DocumentKind[] };
   defaultValue?: unknown;
   validation?: {
     minLength?: number;
