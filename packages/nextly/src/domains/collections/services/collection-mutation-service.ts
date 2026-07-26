@@ -4140,44 +4140,35 @@ export class CollectionMutationService extends BaseService {
               const mainTo = (currentParent as { status?: unknown }).status as
                 | string
                 | undefined;
-              // The main row's status is the DEFAULT locale's entry-level status
-              // on a localized collection (a default-locale write keeps `status`
-              // in the main payload; a non-default write strips it, so the main
-              // check no-ops for those). Tag it with the default locale so a
-              // localized publish is consistent with publishAllLocales; a
-              // non-localized collection has no locale.
-              const defaultLocale = localizedUpdate
-                ? this.localization?.defaultLocale
-                : undefined;
-              const mainStatusRecorded = collectionHasStatusLifecycle
-                ? await this.recordStatusEvents(tx, {
-                    collection: params.collectionName,
-                    id: params.entryId,
-                    ...(defaultLocale !== undefined
-                      ? { locale: defaultLocale }
-                      : {}),
-                    from: mainFrom,
-                    to: mainTo,
-                    isCreate: false,
-                    data: updatedDocument,
-                    previous: previousDocument,
-                    fields: webhookFields,
-                    actor,
-                  })
-                : false;
+              // On a LOCALIZED collection the companion `_status` is the
+              // authoritative per-locale status (the write locale's), and the
+              // main row only mirrors the default locale — which can drift from
+              // the default companion. So route every localized write through the
+              // per-locale branch below (default included) and use the main-row
+              // branch only for a NON-localized collection. This avoids both a
+              // duplicate default-locale event (main + companion) and a dropped
+              // one (main-row no-op while the companion actually transitioned).
+              const mainStatusRecorded =
+                collectionHasStatusLifecycle && !localizedUpdate
+                  ? await this.recordStatusEvents(tx, {
+                      collection: params.collectionName,
+                      id: params.entryId,
+                      from: mainFrom,
+                      to: mainTo,
+                      isCreate: false,
+                      data: updatedDocument,
+                      previous: previousDocument,
+                      fields: webhookFields,
+                      actor,
+                    })
+                  : false;
 
-              // Per-locale delta (i18n M6): a NON-default localized write moves
-              // only the companion `_status`, leaving the main row unchanged, so
-              // the main-row check above never fires for it — emit it here tagged
-              // with the write locale. The DEFAULT locale is skipped: its status
-              // lives in the main row too, so it is already covered above, and
-              // recording it here as well would duplicate the event.
+              // Per-locale delta (i18n M6), for the write locale of a localized
+              // write — including the default locale, whose real status is the
+              // companion `_status`, not the main row. Tagged with the write
+              // locale. `_status` is present only when the patch carried a status.
               let localizedStatusRecorded = false;
-              if (
-                collectionHasStatusLifecycle &&
-                localizedUpdate &&
-                localizedUpdate.writeLocale !== this.localization?.defaultLocale
-              ) {
+              if (collectionHasStatusLifecycle && localizedUpdate) {
                 const localizedNext = localizedUpdate.companionData._status;
                 localizedStatusRecorded = await this.recordStatusEvents(tx, {
                   collection: params.collectionName,
