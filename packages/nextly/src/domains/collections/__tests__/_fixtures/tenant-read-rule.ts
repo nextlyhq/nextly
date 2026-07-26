@@ -49,10 +49,23 @@ export default function tenantReadRule({
     // a function, which reads as a present column.
     case "inherited-field":
       return { tenant: { equals: "acme" }, toString: { not_equals: "x" } };
-    // An empty alternatives group, as a rule building branches dynamically can
-    // produce. It should authorize nothing.
-    case "empty-or":
-      return { tenant: { equals: "acme" }, or: [] };
+    // An empty field name, which translation drops.
+    case "empty-field-name":
+      return { tenant: { equals: "acme" }, "": { equals: "x" } };
+    // A dotted path. Translation discards the suffix and compares the base
+    // column, applying a different predicate than the rule states.
+    case "dotted-field":
+      return { tenant: { equals: "acme" }, "region.name": { equals: "eu" } };
+    // Shorthand equality: a primitive translates to `field = value`.
+    case "shorthand":
+      return { region: "eu" };
+    // A logical group. Refused rather than approximated: a branch that
+    // translates to nothing is dropped and its siblings decide alone.
+    case "or-group":
+      return { tenant: { equals: "acme" }, or: [{ region: { equals: "eu" } }] };
+    // A branch that translates to nothing inside a non-empty group.
+    case "or-empty-branch":
+      return { tenant: { equals: "acme" }, or: [{}] };
     // A scalar `in`, which the translator normalizes to a one-element list, so
     // it is a valid rule and must NOT be refused.
     case "scalar-in":

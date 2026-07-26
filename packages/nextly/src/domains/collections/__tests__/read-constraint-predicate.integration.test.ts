@@ -217,17 +217,37 @@ describe("stored read constraints are applied in full (integration)", () => {
     expect(result.statusCode).toBe(403);
   });
 
-  it("refuses an empty alternatives group", async () => {
+  it.each([
+    ["or-group", "a logical group"],
+    ["or-empty-branch", "a group whose branch translates to nothing"],
+    ["empty-field-name", "an empty field name"],
+    ["dotted-field", "a dotted path whose suffix translation discards"],
+  ])("refuses %s (%s)", async userId => {
+    // Each of these translates to something NARROWER than the rule states, or
+    // to a different predicate entirely. Refusing beats approximating: the
+    // shapes an access constraint may take are deliberately narrower than the
+    // ones a caller's own filter may take.
     const handler = await bootWithStoredRule();
 
     const result = await handler.listEntries({
       collectionName: "docs",
-      user: { id: "empty-or" },
+      user: { id: userId },
       routeAuthorized: true,
     });
 
     expect(result.success).toBe(false);
     expect(result.statusCode).toBe(403);
+  });
+
+  it("accepts shorthand equality", async () => {
+    // A primitive value translates to `field = value`, so it is exact and must
+    // not be refused.
+    const handler = await bootWithStoredRule();
+
+    expect(await titlesFor(handler, "shorthand")).toEqual([
+      "acme-eu-free",
+      "other-eu-paid",
+    ]);
   });
 
   it("accepts a scalar IN, which the translator normalizes", async () => {

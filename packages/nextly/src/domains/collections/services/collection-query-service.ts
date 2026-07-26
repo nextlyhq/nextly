@@ -134,20 +134,15 @@ interface LocalizedQueryContext {
   statusValue?: string;
 }
 
-/**
- * The operators `buildWhereClause` can map, as an explicit set.
- *
- * `isValidOperator` tests with the `in` keyword, which also answers true for
- * inherited names like `toString` or `constructor`. Such a member passes
- * validation, is then dropped as unmappable, and leaves its siblings running —
- * a narrower predicate than the rule states.
- */
 let mappableOperators: ReadonlySet<string> | undefined;
 
 /**
- * Built on first use rather than at module load: this module participates in an
- * import cycle, so reading the operator list eagerly can run before that module
- * has initialized and throw while the graph is still being wired.
+ * Whether an operator name is one `buildWhereClause` maps.
+ *
+ * Built on first use, not at module load: this module sits in an import cycle,
+ * so reading the operator list eagerly can run before that module initializes.
+ * Checked against an explicit set rather than the `in` keyword, which also
+ * answers true for inherited names like `toString`.
  */
 function isMappableOperator(operator: string): boolean {
   mappableOperators ??= new Set<string>(getSupportedOperators());
@@ -155,79 +150,76 @@ function isMappableOperator(operator: string): boolean {
 }
 
 /**
- * Whether an operator's VALUE survives translation.
+ * Why an access constraint cannot be applied, or null when it can.
  *
- * `buildWhereClause` skips an `undefined` value, and an empty `IN` list is
- * dropped downstream rather than matching nothing. Either way the member
- * vanishes while its siblings remain, so a rule that should match no rows
- * instead matches every row its other predicates allow.
+ * An access constraint is a security predicate, so it is held to a NARROWER
+ * shape than a caller's own `where` clause. The translators are built for caller
+ * filters, where dropping a member they cannot handle is acceptable; for a rule
+ * that decides who sees what, a dropped member means the read runs under a
+ * weaker predicate than the rule states and returns rows it excludes.
+ *
+ * Rather than enumerate everything translation can drop — a list that has proven
+ * incomplete — only a shape whose translation is exact is accepted:
+ *
+ * - a flat map of field to predicate, no logical groups
+ * - fields that are OWN columns on the main table, or localized fields the
+ *   companion context resolves; no dotted paths, whose suffix translation
+ *   discards and compares the base column instead
+ * - a primitive value (shorthand equality), or operators from the mapped set
+ *   with values that survive translation
+ *
+ * Anything else is refused with its reason rather than partly applied. A rule
+ * needing a richer shape is a feature, not something to approximate here.
  */
-function isTranslatableOperatorValue(
-  operator: string,
-  value: unknown
-): boolean {
-  if (value === undefined) return false;
-  if (operator === "in" || operator === "not_in") {
-    // A scalar is normalized to a one-element list downstream, so it translates.
-    // An EMPTY list does not: it is dropped, and a rule that should match no
-    // rows instead leaves its siblings matching everything they allow.
-    return Array.isArray(value) ? value.length > 0 : true;
-  }
-  return true;
-}
-
-/**
- * Confirm every member of an access constraint can be translated into SQL.
- *
- * The translators drop a member they cannot handle and keep the rest, so a
- * constraint can produce a non-empty condition that binds less than it states —
- * returning rows the rule excludes. Completeness is therefore established here,
- * before translating, rather than inferred from a non-empty result.
- *
- * A field is translatable when it is a column on the main table, or a localized
- * field the companion context can resolve. Returns the first untranslatable
- * member, or null when the whole constraint can be applied.
- */
-function findUntranslatableConstraintMember(
+function describeUntranslatableConstraint(
   constraint: Record<string, unknown>,
   schema: Record<string, unknown>,
   localizedCtx?: LocalizedQueryContext | null
 ): string | null {
-  for (const [key, value] of Object.entries(constraint)) {
-    if (key === "and" || key === "or") {
-      // An empty group is dropped rather than matching nothing, which would let
-      // the siblings beside it run as the whole predicate.
-      if (!Array.isArray(value) || value.length === 0) return key;
-      for (const branch of value) {
-        if (branch === null || typeof branch !== "object") return key;
-        const nested = findUntranslatableConstraintMember(
-          branch as Record<string, unknown>,
-          schema,
-          localizedCtx
-        );
-        if (nested) return nested;
-      }
+  const entries = Object.entries(constraint);
+  if (entries.length === 0) return "constraint is empty";
+
+  for (const [field, predicate] of entries) {
+    if (field === "and" || field === "or") {
+      return `logical group "${field}" is not supported in an access constraint`;
+    }
+    if (!field) return "field name is empty";
+    if (field.includes(".")) {
+      // Translation drops the suffix and compares the base column, which is a
+      // different predicate than the rule states.
+      return `dotted field "${field}" is not supported in an access constraint`;
+    }
+
+    const isOwnColumn = Object.prototype.hasOwnProperty.call(schema, field);
+    const isLocalized = Boolean(
+      localizedCtx?.localizedFields.some(f => f.name === field)
+    );
+    if (!isOwnColumn && !isLocalized) return `unknown field "${field}"`;
+
+    // Shorthand equality: a primitive translates to `field = value`.
+    if (predicate === null || typeof predicate !== "object") {
+      if (predicate === undefined) return `field "${field}" has no value`;
       continue;
     }
 
-    const fieldName = key.split(".")[0];
-    const isLocalized = Boolean(
-      localizedCtx?.localizedFields.some(f => f.name === fieldName)
-    );
-    // An own column only: a plain lookup resolves inherited names like
-    // `toString` to a function, which passes as present and is then read as a
-    // column, leaving the siblings as the effective predicate.
-    const isOwnColumn = Object.prototype.hasOwnProperty.call(schema, fieldName);
-    if (!isOwnColumn && !isLocalized) return key;
-
-    if (value === null || typeof value !== "object") return key;
-    const operators = Object.keys(value);
-    if (operators.length === 0) return key;
+    const operators = Object.keys(predicate);
+    if (operators.length === 0) return `field "${field}" has no operator`;
     for (const operator of operators) {
-      if (!isMappableOperator(operator)) return `${key}.${operator}`;
-      const operatorValue = (value as Record<string, unknown>)[operator];
-      if (!isTranslatableOperatorValue(operator, operatorValue)) {
-        return `${key}.${operator}`;
+      if (!isMappableOperator(operator)) {
+        return `operator "${operator}" on "${field}" is not supported`;
+      }
+      const value = (predicate as Record<string, unknown>)[operator];
+      if (value === undefined) {
+        return `operator "${operator}" on "${field}" has no value`;
+      }
+      // An empty list is dropped rather than matching nothing, so a rule that
+      // should authorize no rows would leave its siblings deciding alone.
+      if (
+        (operator === "in" || operator === "not_in") &&
+        Array.isArray(value) &&
+        value.length === 0
+      ) {
+        return `operator "${operator}" on "${field}" has an empty list`;
       }
     }
   }
@@ -1030,17 +1022,19 @@ export class CollectionQueryService extends BaseService {
       if (accessConstraint) {
         // Refuse before translating: a partially translatable constraint yields a
         // non-empty condition that binds less than the rule requires.
-        const untranslatable = findUntranslatableConstraintMember(
+        const untranslatable = describeUntranslatableConstraint(
           accessConstraint,
           schema,
           localizedCtx
         );
-        if (untranslatable) {
+        // Explicitly against null: a reason can be any string, and an empty one
+        // would read as success.
+        if (untranslatable !== null) {
           throw NextlyError.forbidden({
             logContext: {
               collection: params.collectionName,
               reason: "untranslatable-access-constraint",
-              member: untranslatable,
+              reason_detail: untranslatable,
             },
           });
         }
@@ -1826,17 +1820,19 @@ export class CollectionQueryService extends BaseService {
       if (accessConstraint) {
         // Refuse before translating: a partially translatable constraint yields a
         // non-empty condition that binds less than the rule requires.
-        const untranslatable = findUntranslatableConstraintMember(
+        const untranslatable = describeUntranslatableConstraint(
           accessConstraint,
           schema,
           localizedCtx
         );
-        if (untranslatable) {
+        // Explicitly against null: a reason can be any string, and an empty one
+        // would read as success.
+        if (untranslatable !== null) {
           throw NextlyError.forbidden({
             logContext: {
               collection: params.collectionName,
               reason: "untranslatable-access-constraint",
-              member: untranslatable,
+              reason_detail: untranslatable,
             },
           });
         }

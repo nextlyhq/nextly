@@ -25,4 +25,6 @@ Read rules that narrow by a filter are now applied in full. A stored read rule c
 
 Filters now go through the same translation your own `where` clauses use, so every field and every supported operator binds. Owner-only rules are unaffected: a single non-empty owner id was the one shape the old path handled correctly, which is why this went unnoticed.
 
-A filter is applied only if **all** of it can be applied. If any part cannot be — an operator that needs a different query path, or a field that is not on the table — the read is refused rather than run under a weaker filter that binds some parts and drops others. The refusal is reported as forbidden, and the matching count refuses identically.
+A filter is applied only if **all** of it can be applied, and access filters are held to a narrower shape than the `where` clauses you write yourself. A filter may name columns on the collection (or its localized fields) and compare them with any supported operator, including the shorthand `{ field: value }` form. Logical `and`/`or` groups, dotted paths like `author.name`, and empty `in`/`not_in` lists are refused rather than approximated, because each of those translates to something narrower than the rule states — or, in the dotted case, to a comparison against a different column.
+
+A refused filter is reported as forbidden, and the matching count refuses identically. If you need a shape that is currently refused, the read fails closed instead of quietly returning more than the rule allows.
