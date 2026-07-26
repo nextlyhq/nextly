@@ -4141,17 +4141,30 @@ export class CollectionMutationService extends BaseService {
               const mainTo = (currentParent as { status?: unknown }).status as
                 | string
                 | undefined;
-              // Route the event through the branch that actually holds the
-              // transition. A companion `_status` is written only for a STRING
-              // status on a localized write; when it is, it is the authoritative
-              // per-locale status (default included, since the main row can drift
-              // from the default companion), so the companion branch owns it and
-              // the main-row branch is skipped to avoid a duplicate. Otherwise —
-              // a non-localized collection, or a localized write whose status the
-              // DB coerced onto the main row without a companion write (e.g.
-              // `status: 0`) — the main row holds the transition, so use it.
+              // A companion `_status` is written only for a STRING status on a
+              // localized write; it is then the authoritative per-locale status
+              // and the companion branch below records its transition, tagged
+              // with the locale.
               const companionStatusWritten =
                 typeof localizedUpdate?.companionData._status === "string";
+              const companionNext =
+                typeof localizedUpdate?.companionData._status === "string"
+                  ? localizedUpdate.companionData._status
+                  : undefined;
+              // Route so exactly one branch records each real transition. The
+              // default locale's status lives on BOTH the main row and its
+              // companion, so a normal default-locale write records the same
+              // transition on each — suppress the main-row event ONLY when the
+              // companion write encodes that identical transition (same from AND
+              // to). Otherwise the companion is a different locale's status, or a
+              // no-op rewrite that left a real main-row transition unrecorded
+              // (main row and default companion can drift after a coerced
+              // non-string write, e.g. `status: 0`), so the main row still holds
+              // a transition the companion branch will not emit — keep it.
+              const companionEncodesMainTransition =
+                companionStatusWritten &&
+                localizedPreviousStatus === mainFrom &&
+                companionNext === mainTo;
               // The main-row event must describe the main `status` column's
               // transition, but `updatedDocument`/`previousDocument` carry the
               // write-locale companion status overlaid — and for a default-locale
@@ -4170,7 +4183,7 @@ export class CollectionMutationService extends BaseService {
                   ? { ...previousDocument, status: mainFrom }
                   : previousDocument;
               const mainStatusRecorded =
-                collectionHasStatusLifecycle && !companionStatusWritten
+                collectionHasStatusLifecycle && !companionEncodesMainTransition
                   ? await this.recordStatusEvents(tx, {
                       collection: params.collectionName,
                       id: params.entryId,
@@ -4190,16 +4203,12 @@ export class CollectionMutationService extends BaseService {
               // row. Tagged with the write locale.
               let localizedStatusRecorded = false;
               if (collectionHasStatusLifecycle && companionStatusWritten) {
-                const localizedNext = localizedUpdate.companionData._status;
                 localizedStatusRecorded = await this.recordStatusEvents(tx, {
                   collection: params.collectionName,
                   id: params.entryId,
                   locale: localizedUpdate.writeLocale,
                   from: localizedPreviousStatus,
-                  to:
-                    typeof localizedNext === "string"
-                      ? localizedNext
-                      : undefined,
+                  to: companionNext,
                   isCreate: false,
                   data: updatedDocument,
                   previous: previousDocument,

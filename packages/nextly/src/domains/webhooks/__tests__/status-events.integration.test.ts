@@ -263,6 +263,71 @@ describe("collection status webhook events (integration)", () => {
     expect(envelope.changedFields).toContain("status");
   });
 
+  it("records the main-row transition when a default-locale write leaves the companion status unchanged", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { title: "hi", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Drift the main row from its default companion: a non-string status coerces
+    // onto the main `status` column but is never written to the companion, so the
+    // companion stays "published" while the main row becomes the coerced value.
+    await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "en",
+      },
+      { status: 0 }
+    );
+    const coerced = (
+      envelopeOf(
+        (await events(current)).find(r => r.type === "entry.status_changed")!
+      ).statusChange as { to: string }
+    ).to;
+
+    // Re-publish the default locale: the main row genuinely transitions (coerced
+    // -> published) but the companion rewrite is a no-op (published ->
+    // published). Writing the companion must not suppress the real main-row
+    // transition.
+    await handler.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "en",
+      },
+      { status: "published" }
+    );
+
+    const republish = (await events(current)).find(
+      r =>
+        r.type === "entry.published" &&
+        (envelopeOf(r).statusChange as { from?: string | null }).from ===
+          coerced
+    );
+    expect(republish).toBeDefined();
+    expect(envelopeOf(republish!).statusChange).toEqual({
+      from: coerced,
+      to: "published",
+    });
+  });
+
   it("a webhooks:false collection emits no status events on publish", async () => {
     current = await createTestNextly({
       collections: [
