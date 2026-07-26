@@ -139,6 +139,7 @@ jobs:
           --filter=@nextlyhq/blocks-engine
           --filter=@nextlyhq/plugin-page-builder
           --filter=@nextlyhq/plugin-form-builder
+          --filter=@nextlyhq/plugin-seo
           --filter=@nextlyhq/plugin-sdk
           --filter=@nextlyhq/ui
           --filter=@nextlyhq/adapter-drizzle
