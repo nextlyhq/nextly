@@ -94,7 +94,7 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
-import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
+import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
 
@@ -359,7 +359,11 @@ export class CollectionMutationService extends BaseService {
     fields: readonly SensitiveFieldSource[],
     executor?: unknown
   ): Promise<readonly SensitiveFieldSource[]> {
-    if (!isWebhookRecordingEnabled("collection", collectionSlug)) return fields;
+    // Skip the component expansion when this write will not be recorded — the
+    // per-entity opt-out, or no endpoint with audit off. Component expansion
+    // issues a registry read per slug, so gating it here means a gated-off write
+    // pays nothing and cannot fail on a webhook-only read.
+    if (!isOutboxRecordingActive("collection", collectionSlug)) return fields;
     return this.webhookFieldTree(fields, executor);
   }
 

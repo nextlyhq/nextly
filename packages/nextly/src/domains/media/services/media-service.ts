@@ -50,6 +50,7 @@
 // logContext per §13.8; public messages remain generic and end with a period.
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
+import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
 import type { WebhookRetentionRunner } from "../../../domains/webhooks/retention-runner";
 import { NextlyError } from "../../../errors";
 import { emitMediaEvent } from "../../../events/domain-events";
@@ -220,7 +221,12 @@ export class MediaService {
    * committed media write into an error. Mirrors the collection write path.
    */
   private async afterWrite(): Promise<void> {
-    this.fastDrainScheduler?.offer();
+    // Only offer the fast drain when a media write would have recorded an event
+    // (an endpoint exists, or audit is on). Media has no per-entity opt-out, so
+    // this sync check equals the recorder's result; without it an install with
+    // no webhooks pays a fresh `nextly_webhooks` query on every media write.
+    // Retention still runs — it prunes prior rows regardless.
+    if (isUnscopedRecordingActive()) this.fastDrainScheduler?.offer();
     await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
   }
 
