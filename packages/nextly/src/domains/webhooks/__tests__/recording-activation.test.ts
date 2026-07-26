@@ -110,26 +110,50 @@ describe("endpoint presence flag", () => {
     expect(endpointsPresent()).toBe(true);
   });
 
-  it("coalesces a refresh requested while one is in flight", async () => {
+  it("resolves only after its own serialized refresh completes", async () => {
     const resolvers: Array<(v: boolean) => void> = [];
     const refresher = vi.fn(
       () => new Promise<boolean>(res => resolvers.push(res))
     );
     setEndpointPresenceRefresher(refresher);
 
+    // A CRUD caller must not see its awaited refresh resolve before the read it
+    // requested completes; requests serialize on a shared tail.
     const first = refreshEndpointPresence();
-    // Requested during the in-flight refresh (e.g. endpoint CRUD): must not be
-    // discarded, so the active refresh runs once more afterward.
     const second = refreshEndpointPresence();
-    expect(refresher).toHaveBeenCalledTimes(1);
+    let secondDone = false;
+    void second.then(() => {
+      secondDone = true;
+    });
 
-    resolvers[0](false);
     await flush();
-    expect(refresher).toHaveBeenCalledTimes(2);
-
-    resolvers[1](true);
+    resolvers[0](false); // first refresh completes
     await first;
+    expect(secondDone).toBe(false); // second still awaits its own trailing read
+
+    resolvers[1](true); // second refresh completes
     await second;
+    expect(secondDone).toBe(true);
+    expect(refresher).toHaveBeenCalledTimes(2);
+    expect(endpointsPresent()).toBe(true);
+  });
+
+  it("discards a refresh that resolves after a reset", async () => {
+    let resolveStale: (v: boolean) => void = () => undefined;
+    const refresher = vi.fn(
+      () => new Promise<boolean>(res => (resolveStale = res))
+    );
+    setEndpointPresenceRefresher(refresher);
+
+    const inflight = refreshEndpointPresence();
+    await flush();
+    // A new instance registers (reset) while the prior read is still in flight.
+    resetWebhookActivation();
+    resolveStale(false); // the prior read resolves AFTER the reset
+    await inflight;
+
+    // The stale `false` from the prior instance must not have been committed; the
+    // reset instance is unprimed, so it fails open.
     expect(endpointsPresent()).toBe(true);
   });
 

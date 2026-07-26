@@ -51,9 +51,12 @@ interface ActivationState {
   endpointsPresent: boolean | null;
   presenceAtMs: number;
   refresher: EndpointPresenceRefresher | null;
-  refreshing: boolean;
-  /** A refresh was requested while one was in flight; run once more after it. */
-  refreshPending: boolean;
+  /** Tail of the serialized refresh chain; each request runs after the last. */
+  refreshTail: Promise<void>;
+  /** A background (stale-read) refresh is already queued; do not stampede. */
+  backgroundQueued: boolean;
+  /** Bumped on reset so an in-flight refresh from a prior instance is discarded. */
+  generation: number;
   now: () => number;
 }
 
@@ -66,8 +69,9 @@ if (!globalForActivation.__nextly_webhookActivation) {
     endpointsPresent: null,
     presenceAtMs: 0,
     refresher: null,
-    refreshing: false,
-    refreshPending: false,
+    refreshTail: Promise.resolve(),
+    backgroundQueued: false,
+    generation: 0,
     now: () => Date.now(),
   };
 }
@@ -114,23 +118,16 @@ export function setActivationClock(now: () => number): void {
 async function runRefresh(): Promise<void> {
   const refresher = state.refresher;
   if (refresher === null) return;
-  // Coalesce: a refresh requested while one is in flight (e.g. endpoint CRUD
-  // during the boot/TTL refresh) must not be discarded, or the in-flight read
-  // could commit a pre-mutation result after the change. Mark it pending so the
-  // active refresh runs once more and picks up the newest state.
-  if (state.refreshing) {
-    state.refreshPending = true;
-    return;
-  }
-  state.refreshing = true;
+  // Capture the generation so a refresh started before a reset never writes the
+  // new instance's state (its registry closes over a prior container).
+  const gen = state.generation;
   try {
-    do {
-      state.refreshPending = false;
-      const present = await refresher();
-      state.endpointsPresent = present;
-      state.presenceAtMs = state.now();
-    } while (state.refreshPending);
+    const present = await refresher();
+    if (gen !== state.generation) return;
+    state.endpointsPresent = present;
+    state.presenceAtMs = state.now();
   } catch {
+    if (gen !== state.generation) return;
     // A failed read must not pin a stale value. Keep a known-POSITIVE value (a
     // transient blip should not disable delivery), but drop a negative/unknown
     // value to `null` so the next read fails open and retries — otherwise a
@@ -139,19 +136,37 @@ async function runRefresh(): Promise<void> {
     if (state.endpointsPresent !== true) {
       state.endpointsPresent = null;
     }
-    state.refreshPending = false;
-  } finally {
-    state.refreshing = false;
   }
 }
 
 /**
- * Refresh the presence flag now, awaiting the read. Called at boot and after
- * endpoint CRUD — both outside any content transaction — so same-process changes
- * take effect immediately.
+ * Refresh the presence flag now. AWAITS a read that starts AFTER this call, so a
+ * caller that just changed endpoints (boot, endpoint CRUD) sees its change
+ * reflected before the returned promise resolves. Requests are serialized on a
+ * shared tail, so concurrent callers each await their own trailing read rather
+ * than a stale in-flight one.
  */
 export async function refreshEndpointPresence(): Promise<void> {
-  await runRefresh();
+  const run = state.refreshTail.then(runRefresh, runRefresh);
+  // Keep the chain alive even if a run rejects (runRefresh swallows, but guard
+  // the tail regardless) so later refreshes are not blocked by an earlier error.
+  state.refreshTail = run.catch(() => undefined);
+  await run;
+}
+
+/**
+ * Kick a background refresh without awaiting it, coalesced so a burst of stale
+ * reads does not stampede the database. Safe to call from inside a content write
+ * transaction: the refresh runs on a pooled connection and is never awaited by
+ * the caller, so it cannot check out a second connection while the write holds
+ * one.
+ */
+function scheduleBackgroundRefresh(): void {
+  if (state.backgroundQueued) return;
+  state.backgroundQueued = true;
+  void refreshEndpointPresence().finally(() => {
+    state.backgroundQueued = false;
+  });
 }
 
 /**
@@ -166,12 +181,12 @@ export function endpointsPresent(): boolean {
   if (present === null) {
     // Never primed (e.g. webhooks registered but boot prime not yet finished):
     // fail open, and kick a background prime so later writes gate correctly.
-    void runRefresh();
+    scheduleBackgroundRefresh();
     return true;
   }
   if (state.now() - state.presenceAtMs > PRESENCE_TTL_MS) {
     // Serve the last known value now; refresh out of band for the next read.
-    void runRefresh();
+    scheduleBackgroundRefresh();
   }
   return present;
 }
@@ -209,7 +224,11 @@ export function resetWebhookActivation(): void {
   state.endpointsPresent = null;
   state.presenceAtMs = 0;
   state.refresher = null;
-  state.refreshing = false;
-  state.refreshPending = false;
+  // Bump the generation so any refresh started before this reset is discarded
+  // when it resolves, rather than writing a prior instance's endpoint state onto
+  // the reinitialized one.
+  state.generation += 1;
+  state.refreshTail = Promise.resolve();
+  state.backgroundQueued = false;
   state.now = () => Date.now();
 }
