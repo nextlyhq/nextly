@@ -150,11 +150,12 @@ export const MAX_PAGE_SIZE = 500;
  * `seo.noindex` are excluded: a page told not to be indexed does not belong in
  * the sitemap.
  *
- * The `status: published` filter applies to collections with the draft/
- * published lifecycle (`status: true`). A collection without it has no
- * unpublished state, so the (unknown-field) filter is a no-op there and every
- * entry — all of which are live — is listed. That mirrors the core's own
- * status handling (filter only when a status column exists).
+ * The `status: published` filter is applied ONLY to collections with the
+ * built-in draft/published lifecycle (`status: true`, read via
+ * `getCollection`). A status-less collection has no unpublished state, so every
+ * entry — all of which are live — is listed; the filter is skipped there rather
+ * than applied to a same-named ordinary field. That mirrors the core's own
+ * status handling (filter only when the lifecycle column exists).
  */
 export async function buildSitemapUrls(
   services: SitemapServices,
