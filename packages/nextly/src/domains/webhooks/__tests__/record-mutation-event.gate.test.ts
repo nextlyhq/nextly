@@ -14,6 +14,9 @@ import {
   setWebhookRecording,
 } from "../recording-policy";
 
+// The recording policy and activation are process-global singletons, so each
+// test explicitly primes them and clears them here — otherwise one test's
+// opt-out or presence value would leak into the next.
 afterEach(() => {
   resetWebhookRecordingPolicy();
   resetWebhookActivation();
@@ -63,6 +66,9 @@ describe("recordMutationEvent recording gate", () => {
   });
 });
 
+// Drive the endpoint-presence flag to a known value: wire a refresher that
+// resolves to `present` and await one refresh, so the synchronous
+// `endpointsPresent()` the gate reads reflects it deterministically.
 async function primePresence(present: boolean): Promise<void> {
   setEndpointPresenceRefresher(() => Promise.resolve(present));
   await refreshEndpointPresence();

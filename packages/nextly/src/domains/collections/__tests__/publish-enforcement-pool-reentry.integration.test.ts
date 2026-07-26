@@ -22,7 +22,10 @@ import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import { setWebhookAuditEnabled } from "../../../domains/webhooks/recording-activation";
+import {
+  refreshEndpointPresence,
+  setWebhookAuditEnabled,
+} from "../../../domains/webhooks/recording-activation";
 import { NextlyError } from "../../../errors/nextly-error";
 import { registerHook, unregisterHook } from "../../../hooks";
 import type { HookHandler } from "../../../hooks/types";
@@ -53,8 +56,9 @@ const BEFOREOP_SLUG = "poolreentrybeforeop";
 // transaction — the binding this fixture exercises. Its teardown also drops the
 // companion table (see `drop`).
 const LOCALIZED_DELETE_SLUG = "poolreentrylocdel";
-// A write whose outbox recording gate must read endpoint presence on the
-// caller's transaction, not a second pooled connection, when its cache is cold.
+// A write whose outbox recording gate reads endpoint presence from a
+// synchronous out-of-band flag, never the database, so it takes no connection
+// inside the write transaction.
 const GATE_SLUG = "poolreentrygate";
 const SLUGS = [
   RBAC_SLUG,
@@ -181,9 +185,19 @@ describePg(
         // A regression that made the gate read endpoints inside the write
         // transaction would deadlock forever on this `max: 1` pool.
         setWebhookAuditEnabled(false);
+        // Prime the presence flag to its real (empty) value so the gate reads a
+        // deterministic `false` rather than the fail-open default while the boot
+        // prime is still in flight.
+        await refreshEndpointPresence();
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
           .getEntryService() as CollectionEntryService;
+
+        // The shared system table persists rows from earlier cases, so measure
+        // the delta this write adds rather than asserting a global empty count.
+        const before = (
+          await handle.adapter.select<{ id: string }>("nextly_events")
+        ).length;
 
         const result = await withTimeout(
           handle.adapter.transaction(tx =>
@@ -200,6 +214,12 @@ describePg(
         // connection; with no endpoint and audit off, no event is recorded.
         expect(result.successful).toBe(1);
         expect(result.failed).toBe(0);
+        // Prove the gate actually closed: a regression that recorded despite no
+        // endpoint would still complete, so assert the outbox gained no row.
+        const after = (
+          await handle.adapter.select<{ id: string }>("nextly_events")
+        ).length;
+        expect(after).toBe(before);
       } finally {
         await handle?.destroy();
       }

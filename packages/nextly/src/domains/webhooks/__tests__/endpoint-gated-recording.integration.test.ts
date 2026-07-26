@@ -15,6 +15,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { WebhookEndpointRegistry } from "../endpoint-registry";
 import {
   refreshEndpointPresence,
+  resetWebhookActivation,
   setWebhookAuditEnabled,
 } from "../recording-activation";
 
@@ -23,6 +24,9 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  // `destroy()` clears the container but not this process-global; reset it so a
+  // suite's audit/presence state never leaks into the next sequential file.
+  resetWebhookActivation();
 });
 
 async function eventCount(handle: TestNextly): Promise<number> {
