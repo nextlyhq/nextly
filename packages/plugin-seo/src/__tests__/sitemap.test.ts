@@ -16,10 +16,16 @@ import {
  */
 function stubServices(
   pages: Record<string, Array<Record<string, unknown>[]>>,
-  spy?: ReturnType<typeof vi.fn>
+  spy?: ReturnType<typeof vi.fn>,
+  // Collections WITHOUT the built-in lifecycle. Anything not listed here is
+  // treated as `status: true`, matching the common content-collection case.
+  statusless: string[] = []
 ): SitemapServices {
   return {
     collections: {
+      async getCollection(slug) {
+        return { status: !statusless.includes(slug) };
+      },
       async listEntries(slug, query, opts) {
         spy?.(slug, query, opts);
         const collectionPages = pages[slug] ?? [];
@@ -114,6 +120,34 @@ describe("buildSitemapUrls", () => {
       "https://canonical.example/a",
       "https://x.com/posts/b",
     ]);
+  });
+
+  it("resolves a relative canonical against baseUrl (loc must be absolute)", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a", seo: { canonical: "/about" } }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls[0].loc).toBe("https://x.com/about");
+  });
+
+  it("does not filter by status on a status-less collection", async () => {
+    // `notes` has no lifecycle: the read must carry NO status filter, so a
+    // user-defined `status` field is never wrongly filtered.
+    const spy = vi.fn();
+    const services = stubServices({ notes: [[{ slug: "a" }]] }, spy, ["notes"]);
+
+    await buildSitemapUrls(services, {
+      collections: ["notes"],
+      baseUrl: "https://x.com",
+    });
+
+    const [, query] = spy.mock.calls[0];
+    expect(query.where).toBeUndefined();
   });
 
   it("maps entries to absolute loc + ISO lastModified", async () => {

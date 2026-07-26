@@ -24,6 +24,16 @@
  */
 export interface SitemapServices {
   collections: {
+    /**
+     * Collection metadata — read only to check the built-in draft/published
+     * lifecycle flag (`status: true`). Typed as `unknown` and narrowed at the
+     * call site (the core `Collection` type does not surface `status`). The
+     * context arg is unused by the read; pass `{}`.
+     */
+    getCollection(
+      slug: string,
+      context: Record<string, never>
+    ): Promise<unknown>;
     listEntries(
       slug: string,
       query: {
@@ -160,6 +170,16 @@ export async function buildSitemapUrls(
   const urls: SitemapUrl[] = [];
 
   for (const collection of options.collections) {
+    // Apply the published filter ONLY to collections with the built-in
+    // lifecycle. A status-less collection has no unpublished state, and it may
+    // even define an ordinary `status` field (e.g. "active"/"closed"), so a
+    // blanket `status = published` filter there would wrongly drop live rows.
+    const meta = await services.collections.getCollection(collection, {});
+    const hasLifecycle = isRecord(meta) && meta.status === true;
+    const where = hasLifecycle
+      ? { status: { equals: "published" } }
+      : undefined;
+
     // 1-indexed: the managed service reads by `page`, not `offset`, so the loop
     // MUST advance `page` — advancing an ignored `offset` would re-read page 1
     // forever while `hasMore` stayed true.
@@ -168,7 +188,7 @@ export async function buildSitemapUrls(
       const result = await services.collections.listEntries(
         collection,
         {
-          where: { status: { equals: "published" } },
+          where,
           depth: 0,
           // Deterministic paging: without an explicit sort the service pages an
           // unordered query, so rows could repeat or vanish between pages. `id`
@@ -186,13 +206,21 @@ export async function buildSitemapUrls(
         if (seo?.noindex === true) continue;
         // Honor a declared canonical: a sitemap should list canonical URLs, so
         // when the entry sets one, advertise THAT rather than the generated URL
-        // it points away from.
+        // it points away from. The `canonical` field is free text, so resolve it
+        // against `baseUrl` (a relative `/about` becomes absolute) and fall back
+        // to the generated URL if it is not a usable URL — a `<loc>` must be a
+        // valid absolute URL.
         const canonical =
           typeof seo?.canonical === "string" ? seo.canonical.trim() : "";
-        let loc: string;
+        let loc: string | null = null;
         if (canonical) {
-          loc = canonical;
-        } else {
+          try {
+            loc = new URL(canonical, baseUrl).href;
+          } catch {
+            loc = null;
+          }
+        }
+        if (loc === null) {
           // A falsy path means the entry has no stable URL (no slug, or a
           // custom urlFor opted it out) — skip it rather than emit a bogus loc.
           const path = urlFor(row, collection);
