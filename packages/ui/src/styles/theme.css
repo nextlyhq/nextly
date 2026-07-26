@@ -405,9 +405,9 @@
   /* ============================================
    * BOX SHADOWS (Tailwind v4.1)
    * The ramp's geometry is fixed but its color is a token, so a theme can
-   * restyle elevation. Mapped with a bare var() (like --color-*) so the
-   * reference is inlined into the utility and resolves at the element,
-   * which is what makes a runtime theme override take effect.
+   * restyle elevation. Shadow colors use color-mix() to blend --nx-shadow-color
+   * at different opacities, inlining the reference into the utility so it
+   * resolves at the element—this is what makes runtime theme overrides work.
    * ============================================ */
   --shadow-sm: 0 1px 2px 0
     color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
@@ -758,13 +758,10 @@
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
 
-  /* Elevation color. A theme sets --nx-shadow-color; the three strengths are
-   * mixed from it so a warm theme's shadows warm with it instead of staying
-   * black, which reads as dirt on a tinted surface. */
+  /* Elevation color for the light theme. When a theme overrides this,
+   * the shadow colors in the ramp will resolve to the new hue instead of
+   * staying black, which reads as elevation rather than dirt on tinted surfaces. */
   --nx-shadow-color: oklch(0 0 0);
-  --nx-shadow-faint: color-mix(in srgb, var(--nx-shadow-color) 4%, transparent);
-  --nx-shadow-weak: color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
-  --nx-shadow-base: color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);
 }
 
 /* Dark theme overrides when using class-based theming */
@@ -909,14 +906,8 @@
   --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
 
-  /* Dark surfaces need a denser shadow than light ones to read as elevation at
-   * all; the same 5-10% black that works on white is invisible on near-black. */
+  /* Elevation color for the dark theme. Same base as light mode; the inlined
+   * color-mix opacities (20-40% vs 4-10% in light) make shadows visible on
+   * dark surfaces without appearing as dirt. */
   --nx-shadow-color: oklch(0 0 0);
-  --nx-shadow-faint: color-mix(
-    in srgb,
-    var(--nx-shadow-color) 20%,
-    transparent
-  );
-  --nx-shadow-weak: color-mix(in srgb, var(--nx-shadow-color) 25%, transparent);
-  --nx-shadow-base: color-mix(in srgb, var(--nx-shadow-color) 40%, transparent);
 }
