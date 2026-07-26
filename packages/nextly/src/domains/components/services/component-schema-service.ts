@@ -36,6 +36,7 @@ import {
   index as sqliteIndex,
 } from "drizzle-orm/sqlite-core";
 
+import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import {
   isTextField,
   isTextareaField,
@@ -1166,7 +1167,8 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (
           isRepeaterField(field) ||
           isGroupField(field) ||
-          isJSONField(field)
+          isJSONField(field) ||
+          isBlocksField(field)
         ) {
           imports.add("json");
         }
@@ -1195,7 +1197,8 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (
           isRepeaterField(field) ||
           isGroupField(field) ||
-          isJSONField(field)
+          isJSONField(field) ||
+          isBlocksField(field)
         ) {
           imports.add("jsonb");
         }
@@ -1323,6 +1326,8 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       case "select":
       case "radio":
         return "''";
+      case "blocks":
+        return `'${emptyBlockDocumentJson()}'`;
       case "number":
         return "0";
       case "checkbox":
@@ -1361,7 +1366,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       if (this.dialect === "sqlite") return value ? "1" : "0";
       return value ? "TRUE" : "FALSE";
     }
-    if (type === "json" || type === "repeater" || type === "group") {
+    if (
+      type === "json" ||
+      type === "repeater" ||
+      type === "group" ||
+      type === "blocks"
+    ) {
       return `'${typeof value === "string" ? value : JSON.stringify(value)}'`;
     }
     if (type === "date") {

@@ -94,10 +94,20 @@ export function sensitiveFieldPaths(
       if (Array.isArray(field.fields)) walk(field.fields, path, childHidden);
       if (Array.isArray(field.blocks)) {
         for (const block of field.blocks) {
-          const nested = (block as { fields?: unknown })?.fields;
-          if (Array.isArray(nested)) {
-            walk(nested as SensitiveFieldSource[], path, childHidden);
-          }
+          if (typeof block !== "object" || block === null) continue;
+          const nested = (block as { fields?: unknown }).fields;
+          if (!Array.isArray(nested)) continue;
+          // Each element is checked before it is walked: this tree comes from
+          // stored schema data, and one malformed entry must not stop the
+          // sensitive-path scan that decides what a webhook may reveal.
+          walk(
+            nested.filter(
+              (entry): entry is SensitiveFieldSource =>
+                typeof entry === "object" && entry !== null
+            ),
+            path,
+            childHidden
+          );
         }
       }
     }

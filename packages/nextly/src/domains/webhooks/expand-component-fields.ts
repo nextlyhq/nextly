@@ -100,11 +100,19 @@ async function expandBlocks(
   if (!Array.isArray(blocks)) return blocks;
   return Promise.all(
     blocks.map(async entry => {
-      const block = entry as { fields?: SensitiveFieldSource[] };
-      if (!Array.isArray(block.fields)) return entry;
+      // Untrusted shape: only an object carrying an array of object fields is
+      // walked, so a malformed entry passes through instead of crashing the
+      // webhook payload build.
+      if (typeof entry !== "object" || entry === null) return entry;
+      const nested = (entry as { fields?: unknown }).fields;
+      if (!Array.isArray(nested)) return entry;
+      const fields = nested.filter(
+        (field): field is SensitiveFieldSource =>
+          typeof field === "object" && field !== null
+      );
       return {
-        ...block,
-        fields: await expandComponentFields(block.fields, resolve, seen, cache),
+        ...(entry as object),
+        fields: await expandComponentFields(fields, resolve, seen, cache),
       };
     })
   );

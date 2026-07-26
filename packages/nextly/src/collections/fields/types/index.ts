@@ -104,6 +104,7 @@ export type DataFieldConfig =
   | JSONFieldConfig
   | ComponentFieldConfig
   | ChipsFieldConfig
+  // A page built from blocks, stored as one document.
   | BlocksFieldConfig;
 
 /**
@@ -141,6 +142,7 @@ export type DataFieldType =
   | "json"
   | "component"
   | "chips"
+  // A page built from blocks, stored as one JSON document.
   | "blocks";
 
 /**
@@ -175,6 +177,7 @@ export const DATA_FIELD_TYPES: readonly DataFieldType[] = [
   "json",
   "component",
   "chips",
+  // A page built from blocks; storage is JSON, like the other structured types.
   "blocks",
 ] as const;
 

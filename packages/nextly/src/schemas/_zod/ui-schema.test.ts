@@ -142,6 +142,55 @@ describe("parseUiSchema — blocks fields", () => {
     ).toBe(true);
   });
 
+  it("rejects a default of a kind the field itself excludes", () => {
+    // The default is checked by the field's own validator, so a schema cannot
+    // declare a policy and a default that contradict each other.
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: ["template"] },
+          defaultValue: { formatVersion: 1, kind: "page", nodes: [] },
+        })
+      ).success
+    ).toBe(false);
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: ["template"] },
+          defaultValue: { formatVersion: 1, kind: "template", nodes: [] },
+        })
+      ).success
+    ).toBe(true);
+  });
+
+  it("rejects a default using a block the field does not allow", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { allow: ["core/*"] },
+          defaultValue: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                type: "acme/pricing",
+                version: 1,
+                props: {},
+              },
+            ],
+          },
+        })
+      ).success
+    ).toBe(false);
+  });
+
   it("accepts a document as a blocks default", () => {
     expect(
       parseUiSchema(
