@@ -1611,6 +1611,15 @@ export class CollectionMutationService extends BaseService {
       // without a manual slug. Running before write access means a field the
       // caller may not create is not reintroduced; the uniqueness check uses
       // the shared connection (a plain, non-transactional create).
+      // Declared defaults are filled first so everything downstream sees the
+      // values the entry will actually hold: generation then fills only the
+      // identity fields still unresolved, a field-level access predicate reads
+      // final values rather than undefined, and a required field carrying a
+      // default is satisfied by the time validation runs. Placed before write
+      // access for the same reason generation is — a field the caller may not
+      // create must not be reintroduced here.
+      applyFieldDefaults(finalData, fields);
+
       const isSlugTaken = (slug: string) =>
         this.checkFieldUniqueness(params.collectionName, "slug", slug);
       await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
@@ -1625,11 +1634,6 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
         overrideAccess: params.overrideAccess,
       });
-
-      // Declared defaults are filled before the hooks so a hook branching on a
-      // field sees the value a new entry actually starts with, and before
-      // validation so a required field carrying a default is satisfied.
-      applyFieldDefaults(finalData, fields);
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
@@ -4993,6 +4997,15 @@ export class CollectionMutationService extends BaseService {
       // validation (see createEntry). The uniqueness check runs on the
       // transaction so same-title creates within one uncommitted tx still
       // dedupe — the tx sees its own pending rows.
+      // Declared defaults are filled first so everything downstream sees the
+      // values the entry will actually hold: generation then fills only the
+      // identity fields still unresolved, a field-level access predicate reads
+      // final values rather than undefined, and a required field carrying a
+      // default is satisfied by the time validation runs. Placed before write
+      // access for the same reason generation is — a field the caller may not
+      // create must not be reintroduced here.
+      applyFieldDefaults(finalData, fields);
+
       const isSlugTaken = async (slug: string) => {
         const existing = await tx.selectOne<Record<string, unknown>>(
           tableName,
@@ -5015,11 +5028,6 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
         overrideAccess: params.overrideAccess,
       });
-
-      // Declared defaults are filled before the hooks so a hook branching on a
-      // field sees the value a new entry actually starts with, and before
-      // validation so a required field carrying a default is satisfied.
-      applyFieldDefaults(finalData, fields);
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
@@ -6211,6 +6219,15 @@ export class CollectionMutationService extends BaseService {
       // entry that omits slug/title must still receive them. The uniqueness
       // check runs on the transaction so entries created earlier in the same
       // bulk batch are seen.
+      // Declared defaults are filled first so everything downstream sees the
+      // values the entry will actually hold: generation then fills only the
+      // identity fields still unresolved, a field-level access predicate reads
+      // final values rather than undefined, and a required field carrying a
+      // default is satisfied by the time validation runs. Placed before write
+      // access for the same reason generation is — a field the caller may not
+      // create must not be reintroduced here.
+      applyFieldDefaults(finalData, fields);
+
       const isSlugTaken = async (slug: string) => {
         const existing = await tx.selectOne<Record<string, unknown>>(
           tableName,
@@ -6237,11 +6254,6 @@ export class CollectionMutationService extends BaseService {
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry). A
       // hook can set `slug`, so re-sanitize after it so the validated and
-      // stored value stays URL-safe. When hooks are skipped the slug is still
-      // the (already-sanitized) generated value, so no pass is needed.
-      // Filled regardless of `skipHooks`: a default is part of what the entry
-      // is, not a hook behaviour that a bulk path may opt out of.
-      applyFieldDefaults(finalData, fields);
 
       if (!skipHooks) {
         await runFieldHooks({

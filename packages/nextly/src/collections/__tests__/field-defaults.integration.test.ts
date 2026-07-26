@@ -8,8 +8,11 @@
  * A unit test over the helper cannot show either, since both depend on where
  * the helper sits relative to validation and the insert.
  *
- * The suite self-skips on dialects whose URL is unset, per the integration
- * convention; CI runs all three.
+ * Runs on SQLite: `createTestNextly` provisions its system tables in an
+ * in-memory database and has no path that bootstraps them on Postgres or
+ * MySQL, so a suite built on it exercises one dialect whatever URLs are set.
+ * Nothing here is dialect-specific — the ordering and precedence rules under
+ * test live above the adapter.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
