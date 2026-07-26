@@ -45,6 +45,18 @@ export default function tenantReadRule({
     // An inherited property name rather than a real operator.
     case "inherited-operator":
       return { tenant: { equals: "acme" }, region: { toString: "x" } };
+    // An inherited property name used as a FIELD. A plain lookup resolves it to
+    // a function, which reads as a present column.
+    case "inherited-field":
+      return { tenant: { equals: "acme" }, toString: { not_equals: "x" } };
+    // An empty alternatives group, as a rule building branches dynamically can
+    // produce. It should authorize nothing.
+    case "empty-or":
+      return { tenant: { equals: "acme" }, or: [] };
+    // A scalar `in`, which the translator normalizes to a one-element list, so
+    // it is a valid rule and must NOT be refused.
+    case "scalar-in":
+      return { region: { in: "eu" } };
     default:
       return true;
   }

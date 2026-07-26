@@ -204,6 +204,43 @@ describe("stored read constraints are applied in full (integration)", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("refuses an inherited property used as a field name", async () => {
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "inherited-field" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("refuses an empty alternatives group", async () => {
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "empty-or" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("accepts a scalar IN, which the translator normalizes", async () => {
+    // Refusing this would break a valid rule: `buildCondition` wraps a non-array
+    // `in` value in a one-element list, so the member does translate.
+    const handler = await bootWithStoredRule();
+
+    expect(await titlesFor(handler, "scalar-in")).toEqual([
+      "acme-eu-free",
+      "other-eu-paid",
+    ]);
+  });
+
   it("counts the same rows it lists", async () => {
     const handler = await bootWithStoredRule();
 

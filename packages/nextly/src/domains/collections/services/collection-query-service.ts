@@ -168,7 +168,10 @@ function isTranslatableOperatorValue(
 ): boolean {
   if (value === undefined) return false;
   if (operator === "in" || operator === "not_in") {
-    return Array.isArray(value) && value.length > 0;
+    // A scalar is normalized to a one-element list downstream, so it translates.
+    // An EMPTY list does not: it is dropped, and a rule that should match no
+    // rows instead leaves its siblings matching everything they allow.
+    return Array.isArray(value) ? value.length > 0 : true;
   }
   return true;
 }
@@ -192,7 +195,9 @@ function findUntranslatableConstraintMember(
 ): string | null {
   for (const [key, value] of Object.entries(constraint)) {
     if (key === "and" || key === "or") {
-      if (!Array.isArray(value)) return key;
+      // An empty group is dropped rather than matching nothing, which would let
+      // the siblings beside it run as the whole predicate.
+      if (!Array.isArray(value) || value.length === 0) return key;
       for (const branch of value) {
         if (branch === null || typeof branch !== "object") return key;
         const nested = findUntranslatableConstraintMember(
@@ -209,7 +214,11 @@ function findUntranslatableConstraintMember(
     const isLocalized = Boolean(
       localizedCtx?.localizedFields.some(f => f.name === fieldName)
     );
-    if (!schema[fieldName] && !isLocalized) return key;
+    // An own column only: a plain lookup resolves inherited names like
+    // `toString` to a function, which passes as present and is then read as a
+    // column, leaving the siblings as the effective predicate.
+    const isOwnColumn = Object.prototype.hasOwnProperty.call(schema, fieldName);
+    if (!isOwnColumn && !isLocalized) return key;
 
     if (value === null || typeof value !== "object") return key;
     const operators = Object.keys(value);
