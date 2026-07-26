@@ -48,12 +48,13 @@ export interface SitemapUrl {
 
 /**
  * Build the URL path for an entry (leading slash, appended to the origin).
- * Defaults to `/<collection>/<slug>`.
+ * Defaults to `/<collection>/<slug>`. Return `null`/`undefined` to EXCLUDE the
+ * entry from the sitemap (e.g. it has no stable public URL).
  */
 export type UrlForEntry = (
   entry: Record<string, unknown>,
   collection: string
-) => string;
+) => string | null | undefined;
 
 /** Options for {@link buildSitemapUrls} / {@link generateSitemap}. */
 export interface SitemapOptions {
@@ -73,12 +74,18 @@ export interface SitemapOptions {
   pageSize?: number;
 }
 
-/** Default path: `/<collection>/<slug>`. */
+/**
+ * Default path: `/<collection>/<slug>`. Returns `null` when the entry has no
+ * usable `slug` so the caller SKIPS it — without a slug there is no stable URL,
+ * and emitting `/<collection>/` for every slugless row would advertise
+ * duplicate, meaningless listing URLs.
+ */
 export function defaultUrlForEntry(
   entry: Record<string, unknown>,
   collection: string
-): string {
-  const slug = typeof entry.slug === "string" ? entry.slug : "";
+): string | null {
+  const slug = typeof entry.slug === "string" ? entry.slug.trim() : "";
+  if (!slug) return null;
   // Percent-encode the slug so a value with spaces or non-ASCII characters is
   // still a valid URL path segment (`<loc>` must be a valid URL, and XML
   // escaping alone does not make ` ` or `é` URL-safe). The collection segment
@@ -170,8 +177,12 @@ export async function buildSitemapUrls(
         const seo = isRecord(row.seo) ? row.seo : undefined;
         // A noindexed page is intentionally kept out of the sitemap.
         if (seo?.noindex === true) continue;
+        // A falsy path means the entry has no stable URL (no slug, or a custom
+        // urlFor opted it out) — skip it rather than advertise a bogus loc.
+        const path = urlFor(row, collection);
+        if (!path) continue;
         urls.push({
-          loc: `${baseUrl}${urlFor(row, collection)}`,
+          loc: `${baseUrl}${path}`,
           lastModified: toLastModified(row.updatedAt),
         });
       }

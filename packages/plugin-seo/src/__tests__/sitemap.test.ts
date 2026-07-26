@@ -50,8 +50,9 @@ describe("defaultUrlForEntry", () => {
     expect(defaultUrlForEntry({ slug: "hello" }, "posts")).toBe("/posts/hello");
   });
 
-  it("tolerates a missing slug rather than emitting 'undefined'", () => {
-    expect(defaultUrlForEntry({}, "posts")).toBe("/posts/");
+  it("returns null for a missing or blank slug so the caller skips it", () => {
+    expect(defaultUrlForEntry({}, "posts")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "   " }, "posts")).toBeNull();
   });
 
   it("percent-encodes an unsafe slug into a valid URL segment", () => {
@@ -156,6 +157,36 @@ describe("buildSitemapUrls", () => {
 
     const [, query] = spy.mock.calls[0];
     expect(query.pagination?.limit).toBe(500);
+  });
+
+  it("skips entries with no usable slug (default urlFor) rather than emitting duplicates", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a" }, {}, { slug: "  " }, { slug: "b" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/posts/a",
+      "https://x.com/posts/b",
+    ]);
+  });
+
+  it("lets a custom urlFor exclude an entry by returning null", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "keep" }, { slug: "drop" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      urlFor: entry => (entry.slug === "drop" ? null : `/${entry.slug}`),
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/keep"]);
   });
 
   it("excludes entries flagged seo.noindex", async () => {
