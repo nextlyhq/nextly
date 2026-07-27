@@ -86,6 +86,10 @@ function applyFoldedToBase(
     components: folded.components ?? base.components,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
+    // Carry a plugin setup transformer's audit decision through, so an audit
+    // plugin that forces recording is not dropped back to the base value on a
+    // reload. Always a resolved boolean on a sanitized config.
+    webhookAuditEnabled: transformed.webhookAuditEnabled,
   };
 }
 

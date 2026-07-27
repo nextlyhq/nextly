@@ -48,6 +48,7 @@ import {
 } from "../../../utils/validate-external-url";
 import type { DeliverTransport } from "../deliver";
 import type { WebhookEndpointRegistry } from "../endpoint-registry";
+import { refreshEndpointPresence } from "../recording-activation";
 import { decryptWebhookSecret, generateWebhookSecret } from "../secret";
 import {
   liveSecretEntries,
@@ -210,6 +211,18 @@ export class WebhookEndpointService extends BaseService {
   }
 
   /**
+   * Drop the shared endpoint cache and re-derive the recording gate's presence
+   * flag, after an endpoint mutation has committed. Runs on a pooled connection
+   * outside any content transaction, so the recording choke point can keep
+   * reading presence synchronously; awaited so a same-process change takes effect
+   * before the mutation call returns.
+   */
+  private async refreshRecordingGate(): Promise<void> {
+    this.registry?.invalidate();
+    await refreshEndpointPresence();
+  }
+
+  /**
    * Run a database call, turning a driver error into the canonical envelope.
    *
    * Every statement here can fail for reasons the caller should see as a typed
@@ -368,7 +381,7 @@ export class WebhookEndpointService extends BaseService {
     };
 
     await this.query(() => this.db.insert(this.table).values(row));
-    this.registry?.invalidate();
+    await this.refreshRecordingGate();
 
     return { endpoint: this.toSummary(row), secret };
   }
@@ -438,7 +451,7 @@ export class WebhookEndpointService extends BaseService {
     // Invalidated for every field, not only `enabled`: the cached list carries
     // url, event types and headers too, and a stale copy would keep delivering
     // to the old target.
-    this.registry?.invalidate();
+    await this.refreshRecordingGate();
 
     // Done here rather than in `setEnabled` so that disabling through a plain
     // field update cannot skip it. Not wrapped in a transaction with the update
@@ -556,7 +569,7 @@ export class WebhookEndpointService extends BaseService {
         await this.cancelQueuedDeliveries(txDb, id, "webhook deleted");
       })
     );
-    this.registry?.invalidate();
+    await this.refreshRecordingGate();
   }
 
   /**
@@ -715,7 +728,7 @@ export class WebhookEndpointService extends BaseService {
 
     // The delivery path reads secrets from its own row, but the cached registry
     // still lists this endpoint; invalidate so nothing serves a stale copy.
-    this.registry?.invalidate();
+    await this.refreshRecordingGate();
 
     const updated = await this.getEndpoint(id);
     if (!updated) throw this.notFound(id);
@@ -735,7 +748,7 @@ export class WebhookEndpointService extends BaseService {
       );
       return { entries: primaryOnly, result: undefined };
     });
-    this.registry?.invalidate();
+    await this.refreshRecordingGate();
 
     const updated = await this.getEndpoint(id);
     if (!updated) throw this.notFound(id);
