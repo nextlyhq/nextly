@@ -1,0 +1,102 @@
+---
+title: Webhook queue retention & VACUUM
+description: How Nextly prunes the webhook event ledger and delivery log, plus Postgres autovacuum tuning and SQLite VACUUM guidance for the nextly_events and nextly_webhook_deliveries tables.
+---
+
+Nextly records outbound webhook activity in two high-churn tables:
+
+- **`nextly_events`** — the event ledger (the outbox). A content change writes a row here **only when recording is active**: an enabled webhook endpoint exists, or the `webhooks.audit` seam is on. An install with no enabled endpoint and audit off records nothing, so the table does not grow.
+- **`nextly_webhook_deliveries`** — **one row per (endpoint, event)**, carrying the retry state. Each retry is appended to that row's in-row attempt log, not added as a new row, so more matching endpoints add rows while retries enlarge existing ones.
+
+When recording is active these tables fill continuously and are pruned automatically. This page explains the retention policy, the manual `nextly webhooks:prune` command, and how to keep the underlying tables from bloating on Postgres and SQLite.
+
+## How retention works
+
+Retention runs **opportunistically on content writes** and as part of the delivery **drain** — you do not need to schedule anything for it to work. Each pass deletes:
+
+- **Terminal deliveries** (`delivered` / `failed`) older than `deliveriesMaxAgeMs`.
+- **Events** older than `eventsMaxAgeMs`, once they have been fanned out and no delivery still references them. (A separate, longer window governs audit-class events — see the note below the table.)
+
+Passes are bounded so a single write never turns into an unbounded delete.
+
+### Configuration
+
+Set `webhooks.retention` in `nextly.config.ts`. Every field is optional; the defaults suit most installs.
+
+```ts
+export default defineConfig({
+  webhooks: {
+    retention: {
+      eventsMaxAgeMs: 30 * 24 * 60 * 60 * 1000, // webhook events — default 30 days
+      auditEventsMaxAgeMs: 365 * 24 * 60 * 60 * 1000, // audit events — default 365 days
+      deliveriesMaxAgeMs: 7 * 24 * 60 * 60 * 1000, // terminal deliveries — default 7 days
+      intervalMs: 60 * 60 * 1000, // min gap between AUTOMATIC passes — default 1 hour
+      batchSize: 500, // rows per delete batch — default 500
+      maxBatchesPerRun: 20, // batches per pass — default 20
+    },
+  },
+});
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `eventsMaxAgeMs` | 30 days | Age after which a fanned-out `webhook`-class event is prunable. `false` keeps events forever. |
+| `auditEventsMaxAgeMs` | 365 days | Age for `audit`-class events. `false` keeps them forever. See the note below. |
+| `deliveriesMaxAgeMs` | 7 days | Age after which a `delivered`/`failed` delivery row is prunable. `false` keeps them forever. |
+| `intervalMs` | 1 hour | Minimum gap between **automatic** retention passes (the opportunistic and drain-driven ones). Does not affect `nextly webhooks:prune`, which always runs a pass when invoked. |
+| `batchSize` | 500 | Rows deleted per batch (capped at 900). |
+| `maxBatchesPerRun` | 20 | Batches per pass, so one write never triggers an unbounded delete. |
+
+**On the audit class:** every event today is recorded with the default `webhook` retention class, so `eventsMaxAgeMs` governs all pruning. The `audit` class and its longer `auditEventsMaxAgeMs` window are reserved for a future audit-log producer and are dormant until then — do not rely on the 365-day window to retain events longer.
+
+Set `webhooks.retention: false` to disable pruning entirely. Both the automatic passes **and** `nextly webhooks:prune` then do nothing, so the tables grow until you either re-enable retention or clean them up at the database level yourself.
+
+## Pruning by hand: `nextly webhooks:prune`
+
+`nextly webhooks:prune` runs one retention pass immediately.
+
+```bash
+nextly webhooks:prune            # run one retention pass now
+nextly webhooks:prune --dry-run  # report what a pass would remove, delete nothing
+```
+
+The command reports how many webhook events, audit events, and terminal delivery rows it removed. If a batch bound stops the pass before it finishes, it says so — run it again to continue. It reads the same `webhooks.retention` policy as the automatic passes, and does nothing when retention is disabled.
+
+**`webhooks:prune` is cleanup, not delivery.** It does not fan out or deliver anything. Its behaviour splits on whether an enabled endpoint exists:
+
+- **With an enabled endpoint,** an event that was never fanned out is **kept** — it may still be delivered — so prune only reclaims already-fanned-out events plus terminal (`delivered`/`failed`) deliveries. You still need the **drain running** to fan out and deliver; `webhooks:prune` supplements it with scheduled cleanup, it does not replace it.
+- **With no enabled endpoint** (an audit-only install, `webhooks.audit` on), there is nothing to deliver to, so aged un-fanned events are reclaimable and `webhooks:prune` is all you need to keep the ledger bounded.
+
+A daily cron is a good baseline where you want scheduled cleanup:
+
+```bash
+0 3 * * *  cd /path/to/app && nextly webhooks:prune
+```
+
+Global flags inherited from the root `nextly` command apply: `--config <path>`, `--cwd <path>`, `--verbose`, `-q/--quiet`. Note that `--cwd` selects where the config is discovered, but `nextly` loads `.env` and reads `DATABASE_URL` from the directory you actually run it in — so invoke `webhooks:prune` from the app directory, or export the database environment yourself, when using `--cwd`.
+
+## Keeping the tables small
+
+Deleting rows frees logical space but does not always return it to the operating system, and queue-shaped tables (many inserts, many deletes) are exactly the workload that outpaces a database's default reclamation.
+
+### Postgres: tune autovacuum for the queue tables
+
+`nextly_events` and `nextly_webhook_deliveries` churn far faster than a typical content table, so the default `autovacuum_vacuum_scale_factor` (0.2 — vacuum after 20% of rows change) lets dead tuples accumulate between vacuums and the tables bloat. Lower the scale factor for just these two tables so autovacuum runs more often, and drop the fillfactor a little so updates can reuse space on the same page:
+
+```sql
+ALTER TABLE nextly_events
+  SET (autovacuum_vacuum_scale_factor = 0.02, fillfactor = 90);
+ALTER TABLE nextly_webhook_deliveries
+  SET (autovacuum_vacuum_scale_factor = 0.02, fillfactor = 90);
+```
+
+This is a per-table override; the rest of your schema keeps the server defaults. On managed Postgres (Neon, Supabase, RDS) these `ALTER TABLE ... SET` options apply normally.
+
+### SQLite: do not auto-VACUUM
+
+Do **not** run `VACUUM` automatically after pruning. `VACUUM` takes a whole-database exclusive lock and rewrites the entire file, which stalls every other connection; in WAL mode it also needs a following checkpoint before the space is actually reclaimed. Let pruning delete the rows, and only run `VACUUM` (or set `PRAGMA auto_vacuum` at database creation) deliberately, during a maintenance window when the app is idle. For most self-hosted SQLite deployments the freed pages are simply reused by later inserts, and no manual reclamation is needed at all.
+
+## Related
+
+- [Production migrations](/docs/guides/production-migrations) — the `nextly migrate` model these system tables evolve through.
+- [Draft & published status](/docs/guides/draft-published-status) — the status transitions that produce publish/unpublish events.

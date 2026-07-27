@@ -128,6 +128,12 @@ export const nextlyWebhookDeliveries = pgTable(
   "nextly_webhook_deliveries",
   {
     id: text("id").primaryKey(),
+    // Both foreign keys cascade on delete, deliberately. Endpoints are
+    // soft-deleted (the `nextly_webhooks` row survives), so this cascade never
+    // fires for normal retirement and a retired endpoint keeps its history; it
+    // only fires on a genuine hard row-delete, where erasing the endpoint's
+    // deliveries with it is the intended meaning. The event cascade is how
+    // retention prunes an event together with its delivery attempts in one step.
     webhookId: text("webhook_id")
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),
