@@ -404,17 +404,26 @@
 
   /* ============================================
    * BOX SHADOWS (Tailwind v4.1)
+   * The ramp's colour comes from --nx-shadow-color, mixed down to each step's
+   * alpha. `@theme inline` copies a declaration's value into the generated
+   * utility, so a literal rgba() would be frozen at build time while this
+   * var() stays live and re-resolves per mode / per scope at the element.
    * ============================================ */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 2px 0
+    color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-md:
-    0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    0 4px 6px -1px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 2px 4px -1px color-mix(in srgb, var(--nx-shadow-color) 6%, transparent);
   --shadow-lg:
-    0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    0 10px 15px -3px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 4px 6px -2px color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-xl:
-    0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    0 20px 25px -5px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 10px 10px -5px color-mix(in srgb, var(--nx-shadow-color) 4%, transparent);
 
   /* Custom Functional Shadows (Fixes build warnings from arbitrary values) */
-  --shadow-inner-subtle: 0 -4px 6px -1px rgba(0, 0, 0, 0.05);
+  --shadow-inner-subtle: 0 -4px 6px -1px
+    color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-glow-success: 0 0 10px
     color-mix(in srgb, var(--nx-success) 10%, transparent);
   --shadow-glow-primary: 0 0 15px
@@ -423,7 +432,8 @@
     color-mix(in srgb, var(--nx-primary) 40%, transparent);
   --shadow-soft-primary: 0 8px 30px
     color-mix(in srgb, var(--nx-primary) 6%, transparent);
-  --shadow-neo: 4px 4px 0px 0px rgba(0, 0, 0, 0.1);
+  --shadow-neo: 4px 4px 0px 0px
+    color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);
 
   /* ============================================
    * FLUID TYPOGRAPHY (Tailwind v4.1)
@@ -698,6 +708,11 @@
   --nx-input: oklch(0.6454 0.0116 286.11);
   --nx-ring: var(--nx-primary);
 
+  /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
+   * -neo). Each step mixes this down to its own alpha, so retinting every
+   * shadow at once is a single token change. */
+  --nx-shadow-color: oklch(0 0 0);
+
   /* Chart colors for data visualization */
   --nx-chart-1: var(--nx-primary);
   --nx-chart-2: oklch(0.7399 0.1277 209.34);
@@ -855,6 +870,10 @@
    * surface as well as the page and card (was 1.73:1 on a popover). */
   --nx-input: oklch(0.54 0.0128 285.92);
   --nx-ring: var(--nx-primary);
+
+  /* Black in dark mode too: the ramp reads as depth against the deep surfaces
+   * rather than as a glow, which a lightened shadow colour would produce. */
+  --nx-shadow-color: oklch(0 0 0);
 
   /* Chart colors for data visualization (same as light mode) */
   --nx-chart-1: var(--nx-primary);
