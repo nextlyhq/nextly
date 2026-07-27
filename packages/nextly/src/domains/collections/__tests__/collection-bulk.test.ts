@@ -16,6 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import { CollectionMutationService } from "../services/collection-mutation-service";
 
 import {
   createMockSchema,
@@ -285,6 +286,35 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       expect(result.failures[0]).toHaveProperty("id", "missing-1");
       expect(result.failures[0]).toHaveProperty("code");
       expect(result.failures[0]).toHaveProperty("message");
+    });
+
+    it("should classify a DUPLICATE-coded 409 item failure as DUPLICATE", async () => {
+      // A unique violation on one item surfaces from updateEntry as a legacy
+      // 409 envelope carrying code DUPLICATE. The per-item failure must keep
+      // that classification: a bare 409 is ambiguous and would otherwise
+      // collapse into the stale-version CONFLICT message.
+      vi.spyOn(
+        CollectionMutationService.prototype,
+        "updateEntry"
+      ).mockResolvedValue({
+        success: false,
+        statusCode: 409,
+        code: "DUPLICATE",
+        message: "Resource already exists.",
+        data: null,
+      });
+
+      const result = await service.bulkUpdateEntries({
+        collectionName: "posts",
+        ids: ["entry-1"],
+        data: { slug: "taken" },
+      });
+
+      expect(result.failures[0]).toMatchObject({
+        id: "entry-1",
+        code: "DUPLICATE",
+        message: "Resource already exists.",
+      });
     });
   });
 

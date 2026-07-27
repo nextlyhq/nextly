@@ -277,7 +277,7 @@ export async function runChecks(args: {
       logger.error(`  Actual SHA-256:   ${result.actual}`);
       logger.error(
         "  The migration file was edited after generation. Either revert the edit, " +
-          "or delete this file and re-generate via `nextly migrate:create --name=<name>`."
+          'or delete this file and re-generate via `nextly migrate:create --name="<migration-name>"`.'
       );
       process.exit(1);
       return;
@@ -324,7 +324,7 @@ export async function runChecks(args: {
       logger.error(`  ... and ${ops.length - 10} more`);
     }
     logger.error(
-      "Run `nextly migrate:create --name=<name>` and commit the result."
+      'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
     );
     process.exit(1);
     return;
