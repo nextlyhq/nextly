@@ -78,4 +78,29 @@ describe("resolveContent (integration)", () => {
     });
     expect((doc as { title?: string } | null)?.title).toBe("Intro");
   });
+
+  it("resolves duplicate published slugs deterministically (lowest id)", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    // A slug field is not unique — seed several published rows on the same slug.
+    for (let i = 0; i < 4; i++) {
+      await current.nextly.create({
+        collection: "pages",
+        data: { slug: "dup", title: `Dup ${i}`, status: "published" },
+      });
+    }
+    // Sorting by `id` makes the lexicographically smallest id the stable winner.
+    const all = await current.nextly.find({
+      collection: "pages",
+      where: { slug: { equals: "dup" } },
+      limit: 50,
+    });
+    const expectedId = all.items
+      .map(row => (row as { id: string }).id)
+      .sort()[0];
+
+    const resolved = await resolveContent("pages", "dup", {
+      nextly: current.nextly,
+    });
+    expect((resolved as { id?: string } | null)?.id).toBe(expectedId);
+  });
 });

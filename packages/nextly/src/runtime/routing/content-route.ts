@@ -12,6 +12,14 @@
  * `next`/`react` imports are TYPE-ONLY and `next/navigation` is resolved lazily,
  * so importing this never forces those onto a non-Next consumer at load.
  *
+ * `generateStaticParams` returns `[]` when there is nothing to pre-render (a
+ * `staticParamsLimit` of `0`, or no published slugs yet), which is valid for
+ * standard App Router builds. Next 16 Cache Components is stricter: an EXPORTED
+ * `generateStaticParams` must return at least one entry. Under that mode, do not
+ * wire `generateStaticParams` into the route file for a no-prerender/empty-site
+ * setup — export only `ContentPage` and `generateMetadata` and let paths render
+ * on demand.
+ *
  * @module runtime/routing/content-route
  */
 import { createRequire } from "node:module";

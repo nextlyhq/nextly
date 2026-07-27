@@ -106,6 +106,10 @@ export async function resolveContent(
         collection,
         where,
         limit: 1,
+        // A slug field is ordinary text and need not be unique; sort by the
+        // always-present unique `id` so duplicate-slug rows resolve to the same
+        // entry deterministically instead of an arbitrary one.
+        sort: "id",
         depth,
         ...(options.richTextFormat
           ? { richTextFormat: options.richTextFormat }
