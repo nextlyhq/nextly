@@ -35,6 +35,7 @@ import { registerPluginsCommand } from "./commands/plugins";
 import { registerPruneCommand } from "./commands/prune";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
+import { registerWebhooksPruneCommand } from "./commands/webhooks-prune";
 import { createLogger, type Logger, type LoggerOptions } from "./utils/logger";
 
 // ============================================================================
@@ -211,6 +212,7 @@ function registerCommands(program: Command): void {
   registerMigrateStatusCommand(program);
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
+  registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback
 
