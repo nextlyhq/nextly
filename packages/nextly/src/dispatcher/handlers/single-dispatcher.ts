@@ -99,6 +99,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
+  parseStatusParam,
   requireParam,
   toNumber,
 } from "../helpers/validation";
@@ -721,15 +722,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
-      // HTTP API default returns every document regardless of status; pass
-      // `?status=published` or `?status=draft` to filter. The route requires
-      // auth (see isPublicEndpoint), so this only affects callers who
-      // already have read permission. Anything outside the allowlist falls
-      // back to "all" instead of being silently dropped.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Absent → undefined so the service applies its published-only default
+      // (an untrusted read must not leak a draft Single); pass
+      // `?status=all|draft|published` to widen. An invalid value is rejected
+      // with 400 rather than silently widened.
+      const status = parseStatusParam(p.status);
       // Forward the caller so the service can evaluate the Single's stored read
       // rules for them. Without it those rules cannot run at all: a rule that
       // asks who is reading has no one to judge, so the admin's read setting

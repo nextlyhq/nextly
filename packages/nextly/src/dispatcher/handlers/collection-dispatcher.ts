@@ -96,6 +96,7 @@ import {
   isTruthyParam,
   parseRichTextFormat,
   parseSelectParam,
+  parseStatusParam,
   parseWhereParam,
   requireBody,
   requireParam,
@@ -947,17 +948,14 @@ const COLLECTIONS_METHODS: Record<
 
       const rawLimit = p.limit;
 
-      // Why: forward the `?status=` URL param so trusted callers (the admin)
-      // HTTP API default returns every entry regardless of status; pass
-      // `?status=published` or `?status=draft` to filter. Same allowlist as
-      // getEntry — any value outside it falls back to "all". The status
-      // dropdown in the entry table layers a `where: {status: {equals: ...}}`
-      // on top of this; that still works because where-narrowing happens
-      // after the default filter.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Forward the `?status=` URL param. Absent → undefined so the query
+      // service applies its published-only default (an untrusted list read must
+      // not leak drafts); pass `?status=all|draft|published` to widen. An
+      // invalid value is rejected with 400 rather than silently widened. The
+      // status dropdown in the entry table layers a `where: {status: {equals}}`
+      // on top of this, which still works because where-narrowing happens after
+      // the default filter.
+      const status = parseStatusParam(p.status);
 
       // Forward the caller so the service evaluates the collection's stored
       // read rules for them: role-based rules, and owner-only scoping folded
@@ -1014,12 +1012,11 @@ const COLLECTIONS_METHODS: Record<
     // `{ totalDocs }` internally; we translate at the boundary.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      // Match listEntries: count every entry regardless of status by
-      // default; pass `?status=published` (or `draft`) to filter.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Match listEntries: absent → undefined so the service applies its
+      // published-only default; pass `?status=all|draft|published` to widen,
+      // invalid → 400. A count must obey the same filter as the list or the
+      // total would not match the rows returned.
+      const status = parseStatusParam(p.status);
       // The same caller context listEntries forwards. A count that ignored the
       // read rules while the list obeyed them would report totals for rows the
       // caller cannot see, which both leaks how much data exists and breaks
@@ -1092,12 +1089,10 @@ const COLLECTIONS_METHODS: Record<
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
-      // HTTP API returns the entry regardless of status by default; pass
-      // `?status=published` (or `draft`) to filter. Matches listEntries.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Absent → undefined so the service applies its published-only default;
+      // pass `?status=all|draft|published` to widen, invalid → 400. Matches
+      // listEntries.
+      const status = parseStatusParam(p.status);
       // Same caller context as listEntries. Fetching one document by id is the
       // path where a missing user matters most: without it an owner-only rule
       // could not deny a direct read of someone else's entry.
