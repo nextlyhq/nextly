@@ -31,6 +31,16 @@ describe("isReservedPath", () => {
     }
   });
 
+  it("collapses redundant slashes so a slash-prefixed slug can't dodge the match", () => {
+    // A slash-preserving slug field storing "/admin" would otherwise check
+    // "//admin" and slip past the prefix.
+    expect(isReservedPath("//admin")).toBe(true);
+    expect(isReservedPath("/admin//foo")).toBe(true);
+    expect(isReservedPath("//api")).toBe(true);
+    // A genuine content path with an internal double slash still resolves cleanly.
+    expect(isReservedPath("blog//post")).toBe(false);
+  });
+
   it("allows ordinary content paths", () => {
     for (const path of [
       "/about",

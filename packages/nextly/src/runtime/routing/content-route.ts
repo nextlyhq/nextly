@@ -165,8 +165,15 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   if (typeof value !== "string") return null;
   if (value === "") return isReservedPath("/") ? null : { slug: [] };
   if (value.trim() === "") return null;
-  if (isReservedPath(`/${value}`)) return null;
-  return { slug: value.split("/") };
+  // Collapse leading/trailing/duplicate slashes so a stored "/admin" or "a//b"
+  // normalizes to clean segments and can't dodge the reserved-path check.
+  const normalized = value
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\/{2,}/g, "/");
+  if (normalized === "") return null;
+  if (isReservedPath(`/${normalized}`)) return null;
+  return { slug: normalized.split("/") };
 }
 
 export function createContentRoute<TNode>(

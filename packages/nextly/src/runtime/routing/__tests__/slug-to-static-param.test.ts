@@ -27,4 +27,14 @@ describe("slugToStaticParam", () => {
     expect(slugToStaticParam("admin")).toBeNull();
     expect(slugToStaticParam("api/keys")).toBeNull();
   });
+
+  it("normalizes redundant slashes and still rejects a slash-prefixed reserved slug", () => {
+    // A leading slash must not smuggle a reserved path past the check.
+    expect(slugToStaticParam("/admin")).toBeNull();
+    // Edge/duplicate slashes collapse to clean segments.
+    expect(slugToStaticParam("/blog/post/")).toEqual({
+      slug: ["blog", "post"],
+    });
+    expect(slugToStaticParam("a//b")).toEqual({ slug: ["a", "b"] });
+  });
 });

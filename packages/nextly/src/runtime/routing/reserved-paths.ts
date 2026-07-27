@@ -26,7 +26,10 @@ const RESERVED_EXACT = new Set([
  * a trailing slash is ignored.
  */
 export function isReservedPath(path: string): boolean {
-  let normalized = path.startsWith("/") ? path : `/${path}`;
+  // Force a single leading slash and collapse any redundant slashes, so a stored
+  // slug carrying an extra slash (e.g. "/admin" -> "//admin", or "a//admin")
+  // cannot dodge the prefix match.
+  let normalized = `/${path}`.replace(/\/{2,}/g, "/");
   // Drop a trailing slash (but keep the root "/").
   if (normalized.length > 1 && normalized.endsWith("/")) {
     normalized = normalized.slice(0, -1);
