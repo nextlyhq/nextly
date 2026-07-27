@@ -564,25 +564,23 @@ export class SingleQueryService extends BaseService {
    * document has already been assembled from several tables and no longer
    * corresponds to a single row — so a constraint is refused rather than
    * approximated in memory.
+   *
+   * Only a `custom` rule is asked again. Ownership is settled once, against the
+   * stored row: none of the assembly stages can transfer a document to a
+   * different owner, while a hook is free to drop or rewrite the owner value in
+   * the response — so asking again here could only refuse the caller the first
+   * check already recognised as the owner.
    */
   private async judgeAssembledDocument(params: {
     slug: string;
-    readRule: { type?: string } | undefined;
     accessRules: CollectionAccessRules | undefined;
     user?: UserContext;
     locale?: string;
     fallbackLocale?: string | false;
     document: SingleDocument;
   }): Promise<SingleResult | null> {
-    const {
-      slug,
-      readRule,
-      accessRules,
-      user,
-      locale,
-      fallbackLocale,
-      document,
-    } = params;
+    const { slug, accessRules, user, locale, fallbackLocale, document } =
+      params;
     if (!accessRules) return null;
 
     const denied: SingleResult = {
@@ -590,15 +588,6 @@ export class SingleQueryService extends BaseService {
       statusCode: 403,
       message: `Access denied: read on single "${slug}" is not permitted`,
     };
-
-    if (readRule?.type === "owner-only") {
-      return this.evaluateOwnerOnlyRead({
-        slug,
-        rule: readRule as { ownerField?: string },
-        user,
-        document,
-      });
-    }
 
     const result = await this.accessControlService.evaluateAccess(
       accessRules,
@@ -951,8 +940,9 @@ export class SingleQueryService extends BaseService {
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
-      // Field-level afterRead hooks + read access (functions resolved via
-      // the field-level registry).
+      // Field-level afterRead hooks (functions resolved via the field-level
+      // registry). Field read access runs further down, once the document-level
+      // decision has been made.
       await runFieldHooks({
         kind: "single",
         slug,
@@ -960,13 +950,6 @@ export class SingleQueryService extends BaseService {
         data: doc,
         operation: "read",
         user: options.user,
-      });
-      await applyFieldReadAccess({
-        kind: "single",
-        slug,
-        entry: doc,
-        user: options.user,
-        overrideAccess: options.overrideAccess,
       });
 
       // Defense in depth: re-strip after hooks in case a hook re-introduced
@@ -984,10 +967,9 @@ export class SingleQueryService extends BaseService {
       // assembled document denies. The earlier gate stays because it refuses
       // callers before those stages run any side effects; this is the decision
       // that governs what is handed back.
-      if ((deferDocumentRule || deferCustomRule) && !options.overrideAccess) {
+      if (deferCustomRule && !options.overrideAccess) {
         const finalDenial = await this.judgeAssembledDocument({
           slug,
-          readRule,
           accessRules: singleMeta.accessRules,
           user: options.user,
           locale: options.locale,
@@ -996,6 +978,20 @@ export class SingleQueryService extends BaseService {
         });
         if (finalDenial) return finalDenial;
       }
+
+      // 10. Redact fields the caller may not read, AFTER the document-level
+      // decision. Redaction removes values a rule may be written to inspect, so
+      // running it first lets a rule guarding a companion- or component-backed
+      // field see that field absent — the same "missing means allowed" reading
+      // that admits a caller the rule exists to refuse. Access decides on the
+      // document as assembled; the response is narrowed once it is decided.
+      await applyFieldReadAccess({
+        kind: "single",
+        slug,
+        entry: doc,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      });
 
       return {
         success: true,

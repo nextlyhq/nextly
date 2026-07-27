@@ -29,3 +29,7 @@ The rule is judged against the document you actually receive — after the Singl
 Rules that return a **query constraint** are refused on Singles rather than partly applied. A constraint narrows a result set; by the time the read is decided, a Single's document has been assembled from several tables and no longer corresponds to one row for the database to test the predicate against. Return a boolean from a Single's read rule; constraints continue to work on collections, where they are folded into the query.
 
 A rule that returns no decision at all now denies, on collections as well as Singles. A rule is free to fall through without returning, and such a result was previously read as "allowed, with nothing to filter by" — admitting the caller and narrowing nothing.
+
+Field-level read access is applied to a Single **after** the read is decided, not before. A field your rule inspects is no longer removed from the document the rule is shown, so a rule guarding a value the caller may not read decides on that value rather than on its absence.
+
+Ownership is decided once, against the stored row. An `owner-only` Single is no longer re-checked against the response object, which an `afterRead` hook or a field read rule is free to strip the owner identifier from — a transformation that could refuse the document to its actual owner.

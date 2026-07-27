@@ -149,7 +149,12 @@ describe("SingleQueryService.get — stored read rules", () => {
 describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
   const OWNER_ONLY_READ = { read: { type: "owner-only" as const } };
 
-  function createOwnerOnlyService(row: Record<string, unknown> | null) {
+  function createOwnerOnlyService(
+    row: Record<string, unknown> | null,
+    hookRegistry: ReturnType<
+      typeof createMockHookRegistry
+    > = createMockHookRegistry()
+  ) {
     const registry = createMockSingleRegistry();
     registry.registerSingle("site-settings", {
       ...siteSettingsMeta({ accessRules: OWNER_ONLY_READ }),
@@ -162,7 +167,7 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
       createMockAdapter({ selectOne, insert }) as unknown as Ctor[0],
       createSilentLogger() as unknown as Ctor[1],
       registry as unknown as Ctor[2],
-      createMockHookRegistry() as unknown as Ctor[3],
+      hookRegistry as unknown as Ctor[3],
       undefined,
       createMockRBACService(true) as unknown as Ctor[5]
       // No accessControlService override: the real one is constructed, which is
@@ -244,6 +249,38 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("still admits the owner when a hook drops the owner value", async () => {
+    // Ownership is settled once, against the stored row. An `afterRead` hook
+    // shapes the RESPONSE and is free to drop the owner identifier from it, so
+    // re-deciding ownership on what the hook produced refuses the caller the
+    // stored row proves is the owner.
+    const hookRegistry = createMockHookRegistry();
+    hookRegistry.hasHooks = vi
+      .fn()
+      .mockImplementation((phase: string) => phase === "afterRead");
+    hookRegistry.execute = vi
+      .fn()
+      .mockImplementation(
+        async (_phase: string, ctx: { data: Record<string, unknown> }) => {
+          const { created_by: _owner, ...rest } = ctx.data;
+          return rest;
+        }
+      );
+
+    const { service } = createOwnerOnlyService(
+      { id: "doc1", created_by: "owner-1", siteName: "Nextly" },
+      hookRegistry
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "owner-1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("created_by");
   });
 });
 

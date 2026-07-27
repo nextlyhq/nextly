@@ -48,6 +48,11 @@ export default function singleReadRule({
       return (req.user as { tenantId?: string })?.tenantId === "blocked"
         ? false
         : { tenant: { equals: "acme" } };
+    // Guards a value the bare main row cannot show: the companion table holds
+    // it per language, so only the assembled document carries the requested
+    // locale's value.
+    case "assembled-aware":
+      return (data as { visibility?: string })?.visibility !== "private";
     // A rule that falls through without returning a decision, as a dynamically
     // imported function is free to do — it is not checked against the contract
     // at runtime.

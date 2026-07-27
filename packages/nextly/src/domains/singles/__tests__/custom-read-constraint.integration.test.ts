@@ -187,3 +187,79 @@ describe("Single custom read rules (integration)", () => {
     expect(result.success).toBe(true);
   });
 });
+
+/**
+ * A rule guarding a redacted field is decided on the value, not on its absence.
+ *
+ * Field-level read access removes fields from the response. Removing them
+ * before the document-level decision leaves a rule written as
+ * `data.visibility !== "private"` reading `undefined`, which passes — so the
+ * caller receives the rest of a document the rule exists to withhold. The
+ * guarded value here lives in the companion table, so the earlier gate cannot
+ * see it either: the main row carries the default language's value.
+ */
+describe("Single custom read rules vs field redaction (integration)", () => {
+  /** Boot a localized Single whose guarded field is unreadable to callers. */
+  async function bootLocalized(): Promise<SingleEntryService> {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          localized: true,
+          fields: [
+            text({ name: "siteName" }),
+            text({ name: "visibility", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", visibility: "public" },
+      { overrideAccess: true, locale: "en" }
+    );
+    await entry.update(
+      "branding",
+      { siteName: "Acme", visibility: "private" },
+      { overrideAccess: true, locale: "de" }
+    );
+    return entry;
+  }
+
+  it("denies on a guarded value the caller may not read", async () => {
+    const entry = await bootLocalized();
+
+    const result = await entry.get("branding", {
+      user: { id: "assembled-aware" },
+      locale: "de",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("still redacts the guarded field from an allowed read", async () => {
+    // The mirror case: authorizing on the unredacted document must not hand the
+    // guarded value back once the read is allowed.
+    const entry = await bootLocalized();
+
+    const result = await entry.get("branding", {
+      user: { id: "assembled-aware" },
+      locale: "en",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("visibility");
+  });
+});
