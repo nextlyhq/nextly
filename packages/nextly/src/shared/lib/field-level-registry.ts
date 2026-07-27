@@ -26,6 +26,7 @@
  * @module shared/lib/field-level-registry
  */
 
+import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -251,19 +252,20 @@ function openNestedContainer(
 }
 
 /**
- * The value an access callback is shown: a detached copy of the level's data.
+ * Whether any field at this level has an access callback for the operation.
  *
- * Access callbacks are app code and receive `data` as an argument, so a shallow
- * copy leaves every nested group, repeater, component and expanded relation
- * shared with the object being decided about — letting a callback rewrite the
- * response (or the payload) it was only asked to judge. Built once per level
- * and only when a callback will actually be run, so a level with no rules pays
- * nothing.
+ * Decides whether a snapshot is worth taking at all: a level with no callbacks
+ * never shows its data to app code, so copying it would be pure cost on every
+ * row of every list read.
  */
-function detachedSnapshot(
-  data: Record<string, unknown>
-): Record<string, unknown> {
-  return structuredClone(data);
+function levelHasAccessCallback(
+  fns: Record<string, FieldFunctions>,
+  operation: "create" | "update" | "read"
+): boolean {
+  for (const entry of Object.values(fns)) {
+    if (typeof entry.access?.[operation] === "function") return true;
+  }
+  return false;
 }
 
 /**
@@ -280,7 +282,14 @@ async function applyWriteAccessRec(
   operation: "create" | "update",
   ctx: { user?: Record<string, unknown>; id?: string }
 ): Promise<void> {
-  let snapshot: Record<string, unknown> | undefined;
+  // Taken BEFORE the recursion below, which rewrites nested containers in
+  // place as it redacts them: a rule at this level that reads into a nested
+  // value must see what the level held when it was entered, not what an
+  // earlier-registered field's recursion left behind. Skipped entirely when no
+  // rule at this level will run.
+  const snapshot = levelHasAccessCallback(fns, operation)
+    ? detachData(data)
+    : undefined;
   const denied: string[] = [];
   for (const [name, entry] of Object.entries(fns)) {
     if (!(name in data)) continue;
@@ -291,9 +300,6 @@ async function applyWriteAccessRec(
     }
     const fn = entry.access?.[operation];
     if (!fn) continue;
-    // Taken before the first rule runs, so every rule at this level sees the
-    // same data whatever an earlier one did with its argument.
-    snapshot ??= detachedSnapshot(data);
     let allowed = false;
     try {
       allowed = await fn({
@@ -345,7 +351,13 @@ async function applyReadAccessRec(
   fns: Record<string, FieldFunctions>,
   ctx: { user?: Record<string, unknown>; id?: string }
 ): Promise<void> {
-  let snapshot: Record<string, unknown> | undefined;
+  // Taken BEFORE the recursion below replaces nested containers with their
+  // redacted serialization: a parent-level rule reading a protected nested
+  // value would otherwise find it already removed, and the outcome would turn
+  // on field registration order.
+  const snapshot = levelHasAccessCallback(fns, "read")
+    ? detachData(entry)
+    : undefined;
   const denied: string[] = [];
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;
@@ -360,7 +372,6 @@ async function applyReadAccessRec(
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    snapshot ??= detachedSnapshot(entry);
     let allowed = false;
     try {
       allowed = await fn({

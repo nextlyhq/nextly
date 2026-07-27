@@ -49,6 +49,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { detachData } from "../../../shared/lib/detach";
 import {
   applyFieldReadAccess,
   runFieldHooks,
@@ -540,6 +541,12 @@ export class SingleQueryService extends BaseService {
       // given, and the response is assembled from the same row afterwards.
       doc: { ...params.doc },
       enforceRelatedFieldAccess: false,
+      // Depth is the caller's preference about the SHAPE of the response, and
+      // must not be able to shrink the evidence a rule is judged on: at
+      // `depth: 0` a relationship stays an id, and a rule reading into the
+      // related row would be handed nothing and read that as permission.
+      // Authorization uses the full read depth whatever the caller asked for.
+      options: { ...params.options, depth: undefined },
     });
     // The response carries the per-locale overview when it is asked for, so a
     // rule deciding on translation state has to see it here too, or the two
@@ -551,7 +558,7 @@ export class SingleQueryService extends BaseService {
         assembled
       );
     }
-    return structuredClone(assembled);
+    return detachData(assembled);
   }
 
   /**
@@ -1088,7 +1095,7 @@ export class SingleQueryService extends BaseService {
           // including putting back a value a later stage is meant to withhold.
           // Deep, because a shallow copy still shares every nested component,
           // repeater and expanded relation with the response.
-          document: structuredClone(doc),
+          document: detachData(doc),
         });
         if (finalDenial) return finalDenial;
       }

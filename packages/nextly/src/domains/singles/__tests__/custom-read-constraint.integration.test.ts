@@ -377,6 +377,59 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.statusCode).toBe(403);
   });
 
+  it("does not let the caller's depth shrink what the rule is shown", async () => {
+    // Depth shapes the RESPONSE. Letting it shape the authorization view too
+    // hands the caller a way to blind the rule: at `depth: 0` the relationship
+    // stays an id, so `data.author?.suspended !== true` reads `undefined` and
+    // the Single is served to someone the stored data refuses.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (created.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 0,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("keeps a rule's writes deep inside its argument out of the response", async () => {
     // A shallow copy still shares every nested object with the response, so a
     // rule reaching into a component or group could rewrite what is returned.
