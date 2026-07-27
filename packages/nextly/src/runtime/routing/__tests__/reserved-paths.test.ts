@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+
+import { isReservedPath } from "../reserved-paths";
+
+describe("isReservedPath", () => {
+  it("reserves the framework prefixes and their children", () => {
+    for (const path of [
+      "/admin",
+      "/admin/",
+      "/admin/collections/posts",
+      "/api",
+      "/api/plugins/x",
+      "/_next/static/chunk.js",
+      "/static/logo.png",
+    ]) {
+      expect(isReservedPath(path)).toBe(true);
+    }
+  });
+
+  it("reserves the well-known metadata files", () => {
+    for (const path of [
+      "/sitemap.xml",
+      "/robots.txt",
+      "/favicon.ico",
+      "/manifest.webmanifest",
+      "/manifest.json",
+      "/opengraph-image",
+      "/twitter-image",
+    ]) {
+      expect(isReservedPath(path)).toBe(true);
+    }
+  });
+
+  it("collapses redundant slashes so a slash-prefixed slug can't dodge the match", () => {
+    // A slash-preserving slug field storing "/admin" would otherwise check
+    // "//admin" and slip past the prefix.
+    expect(isReservedPath("//admin")).toBe(true);
+    expect(isReservedPath("/admin//foo")).toBe(true);
+    expect(isReservedPath("//api")).toBe(true);
+    // A genuine content path with an internal double slash still resolves cleanly.
+    expect(isReservedPath("blog//post")).toBe(false);
+  });
+
+  it("allows ordinary content paths", () => {
+    for (const path of [
+      "/about",
+      "/blog/hello-world",
+      "/administration", // not /admin
+      "/apiary", // not /api
+      "/sitemap", // not /sitemap.xml
+      "/",
+    ]) {
+      expect(isReservedPath(path)).toBe(false);
+    }
+  });
+
+  it("normalizes a missing leading slash and a trailing slash", () => {
+    expect(isReservedPath("admin")).toBe(true);
+    expect(isReservedPath("about/")).toBe(false);
+    expect(isReservedPath("api/")).toBe(true);
+  });
+});
