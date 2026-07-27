@@ -186,7 +186,12 @@ const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
         ref={ref}
         data-slot="card-footer"
         className={cn(
-          "flex items-center px-6 py-4  border-t border-border bg-primary/5",
+          // The footer's tint runs the full width of the card, so at a nonzero
+          // --radius it would paint square across the card's curved bottom
+          // corners. `inherit` takes the card's own computed radius rather than
+          // restating a step, so a card whose radius is overridden stays
+          // matched, and at --radius: 0 both resolve to 0 and nothing changes.
+          "flex items-center px-6 py-4  border-t border-border bg-primary/5 rounded-b-[inherit]",
           className
         )}
         {...props}
