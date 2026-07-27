@@ -19,14 +19,13 @@ import { createRequire } from "node:module";
 import type { Metadata } from "next";
 
 import { getNextly } from "../../direct-api/nextly";
-import type { Nextly } from "../../direct-api/nextly";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { isReservedPath } from "./reserved-paths";
 import {
-  collectionHasStatusLifecycle,
   resolveContent,
   type ContentEntry,
+  type NextlyContentReader,
 } from "./resolve-content";
 
 /** Where a resolved entry was found — passed to `render`/`buildMetadata`. */
@@ -60,10 +59,16 @@ export interface ContentRouteConfig<TNode> {
   ) => Metadata | Promise<Metadata>;
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
+  /**
+   * Field holding the publish status (default `"status"`), matched against
+   * `"published"`. Pass `false` to skip status filtering for status-less
+   * collections (no built-in draft/published lifecycle).
+   */
+  statusField?: string | false;
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
-  nextly?: Nextly;
+  nextly?: NextlyContentReader;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
    * collection (a populated author, category, media) can bust the page. The
@@ -144,10 +149,11 @@ export function createContentRoute<TNode>(
 ): ContentRoute<TNode> {
   const collections = [...new Set(config.collections)];
   const slugField = config.slugField ?? "slug";
+  const statusField = config.statusField ?? "status";
   const depth = config.depth ?? 1;
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
 
-  const getInstance = (): Nextly => config.nextly ?? getNextly();
+  const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
   /** Resolve the joined slug across the configured collections (first match wins). */
   async function resolve(
@@ -157,6 +163,7 @@ export function createContentRoute<TNode>(
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
+        statusField,
         depth,
         tags: config.tags,
         revalidate: config.revalidate,
@@ -174,20 +181,16 @@ export function createContentRoute<TNode>(
     const nextly = getInstance();
     const params: Array<{ slug: string[] }> = [];
     for (const collection of collections) {
-      // Filter by `published` only when the built-in lifecycle exists, else a
-      // status-less collection's read would drop rows or target a missing column.
-      const filterByStatus = await collectionHasStatusLifecycle(
-        nextly,
-        collection
-      );
       let page = 1;
       let collected = 0;
       for (;;) {
         const result = await nextly.find({
           collection,
-          ...(filterByStatus
-            ? { where: { status: { equals: "published" } } }
-            : {}),
+          // Filter by `published` unless the caller opted out for a status-less
+          // collection (`statusField: false`), which has no such column.
+          ...(statusField === false
+            ? {}
+            : { where: { [statusField]: { equals: "published" } } }),
           select: { [slugField]: true },
           // `id` is unique and present on every collection; `createdAt` may be
           // absent (timestamps off) or non-unique, letting rows shift between

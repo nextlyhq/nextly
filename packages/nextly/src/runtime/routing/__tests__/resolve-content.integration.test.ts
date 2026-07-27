@@ -51,9 +51,10 @@ describe("resolveContent (integration)", () => {
     ).toBeNull();
   });
 
-  it("does not apply a published filter on a status-less collection", async () => {
+  it("skips status filtering when statusField is false (status-less collection)", async () => {
     // No `status: true` — the collection defines its own ordinary `status`
-    // field. A blanket `status = published` filter would wrongly drop this row.
+    // field. A blanket `status = published` filter would wrongly drop this row,
+    // so the caller opts out with `statusField: false`.
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -73,6 +74,7 @@ describe("resolveContent (integration)", () => {
 
     const doc = await resolveContent("docs", "intro", {
       nextly: current.nextly,
+      statusField: false,
     });
     expect((doc as { title?: string } | null)?.title).toBe("Intro");
   });

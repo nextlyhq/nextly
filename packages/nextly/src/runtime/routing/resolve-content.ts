@@ -18,40 +18,32 @@ import { nextlyTags } from "../cache/nextly-tags";
 /** A resolved content entry (loose by design — shape is the app's collection). */
 export type ContentEntry = Record<string, unknown>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 /**
- * Whether `collection` has the built-in draft/published lifecycle enabled
- * (`status: true`). A status-less collection has no `status` column, so a
- * blanket `status = published` predicate would either be silently dropped or —
- * if the collection defines its own field named `status` — wrongly filter live
- * rows; both routing reads gate the filter on this. Mirrors the sitemap plugin.
+ * The booted-Nextly surface these helpers need: just a `find` reader. Typed
+ * structurally (not as the Direct API class) so BOTH the internal singleton and
+ * the public instance returned by `await getNextly(config)` satisfy it — the
+ * public interface does not expose the Direct API's internal handlers.
  */
-export async function collectionHasStatusLifecycle(
-  nextly: Nextly,
-  collection: string
-): Promise<boolean> {
-  const result = await nextly.collectionsHandler.getCollection({
-    collectionName: collection,
-  });
-  const data = isRecord(result) ? result.data : undefined;
-  return isRecord(data) && data.status === true;
-}
+export type NextlyContentReader = Pick<Nextly, "find">;
 
 /** Options for {@link resolveContent}. */
 export interface ResolveContentOptions {
   /**
    * A booted Nextly instance. Defaults to the runtime singleton (`getNextly()`),
-   * which requires services to be registered — pass one explicitly from a
-   * frontend read path that boots the config itself.
+   * which requires services to be registered — pass one explicitly (e.g. the
+   * value from `await getNextly(config)`) from a frontend read path that boots
+   * the config itself.
    */
-  nextly?: Nextly;
+  nextly?: NextlyContentReader;
   /** The field holding the URL slug (default `"slug"`). */
   slugField?: string;
-  /** The field holding the publish status (default `"status"`). */
-  statusField?: string;
+  /**
+   * The field holding the publish status (default `"status"`), matched against
+   * `"published"`. Pass `false` to skip status filtering entirely — required
+   * for status-less collections (no built-in draft/published lifecycle), which
+   * have no such column.
+   */
+  statusField?: string | false;
   /** Relation population depth for rendering (default `1`). */
   depth?: number;
   /** Read a specific locale (localized collections). */
@@ -94,16 +86,15 @@ export async function resolveContent(
 
   return cachedFind(
     async () => {
-      // Only require `published` when the collection actually has that field: a
-      // custom `statusField` is the caller asserting it exists, and the default
-      // `status` field only exists when the built-in lifecycle is enabled.
-      const filterByStatus =
-        statusField !== "status" ||
-        (await collectionHasStatusLifecycle(nextly, collection));
+      // Filter by `published` unless the caller opted out (`statusField: false`)
+      // for a status-less collection that has no such column.
       const slugCondition = { [slugField]: { equals: slug } };
-      const where = filterByStatus
-        ? { and: [{ [statusField]: { equals: "published" } }, slugCondition] }
-        : slugCondition;
+      const where =
+        statusField === false
+          ? slugCondition
+          : {
+              and: [{ [statusField]: { equals: "published" } }, slugCondition],
+            };
       const result = await nextly.find({
         collection,
         where,
@@ -131,7 +122,7 @@ export async function resolveContent(
         slugField,
         slug,
         locale ?? "",
-        statusField,
+        statusField === false ? "no-status" : statusField,
         String(depth),
         options.richTextFormat ?? "json",
       ],

@@ -66,19 +66,30 @@ export function nextlySitemap(
   options: NextlySitemapOptions
 ): () => Promise<MetadataRoute.Sitemap> {
   const hasTags = (options.tags?.length ?? 0) > 0;
-  const hasRevalidate =
-    typeof options.revalidate === "number" && options.revalidate >= 0;
+  // Only a POSITIVE window is a valid cache lifetime — `unstable_cache` rejects
+  // `revalidate: 0` (Next requires `false` or `> 0`), so treat 0 as no window.
+  const revalidate =
+    typeof options.revalidate === "number" && options.revalidate > 0
+      ? options.revalidate
+      : false;
   // With neither invalidation tags nor a revalidate window, a cached entry would
   // pin the first render forever — publishes, edits, and deletes would never
   // reach `/sitemap.xml`. Read uncached in that case so it always stays current.
-  if (!hasTags && !hasRevalidate) {
+  if (!hasTags && revalidate === false) {
     return async () => normalize(await options.entries());
   }
+  // Default the key off the tags so multiple sitemap helpers (partitioned or
+  // nested) that omit `keyParts` don't alias to one shared cache entry.
+  const keyParts = options.keyParts ?? [
+    "nextly",
+    "sitemap",
+    ...(options.tags ?? []),
+  ];
   return () =>
     cachedFind(async () => normalize(await options.entries()), {
       tags: options.tags ?? [],
-      keyParts: options.keyParts ?? ["nextly", "sitemap"],
-      revalidate: options.revalidate ?? false,
+      keyParts,
+      revalidate,
     });
 }
 
