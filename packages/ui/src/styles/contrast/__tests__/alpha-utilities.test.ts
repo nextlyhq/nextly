@@ -70,8 +70,6 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "text-white/60", // schema-restart overlay text on a bg-black/75 scrim (~4.9:1)
   "text-white/70", // caption over a media thumbnail with a dark gradient scrim
   "text-white/80", // gallery-node label over a media thumbnail scrim
-  "border-black/5", // decorative hairline separator
-  "border-white/5", // decorative hairline separator in dark mode
 ]);
 
 const opaque = (c: Rgb, b: Rgb): Rgb => (c.alpha < 1 ? compositeOver(c, b) : c);

@@ -127,7 +127,10 @@ export function ChipsInput<TFieldValues extends FieldValues = FieldValues>({
                 e.stopPropagation();
                 removeChip(index);
               }}
-              className="ml-0.5 rounded-md p-0.5 hover:bg-black/10 focus:outline-none"
+              // The hover wash comes from `foreground` so it darkens the chip in
+              // light mode and lightens it in dark mode, instead of being an
+              // invisible black tint on the dark badge fill.
+              className="ml-0.5 rounded-md p-0.5 hover:bg-foreground/10 focus:outline-none"
               tabIndex={-1}
               aria-label={`Remove ${chip}`}
             >

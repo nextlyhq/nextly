@@ -200,17 +200,10 @@
   border-width: 1px;
   background-color: var(--nx-card);
   padding: 1.25rem;
-  /* box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); */
   transition-property: all;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 150ms;
 }
-
-/* .admin-card:hover {
-  box-shadow:
-    0 1px 3px 0 rgba(0, 0, 0, 0.1),
-    0 1px 2px -1px rgba(0, 0, 0, 0.1);
-} */
 
 /**
     * Typography
@@ -467,9 +460,13 @@
 /**
  * SUBTLE ROW HOVER
  * Specifically for lists/rows where the solid black is too harsh.
+ *
+ * The dark-mode wash is drawn from `foreground` rather than a literal white so
+ * it inverts with the page's own ink instead of staying white under a theme
+ * that gives the dark palette a tinted foreground.
  */
 .hover-subtle-row {
-  @apply hover:bg-primary/5 hover:text-foreground dark:hover:bg-white/5 transition-colors;
+  @apply hover:bg-primary/5 hover:text-foreground dark:hover:bg-foreground/5 transition-colors;
 }
 
 .hover-subtle-row:hover * {
@@ -490,8 +487,9 @@
   @apply group-hover:bg-primary/5 group-hover:text-foreground;
 }
 
+/* Dark wash drawn from `foreground` so it tracks the page ink, not a literal white. */
 .group-hover-subtle-row {
-  @apply group-hover:bg-primary/5 dark:group-hover:bg-white/5 transition-colors;
+  @apply group-hover:bg-primary/5 dark:group-hover:bg-foreground/5 transition-colors;
 }
 
 .group:hover .group-hover-unified svg {
@@ -518,9 +516,10 @@
   color: inherit !important;
 }
 
-/* Table icon covers: flat shape with unified neutral background. */
+/* Table icon covers: flat shape with unified neutral background. The dark fill
+ * comes from `foreground` so the cover follows the page ink under any theme. */
 .table-row-icon-cover {
-  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-md bg-primary/5 text-foreground dark:bg-white/20;
+  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-md bg-primary/5 text-foreground dark:bg-foreground/20;
 }
 
 /* Normalize table pills/badges to one monochrome look across all tables. */
