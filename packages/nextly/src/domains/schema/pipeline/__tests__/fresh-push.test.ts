@@ -386,12 +386,14 @@ describe("freshPushSchema", () => {
         execute: vi.fn().mockResolvedValue([[{ db: null }], []]),
       };
       // NextlyError keeps the public message generic; the diagnosis lives
-      // in logContext.reason.
+      // in logContext.reason. Matched from the verb so the assertion pins
+      // what the reason says rather than which caller says it — the lookup is
+      // shared with the DI-bound apply path.
       await expect(freshPushSchema("mysql", db, {})).rejects.toMatchObject({
         code: "INTERNAL_ERROR",
         logContext: {
           reason: expect.stringContaining(
-            "could not determine the current MySQL database"
+            "determine the current MySQL database"
           ),
         },
       });
