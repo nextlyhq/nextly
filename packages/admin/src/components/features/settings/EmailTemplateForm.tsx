@@ -542,7 +542,10 @@ function PreviewPane({
           title="Email preview"
           sandbox=""
           srcDoc={srcDoc}
-          className="h-full min-h-[420px] rounded-md border border-border bg-white"
+          // No backdrop class: srcDoc always paints its own body background for
+          // the simulated mail client, so a fixed white here would only ever
+          // show as a flash of the wrong color in a dark admin.
+          className="h-full min-h-[420px] rounded-md border border-border"
           style={{ width: device === "mobile" ? 375 : 640, maxWidth: "100%" }}
         />
       </div>
