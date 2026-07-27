@@ -7,6 +7,8 @@ export type EyebrowState =
   | "success-partial"
   | "error";
 
+// Every tone is the plain foreground ink: these labels are text, so they must
+// stay neutral under a themed primary rather than picking up its hue.
 const COPY: Record<
   EyebrowState,
   { primary: string; sub: string; toneClass: string }
@@ -14,12 +16,12 @@ const COPY: Record<
   idle: {
     primary: "Welcome / Seed",
     sub: "Step 0",
-    toneClass: "text-primary/80",
+    toneClass: "text-foreground",
   },
   seeding: {
     primary: "Seeding in progress",
     sub: "Do not refresh",
-    toneClass: "text-primary/80",
+    toneClass: "text-foreground",
   },
   // Success / error eyebrows stay tonally neutral — the accent bar
   // carries the color signal. Coloring the eyebrow text too produces
@@ -29,17 +31,17 @@ const COPY: Record<
   success: {
     primary: "Seed complete",
     sub: "Auto-hides in 5s",
-    toneClass: "text-primary/80",
+    toneClass: "text-foreground",
   },
   "success-partial": {
     primary: "Seed complete",
     sub: "",
-    toneClass: "text-primary/80",
+    toneClass: "text-foreground",
   },
   error: {
     primary: "Seed failed",
     sub: "No partial data was written",
-    toneClass: "text-primary/80",
+    toneClass: "text-foreground",
   },
 };
 

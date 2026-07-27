@@ -46,7 +46,9 @@ export function WelcomeHeader() {
     <div className="space-y-1 pb-4">
       <h1 className="text-xl font-semibold tracking-[-0.04em] text-foreground leading-tight">
         Welcome,{" "}
-        <span className="text-primary/90">{getFirstName(user?.name)}</span>
+        {/* Same ink as the heading it sits in; the name is emphasis of the
+            title, not an action. */}
+        <span className="text-foreground">{getFirstName(user?.name)}</span>
       </h1>
       <p className="text-sm font-normal text-muted-foreground tracking-tight">
         Manage your content, schemas, and team from one place.

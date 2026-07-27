@@ -81,7 +81,9 @@ export function MediaBulkActionBar({
     >
       <div className="flex items-center gap-3">
         <div className="flex h-8 items-center gap-2 px-3">
-          <span className="text-sm font-semibold text-primary">
+          {/* A count readout, so it takes the page ink; the bar's primary tint
+              already carries the selection signal. */}
+          <span className="text-sm font-semibold text-foreground">
             {selectedCount}
           </span>
           <span className="text-xs text-muted-foreground font-normal">

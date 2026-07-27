@@ -34,14 +34,14 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
         <CardContent className="p-5 relative z-10">
           <div className="flex items-start justify-between">
             <div className="space-y-1">
-              <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground leading-none group-hover:text-primary transition-colors">
+              <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground leading-none transition-colors">
                 {count}
               </span>
-              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-primary pt-1">
+              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
                 {label}
               </h5>
             </div>
-            <div className="text-muted-foreground group-hover:text-primary transition-colors pt-1">
+            <div className="text-muted-foreground group-hover:text-foreground transition-colors pt-1">
               <Icon className="h-5 w-5 shrink-0" />
             </div>
           </div>

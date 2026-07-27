@@ -72,7 +72,9 @@ export const OnboardingChecklist: React.FC = () => {
       >
         <div className="flex items-center gap-4">
           <div className="space-y-1">
-            <CardTitle className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/80">
+            {/* Card ink, not the action token: this eyebrow is a title, and
+                the card's color signal is the progress bar above it. */}
+            <CardTitle className="text-[10px] font-black uppercase tracking-[0.3em] text-foreground">
               Launch Sequence
             </CardTitle>
             <div className="flex items-center gap-2">

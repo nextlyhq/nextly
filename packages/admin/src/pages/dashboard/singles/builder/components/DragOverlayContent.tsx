@@ -48,7 +48,9 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
     const IconComponent = iconMap[data.icon] || Icons.FileText;
     return (
       <div className="flex items-center gap-2 px-3 py-2 rounded-lg  border border-border bg-background shadow-lg">
-        <IconComponent className="h-4 w-4 text-primary shrink-0" />
+        {/* Muted foreground to match the field-type icon on the real row this
+            preview stands in for. */}
+        <IconComponent className="h-4 w-4 text-muted-foreground shrink-0" />
         <span className="text-xs font-medium text-foreground">
           {data.label}
         </span>
@@ -69,7 +71,8 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
     >
       {/* Drag handle */}
       <div className="p-1.5 shrink-0">
-        <Icons.GripVertical className="h-4 w-4 text-primary" />
+        {/* Muted foreground to match the reorder handle on the real row. */}
+        <Icons.GripVertical className="h-4 w-4 text-muted-foreground" />
       </div>
 
       {/* Field type icon */}

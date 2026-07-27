@@ -314,12 +314,14 @@ function SingleComponentNonRepeatable({
             "border-y border-border hover:border-primary relative z-10"
           )}
         >
-          <span className="text-[11px] font-bold tracking-[0.08em] uppercase text-primary">
+          {/* Accordion label and its disclosure chevron are content, so they
+              take the page ink; the primary tint stays on the header fill. */}
+          <span className="text-[11px] font-bold tracking-[0.08em] uppercase text-foreground">
             {label}
           </span>
           <ChevronDown
             className={cn(
-              "h-4 w-4 text-primary transition-transform duration-200",
+              "h-4 w-4 text-foreground transition-transform duration-200",
               isOpen ? "rotate-0" : "-rotate-90"
             )}
           />

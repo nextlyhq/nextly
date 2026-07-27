@@ -245,9 +245,9 @@ export function ComponentFieldEditor({
             />
             <div className="flex flex-col items-start gap-0.5">
               <span className="text-sm font-semibold">Single</span>
-              <span
-                className={`text-xs ${currentMode === "single" ? "text-primary/70" : "text-muted-foreground"}`}
-              >
+              {/* Helper text stays muted in both states; selection is carried by
+                  the card border, fill and title. */}
+              <span className="text-xs text-muted-foreground">
                 One type
               </span>
             </div>
@@ -270,9 +270,9 @@ export function ComponentFieldEditor({
             />
             <div className="flex flex-col items-start gap-0.5">
               <span className="text-sm font-semibold">Dynamic Zone</span>
-              <span
-                className={`text-xs ${currentMode === "multi" ? "text-primary/70" : "text-muted-foreground"}`}
-              >
+              {/* Helper text stays muted in both states; selection is carried by
+                  the card border, fill and title. */}
+              <span className="text-xs text-muted-foreground">
                 Multiple types
               </span>
             </div>

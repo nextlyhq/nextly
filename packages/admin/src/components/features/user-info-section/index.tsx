@@ -61,7 +61,8 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
             rel="noopener noreferrer"
             className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-card-foreground hover:bg-accent cursor-pointer"
           >
-            <HelpCircle className="h-4 w-4 text-primary" />
+            {/* Same ink as the row's label, which sits on the card surface. */}
+            <HelpCircle className="h-4 w-4 text-card-foreground" />
             <div className="flex flex-col items-start">
               <span>Help</span>
               <span className="text-xs text-muted-foreground">

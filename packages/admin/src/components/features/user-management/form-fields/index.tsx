@@ -331,7 +331,9 @@ export function UserFormFields({
                   )}
                 />
                 <div>
-                  <div className="text-sm font-semibold text-primary">
+                  {/* A field label, so it takes the page ink rather than the
+                      action token. */}
+                  <div className="text-sm font-semibold text-foreground">
                     Active Account (Default: Yes)
                   </div>
                   {/* Muted foreground so this secondary text meets contrast; a faint primary alpha did not. */}

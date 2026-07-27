@@ -67,7 +67,7 @@ export function NotificationBell({ className }: NotificationBellProps) {
           )}
         >
           {/* Muted foreground so the resting bell icon meets contrast; a faint primary alpha did not. */}
-          <Bell className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+          <Bell className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
           {/* Solid emphasis fill so white on-color text stays AA in dark mode. */}
           {unread > 0 && (
             <span

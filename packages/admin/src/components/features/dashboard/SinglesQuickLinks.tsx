@@ -42,7 +42,7 @@ function SingleCard({ single }: { single: ApiSingle }) {
         <CardContent className="p-5 relative z-10">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1 min-w-0">
-              <h5 className="font-semibold text-base tracking-tight text-foreground truncate group-hover:text-primary transition-colors">
+              <h5 className="font-semibold text-base tracking-tight text-foreground truncate transition-colors">
                 {single.label || single.slug}
               </h5>
               {single.description && (
@@ -51,7 +51,7 @@ function SingleCard({ single }: { single: ApiSingle }) {
                 </p>
               )}
             </div>
-            <div className="text-muted-foreground group-hover:text-primary transition-colors shrink-0">
+            <div className="text-muted-foreground group-hover:text-foreground transition-colors shrink-0">
               <Icon className="h-5 w-5" />
             </div>
           </div>

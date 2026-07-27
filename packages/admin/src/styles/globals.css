@@ -454,9 +454,14 @@
 /*
  * ONE UNIFIED HOVER CLASS
  * Target class for all component hover states.
+ *
+ * The tint is `primary` (a surface) while the ink is `foreground`: these
+ * classes sit on rows, breadcrumbs, table cells and icons all over the admin,
+ * so drawing their hover text from the action token would recolor most of the
+ * app's text the moment a theme gives primary a hue.
  */
 .hover-unified {
-  @apply hover:bg-primary/5 hover:text-primary transition-colors;
+  @apply hover:bg-primary/5 hover:text-foreground transition-colors;
 }
 
 /**
@@ -464,7 +469,7 @@
  * Specifically for lists/rows where the solid black is too harsh.
  */
 .hover-subtle-row {
-  @apply hover:bg-primary/5 hover:text-primary dark:hover:bg-white/5 transition-colors;
+  @apply hover:bg-primary/5 hover:text-foreground dark:hover:bg-white/5 transition-colors;
 }
 
 .hover-subtle-row:hover * {
@@ -482,7 +487,7 @@
 }
 
 .group-hover-unified {
-  @apply group-hover:bg-primary/5 group-hover:text-primary;
+  @apply group-hover:bg-primary/5 group-hover:text-foreground;
 }
 
 .group-hover-subtle-row {
@@ -502,7 +507,7 @@
  * Subtle primary tint; the token inverts for dark, so no OS media query.
  */
 .hover-unified-table-row {
-  @apply hover:bg-primary/5 hover:text-primary transition-colors;
+  @apply hover:bg-primary/5 hover:text-foreground transition-colors;
 }
 
 .hover-unified-table-row:hover * {

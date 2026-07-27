@@ -48,8 +48,9 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             className="relative flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
             title="GitHub Repository"
           >
-            {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}
-            <Github className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+            {/* Muted foreground so this resting icon meets contrast; it brightens to the
+                foreground ink on hover, not to the action token. */}
+            <Github className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
             <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
           </a>
         )}
@@ -61,8 +62,9 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
             title="Discord Community"
           >
-            {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}
-            <Discord className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+            {/* Muted foreground so this resting icon meets contrast; it brightens to the
+                foreground ink on hover, not to the action token. */}
+            <Discord className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
           </a>
         )}
 
@@ -74,8 +76,9 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
             title="Documentation"
           >
-            {/* Muted foreground so this resting icon meets contrast; it brightens to primary on hover. */}
-            <HelpCircle className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+            {/* Muted foreground so this resting icon meets contrast; it brightens to the
+                foreground ink on hover, not to the action token. */}
+            <HelpCircle className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
           </a>
         )}
 
