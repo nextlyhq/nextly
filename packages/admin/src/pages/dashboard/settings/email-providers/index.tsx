@@ -566,7 +566,7 @@ function EmailProviderTable() {
         }
         filters={
           <Select value={type} onValueChange={handleTypeChange}>
-            <SelectTrigger className="w-[130px] bg-background text-foreground border-border hover:bg-accent/10">
+            <SelectTrigger className="w-[130px] bg-background text-foreground hover:bg-accent/10">
               <SelectValue placeholder="All Types" />
             </SelectTrigger>
             <SelectContent>

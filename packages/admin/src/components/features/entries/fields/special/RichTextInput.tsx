@@ -266,7 +266,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-md  border border-border bg-background",
+        "relative rounded-md  border border-input bg-background",
         !isEditable && "bg-primary/5 cursor-not-allowed",
         className
       )}

@@ -150,6 +150,9 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     return (
       <div className={cn("relative w-full max-w-lg", className)}>
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        {/* The edge uses border-input (a visible 3:1 boundary) rather than the
+            decorative border-border: an empty field has nothing else to
+            identify it. */}
         <input
           {...props}
           ref={ref}
@@ -158,7 +161,7 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
           value={internalValue}
           onChange={handleChange}
           aria-busy={isLoading}
-          className="h-10 w-full rounded-md border border-border bg-background text-foreground pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus:outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50 transition-all"
+          className="h-10 w-full rounded-md border border-input bg-background text-foreground pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus:outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50 transition-all"
         />
 
         {/* Right side icons (clear button + loading spinner) */}

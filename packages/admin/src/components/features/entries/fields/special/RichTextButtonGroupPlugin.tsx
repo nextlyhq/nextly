@@ -456,7 +456,7 @@ export function RichTextButtonGroupPlugin({
                         onChange={e =>
                           updateButton(index, { bgColor: e.target.value })
                         }
-                        className="h-8 w-8 rounded-md  border border-border cursor-pointer p-0.5"
+                        className="h-8 w-8 rounded-md  border border-input cursor-pointer p-0.5"
                         title="Background color"
                       />
                     )}
@@ -466,7 +466,7 @@ export function RichTextButtonGroupPlugin({
                       onChange={e =>
                         updateButton(index, { textColor: e.target.value })
                       }
-                      className="h-8 w-8 rounded-md  border border-border cursor-pointer p-0.5"
+                      className="h-8 w-8 rounded-md  border border-input cursor-pointer p-0.5"
                       title="Text color"
                     />
                   </div>

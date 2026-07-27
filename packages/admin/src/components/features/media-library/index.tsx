@@ -605,7 +605,7 @@ export function MediaLibrary({
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-background text-foreground border-border hover:bg-accent/10">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-background text-foreground hover:bg-accent/10">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>
@@ -633,7 +633,7 @@ export function MediaLibrary({
             value={`${sortBy}-${sortOrder}`}
             onValueChange={handleSortChange}
           >
-            <SelectTrigger className="w-full sm:w-[180px] shrink-0 hover-unified bg-background text-foreground border-border hover:bg-accent/10">
+            <SelectTrigger className="w-full sm:w-[180px] shrink-0 hover-unified bg-background text-foreground hover:bg-accent/10">
               <SelectValue placeholder="Sort by..." />
             </SelectTrigger>
             <SelectContent>

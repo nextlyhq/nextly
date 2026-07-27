@@ -58,10 +58,11 @@
   font-weight: 500;
 }
 
-/* DatePicker specific styling */
+/* DatePicker specific styling. The trigger is a form control, so its edge takes
+   --nx-input (a visible 3:1 boundary), not the decorative --nx-border. */
 [data-slot="date-picker-trigger"] {
   background-color: var(--nx-background);
-  border-color: var(--nx-border);
+  border-color: var(--nx-input);
 }
 
 .nextly-admin {
