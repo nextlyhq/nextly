@@ -78,8 +78,9 @@ export interface SitemapOptions {
   /** Collections whose published entries appear in the sitemap. */
   collections: string[];
   /**
-   * Absolute site origin for `<loc>` (e.g. "https://example.com"). A trailing
-   * slash is trimmed so a leading-slash path never produces a doubled `//`.
+   * Absolute site origin for `<loc>` (e.g. "https://example.com"). Must be an
+   * origin only — no path, query, fragment, or credentials; per-entry paths come
+   * from {@link UrlForEntry}. An invalid value throws.
    */
   baseUrl: string;
   /** Path builder; defaults to `/<collection>/<slug>`. */
