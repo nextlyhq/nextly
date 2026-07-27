@@ -22,4 +22,6 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-A field's declared `defaultValue` is now applied when a collection entry is created through the REST or Direct API, not only in the admin form. A required field that carries a default can now be created without supplying it.
+A field's declared constant `defaultValue` is now applied when a collection entry is created through the REST or Direct API, not only in the admin form, and a required field carrying one can be created without supplying it. Defaults reach nested group and repeater fields too.
+
+Two limits: a `defaultValue` written as a function is not applied on these paths, because the stored collection definition cannot carry a function, and bulk or caller-managed transactional creates are unchanged.
