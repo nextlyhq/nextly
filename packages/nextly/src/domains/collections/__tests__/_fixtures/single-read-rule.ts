@@ -10,7 +10,7 @@ export default function singleReadRule({
   req,
   data,
 }: {
-  req: { user?: { id?: string } };
+  req: { user?: { id?: string }; locale?: string };
   data?: Record<string, unknown>;
 }): unknown {
   switch (req.user?.id) {
@@ -31,6 +31,17 @@ export default function singleReadRule({
     // loaded before the rule is evaluated.
     case "reads-data":
       return { tenant: { equals: (data as { tenant?: string })?.tenant } };
+    // A caller-only decision, used to check the first read of a Single that has
+    // never been materialized can still authorize its creation.
+    case "caller-only":
+      return Boolean(req.user);
+    // A case-insensitive operator, whose SQL differs by dialect.
+    case "contains-op":
+      return { tenant: { contains: "acm" } };
+    // Keyed on the requested language, which the rule only sees if the read's
+    // locale is threaded into its context.
+    case "locale-aware":
+      return req.locale === "secret" ? false : { tenant: { equals: "acme" } };
     // Narrow to the caller's own tenant.
     default:
       return { tenant: { equals: req.user?.id } };

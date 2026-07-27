@@ -43,7 +43,10 @@ import {
   AccessControlService,
   isSuperAdminContext,
 } from "../../../services/access";
-import { describeUntranslatableConstraint } from "../../../services/access/constraint-shape";
+import {
+  DIALECT_DEPENDENT_OPERATORS,
+  describeUntranslatableConstraint,
+} from "../../../services/access/constraint-shape";
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
@@ -446,8 +449,11 @@ export class SingleQueryService extends BaseService {
     singleMeta: { tableName: string };
     accessRules: CollectionAccessRules | undefined;
     user?: UserContext;
+    locale?: string;
+    fallbackLocale?: string | false;
   }): Promise<{ denied?: SingleResult; document?: SingleDocument | null }> {
-    const { slug, singleMeta, accessRules, user } = params;
+    const { slug, singleMeta, accessRules, user, locale, fallbackLocale } =
+      params;
     const denied: SingleResult = {
       success: false,
       statusCode: 403,
@@ -455,58 +461,66 @@ export class SingleQueryService extends BaseService {
     };
     if (!accessRules) return {};
 
-    // Load first. The rule's documented `id`/`data` arguments must carry the
-    // stored document: a rule reading `data` evaluated against `undefined`
-    // decides on nothing, and one written as `data?.secret !== true` would ALLOW
-    // where the real row denies. The row also supplies the authoritative column
-    // list below.
-    const document = await this.adapter.selectOne<SingleDocument>(
-      singleMeta.tableName,
-      {}
-    );
-    // Nothing stored yet: a document-dependent rule has nothing to judge, and
-    // auto-creating for a caller it may refuse is a write triggered by a read
-    // about to be denied.
-    if (!document) return { denied };
+    // The rule's documented `id`/`data` arguments must carry the stored
+    // document: evaluated against nothing, a rule reading `data` decides on
+    // nothing, and one written as `data?.secret !== true` allows where the real
+    // row denies.
+    const load = () =>
+      this.adapter.selectOne<SingleDocument>(singleMeta.tableName, {});
+    const judge = (document: SingleDocument | null) =>
+      this.accessControlService.evaluateAccess(
+        accessRules,
+        "read",
+        {
+          user: user
+            ? {
+                id: user.id,
+                role: user.role,
+                roles: user.roles,
+                email: user.email,
+              }
+            : undefined,
+          // Part of the documented rule context: a rule keyed on the requested
+          // language sees `undefined` without them, which can turn an
+          // absence-tolerant check into an unintended allow.
+          locale,
+          fallbackLocale,
+        },
+        typeof document?.id === "string" ? document.id : undefined,
+        document ?? undefined
+      );
 
-    const documentId =
-      typeof document.id === "string" ? document.id : undefined;
-    const result = await this.accessControlService.evaluateAccess(
-      accessRules,
-      "read",
-      {
-        user: user
-          ? {
-              id: user.id,
-              role: user.role,
-              roles: user.roles,
-              email: user.email,
-            }
-          : undefined,
-      },
-      documentId,
-      document
-    );
+    const document = await load();
+    const result = await judge(document);
     if (!result.allowed) {
       return {
         denied: { ...denied, message: result.reason ?? denied.message },
       };
     }
-    // A boolean answer decides on the caller alone; there is nothing to filter.
+    // A boolean answer decides on the caller alone. It carries no predicate, so
+    // it also authorizes the first read of a Single that has never been
+    // materialized — the read that auto-creates it.
     if (result.query === undefined || result.query === null) {
       return { document };
     }
+    // A predicate with no row cannot be satisfied, and auto-creating for it
+    // would materialize a document the rule excludes.
+    if (!document) return { denied };
 
     // Validate against the columns the row actually has. A Single's configured
-    // fields are the wrong set in both directions: system columns (`id`,
-    // `status`, timestamps) are queryable but not configured fields, while
-    // localized, component and many-to-many fields are configured but live in
-    // their own tables — filtering on one would make the fetch throw rather than
-    // deny.
+    // fields are the wrong set in both directions: system columns are queryable
+    // but not configured, while localized, component and many-to-many fields are
+    // configured but live in their own tables.
     const columns = new Set(Object.keys(document));
     const untranslatable = describeUntranslatableConstraint(
       result.query,
-      name => columns.has(name)
+      name => columns.has(name),
+      undefined,
+      // This path hands the clause straight to the adapter, bypassing the
+      // dialect-aware ILIKE-to-LIKE rewrite the collection query builder
+      // applies, so a case-insensitive operator would emit ILIKE on engines
+      // that reject it.
+      DIALECT_DEPENDENT_OPERATORS
     );
     if (untranslatable !== null) {
       this.logger.warn("Refused an untranslatable access constraint", {
@@ -517,13 +531,23 @@ export class SingleQueryService extends BaseService {
     }
 
     // Re-read under the constraint so the database decides, applying the same
-    // predicate a list read would compile. Selecting nothing means the stored
-    // row does not satisfy the rule.
+    // predicate a list read would compile.
     const permitted = await this.adapter.selectOne<SingleDocument>(
       singleMeta.tableName,
       { where: buildWhereClause(result.query as WhereFilter) }
     );
     if (!permitted) return { denied };
+
+    // Re-judge the row the constraint actually selected. A write landing between
+    // the two reads could satisfy a constraint derived from the earlier row
+    // while the rule would refuse the newer one, so the row being returned is
+    // the row the rule is asked about.
+    const recheck = await judge(permitted);
+    if (!recheck.allowed) {
+      return {
+        denied: { ...denied, message: recheck.reason ?? denied.message },
+      };
+    }
     return { document: permitted };
   }
 
@@ -687,6 +711,8 @@ export class SingleQueryService extends BaseService {
           singleMeta,
           accessRules: singleMeta.accessRules,
           user: options.user,
+          locale: options.locale,
+          fallbackLocale: options.fallbackLocale,
         });
         if (customDenied.denied) return customDenied.denied;
         loadedDoc = customDenied.document ?? loadedDoc;

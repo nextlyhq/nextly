@@ -154,6 +154,37 @@ describe("Single custom read rules (integration)", () => {
     expect(result.success).toBe(true);
   });
 
+  it("refuses an operator whose SQL depends on the dialect", async () => {
+    // This path hands the clause straight to the adapter, skipping the
+    // ILIKE-to-LIKE rewrite the collection query builder applies, so emitting it
+    // would fail on engines that reject ILIKE rather than allow or deny.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "contains-op" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("gives the rule the read's locale", async () => {
+    // A rule keyed on the requested language sees `undefined` unless the read's
+    // locale reaches its context, which can turn a check that tolerates absence
+    // into an unintended allow.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "locale-aware" },
+      locale: "secret",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("lets a trusted read through untouched", async () => {
     const entry = await bootWithCustomRule();
 

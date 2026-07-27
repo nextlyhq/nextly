@@ -36,6 +36,19 @@ function isMappableOperator(operator: string): boolean {
 export type HasColumn = (name: string) => boolean;
 
 /**
+ * Operators whose SQL depends on the dialect.
+ *
+ * The collection query builder rewrites `ILIKE` to `LIKE` for engines that
+ * reject it. A caller handing a translated clause straight to the adapter skips
+ * that rewrite, so these have to be refused on such a path rather than emitting
+ * SQL the database will not accept.
+ */
+export const DIALECT_DEPENDENT_OPERATORS: ReadonlySet<string> = new Set([
+  "contains",
+  "search",
+]);
+
+/**
  * Why an access constraint cannot be applied exactly, or null when it can.
  *
  * Accepted:
@@ -51,7 +64,9 @@ export type HasColumn = (name: string) => boolean;
 export function describeUntranslatableConstraint(
   constraint: Record<string, unknown>,
   hasColumn: HasColumn,
-  isLocalizedField?: (name: string) => boolean
+  isLocalizedField?: (name: string) => boolean,
+  /** Operators this caller's translation path cannot apply, refused as unsupported. */
+  refusedOperators?: ReadonlySet<string>
 ): string | null {
   const entries = Object.entries(constraint);
   if (entries.length === 0) return "constraint is empty";
@@ -79,7 +94,7 @@ export function describeUntranslatableConstraint(
     const operators = Object.keys(predicate);
     if (operators.length === 0) return `field "${field}" has no operator`;
     for (const operator of operators) {
-      if (!isMappableOperator(operator)) {
+      if (!isMappableOperator(operator) || refusedOperators?.has(operator)) {
         return `operator "${operator}" on "${field}" is not supported`;
       }
       const value = (predicate as Record<string, unknown>)[operator];
