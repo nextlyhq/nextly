@@ -5,17 +5,17 @@ description: How Nextly prunes the webhook event ledger and delivery log, plus P
 
 Nextly records outbound webhook activity in two high-churn tables:
 
-- **`nextly_events`** — the event ledger (the outbox). Every captured content change writes a row here, whether or not a webhook endpoint is configured to receive it.
-- **`nextly_webhook_deliveries`** — one row per delivery attempt, with retry state and a per-attempt log.
+- **`nextly_events`** — the event ledger (the outbox). A content change writes a row here **only when recording is active**: an enabled webhook endpoint exists, or the `webhooks.audit` seam is on. An install with no enabled endpoint and audit off records nothing, so the table does not grow.
+- **`nextly_webhook_deliveries`** — **one row per (endpoint, event)**, carrying the retry state. Each retry is appended to that row's in-row attempt log, not added as a new row, so more matching endpoints add rows while retries enlarge existing ones.
 
-Both fill continuously and are pruned automatically. This page explains the retention policy, the manual `nextly webhooks:prune` command, and how to keep the underlying tables from bloating on Postgres and SQLite.
+When recording is active these tables fill continuously and are pruned automatically. This page explains the retention policy, the manual `nextly webhooks:prune` command, and how to keep the underlying tables from bloating on Postgres and SQLite.
 
 ## How retention works
 
 Retention runs **opportunistically on content writes** and as part of the delivery **drain** — you do not need to schedule anything for it to work. Each pass deletes:
 
 - **Terminal deliveries** (`delivered` / `failed`) older than `deliveriesMaxAgeMs`.
-- **Events** older than `eventsMaxAgeMs` (or `auditEventsMaxAgeMs` for audit-class events), once they have been fanned out and no delivery still references them.
+- **Events** older than `eventsMaxAgeMs`, once they have been fanned out and no delivery still references them. (A separate, longer window governs audit-class events — see the note below the table.)
 
 Passes are bounded so a single write never turns into an unbounded delete.
 
@@ -39,13 +39,15 @@ export default defineConfig({
 
 | Field | Default | Meaning |
 |---|---|---|
-| `eventsMaxAgeMs` | 30 days | Age after which a fanned-out webhook event is prunable. `false` keeps events forever. |
-| `auditEventsMaxAgeMs` | 365 days | Same, for audit-class events (kept longer). `false` keeps them forever. |
+| `eventsMaxAgeMs` | 30 days | Age after which a fanned-out `webhook`-class event is prunable. `false` keeps events forever. |
+| `auditEventsMaxAgeMs` | 365 days | Age for `audit`-class events. `false` keeps them forever. See the note below. |
 | `deliveriesMaxAgeMs` | 7 days | Age after which a `delivered`/`failed` delivery row is prunable. `false` keeps them forever. |
 | `batchSize` | 500 | Rows deleted per batch (capped at 900). |
 | `maxBatchesPerRun` | 20 | Batches per pass, so one write never triggers an unbounded delete. |
 
-Set `webhooks.retention: false` to disable pruning entirely (the tables then grow until you prune them yourself).
+**On the audit class:** every event today is recorded with the default `webhook` retention class, so `eventsMaxAgeMs` governs all pruning. The `audit` class and its longer `auditEventsMaxAgeMs` window are reserved for a future audit-log producer and are dormant until then — do not rely on the 365-day window to retain events longer.
+
+Set `webhooks.retention: false` to disable pruning entirely. Both the automatic passes **and** `nextly webhooks:prune` then do nothing, so the tables grow until you either re-enable retention or clean them up at the database level yourself.
 
 ## Pruning by hand: `nextly webhooks:prune`
 
@@ -58,7 +60,10 @@ nextly webhooks:prune --dry-run  # report what a pass would remove, delete nothi
 
 The command reports how many webhook events, audit events, and terminal delivery rows it removed. If a batch bound stops the pass before it finishes, it says so — run it again to continue. It reads the same `webhooks.retention` policy as the automatic passes, and does nothing when retention is disabled.
 
-**`webhooks:prune` is cleanup, not delivery.** It does not fan out or deliver anything. It only reclaims events that have already been fanned out, plus terminal (`delivered`/`failed`) deliveries. An event that was never fanned out — because no drain ran — is left in place, since it may still be delivered. So if you have **enabled endpoints, you still need the drain running** to fan out and deliver; `webhooks:prune` supplements the drain with a scheduled cleanup, it does not replace it. It is most useful where events accrue but you want space reclaimed on a schedule — for example an audit-only install with no enabled endpoint, or alongside a drain whose retention you want to run more aggressively.
+**`webhooks:prune` is cleanup, not delivery.** It does not fan out or deliver anything. Its behaviour splits on whether an enabled endpoint exists:
+
+- **With an enabled endpoint,** an event that was never fanned out is **kept** — it may still be delivered — so prune only reclaims already-fanned-out events plus terminal (`delivered`/`failed`) deliveries. You still need the **drain running** to fan out and deliver; `webhooks:prune` supplements it with scheduled cleanup, it does not replace it.
+- **With no enabled endpoint** (an audit-only install, `webhooks.audit` on), there is nothing to deliver to, so aged un-fanned events are reclaimable and `webhooks:prune` is all you need to keep the ledger bounded.
 
 A daily cron is a good baseline where you want scheduled cleanup:
 
@@ -66,7 +71,7 @@ A daily cron is a good baseline where you want scheduled cleanup:
 0 3 * * *  cd /path/to/app && nextly webhooks:prune
 ```
 
-Global flags inherited from the root `nextly` command apply: `--config <path>`, `--cwd <path>`, `--verbose`, `-q/--quiet`.
+Global flags inherited from the root `nextly` command apply: `--config <path>`, `--cwd <path>`, `--verbose`, `-q/--quiet`. Note that `--cwd` selects where the config is discovered, but `nextly` loads `.env` and reads `DATABASE_URL` from the directory you actually run it in — so invoke `webhooks:prune` from the app directory, or export the database environment yourself, when using `--cwd`.
 
 ## Keeping the tables small
 
