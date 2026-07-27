@@ -57,6 +57,10 @@ import {
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
+import {
+  ensureWebhookSecretColumnRenamed,
+  type SecretColumnMigrationAdapter,
+} from "../../schemas/webhooks/secret-column-migration";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -346,6 +350,15 @@ export async function migrateCore(
     deps.db,
     deps.dialect,
     async () => {
+      // Rename the webhook signing-secret column in place BEFORE the core diff.
+      // Otherwise reconcile sees the old `secret_hash` (gone from the desired
+      // schema) plus the new `secret_ciphertext` as a destructive drop + add.
+      // Guarded + idempotent: a no-op on fresh installs and on re-runs.
+      await ensureWebhookSecretColumnRenamed(
+        deps.adapter as unknown as SecretColumnMigrationAdapter,
+        deps.dialect
+      );
+
       deps.logger.info("Phase 1: reconciling core schema...");
       const r = await reconcile({
         db: deps.db,

@@ -87,7 +87,7 @@ describe("WebhookDeliveryQueryService (real SQLite)", () => {
       event_types: ["entry.updated"],
       filter: null,
       headers: null,
-      secret_hash: ["whsec_x"],
+      secret_ciphertext: ["whsec_x"],
       secret_prefix: "whsec_",
       field_allowlist: null,
       created_by: null,

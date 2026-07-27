@@ -188,7 +188,7 @@ export type FilterSpec = FilterSpecV1 | FilterSpecExpression;
 
 /**
  * The outbound endpoint registry shape (mirrors `nextly_webhooks`). Secrets are
- * never held raw: `secretHash` is the list of active-secret hashes (a list for
+ * never held raw: `secretCiphertext` is the list of active-secret hashes (a list for
  * zero-downtime rotation) and `secretPrefix` is a display-only prefix. The
  * property name matches the Drizzle column so a hydrated row maps directly.
  */
@@ -208,7 +208,7 @@ export interface WebhookEndpoint {
    * completeness; the delivery path reads and signs from its own row rather
    * than this cached copy.
    */
-  secretHash: StoredSecretEntry[];
+  secretCiphertext: StoredSecretEntry[];
   secretPrefix: string;
   /** Reserved per-endpoint field projection; not applied yet. */
   fieldAllowlist: string[] | null;

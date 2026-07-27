@@ -73,7 +73,7 @@ function toEndpoint(row: Record<string, unknown>): WebhookEndpoint {
     headers: (row.headers as Record<string, string> | null) ?? null,
     // Normalized to the entry shape (tolerating the legacy bare-string form).
     // Carried for completeness only; delivery signs from its own row read.
-    secretHash: normalizeSecretEntries(row.secretHash, {
+    secretCiphertext: normalizeSecretEntries(row.secretCiphertext, {
       prefix: (row.secretPrefix as string) ?? "",
       createdAt:
         row.createdAt instanceof Date

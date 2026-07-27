@@ -115,7 +115,7 @@ describe("webhook delivery engine (real SQLite)", () => {
       event_types: opts.eventTypes ?? ["entry.updated"],
       filter: null,
       headers: opts.headers ?? null,
-      secret_hash: opts.secrets ?? [SECRET],
+      secret_ciphertext: opts.secrets ?? [SECRET],
       secret_prefix: "whsec_",
       field_allowlist: null,
       created_by: null,

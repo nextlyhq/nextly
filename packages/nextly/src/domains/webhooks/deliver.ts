@@ -75,11 +75,11 @@ interface WebhookRow {
   url: string;
   headers: Record<string, string> | null;
   /**
-   * The raw `secret_hash` JSON cell: a list of encrypted signing-secret entries
+   * The raw `secret_ciphertext` JSON cell: a list of encrypted signing-secret entries
    * (or the legacy bare-ciphertext form). Normalized and filtered to the live
    * entries at sign time, so an expired overlap secret is never signed with.
    */
-  secretHash: unknown;
+  secretCiphertext: unknown;
   /** Stored as an integer on SQLite, so it is coerced before it is trusted. */
   enabled: unknown;
 }
@@ -144,7 +144,7 @@ export type DeliverTransport = (
 export interface DeliverDeps {
   db: DeliverDatabase;
   /**
-   * Decrypt one stored signing secret (the `secret_hash` column holds AES-GCM
+   * Decrypt one stored signing secret (the `secret_ciphertext` column holds AES-GCM
    * ciphertext, not a hash). Injected so the engine never reads `env` directly
    * and stays unit-testable; the route wiring passes
    * `ct => decrypt(ct, env.NEXTLY_SECRET)`.
@@ -454,7 +454,7 @@ async function attemptDelivery(
   // prefix/createdAt fallbacks are immaterial here — only the ciphertext of a
   // live entry is used.
   const liveEntries = liveSecretEntries(
-    normalizeSecretEntries(webhook.secretHash, {
+    normalizeSecretEntries(webhook.secretCiphertext, {
       prefix: "",
       createdAt: claimedAt.toISOString(),
     }),

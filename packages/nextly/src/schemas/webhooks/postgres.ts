@@ -77,10 +77,12 @@ export const nextlyEvents = pgTable(
 );
 
 /**
- * Outbound webhook endpoint registry. Secrets follow the api-keys pattern:
- * only the hash and a short display prefix are stored; the raw secret is shown
- * once at creation. `secretHash` is a JSON array of active-secret hashes so
- * zero-downtime rotation can be added later without a migration.
+ * Outbound webhook endpoint registry. The signing secret is stored encrypted at
+ * rest (AES-GCM ciphertext) alongside a short display prefix; the raw secret is
+ * shown once at creation and never persisted in the clear. It is ciphertext, not
+ * a hash: the delivery engine decrypts it to compute each request's HMAC.
+ * `secretCiphertext` is a JSON array of active-secret ciphertexts so a new secret
+ * can overlap an old one during zero-downtime rotation.
  */
 export const nextlyWebhooks = pgTable(
   "nextly_webhooks",
@@ -95,8 +97,8 @@ export const nextlyWebhooks = pgTable(
     filter: jsonb("filter"),
     // Static request headers merged into every delivery.
     headers: jsonb("headers"),
-    // JSON array of active signing-secret hashes (list-shaped for rotation).
-    secretHash: jsonb("secret_hash").notNull(),
+    // JSON array of active signing-secret ciphertexts (list-shaped for rotation).
+    secretCiphertext: jsonb("secret_ciphertext").notNull(),
     // Short prefix of the current secret for display, never the raw secret.
     secretPrefix: varchar("secret_prefix", { length: 16 }).notNull(),
     // Optional per-endpoint field allowlist (projection; reserved for later).
@@ -128,6 +130,12 @@ export const nextlyWebhookDeliveries = pgTable(
   "nextly_webhook_deliveries",
   {
     id: text("id").primaryKey(),
+    // Both foreign keys cascade on delete, deliberately. Endpoints are
+    // soft-deleted (the `nextly_webhooks` row survives), so this cascade never
+    // fires for normal retirement and a retired endpoint keeps its history; it
+    // only fires on a genuine hard row-delete, where erasing the endpoint's
+    // deliveries with it is the intended meaning. The event cascade is how
+    // retention prunes an event together with its delivery attempts in one step.
     webhookId: text("webhook_id")
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),

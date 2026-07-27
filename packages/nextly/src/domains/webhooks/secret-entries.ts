@@ -2,7 +2,7 @@
  * Webhook domain — the stored signing-secret entry shape and its lifecycle.
  *
  * `secret.ts` owns the crypto (generate, encrypt, decrypt, display prefix). This
- * module owns the SHAPE of what a `nextly_webhooks.secret_hash` cell holds and
+ * module owns the SHAPE of what a `nextly_webhooks.secret_ciphertext` cell holds and
  * the rules for a rotation with an overlap window.
  *
  * The column is a JSON array so rotation is additive without a migration. It
@@ -116,7 +116,7 @@ function coerceEntry(
 }
 
 /**
- * Read a stored `secret_hash` cell into entries, tolerating both the current
+ * Read a stored `secret_ciphertext` cell into entries, tolerating both the current
  * object form and the legacy bare-string form. `fallback` supplies the prefix
  * and creation time a legacy entry lacks (the row's own `secret_prefix` and
  * `created_at`). A non-array or fully-malformed cell reads as no entries.
