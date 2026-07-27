@@ -2,15 +2,12 @@
  * Proves a Single's stored `custom` read rule is enforced, against a real
  * (in-memory SQLite) database.
  *
- * A custom rule answers with a boolean or with a query constraint. The
- * constraint is the predicate a list read folds into SQL, and a Single has no
- * list to fold it into — so it is handed to the database as the filter on a
- * single-row fetch. Selecting nothing means the row does not satisfy the rule.
- *
- * That is what makes this enforceable at all. Comparing the predicate in memory
- * would mean a second evaluator drifting from the one lists compile, which is
- * why custom rules were previously left unenforced on Singles rather than
- * half-enforced.
+ * A custom rule answers with a boolean or with a query constraint. The boolean
+ * decides; the constraint is refused. A constraint is the predicate a list read
+ * folds into SQL, and a Single's document is assembled from several tables, so
+ * no single row remains for the database to test it against. Comparing it in
+ * memory instead would mean a second evaluator drifting from the one lists
+ * compile, and that drift is itself the security bug.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -189,14 +186,13 @@ describe("Single custom read rules (integration)", () => {
 });
 
 /**
- * A rule guarding a redacted field is decided on the value, not on its absence.
+ * A rule is decided on values, not on their absence.
  *
- * Field-level read access removes fields from the response. Removing them
- * before the document-level decision leaves a rule written as
- * `data.visibility !== "private"` reading `undefined`, which passes — so the
- * caller receives the rest of a document the rule exists to withhold. The
- * guarded value here lives in the companion table, so the earlier gate cannot
- * see it either: the main row carries the default language's value.
+ * The guarded field here is translatable, so it lives only in the companion
+ * table and the main row carries no value for it at all; it also has a field
+ * read rule, so it is removed from the response. Both are ways for the rule to
+ * be shown `undefined` where the document holds something, and a rule written
+ * as `data.visibility !== "private"` reads that absence as permission.
  */
 describe("Single custom read rules vs the assembled document (integration)", () => {
   /**
