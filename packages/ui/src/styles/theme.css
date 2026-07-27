@@ -720,7 +720,7 @@
   /* Element colors — 3-tier translucent border scale (monochrome).
    * The first two tiers are decorative and are tuned by eye: subtle = faint
    * dividers, default = the container edge on cards, groups, and tables
-   * (composites to #dbdbdb on white, a hairline rather than a rule). The third
+   * (composites to a light grey on white, a hairline rather than a rule). The third
    * is not decorative — strong marks the edge of a control that has no other
    * boundary, so it is held to a contrast minimum instead. */
   --nx-border-subtle: oklch(0 0 0 / 0.08);
