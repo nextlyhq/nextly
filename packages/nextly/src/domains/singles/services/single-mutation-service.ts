@@ -89,7 +89,7 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
-import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
+import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
 import type {
   SingleDocument,
@@ -1346,14 +1346,15 @@ export class SingleMutationService extends BaseService {
             // view; a non-localized single has no locale.
             const payloadLocale = eventLocale ?? defaultViewLocale;
 
-            // Resolve the opt-out ONCE, before assembling any webhook payload.
-            // Building the previous/next documents calls populateComponentData
-            // (strict) — a per-component read that can throw on a missing/stale
-            // component table — and expands the field tree, all of which only
-            // ever feed recordMutationEvent. That helper short-circuits on the
-            // opt-out, so for a `webhooks: false` Single this assembly is pure
-            // waste and must not be able to fail a scalar content write.
-            const recordingEnabled = isWebhookRecordingEnabled("single", slug);
+            // Resolve the FULL recording gate ONCE, before assembling any webhook
+            // payload. Building the previous/next documents calls
+            // populateComponentData (strict) — a per-component read that can throw
+            // on a missing/stale component table — and expands the field tree, all
+            // of which only ever feed recordMutationEvent. The choke point
+            // re-checks the same gate, so for an opted-out Single, or one with no
+            // endpoint and audit off, this assembly is pure waste and must not be
+            // able to fail a scalar content write.
+            const recordingEnabled = isOutboxRecordingActive("single", slug);
 
             const previousDoc =
               recordingEnabled && preRow

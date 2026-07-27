@@ -594,6 +594,24 @@ curl http://localhost:3000/api/api-keys -b "__nextly_access_token=..."
 
 These parameters are accepted by every list endpoint that delegates to the collection / single dispatcher.
 
+### status
+
+For Draft/Published collections and singles, `?status=` controls which lifecycle states a read returns.
+
+| Value | Returns |
+|---|---|
+| _(omitted)_ | Published only — the safe default. Drafts are never returned unless you ask. |
+| `published` | Published only (explicit). |
+| `draft` | Drafts only. |
+| `all` | Every entry regardless of status. |
+
+```
+?status=all
+?status=draft
+```
+
+An **unrecognized** value (a typo like `?status=pubished`) is rejected with `400 VALIDATION_ERROR` rather than silently returning everything, so a bad filter can never widen a read. Trusted server-side calls through the Direct API (which bypass access checks) see every status by default; over HTTP the default is always published-only. The admin panel requests `?status=all` explicitly so editors still see their drafts.
+
 ### where
 
 Filter rows using bracket notation:

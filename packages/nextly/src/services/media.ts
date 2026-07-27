@@ -99,11 +99,15 @@ export class MediaService extends BaseService {
    * Both absorb their own failures, so this never turns a committed write into
    * an error.
    */
-  private async afterWrite(): Promise<void> {
+  private async afterWrite(recorded: boolean): Promise<void> {
     if (!this.fastDrainScheduler && !this.retentionRunner) {
       return;
     }
-    this.fastDrainScheduler?.offer();
+    // Only schedule the fast drain when an event was actually recorded: an
+    // install with no endpoint and audit off records nothing, so offering the
+    // drain would pay a fresh `nextly_webhooks` query on every media write for
+    // no subscriber. Retention still runs — it prunes prior rows regardless.
+    if (recorded) this.fastDrainScheduler?.offer();
     await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
   }
 
@@ -427,6 +431,7 @@ export class MediaService extends BaseService {
         sizes: sizesData == null ? null : JSON.stringify(sizesData),
       }) as Record<string, unknown>;
 
+      let recorded = false;
       await this.adapter.transaction(async tx => {
         await tx.insert("media", insertRow, { returning: [] });
 
@@ -434,7 +439,7 @@ export class MediaService extends BaseService {
         // prior state, so `previous` is null. Media has no field schema, so
         // `fields` is empty (nothing to strip). The uploader is the recorded
         // subject when no transport actor was threaded.
-        await recordMutationEvent(tx, {
+        recorded = await recordMutationEvent(tx, {
           type: "media.uploaded",
           resource: { kind: "media", id: mediaId },
           data: mediaRecord,
@@ -446,7 +451,7 @@ export class MediaService extends BaseService {
 
       // The upload committed a media.uploaded outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite();
+      await this.afterWrite(recorded);
 
       return {
         success: true,
@@ -707,6 +712,7 @@ export class MediaService extends BaseService {
       // the other's fresh variants.
       let replacedSizes: unknown = null;
       let updatedRow: Media | null;
+      let recorded = false;
       try {
         updatedRow = await this.adapter.transaction<Media | null>(async tx => {
           await tx.lockRow("media", mediaId);
@@ -736,7 +742,7 @@ export class MediaService extends BaseService {
 
           // `previous` is the freshly-read pre-write row; `data` is the new
           // state. Media has no field schema, so `fields` is empty.
-          await recordMutationEvent(tx, {
+          recorded = await recordMutationEvent(tx, {
             type: "media.updated",
             resource: { kind: "media", id: mediaId },
             data: nextRow,
@@ -797,7 +803,7 @@ export class MediaService extends BaseService {
 
       // The update committed a media.updated outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite();
+      await this.afterWrite(recorded);
 
       return {
         success: true,
@@ -843,6 +849,7 @@ export class MediaService extends BaseService {
       // is detected reliably on every dialect, and the event's `data` carries
       // the latest committed state rather than the pre-transaction read. The
       // transaction returns the deleted row (or null when it was already gone).
+      let recorded = false;
       const deletedRow = await this.adapter.transaction<Media | null>(
         async tx => {
           await tx.lockRow("media", mediaId);
@@ -861,7 +868,7 @@ export class MediaService extends BaseService {
           // The removed row's final state ships as `data`; there is no
           // post-delete state, so `previous` is null (mirroring create). Media
           // has no field schema, so `fields` is empty (nothing to strip).
-          await recordMutationEvent(tx, {
+          recorded = await recordMutationEvent(tx, {
             type: "media.deleted",
             resource: { kind: "media", id: mediaId },
             data: current,
@@ -931,7 +938,7 @@ export class MediaService extends BaseService {
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite();
+      await this.afterWrite(recorded);
 
       return {
         success: true,
