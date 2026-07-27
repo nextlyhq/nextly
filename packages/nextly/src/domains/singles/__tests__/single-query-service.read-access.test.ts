@@ -149,7 +149,12 @@ describe("SingleQueryService.get — stored read rules", () => {
 describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
   const OWNER_ONLY_READ = { read: { type: "owner-only" as const } };
 
-  function createOwnerOnlyService(row: Record<string, unknown> | null) {
+  function createOwnerOnlyService(
+    row: Record<string, unknown> | null,
+    hookRegistry: ReturnType<
+      typeof createMockHookRegistry
+    > = createMockHookRegistry()
+  ) {
     const registry = createMockSingleRegistry();
     registry.registerSingle("site-settings", {
       ...siteSettingsMeta({ accessRules: OWNER_ONLY_READ }),
@@ -162,7 +167,7 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
       createMockAdapter({ selectOne, insert }) as unknown as Ctor[0],
       createSilentLogger() as unknown as Ctor[1],
       registry as unknown as Ctor[2],
-      createMockHookRegistry() as unknown as Ctor[3],
+      hookRegistry as unknown as Ctor[3],
       undefined,
       createMockRBACService(true) as unknown as Ctor[5]
       // No accessControlService override: the real one is constructed, which is
@@ -245,20 +250,88 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("refuses when the row loses its owner between the two reads", async () => {
+    // Access is decided on a row read before the hooks, and the response is
+    // read again after them. A `beforeRead` hook may write, and another writer
+    // may reassign the owner column in between, so the row actually being
+    // returned has to be judged too — otherwise the caller receives a document
+    // someone else now owns.
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({ accessRules: OWNER_ONLY_READ }),
+      fields: [textField("siteName")],
+    });
+    const selectOne = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "doc1", created_by: "owner-1" })
+      .mockResolvedValue({ id: "doc1", created_by: "someone-else" });
+
+    const service = new SingleQueryService(
+      createMockAdapter({ selectOne }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      undefined,
+      createMockRBACService(true) as unknown as Ctor[5]
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "owner-1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("still admits the owner when a hook drops the owner value", async () => {
+    // Ownership is settled once, against the stored row. An `afterRead` hook
+    // shapes the RESPONSE and is free to drop the owner identifier from it, so
+    // re-deciding ownership on what the hook produced refuses the caller the
+    // stored row proves is the owner.
+    const hookRegistry = createMockHookRegistry();
+    hookRegistry.hasHooks = vi
+      .fn()
+      .mockImplementation((phase: string) => phase === "afterRead");
+    hookRegistry.execute = vi
+      .fn()
+      .mockImplementation(
+        async (_phase: string, ctx: { data: Record<string, unknown> }) => {
+          const { created_by: _owner, ...rest } = ctx.data;
+          return rest;
+        }
+      );
+
+    const { service } = createOwnerOnlyService(
+      { id: "doc1", created_by: "owner-1", siteName: "Nextly" },
+      hookRegistry
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "owner-1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("created_by");
+  });
 });
 
 /**
- * Custom read rules are deliberately NOT enforced on Singles yet.
+ * Custom read rules are consulted on Singles, and consulted early enough.
  *
- * A custom function may return an arbitrary query constraint, which a list read
- * compiles into SQL. Honouring that against one document means re-implementing
- * the filter grammar, and a second evaluator drifts from the first — the
- * divergence being a security bug rather than a missing feature. Until the
- * constraint can be applied by the database, a custom read rule is left as it
- * behaves today rather than half-enforced.
+ * The rule is judged against the document a caller would receive, assembled from
+ * the stored row before any user code runs. Deciding on the way out instead
+ * would let a caller the rule refuses trigger hooks on every attempt. End-to-end
+ * behaviour is covered by `custom-read-constraint.integration.test.ts`, which
+ * needs a real schema; this pins that the rule is reached, and reached first.
  */
-describe("SingleQueryService.get — custom read rules are not enforced yet", () => {
-  function createCustomRuleService(row: Record<string, unknown> | null) {
+describe("SingleQueryService.get — custom read rules are consulted", () => {
+  function createCustomRuleService(
+    row: Record<string, unknown> | null,
+    evaluateAccess = vi.fn()
+  ) {
     const registry = createMockSingleRegistry();
     registry.registerSingle("site-settings", {
       ...siteSettingsMeta({
@@ -266,23 +339,24 @@ describe("SingleQueryService.get — custom read rules are not enforced yet", ()
       }),
       fields: [textField("siteName")],
     });
-    const evaluateAccess = vi.fn();
+    const hookRegistry = createMockHookRegistry();
+    hookRegistry.hasHooks = vi.fn().mockReturnValue(true);
     const service = new SingleQueryService(
       createMockAdapter({
         selectOne: vi.fn().mockResolvedValue(row),
       }) as unknown as Ctor[0],
       createSilentLogger() as unknown as Ctor[1],
       registry as unknown as Ctor[2],
-      createMockHookRegistry() as unknown as Ctor[3],
+      hookRegistry as unknown as Ctor[3],
       undefined,
       createMockRBACService(true) as unknown as Ctor[5],
       undefined,
       { evaluateAccess } as unknown as Ctor[7]
     );
-    return { service, evaluateAccess };
+    return { service, evaluateAccess, hookRegistry };
   }
 
-  it("reads through without consulting the rule", async () => {
+  it("consults the rule rather than reading through", async () => {
     const { service, evaluateAccess } = createCustomRuleService({
       id: "doc1",
       siteName: "Nextly",
@@ -293,10 +367,48 @@ describe("SingleQueryService.get — custom read rules are not enforced yet", ()
       routeAuthorized: true,
     });
 
-    // Unchanged from before read rules were wired: the rule is not evaluated,
-    // so it can neither admit nor deny, and nothing is half-applied.
-    expect(result.success).toBe(true);
-    expect(evaluateAccess).not.toHaveBeenCalled();
+    // The rule decides. A stub returning no verdict denies, which is the safe
+    // direction; what matters here is that it was asked.
+    expect(evaluateAccess).toHaveBeenCalled();
+    void result;
+  });
+
+  it("creates the Single from the very draft the rule judged", async () => {
+    // The first read of an unmaterialized Single is authorized against the
+    // document it would create. Building a second draft for the insert gives
+    // the outgoing check a different identity than the rule was asked about,
+    // so the same draft has to carry through.
+    const { service } = createCustomRuleService(
+      null,
+      vi.fn().mockResolvedValue({ allowed: true })
+    );
+    const buildDraft = vi.spyOn(service, "buildDefaultDocument");
+
+    await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(buildDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs no user hook for a caller the rule refuses", async () => {
+    // Hooks are user code and can reach outside the process, so a read the rule
+    // refuses must not be able to trigger them — otherwise an unauthorized
+    // caller drives those side effects on every attempt.
+    const { service, hookRegistry } = createCustomRuleService(
+      { id: "doc1", siteName: "Nextly" },
+      vi.fn().mockResolvedValue({ allowed: false, reason: "no" })
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(403);
+    expect(hookRegistry.execute).not.toHaveBeenCalled();
+    expect(hookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
   });
 });
 

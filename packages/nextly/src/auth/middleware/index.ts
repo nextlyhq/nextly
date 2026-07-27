@@ -159,6 +159,15 @@ export interface AuthContext {
    * to the user that owns it.
    */
   apiKeyId?: string;
+  /**
+   * Verified non-canonical claims from the caller's token.
+   *
+   * A stored `custom` access rule may decide on a claim this framework knows
+   * nothing about — a tenant, a plan, an entitlement. They are carried here so
+   * the rule sees over HTTP what it sees through the Direct API; without them
+   * an absence-tolerant rule admits the caller it was written to refuse.
+   */
+  claims?: Record<string, unknown>;
 }
 
 /**
@@ -294,6 +303,31 @@ export async function requireApiKeyAuth(
  * API key auth sets `permissions` to the pre-resolved set for the key's token type
  * and `roles` to the resolved role slugs for the key's token type.
  */
+/**
+ * The claims a token carried beyond the identity fields the framework defines.
+ *
+ * `getSession` already spreads them onto the session user, so this only has to
+ * separate them from the canonical keys, which travel in their own fields and
+ * must not be able to be restated (and so overridden) from a claim.
+ */
+const CANONICAL_SESSION_KEYS = new Set([
+  "id",
+  "name",
+  "email",
+  "image",
+  "roleIds",
+]);
+
+function sessionClaims(
+  user: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const claims: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(user)) {
+    if (!CANONICAL_SESSION_KEYS.has(key)) claims[key] = value;
+  }
+  return Object.keys(claims).length > 0 ? claims : undefined;
+}
+
 export async function requireAuthentication(
   req: Request
 ): Promise<AuthContext | ErrorResponse> {
@@ -308,6 +342,7 @@ export async function requireAuthentication(
       permissions: [],
       roles: user.roleIds,
       authMethod: "session",
+      claims: sessionClaims(user),
     };
   }
 

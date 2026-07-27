@@ -67,7 +67,13 @@ export class CollectionAccessService extends BaseService {
     }
 
     return {
+      // Spread rather than rebuild. The canonical fields below are named for
+      // documentation, but a `custom` rule may decide on a claim this framework
+      // knows nothing about — a tenant, a plan, an entitlement — and listing the
+      // fields to copy drops every one of them, so a rule written to refuse a
+      // caller reads `undefined` and admits it.
       user: {
+        ...user,
         id: user.id,
         role: user.role,
         // Forward the full role set so role-based rules match on ANY role,

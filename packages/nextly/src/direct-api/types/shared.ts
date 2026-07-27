@@ -154,22 +154,20 @@ export type DataFromSingleSlug<TSlug extends string> = GeneratedTypes extends {
 /**
  * User context for access control when `overrideAccess` is false.
  *
- * This minimal interface provides the essential information needed
- * for access control decisions.
+ * Carries the identity an access rule decides on. `id` and `role` are the
+ * canonical fields; anything else you attach is passed through to the rule
+ * untouched, so a `custom` rule can decide on a claim of your own (a tenant, a
+ * plan, an entitlement) the same way it can over HTTP.
  */
 export interface UserContext {
   /** Unique user identifier */
   id: string;
   /** User's primary role for role-based access control */
   role?: string;
-  /**
-   * The user's full role set (the user/role model is many-to-many). Access
-   * evaluation matches a role-based rule against ANY of these, so a secondary
-   * role can authorize a read — supply it when known, not just `role`.
-   */
+  /** Full authorized role set, for rules that decide on more than one role. */
   roles?: string[];
-  /** User's email (some stored access rules match on it). */
-  email?: string;
+  /** Any further claims your rules read. */
+  [claim: string]: unknown;
 }
 
 /**

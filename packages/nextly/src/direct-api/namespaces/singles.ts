@@ -18,11 +18,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import {
-  createErrorFromSingleResult,
-  forwardUserContext,
-  mergeConfig,
-} from "./helpers";
+import { createErrorFromSingleResult, mergeConfig } from "./helpers";
 
 /**
  * Retrieve the content of a single by slug.
@@ -36,7 +32,11 @@ export async function findSingle<TSlug extends SingleSlug>(
   const result = await ctx.singleEntryService.get(args.slug, {
     depth: config.depth,
     locale: config.locale,
-    user: forwardUserContext(config.user),
+    // Fallback control belongs to the read: it decides whether an untranslated
+    // field falls back to the default language, and a rule keyed on it sees
+    // `undefined` when it is dropped here.
+    fallbackLocale: config.fallbackLocale,
+    user: config.user,
     overrideAccess: config.overrideAccess,
     context: config.context,
   });
@@ -80,7 +80,7 @@ export async function updateSingle<TSlug extends SingleSlug>(
 
   const result = await ctx.singleEntryService.update(args.slug, args.data, {
     locale: config.locale,
-    user: forwardUserContext(config.user),
+    user: config.user,
     overrideAccess: config.overrideAccess,
     context: config.context,
     disableRevalidate: config.disableRevalidate,
@@ -116,7 +116,8 @@ export async function findSingles(
       const result = await ctx.singleEntryService.get(record.slug, {
         depth: config.depth,
         locale: config.locale,
-        user: forwardUserContext(config.user),
+        fallbackLocale: config.fallbackLocale,
+        user: config.user,
         overrideAccess: config.overrideAccess,
         context: config.context,
       });
