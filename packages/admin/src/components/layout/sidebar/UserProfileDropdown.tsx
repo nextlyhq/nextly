@@ -50,7 +50,7 @@ export function UserProfileDropdown({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          className="w-64 p-2 mb-2 ml-2 rounded-lg shadow-xl shadow-black/5 admin-dropdown-content border border-border bg-popover"
+          className="w-64 p-2 mb-2 ml-2 rounded-lg shadow-xl shadow-(color:--nx-shadow-color)/5 admin-dropdown-content border border-border bg-popover"
           side="bottom"
           align="end"
           forceMount

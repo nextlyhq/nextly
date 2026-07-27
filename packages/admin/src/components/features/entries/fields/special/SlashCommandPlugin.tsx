@@ -262,8 +262,8 @@ const menuContainerStyle: React.CSSProperties = {
   border: "1px solid var(--nx-border)",
   backgroundColor: "var(--nx-popover)",
   padding: "4px",
-  boxShadow:
-    "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)",
+  // Elevation from the theme's shadow ramp rather than a fixed black wash.
+  boxShadow: "var(--shadow-lg)",
   zIndex: 9999,
 };
 

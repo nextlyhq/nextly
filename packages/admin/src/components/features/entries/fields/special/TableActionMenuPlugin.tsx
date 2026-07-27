@@ -49,7 +49,9 @@ const menuStyle: React.CSSProperties = {
   backgroundColor: "var(--nx-background)",
   border: "1px solid var(--nx-border)",
   borderRadius: "6px",
-  boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+  // Elevation from the theme's shadow ramp so the menu lifts with the same ink
+  // as every other floating admin surface.
+  boxShadow: "var(--shadow-md)",
   fontSize: "12px",
   fontFamily: "inherit",
 };

@@ -76,7 +76,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
-              className="w-64 p-2 mt-2 rounded-lg border-border shadow-xl shadow-black/5 admin-dropdown-content"
+              className="w-64 p-2 mt-2 rounded-lg border-border shadow-xl shadow-(color:--nx-shadow-color)/5 admin-dropdown-content"
               align="end"
               forceMount
             >
