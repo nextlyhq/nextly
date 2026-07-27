@@ -274,11 +274,7 @@
    * Perfect Fourth Scale (1.333 ratio) - WCAG 2.2 AA Compliant
    * ============================================ */
 
-  /* Font Families */
-  --font-sans: var(--font-inter), Inter, sans-serif;
-  --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+  /* Font Families live in the non-inline @theme block below. */
 
   /* Type Scale - Base Size: 16px (1rem) */
   --text-xs: 0.75rem;
@@ -451,6 +447,26 @@
 
   /* Custom Transitions */
   --ease-premium: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ============================================
+ * FONT FAMILIES (Tailwind v4.1)
+ *
+ * Deliberately a non-inline `@theme`. `@theme inline` copies a declaration's
+ * value into whatever consumes it, which froze these stacks into
+ * `--default-font-family` / `--default-mono-font-family` and into the
+ * `font-mono` utility at build time, so the variables existed but nothing read
+ * them and re-declaring one on a scope changed nothing. A plain `@theme`
+ * emits each token as a real custom property and makes its consumers
+ * reference it with `var()`, so the base rule and the `font-*` utilities
+ * re-resolve wherever the token is redeclared.
+ * ============================================ */
+@theme {
+  --font-sans: var(--font-inter), Inter, sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
 }
 
 /* ============================================
