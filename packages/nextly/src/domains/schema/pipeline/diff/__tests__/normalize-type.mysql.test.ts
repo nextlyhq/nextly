@@ -23,6 +23,14 @@ describe("normalizeType — MySQL booleans", () => {
     expect(normalizeType("  TINYINT(1) ")).toBe(normalizeType("boolean"));
   });
 
+  it("is not confused by whitespace inside the width", () => {
+    // Insignificant to the engine but not to a string compare, and the
+    // fallback below would strip the width and leave a plain `tinyint`.
+    for (const t of ["TINYINT ( 1 )", "tinyint( 1 )", "tinyint (1)"]) {
+      expect(normalizeType(t), t).toBe(normalizeType("boolean"));
+    }
+  });
+
   it("keeps a plain tinyint distinct from a boolean", () => {
     // A one-byte integer, not a boolean — MySQL 8 reports it as `tinyint`
     // with no width, which is exactly what distinguishes the two.

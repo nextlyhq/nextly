@@ -111,11 +111,23 @@ export function normalizeDefault(
   // fractional-seconds precision, where a DATETIME(3) column authored
   // `CURRENT_TIMESTAMP(3)` reads back as `now(3)`. `now()` is the form this
   // codebase already treats as canonical, so the keyword collapses into it
-  // and any precision is carried across unchanged.
-  normalised = normalised.replace(
-    /^current_timestamp(?:\(\s*(\d+)\s*\))?$/,
-    (_m, precision?: string) => (precision ? `now(${precision})` : "now()")
-  );
+  // and any precision is carried across unchanged. Whitespace inside the call
+  // is insignificant to every dialect but not to a string compare, so
+  // `CURRENT_TIMESTAMP ( 3 )` has to reduce to the same token as `now(3)`.
+  //
+  // A bare `now` is deliberately left alone: unlike the keywords it is not
+  // callable without parentheses in any supported dialect, so an expression
+  // that spells it that way is something else.
+  const timestampKeyword = normalised.trim().match(TIMESTAMP_KEYWORD);
+  if (timestampKeyword) {
+    const precision = timestampKeyword[2];
+    if (
+      timestampKeyword[1] === "current_timestamp" ||
+      precision !== undefined
+    ) {
+      normalised = precision ? `now(${precision})` : "now()";
+    }
+  }
 
   // Step 6: a boolean column's default, whichever spelling the dialect
   // reports. Gated on the column type because `1` is only "true" where the
@@ -167,13 +179,20 @@ const NILADIC_KEYWORDS = [
   "user",
 ].join("|");
 
-// The built-in keywords, alone or with a fractional-seconds precision, and
-// `now()`. These name the same thing in any case, so both sides of the diff
-// can be reduced to lower case; anything outside this set is left as written.
+// The built-in keywords, alone or called with an optional fractional-seconds
+// precision, and `now(...)`. These name the same thing in any case, so both
+// sides of the diff can be reduced to lower case; anything outside this set is
+// left as written. The precision is optional and may be empty because MySQL
+// accepts `CURRENT_TIMESTAMP()` as a call with no argument.
 const KEYWORD_WITH_OPTIONAL_PRECISION = new RegExp(
-  `^(?:now\\(\\)|(?:${NILADIC_KEYWORDS})(?:\\s*\\(\\s*\\d+\\s*\\))?)$`,
+  `^(?:now\\s*\\(\\s*\\d*\\s*\\)|(?:${NILADIC_KEYWORDS})(?:\\s*\\(\\s*\\d*\\s*\\))?)$`,
   "i"
 );
+
+// The two spellings of "the current timestamp", with the precision they may
+// carry. Applied after the lowercase pass, so it needs no `i` flag; the
+// capture groups are the keyword and the precision digits.
+const TIMESTAMP_KEYWORD = /^(current_timestamp|now)(?:\s*\(\s*(\d*)\s*\))?$/;
 
 const EXPRESSION_SHAPED = new RegExp(
   // Anything parenthesised (`(unixepoch())`), anything that calls (`now()`,

@@ -86,10 +86,15 @@ export function normalizeType(type: string | undefined): string | undefined {
 
   const lowered = type.trim().toLowerCase();
   // MySQL reports `BOOLEAN`, `BOOL`, and `TINYINT(1)` all as `tinyint(1)`,
-  // so the width has to be read before it is stripped. Left signed-only on
-  // purpose: `tinyint(1) unsigned` is not what the boolean synonym produces,
-  // and treating it as one would hide a real difference.
-  if (lowered === "tinyint(1)") return "bool";
+  // so the width has to be read before it is stripped. Whitespace around the
+  // width is insignificant and a hand-written `TINYINT ( 1 )` reaches the
+  // desired side as authored, so it is tolerated here — matching it exactly
+  // would leave that spelling to the strip below, which would reduce it to
+  // `tinyint` and report a type change against the very column it describes.
+  // Left signed-only on purpose: `tinyint(1) unsigned` is not what the
+  // boolean synonym produces, and treating it as one would hide a real
+  // difference.
+  if (/^tinyint\s*\(\s*1\s*\)$/.test(lowered)) return "bool";
 
   // Lowercase + strip every `(...)` length/precision modifier (and any
   // whitespace that preceded it), e.g. `varchar(255)` → `varchar`,

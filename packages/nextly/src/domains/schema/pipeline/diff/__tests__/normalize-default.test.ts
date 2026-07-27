@@ -267,6 +267,36 @@ describe("normalizeDefault — MySQL equivalences", () => {
     );
   });
 
+  it("ignores whitespace inside the call", () => {
+    // Insignificant to every dialect, but not to the string compare the diff
+    // performs, so a hand-written spacing must reduce to the same token.
+    for (const spelling of [
+      "CURRENT_TIMESTAMP ( 3 )",
+      "current_timestamp(3 )",
+      "current_timestamp (3)",
+    ]) {
+      expect(normalizeDefault(spelling), spelling).toBe(
+        normalizeDefault("now(3)")
+      );
+    }
+    expect(normalizeDefault("now ( 3 )")).toBe(normalizeDefault("now(3)"));
+  });
+
+  it("treats a no-argument call as the bare keyword", () => {
+    // MySQL accepts `CURRENT_TIMESTAMP()`, which denotes exactly what the
+    // bare keyword does.
+    expect(normalizeDefault("CURRENT_TIMESTAMP()")).toBe(
+      normalizeDefault("now()")
+    );
+    expect(normalizeDefault("current_timestamp( )")).toBe("now()");
+  });
+
+  it("leaves a bare `now` alone", () => {
+    // Not callable without parentheses in any supported dialect, so an
+    // expression spelling it that way denotes something else.
+    expect(normalizeDefault("now")).toBe("now");
+  });
+
   it("reads 1 and 0 as booleans on a boolean column", () => {
     // MySQL booleans ARE tinyint(1), so a boolean default comes back as 1/0
     // where the schema authored true/false.

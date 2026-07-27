@@ -38,26 +38,41 @@ async function secondRunChanged(
   // integration files sequentially in one process.
   const prevUrl = process.env.DATABASE_URL;
   const prevDialect = process.env.DB_DIALECT;
-  process.env.DATABASE_URL = url;
-  process.env.DB_DIALECT = dialect;
+  // A variable that was absent has to be removed again, not assigned back:
+  // `process.env.X = undefined` stores the string "undefined", which the
+  // suites that follow in this same process would read as a configured value.
+  const restoreEnv = (): void => {
+    if (prevUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = prevUrl;
+    if (prevDialect === undefined) delete process.env.DB_DIALECT;
+    else process.env.DB_DIALECT = prevDialect;
+  };
 
-  const adapter = await createAdapter({
-    type: dialect,
-    url,
-  } as Parameters<typeof createAdapter>[0]);
+  // Declared outside the try so a failure while constructing the adapter still
+  // restores the environment, and so cleanup skips a pool that never existed.
+  let adapter: Awaited<ReturnType<typeof createAdapter>> | undefined;
   try {
+    process.env.DATABASE_URL = url;
+    process.env.DB_DIALECT = dialect;
+
+    const connected = await createAdapter({
+      type: dialect,
+      url,
+    } as Parameters<typeof createAdapter>[0]);
+    adapter = connected;
+
     // Mirrors how `nextly migrate` bootstraps the ledger: only when it is not
     // already there. Creating it unconditionally re-runs its CREATE INDEX and
     // fails on the second pass.
     const ensureLedger = async (): Promise<void> => {
-      if (await adapter.tableExists("nextly_schema_events")) return;
+      if (await connected.tableExists("nextly_schema_events")) return;
       for (const stmt of getSchemaEventsDdl(dialect)) {
-        await adapter.executeQuery(stmt);
+        await connected.executeQuery(stmt);
       }
     };
     const run = (): Promise<{ changed: boolean }> =>
       reconcileCore({
-        db: adapter.getDrizzle(),
+        db: connected.getDrizzle(),
         dialect,
         logger: { info: () => {}, warn: () => {} },
         ensureLedger,
@@ -72,9 +87,8 @@ async function secondRunChanged(
   } finally {
     // The pool would otherwise stay open for the rest of the run, which is a
     // single process shared with every other integration file.
-    await adapter.disconnect?.();
-    process.env.DATABASE_URL = prevUrl;
-    process.env.DB_DIALECT = prevDialect;
+    await adapter?.disconnect?.();
+    restoreEnv();
   }
 }
 
@@ -85,16 +99,16 @@ describe.skipIf(!process.env.TEST_POSTGRES_URL)(
       const admin = new Pool({
         connectionString: process.env.TEST_POSTGRES_URL,
       });
-      await admin.query(`DROP DATABASE IF EXISTS ${DB_NAME}`);
-      await admin.query(`CREATE DATABASE ${DB_NAME}`);
-      const url = new URL(process.env.TEST_POSTGRES_URL as string);
-      url.pathname = `/${DB_NAME}`;
-      const pool = new Pool({ connectionString: url.toString() });
+      // Everything after the connection runs inside the try, so a failure
+      // while creating the database still drops it and closes the pool.
       try {
+        await admin.query(`DROP DATABASE IF EXISTS ${DB_NAME}`);
+        await admin.query(`CREATE DATABASE ${DB_NAME}`);
+        const url = new URL(process.env.TEST_POSTGRES_URL as string);
+        url.pathname = `/${DB_NAME}`;
         const changed = await secondRunChanged(url.toString(), "postgresql");
         expect(changed).toBe(false);
       } finally {
-        await pool.end();
         await admin.query(`DROP DATABASE IF EXISTS ${DB_NAME}`).catch(() => {});
         await admin.end();
       }
@@ -107,16 +121,16 @@ describe.skipIf(!process.env.TEST_MYSQL_URL)(
   () => {
     it("reports no change on a second run", async () => {
       const admin = createPool({ uri: process.env.TEST_MYSQL_URL });
-      await admin.promise().query(`DROP DATABASE IF EXISTS ${DB_NAME}`);
-      await admin.promise().query(`CREATE DATABASE ${DB_NAME}`);
-      const url = new URL(process.env.TEST_MYSQL_URL as string);
-      url.pathname = `/${DB_NAME}`;
-      const pool = createPool({ uri: url.toString() });
+      // Everything after the connection runs inside the try, so a failure
+      // while creating the database still drops it and closes the pool.
       try {
+        await admin.promise().query(`DROP DATABASE IF EXISTS ${DB_NAME}`);
+        await admin.promise().query(`CREATE DATABASE ${DB_NAME}`);
+        const url = new URL(process.env.TEST_MYSQL_URL as string);
+        url.pathname = `/${DB_NAME}`;
         const changed = await secondRunChanged(url.toString(), "mysql");
         expect(changed).toBe(false);
       } finally {
-        await new Promise<void>(res => pool.end(() => res()));
         await admin
           .promise()
           .query(`DROP DATABASE IF EXISTS ${DB_NAME}`)

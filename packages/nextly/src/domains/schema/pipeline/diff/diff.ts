@@ -44,13 +44,6 @@ import type {
   TableSpec,
 } from "./types";
 
-/**
- * PostgreSQL's rendering of the default a `serial` column carries implicitly.
- * Matched rather than normalised because the two sides are not two spellings
- * of one value: the desired side has no default at all.
- */
-const SEQUENCE_DEFAULT = /^nextval\(/i;
-
 /** The declared types whose sequence default is part of the type itself. */
 const SERIAL_TYPES = new Set(["serial", "bigserial", "smallserial"]);
 
@@ -220,13 +213,17 @@ function diffColumns(
       // reports the materialised `nextval('<table>_id_seq'::regclass)`. Read
       // literally that is a default being removed on every reconcile.
       //
-      // Gated on the DESIRED column still being declared serial. A `nextval`
-      // default on any other column was set deliberately, and dropping it —
-      // by moving to a plain integer, say — is a real change that must still
-      // emit an op, or the column keeps drawing from the sequence forever.
+      // Two conditions, and both are needed. The live default must be over
+      // the sequence the column OWNS (see ColumnSpec.ownedSequenceDefault) —
+      // a `nextval` over any other sequence was pointed there deliberately
+      // and is a real default. And the DESIRED column must still be declared
+      // serial: moving to a plain integer drops the sequence, which the type
+      // comparison cannot catch because serial and integer share a storage
+      // type, so suppressing it would leave the column drawing from the
+      // sequence forever.
       const sequenceDefaultUnchanged =
         curC.default === undefined &&
-        SEQUENCE_DEFAULT.test(prevC.default ?? "") &&
+        prevC.ownedSequenceDefault === true &&
         SERIAL_TYPES.has((curC.type ?? "").trim().toLowerCase());
 
       if (
