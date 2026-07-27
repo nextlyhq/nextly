@@ -94,19 +94,33 @@ keeps up with that only if it picks a **tier by element category** rather than w
 length. Hardcoding a corner — `rounded-none` just as much as `rounded-[6px]` or
 `border-radius: 4px` — pins your UI at that value and opts it out of the knob.
 
-| Tier                         | Use for                                                                                          |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `rounded-lg` / `--radius-lg` | Containers: cards, dialogs, popovers, panels, table wrappers, alerts, empty states, image frames |
-| `rounded-md` / `--radius-md` | Controls: buttons, inputs, textareas, select triggers, checkboxes, switches                      |
-| `rounded-sm` / `--radius-sm` | Small controls and adornments: menu items, badges, chips, tags, tabs, icon buttons               |
-| `rounded-xl` / `rounded-2xl` | Surfaces that must read as clearly softer than a card. Rare                                      |
-| `rounded-full`               | Circles only — avatars, status dots, spinners, pills                                             |
+The scale is three steps. These are exactly what `@nextlyhq/ui/tailwind-preset` exports, and
+exactly what the shipped components use, so matching a Nextly component means picking the
+tier it picks.
 
-Two consequences worth internalising:
+| Tier                         | Use for                                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rounded-lg` / `--radius-lg` | Floating and grouping containers: cards, dialogs, alert dialogs, popovers, tooltips, dropdown / select / command panels, empty-state panels  |
+| `rounded-md` / `--radius-md` | Controls and the inline surfaces among them: buttons, inputs, textareas, select triggers, icon buttons, alerts, table wrappers, image frames |
+| `rounded-sm` / `--radius-sm` | Small controls and adornments: menu and list items, badges, chips, tags, checkboxes, toolbar affordances                                     |
+| `rounded-full`               | Circles and pills, outside the scale — avatars, status dots, spinners, progress tracks, switch tracks and thumbs                             |
+
+Four consequences worth internalising:
 
 - **`rounded-full` is deliberately outside the scale.** It is `9999px`, not a `--radius`
   step. Those elements are round because of their shape, not because of the theme, so a
   retheme must never flatten them.
+- **`rounded-xl` and `rounded-2xl` are not tiers of this knob.** The preset exports only
+  `lg`, `md` and `sm`, so a plugin built against it gets Tailwind's fixed `0.75rem` /
+  `1rem` for those two, detached from `--radius`. Inside the admin's own build they are
+  defined, but as `--radius + 4px` and `--radius + 8px`, so at the shipped `--radius: 0`
+  they resolve to `4px` and `8px` — visibly round inside a square admin. Pick from
+  `sm` / `md` / `lg`.
+- **`--radius: 0` is not "every step is zero".** `--radius-lg` is `0`, but `--radius-sm`
+  and `--radius-md` compute to `-4px` and `-2px`. They _render_ square only because
+  `border-radius` clamps a negative length to `0`. The token keeps its negative value, so
+  reading a step for padding, for an inset, or through `getComputedStyle` gives you `-4px`,
+  not `0`. Clamp it yourself if you consume a step as a length rather than as a corner.
 - **A rounded container must handle full-bleed children.** If a child paints a background
   all the way to the container's edge (a tinted footer, a sticky header, a hover row), give
   the container `overflow-hidden` or give the child a matching corner with
@@ -116,7 +130,10 @@ Two consequences worth internalising:
 If a specific element genuinely must stay square, keep `rounded-none` and leave a comment
 saying why (overlapped-border strips, full-bleed fills inside an already-rounded parent,
 underline tabs). Square with a stated reason is a decision; square without one is an element
-nobody wired to the knob.
+nobody wired to the knob. Tabs are square for exactly that reason — the active state is a
+bottom border that has to run the full width of the trigger — which is why they are not in
+the `rounded-sm` tier above. Sheet is the counter-example: it is anchored to the viewport
+edge and carries no radius class at all.
 
 ---
 

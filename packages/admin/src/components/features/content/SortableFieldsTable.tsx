@@ -141,7 +141,10 @@ export function SortableFieldsTable({
   };
 
   return (
-    <div className="border rounded-md">
+    // `overflow-hidden` matches the other table wrappers: the header row is
+    // painted opaque edge to edge, so without clipping it squares off the
+    // wrapper's rounded top corners at any nonzero --radius.
+    <div className="border rounded-md overflow-hidden">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

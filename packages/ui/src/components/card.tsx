@@ -102,7 +102,14 @@ const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(
         ref={ref}
         data-slot="card-header"
         className={cn(
-          "flex flex-col p-4",
+          // Mirrors CardFooter: a header that carries its own tint runs the full
+          // width of the card, so at a nonzero --radius it would paint square
+          // across the card's curved top corners. `inherit` takes the parent's
+          // computed radius rather than restating a step. It only helps when the
+          // header is a direct child of the card; a header nested inside another
+          // wrapper inherits that wrapper's radius instead, and such a card needs
+          // `overflow-hidden` to clip the fill.
+          "flex flex-col rounded-t-[inherit] p-4",
           !noBorder && "border-b border-border",
           className
         )}
@@ -190,7 +197,8 @@ const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
           // --radius it would paint square across the card's curved bottom
           // corners. `inherit` takes the card's own computed radius rather than
           // restating a step, so a card whose radius is overridden stays
-          // matched, and at --radius: 0 both resolve to 0 and nothing changes.
+          // matched, and it can never disagree with the card at any --radius,
+          // including the shipped 0 where `rounded-lg` is 0.
           "flex items-center px-6 py-4  border-t border-border bg-primary/5 rounded-b-[inherit]",
           className
         )}

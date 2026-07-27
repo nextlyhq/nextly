@@ -265,6 +265,10 @@ const menuContainerStyle: React.CSSProperties = {
   padding: "4px",
   // Elevation from the theme's shadow ramp rather than a fixed black wash.
   boxShadow: "var(--shadow-lg)",
+  // `z-index` only applies to a positioned box. Without this the element is
+  // `position: static`, the value below is discarded, and the menu loses the
+  // hit test to any positioned overlay above it in paint order.
+  position: "relative",
   zIndex: 9999,
 };
 
@@ -352,10 +356,12 @@ export function SlashCommandPlugin({
   const [editor] = useLexicalComposerContext();
   const [queryString, setQueryString] = useState<string | null>(null);
   // The typeahead anchor is appended to whatever `parent` is given, defaulting
-  // to `ownerDocument.body`. Every token the menu styles read is declared on
-  // `.nextly-admin`, so a body-level anchor resolves none of them: the panel
-  // loses its surface, its border and its elevation. Anchoring inside the
-  // admin's scoped portal root keeps the menu within that cascade.
+  // to `ownerDocument.body`. Dark mode is a `dark` class on the admin's own
+  // root element, not on `<html>`, so the `.dark` overrides of the tokens these
+  // styles read never match an element mounted on the body: a body-level menu
+  // renders with the light-mode surface inside a dark admin. Anchoring inside
+  // the admin's scoped portal root, which carries the same class, keeps the
+  // menu on the correct side of that override.
   const portalContainer = usePortalContainer();
 
   // Check for "/" trigger

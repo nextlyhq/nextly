@@ -225,28 +225,32 @@ export function MediaCard({
 
       {/* Information Bar - Integrated at bottom of aspect-square */}
       <div className="bg-primary/5  border-t border-border p-3 shrink-0">
-        <div className="flex flex-col gap-1.5">
+        {/* A container context on the metadata column, so the row below keys off
+         * the width it actually gets rather than the viewport: the grid's column
+         * count and the sidebar move card width independently of any breakpoint,
+         * and at `lg` the six columns leave the row about 58px wide. */}
+        <div className="@container/meta flex flex-col gap-1.5">
           <p className="text-xs font-bold text-foreground dark:text-muted-foreground truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}
           </p>
-          {/* The six-column grid leaves cards around 84px wide at the `lg`
-           * breakpoint, narrower than a dimensions/size pair can render on one
-           * line. Neither value has a break opportunity, and the card clips its
-           * overflow, so without a shrink policy the text is cut mid-glyph.
-           * Dimensions truncate (the ellipsis reads as "there is more"); the
-           * shorter size holds its width so the value stays whole. `title`
-           * keeps both readable at any card width. */}
-          <div className="flex items-center justify-between gap-2">
-            <span
-              title={dimensionsLabel}
-              className="text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase tracking-widest min-w-0 truncate"
-            >
+          {/* The pair needs roughly 160px to render whole, which the row only
+           * has on wide cards. Below that the size wins the space: it is the one
+           * value every asset has (audio and documents have no dimensions) and
+           * the one the preview cannot convey, whereas an image's proportions
+           * are already visible in the thumbnail above. Dimensions are therefore
+           * shown only once the row can hold both in full, so the value is never
+           * a partial number, and the row's `title` keeps them readable at every
+           * width — unlike a tooltip on the span itself, which is unreachable
+           * once the span is squeezed to zero. `truncate` on both is the floor
+           * that keeps a long label, `Invalid size` included, inside the card. */}
+          <div
+            title={`${dimensionsLabel} · ${sizeLabel}`}
+            className="flex items-center justify-between gap-2"
+          >
+            <span className="hidden @min-[10rem]/meta:inline text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase tracking-widest min-w-0 truncate">
               {dimensionsLabel}
             </span>
-            <span
-              title={sizeLabel}
-              className="text-xs font-bold text-muted-foreground dark:text-muted-foreground uppercase tracking-tighter shrink-0"
-            >
+            <span className="text-xs font-bold text-muted-foreground dark:text-muted-foreground uppercase tracking-tighter min-w-0 truncate">
               {sizeLabel}
             </span>
           </div>
