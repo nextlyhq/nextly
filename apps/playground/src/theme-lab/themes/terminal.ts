@@ -33,6 +33,8 @@ const MONO_STACK =
 export const TERMINAL: ThemeDefinition = {
   id: "terminal",
   label: "Terminal",
+  description:
+    "Near-black in both modes, phosphor green, monospaced throughout.",
   group: "nextly",
   recommendedDensity: "compact",
   radius: "0px",

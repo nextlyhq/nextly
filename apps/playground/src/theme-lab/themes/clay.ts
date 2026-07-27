@@ -27,6 +27,7 @@ import type { ThemeDefinition } from "../types";
 export const CLAY: ThemeDefinition = {
   id: "clay",
   label: "Clay",
+  description: "Deeper earth. Terracotta and olive on warm matte surfaces.",
   group: "nextly",
   recommendedDensity: "default",
   radius: "6px",

@@ -18,6 +18,8 @@ import type { ThemeDefinition } from "../types";
 export const INK: ThemeDefinition = {
   id: "ink",
   label: "Ink",
+  description:
+    "Editorial. Hairline rules, serif headings, generous spacing, square corners.",
   group: "nextly",
   // Print-like leading. The theme trades density for legibility on purpose.
   recommendedDensity: "comfortable",

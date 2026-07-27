@@ -14,6 +14,8 @@ import type { ThemeDefinition } from "../types";
 export const GRAPHITE: ThemeDefinition = {
   id: "graphite",
   label: "Graphite",
+  description:
+    "Mono warmed. Neutral greys shifted to a warm hue, soft 4px corners.",
   group: "nextly",
   recommendedDensity: "default",
   // Softens Mono's square corners by one step; small enough that dense tables

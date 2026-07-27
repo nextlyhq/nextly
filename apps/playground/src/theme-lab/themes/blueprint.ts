@@ -18,6 +18,8 @@ import type { ThemeDefinition } from "../types";
 export const BLUEPRINT: ThemeDefinition = {
   id: "blueprint",
   label: "Blueprint",
+  description:
+    "Technical drafting. Cool grey-cyan, mono numerals, tight 2px corners.",
   group: "nextly",
   // A drawing packs information tightly; loose spacing would undo the premise.
   recommendedDensity: "compact",

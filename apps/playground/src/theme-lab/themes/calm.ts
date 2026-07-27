@@ -36,6 +36,8 @@ import type { ThemeDefinition } from "../types";
 export const CALM: ThemeDefinition = {
   id: "calm",
   label: "Calm",
+  description:
+    "Deliberately low contrast. Soft, quiet, and it misses WCAG AA on purpose.",
   group: "nextly",
   // Air is load-bearing: with rules this faint, spacing is the only remaining
   // signal that two rows are two rows.

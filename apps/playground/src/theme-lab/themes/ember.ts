@@ -25,6 +25,8 @@ import type { ThemeDefinition } from "../types";
 export const EMBER: ThemeDefinition = {
   id: "ember",
   label: "Ember",
+  description:
+    "Mono neutrals plus a warm rust accent. Warm without going soft.",
   group: "nextly",
   recommendedDensity: "default",
   radius: "4px",

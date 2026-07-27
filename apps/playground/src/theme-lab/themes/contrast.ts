@@ -32,6 +32,8 @@ import type { ThemeDefinition } from "../types";
 export const CONTRAST: ThemeDefinition = {
   id: "contrast",
   label: "Contrast",
+  description:
+    "Maximum legibility. Pure black on white, heavy borders, targets AAA.",
   group: "nextly",
   // Legibility here comes from the colours, not from spacing, so the density
   // stays where a working admin wants it rather than being traded away.

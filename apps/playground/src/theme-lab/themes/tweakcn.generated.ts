@@ -11,6 +11,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-modern-minimal",
     label: "Modern Minimal",
+    description: "Soft corners, blue primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.375rem",
@@ -135,6 +136,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-violet-bloom",
     label: "Violet Bloom",
+    description: "Pill corners, violet primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "1.4rem",
@@ -259,6 +261,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-t3-chat",
     label: "T3 Chat",
+    description: "Rounded corners, red primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -382,6 +385,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-twitter",
     label: "Twitter",
+    description: "Pill corners, blue primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "1.3rem",
@@ -506,6 +510,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-mocha-mousse",
     label: "Mocha Mousse",
+    description: "Rounded corners, orange primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -630,6 +635,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-bubblegum",
     label: "Bubblegum",
+    description: "Rounded corners, red primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.4rem",
@@ -754,6 +760,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-amethyst-haze",
     label: "Amethyst Haze",
+    description: "Rounded corners, violet primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -878,6 +885,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-notebook",
     label: "Notebook",
+    description: "Rounded corners, achromatic primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.625rem",
@@ -1002,6 +1010,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-doom-64",
     label: "Doom 64",
+    description: "Sharp corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0px",
@@ -1126,6 +1135,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-catppuccin",
     label: "Catppuccin",
+    description: "Soft corners, violet primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.35rem",
@@ -1250,6 +1260,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-graphite",
     label: "Graphite",
+    description: "Soft corners, achromatic primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.35rem",
@@ -1374,6 +1385,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-perpetuity",
     label: "Perpetuity",
+    description: "Soft corners, cyan primary, cool surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.125rem",
@@ -1498,6 +1510,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-kodama-grove",
     label: "Kodama Grove",
+    description: "Rounded corners, yellow-green primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.425rem",
@@ -1622,6 +1635,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-cosmic-night",
     label: "Cosmic Night",
+    description: "Rounded corners, violet primary, cool surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -1746,6 +1760,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-tangerine",
     label: "Tangerine",
+    description: "Rounded corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.75rem",
@@ -1870,6 +1885,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-quantum-rose",
     label: "Quantum Rose",
+    description: "Rounded corners, red primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -1994,6 +2010,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-nature",
     label: "Nature",
+    description: "Rounded corners, green primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -2118,6 +2135,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-bold-tech",
     label: "Bold Tech",
+    description: "Rounded corners, violet primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.625rem",
@@ -2242,6 +2260,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-elegant-luxury",
     label: "Elegant Luxury",
+    description: "Soft corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.375rem",
@@ -2366,6 +2385,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-amber-minimal",
     label: "Amber Minimal",
+    description: "Soft corners, amber primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.375rem",
@@ -2490,6 +2510,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-supabase",
     label: "Supabase",
+    description: "Rounded corners, green primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -2614,6 +2635,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-neo-brutalism",
     label: "Neo Brutalism",
+    description: "Sharp corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0px",
@@ -2737,6 +2759,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-solar-dusk",
     label: "Solar Dusk",
+    description: "Soft corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.3rem",
@@ -2861,6 +2884,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-claymorphism",
     label: "Claymorphism",
+    description: "Pill corners, blue primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "1.25rem",
@@ -2985,6 +3009,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-cyberpunk",
     label: "Cyberpunk",
+    description: "Rounded corners, magenta primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -3108,6 +3133,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-pastel-dreams",
     label: "Pastel Dreams",
+    description: "Pill corners, violet primary, cool surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "1.5rem",
@@ -3232,6 +3258,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-clean-slate",
     label: "Clean Slate",
+    description: "Rounded corners, blue primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -3356,6 +3383,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-caffeine",
     label: "Caffeine",
+    description: "Rounded corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -3479,6 +3507,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-ocean-breeze",
     label: "Ocean Breeze",
+    description: "Rounded corners, green primary, cool surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -3603,6 +3632,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-retro-arcade",
     label: "Retro Arcade",
+    description: "Soft corners, red primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.25rem",
@@ -3726,6 +3756,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-midnight-bloom",
     label: "Midnight Bloom",
+    description: "Rounded corners, violet primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -3850,6 +3881,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-candyland",
     label: "Candyland",
+    description: "Rounded corners, red primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -3973,6 +4005,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-northern-lights",
     label: "Northern Lights",
+    description: "Rounded corners, green primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -4097,6 +4130,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-vintage-paper",
     label: "Vintage Paper",
+    description: "Soft corners, amber primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.25rem",
@@ -4221,6 +4255,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-sunset-horizon",
     label: "Sunset Horizon",
+    description: "Rounded corners, orange primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.625rem",
@@ -4345,6 +4380,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-starry-night",
     label: "Starry Night",
+    description: "Rounded corners, blue primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -4468,6 +4504,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-claude",
     label: "Claude",
+    description: "Rounded corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -4591,6 +4628,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-vercel",
     label: "Vercel",
+    description: "Rounded corners, achromatic primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.5rem",
@@ -4715,6 +4753,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-darkmatter",
     label: "Darkmatter",
+    description: "Rounded corners, orange primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.75rem",
@@ -4839,6 +4878,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-mono",
     label: "Mono",
+    description: "Sharp corners, achromatic primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0rem",
@@ -4963,6 +5003,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-soft-pop",
     label: "Soft Pop",
+    description: "Pill corners, blue primary, warm surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "1rem",
@@ -5087,6 +5128,7 @@ export const TWEAKCN_THEMES: ThemeDefinition[] = [
   {
     id: "tweakcn-sage-garden",
     label: "Sage Garden",
+    description: "Soft corners, green primary, neutral surfaces.",
     group: "tweakcn",
     recommendedDensity: "default",
     radius: "0.35rem",

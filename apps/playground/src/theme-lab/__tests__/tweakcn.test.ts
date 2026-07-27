@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { describePreset } from "../../../scripts/tweakcn-description.mjs";
 import { themeToCss } from "../generate-css";
 import { TWEAKCN_THEMES } from "../themes/tweakcn.generated";
 
@@ -32,5 +33,13 @@ describe("tweakcn presets", () => {
 
   it.each(TWEAKCN_THEMES)("$label generates complete css", theme => {
     expect(() => themeToCss(theme)).not.toThrow();
+  });
+
+  // The descriptions are derived, not authored, so the thing worth asserting
+  // is that the checked-in file still agrees with the deriver: a hand edit to
+  // the generated file, or a change to the derivation that was never followed
+  // by a re-import, both show up here as a preset describing itself wrongly.
+  it.each(TWEAKCN_THEMES)("$label describes its own values", theme => {
+    expect(theme.description).toBe(describePreset(theme.radius, theme.light));
   });
 });

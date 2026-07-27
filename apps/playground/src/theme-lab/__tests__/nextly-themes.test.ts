@@ -32,6 +32,20 @@ describe("nextly themes", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  // The switcher renders a description under every theme name, so a theme
+  // that shipped without one would show a blank line rather than fail
+  // anywhere. Uniqueness is asserted alongside because a description copied
+  // from the row above is the same defect with a different symptom: two
+  // themes claiming to be different in the same words.
+  it("gives every theme its own one-line description", () => {
+    for (const theme of NEXTLY_THEMES) {
+      expect(theme.description.trim(), theme.id).not.toBe("");
+      expect(theme.description, theme.id).not.toContain("\n");
+    }
+    const descriptions = NEXTLY_THEMES.map(theme => theme.description);
+    expect(new Set(descriptions).size).toBe(descriptions.length);
+  });
+
   // A theme missing any required token throws here, which is the only signal
   // that a partial theme would otherwise give: at runtime it would silently
   // inherit the previously rendered theme's value.

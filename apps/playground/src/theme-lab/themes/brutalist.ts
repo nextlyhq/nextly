@@ -28,6 +28,8 @@ import type { ThemeDefinition } from "../types";
 export const BRUTALIST: ThemeDefinition = {
   id: "brutalist",
   label: "Brutalist",
+  description:
+    "Full-strength black borders, hard offset shadows, oversized type.",
   group: "nextly",
   // Full-weight rules on every edge need whitespace or the page turns to mesh.
   recommendedDensity: "comfortable",

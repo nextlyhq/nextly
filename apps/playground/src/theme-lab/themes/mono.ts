@@ -7,6 +7,7 @@ import type { ThemeDefinition } from "../types";
 export const MONO: ThemeDefinition = {
   id: "mono",
   label: "Mono",
+  description: "Today's Nextly. Black on white, sharp corners, zero hue.",
   group: "nextly",
   recommendedDensity: "default",
   radius: "0px",

@@ -26,6 +26,8 @@ import type { ThemeDefinition } from "../types";
 export const SAND: ThemeDefinition = {
   id: "sand",
   label: "Sand",
+  description:
+    "Elevated neutrals. Oatmeal surfaces, clay accent, borderless with soft shadows.",
   group: "nextly",
   // Comfortable: elevation needs air around it. Packed rows would put two
   // shadows within a few pixels of each other and the depth cue collapses.

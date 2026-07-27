@@ -21,6 +21,8 @@ import type { ThemeDefinition } from "../types";
 export const SIGNAL: ThemeDefinition = {
   id: "signal",
   label: "Signal",
+  description:
+    "Mono neutrals plus one deep teal accent, used only for primary actions.",
   group: "nextly",
   recommendedDensity: "default",
   radius: "6px",

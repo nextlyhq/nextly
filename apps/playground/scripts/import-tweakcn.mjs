@@ -10,6 +10,8 @@
  */
 import { writeFileSync } from "node:fs";
 
+import { describePreset } from "./tweakcn-description.mjs";
+
 const SOURCE =
   "https://raw.githubusercontent.com/jnsahaj/tweakcn/main/utils/theme-presets.ts";
 
@@ -93,12 +95,17 @@ function derive(src, mode) {
   return {
     "page-background": src.muted ?? src.background,
     "destructive-solid": src.destructive,
-    success: mode === "light" ? "oklch(0.53 0.17 149.2)" : "oklch(0.6 0.1921 149.58)",
+    success:
+      mode === "light" ? "oklch(0.53 0.17 149.2)" : "oklch(0.6 0.1921 149.58)",
     "success-solid":
-      mode === "light" ? "oklch(0.53 0.17 149.2)" : "oklch(0.5225 0.1921 149.58)",
+      mode === "light"
+        ? "oklch(0.53 0.17 149.2)"
+        : "oklch(0.5225 0.1921 149.58)",
     "success-foreground": "oklch(1 0 0)",
     warning:
-      mode === "light" ? "oklch(0.565 0.1646 70.11)" : "oklch(0.7686 0.1646 70.11)",
+      mode === "light"
+        ? "oklch(0.565 0.1646 70.11)"
+        : "oklch(0.7686 0.1646 70.11)",
     "warning-foreground": "oklch(0.2079 0.0399 265.73)",
     "border-subtle": `color-mix(in srgb, ${src.border}, transparent 60%)`,
     "border-strong": `color-mix(in srgb, ${src.border}, ${mixToward} 25%)`,
@@ -157,7 +164,9 @@ for (let i = 0; i < blocks.length; i++) {
     // single-quoted instead, so both forms are matched here — matching only
     // one would silently drop the value rather than fail on it.
     const out = {};
-    for (const d of m[1].matchAll(/"?([a-z0-9-]+)"?: (?:"([^"]*)"|'([^']*)')/g)) {
+    for (const d of m[1].matchAll(
+      /"?([a-z0-9-]+)"?: (?:"([^"]*)"|'([^']*)')/g
+    )) {
       out[d[1]] = d[2] ?? d[3];
     }
     return out;
@@ -165,13 +174,18 @@ for (let i = 0; i < blocks.length; i++) {
 
   const light = section("light");
   const dark = { ...light, ...section("dark") };
+  const radius = light.radius ?? "0.5rem";
 
   presets.push({
     id: `tweakcn-${key}`,
     label,
+    // Derived from the preset's own radius and colours rather than written by
+    // hand, so re-running this relabels every preset -- including any tweakcn
+    // has added or retouched since the last import. See tweakcn-description.mjs.
+    description: describePreset(radius, light),
     group: "tweakcn",
     recommendedDensity: "default",
-    radius: light.radius ?? "0.5rem",
+    radius,
     fontSans: light["font-sans"] ?? "var(--font-inter), Inter, sans-serif",
     fontMono: light["font-mono"] ?? "ui-monospace, monospace",
     fontSerif: light["font-serif"],

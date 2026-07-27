@@ -16,6 +16,15 @@ export type ThemeTokens = Record<string, string>;
 export interface ThemeDefinition {
   id: string;
   label: string;
+  /**
+   * One line saying what makes this theme different, shown beside its swatch
+   * strip in the switcher. Required on both groups so the picker renders every
+   * row the same way: the Nextly originals are hand-written because the
+   * difference between them is an intent no token can express, and the tweakcn
+   * presets are derived mechanically by the importer from their own radius and
+   * colours so a regeneration cannot leave the list half-labelled.
+   */
+  description: string;
   group: "nextly" | "tweakcn";
   recommendedDensity: DensityId;
   /** Value for the unprefixed `--radius` knob the whole radius scale derives from. */
