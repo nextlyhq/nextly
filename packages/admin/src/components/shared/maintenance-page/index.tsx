@@ -39,8 +39,10 @@ export function MaintenancePage() {
             <ArrowLeft className="h-4 w-4" />
             Go Back
           </Button>
+          {/* Fill and label come from the button's own primary variant so the
+              action follows the brand instead of a fixed green. */}
           <Button
-            className="w-full sm:w-[140px] gap-2 rounded-md font-medium bg-[#3b8c38] hover:bg-[#2f702d] text-white border-0"
+            className="w-full sm:w-[140px] gap-2 rounded-md font-medium"
             onClick={() => navigateTo(ROUTES.DASHBOARD)}
           >
             <LayoutDashboard className="h-4 w-4" />
