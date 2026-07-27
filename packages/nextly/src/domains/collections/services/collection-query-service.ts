@@ -38,6 +38,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import {
@@ -55,6 +56,7 @@ import {
 } from "../../../services/collections/geo-utils";
 import {
   buildWhereClause,
+  getSupportedOperators,
   extractGeoFilters,
   extractComponentFieldConditions,
 } from "../../../services/collections/query-operators";
@@ -130,6 +132,99 @@ interface LocalizedQueryContext {
    * checks only match companion rows in that state. Undefined = no status constraint.
    */
   statusValue?: string;
+}
+
+let mappableOperators: ReadonlySet<string> | undefined;
+
+/**
+ * Whether an operator name is one `buildWhereClause` maps.
+ *
+ * Built on first use, not at module load: this module sits in an import cycle,
+ * so reading the operator list eagerly can run before that module initializes.
+ * Checked against an explicit set rather than the `in` keyword, which also
+ * answers true for inherited names like `toString`.
+ */
+function isMappableOperator(operator: string): boolean {
+  mappableOperators ??= new Set<string>(getSupportedOperators());
+  return mappableOperators.has(operator);
+}
+
+/**
+ * Why an access constraint cannot be applied, or null when it can.
+ *
+ * An access constraint is a security predicate, so it is held to a NARROWER
+ * shape than a caller's own `where` clause. The translators are built for caller
+ * filters, where dropping a member they cannot handle is acceptable; for a rule
+ * that decides who sees what, a dropped member means the read runs under a
+ * weaker predicate than the rule states and returns rows it excludes.
+ *
+ * Rather than enumerate everything translation can drop — a list that has proven
+ * incomplete — only a shape whose translation is exact is accepted:
+ *
+ * - a flat map of field to predicate, no logical groups
+ * - fields that are OWN columns on the main table, or localized fields the
+ *   companion context resolves; no dotted paths, whose suffix translation
+ *   discards and compares the base column instead
+ * - a primitive value (shorthand equality), or operators from the mapped set
+ *   with values that survive translation
+ *
+ * Anything else is refused with its reason rather than partly applied. A rule
+ * needing a richer shape is a feature, not something to approximate here.
+ */
+function describeUntranslatableConstraint(
+  constraint: Record<string, unknown>,
+  schema: Record<string, unknown>,
+  localizedCtx?: LocalizedQueryContext | null
+): string | null {
+  const entries = Object.entries(constraint);
+  if (entries.length === 0) return "constraint is empty";
+
+  for (const [field, predicate] of entries) {
+    if (field === "and" || field === "or") {
+      return `logical group "${field}" is not supported in an access constraint`;
+    }
+    if (!field) return "field name is empty";
+    if (field.includes(".")) {
+      // Translation drops the suffix and compares the base column, which is a
+      // different predicate than the rule states.
+      return `dotted field "${field}" is not supported in an access constraint`;
+    }
+
+    const isOwnColumn = Object.prototype.hasOwnProperty.call(schema, field);
+    const isLocalized = Boolean(
+      localizedCtx?.localizedFields.some(f => f.name === field)
+    );
+    if (!isOwnColumn && !isLocalized) return `unknown field "${field}"`;
+
+    // Shorthand equality: a primitive translates to `field = value`. `null` and
+    // `undefined` do not — translation skips both, dropping the member while its
+    // siblings stay and decide alone.
+    if (predicate === null) return `field "${field}" is null`;
+    if (predicate === undefined) return `field "${field}" has no value`;
+    if (typeof predicate !== "object") continue;
+
+    const operators = Object.keys(predicate);
+    if (operators.length === 0) return `field "${field}" has no operator`;
+    for (const operator of operators) {
+      if (!isMappableOperator(operator)) {
+        return `operator "${operator}" on "${field}" is not supported`;
+      }
+      const value = (predicate as Record<string, unknown>)[operator];
+      if (value === undefined) {
+        return `operator "${operator}" on "${field}" has no value`;
+      }
+      // An empty list is dropped rather than matching nothing, so a rule that
+      // should authorize no rows would leave its siblings deciding alone.
+      if (
+        (operator === "in" || operator === "not_in") &&
+        Array.isArray(value) &&
+        value.length === 0
+      ) {
+        return `operator "${operator}" on "${field}" has an empty list`;
+      }
+    }
+  }
+  return null;
 }
 
 export class CollectionQueryService extends BaseService {
@@ -762,16 +857,10 @@ export class CollectionQueryService extends BaseService {
           params.authenticatedScope
         );
 
-      // Apply access constraint if present
-      if (accessConstraint) {
-        const accessField = Object.keys(accessConstraint)[0];
-        const accessValue = (
-          accessConstraint[accessField] as { equals?: unknown }
-        )?.equals;
-        if (accessField && accessValue) {
-          whereConditions.push(eq(schema[accessField], accessValue));
-        }
-      }
+      // The constraint is applied further down, through the same translation
+      // the caller's own `where` uses: it is a full filter predicate, not a
+      // single equality, and reducing it here would narrow less than the rule
+      // asks for.
 
       // Apply Draft/Published auto-filter. The helper returns null when the
       // collection has no status column, the caller is trusted with no
@@ -923,6 +1012,57 @@ export class CollectionQueryService extends BaseService {
 
         if (whereCondition) {
           whereConditions.push(whereCondition);
+        }
+      }
+
+      // Apply the stored read rule's query constraint through the same
+      // translation the caller's `where` uses. It is a full filter predicate:
+      // an owner-only read emits one field, but a custom rule can return any
+      // supported operator across several fields, and reading a single `equals`
+      // off the first key silently returns rows the rule excludes.
+      if (accessConstraint) {
+        // Refuse before translating: a partially translatable constraint yields a
+        // non-empty condition that binds less than the rule requires.
+        const untranslatable = describeUntranslatableConstraint(
+          accessConstraint,
+          schema,
+          localizedCtx
+        );
+        // Explicitly against null: a reason can be any string, and an empty one
+        // would read as success.
+        if (untranslatable !== null) {
+          // Logged here rather than left on the error: the surrounding catch
+          // flattens this into a result envelope, so the reason would otherwise
+          // never reach operator logs and every refusal would look alike.
+          this.logger.warn("Refused an untranslatable access constraint", {
+            collection: params.collectionName,
+            reason: untranslatable,
+          });
+          throw NextlyError.forbidden({
+            logContext: {
+              collection: params.collectionName,
+              reason: "untranslatable-access-constraint",
+              reason_detail: untranslatable,
+            },
+          });
+        }
+        const accessCondition = this.buildDrizzleCondition(
+          buildWhereClause(accessConstraint as WhereFilter),
+          schema,
+          dialect,
+          localizedCtx
+        );
+        if (accessCondition) {
+          whereConditions.push(accessCondition);
+        } else {
+          // A constraint that translates to nothing would widen the read to
+          // every row. Fail closed instead: the rule asked to narrow.
+          throw NextlyError.forbidden({
+            logContext: {
+              collection: params.collectionName,
+              reason: "untranslatable-access-constraint",
+            },
+          });
         }
       }
 
@@ -1374,9 +1514,17 @@ export class CollectionQueryService extends BaseService {
         error instanceof Error ? error.message : "Failed to fetch entries";
       const isNotFound =
         message.includes("not found") || message.includes("does not exist");
+      // A NextlyError already carries the right status (a refused access
+      // constraint is a 403); flattening it to 500 would report an authorization
+      // decision as a server fault.
+      const statusCode = NextlyError.is(error)
+        ? error.statusCode
+        : isNotFound
+          ? 404
+          : 500;
       return {
         success: false,
-        statusCode: isNotFound ? 404 : 500,
+        statusCode,
         message,
         data: null,
       };
@@ -1521,16 +1669,10 @@ export class CollectionQueryService extends BaseService {
           params.authenticatedScope
         );
 
-      // Apply access constraint if present
-      if (accessConstraint) {
-        const accessField = Object.keys(accessConstraint)[0];
-        const accessValue = (
-          accessConstraint[accessField] as { equals?: unknown }
-        )?.equals;
-        if (accessField && accessValue) {
-          whereConditions.push(eq(schema[accessField], accessValue));
-        }
-      }
+      // The constraint is applied further down, through the same translation
+      // the caller's own `where` uses: it is a full filter predicate, not a
+      // single equality, and reducing it here would narrow less than the rule
+      // asks for.
 
       // Apply Draft/Published auto-filter. The helper returns null when the
       // collection has no status column, the caller is trusted with no
@@ -1678,6 +1820,57 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
+      // Apply the stored read rule's query constraint through the same
+      // translation the caller's `where` uses. It is a full filter predicate:
+      // an owner-only read emits one field, but a custom rule can return any
+      // supported operator across several fields, and reading a single `equals`
+      // off the first key silently returns rows the rule excludes.
+      if (accessConstraint) {
+        // Refuse before translating: a partially translatable constraint yields a
+        // non-empty condition that binds less than the rule requires.
+        const untranslatable = describeUntranslatableConstraint(
+          accessConstraint,
+          schema,
+          localizedCtx
+        );
+        // Explicitly against null: a reason can be any string, and an empty one
+        // would read as success.
+        if (untranslatable !== null) {
+          // Logged here rather than left on the error: the surrounding catch
+          // flattens this into a result envelope, so the reason would otherwise
+          // never reach operator logs and every refusal would look alike.
+          this.logger.warn("Refused an untranslatable access constraint", {
+            collection: params.collectionName,
+            reason: untranslatable,
+          });
+          throw NextlyError.forbidden({
+            logContext: {
+              collection: params.collectionName,
+              reason: "untranslatable-access-constraint",
+              reason_detail: untranslatable,
+            },
+          });
+        }
+        const accessCondition = this.buildDrizzleCondition(
+          buildWhereClause(accessConstraint as WhereFilter),
+          schema,
+          this.adapter?.dialect || "postgresql",
+          localizedCtx
+        );
+        if (accessCondition) {
+          whereConditions.push(accessCondition);
+        } else {
+          // A constraint that translates to nothing would widen the read to
+          // every row. Fail closed instead: the rule asked to narrow.
+          throw NextlyError.forbidden({
+            logContext: {
+              collection: params.collectionName,
+              reason: "untranslatable-access-constraint",
+            },
+          });
+        }
+      }
+
       // Build the count query
       let query = this.db.select({ count: sql<number>`count(*)` }).from(schema);
 
@@ -1709,7 +1902,9 @@ export class CollectionQueryService extends BaseService {
       });
       return {
         success: false,
-        statusCode: 500,
+        // Mirrors listEntries: a refused access constraint is a 403, not a
+        // server fault, and the count must report it the same way.
+        statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,
       };
