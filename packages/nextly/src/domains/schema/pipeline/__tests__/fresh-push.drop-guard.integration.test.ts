@@ -116,8 +116,12 @@ describe.skipIf(!PG_URL)(
       } finally {
         await pool.end();
         // The database that was actually created — dropping the bare prefix
-        // matched nothing, so every run left its database behind.
-        await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+        // matched nothing, so every run left its database behind. Plain, not
+        // `WITH (FORCE)`: the pool above is already closed, and forcing
+        // terminates any session the server still considers open, which the
+        // driver reports as a fatal error on a live connection and fails the
+        // whole run rather than the one query.
+        await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
         await admin.end();
       }
     });

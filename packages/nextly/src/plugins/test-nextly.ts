@@ -1,20 +1,32 @@
 /**
- * `createTestNextly` — in-memory integration harness.
+ * `createTestNextly` — the integration harness.
  *
- * Boots a REAL Nextly instance on in-memory SQLite (not mocks), running the
- * full plugin lifecycle (resolve → setup → schema sync → init), so plugin
- * authors and the framework can integration-test hooks, events, and lifecycle
- * without a live database. Lives in core and is re-exported from
- * `@nextlyhq/plugin-sdk/testing`.
+ * Boots a REAL Nextly instance (not mocks), running the full plugin lifecycle
+ * (resolve → setup → schema sync → init), so plugin authors and the framework
+ * can integration-test hooks, events, and lifecycle. Lives in core and is
+ * re-exported from `@nextlyhq/plugin-sdk/testing`.
+ *
+ * In-memory SQLite by default, which needs no server and no cleanup. Pass
+ * `dialect` to boot against PostgreSQL or MySQL instead: that instance gets a
+ * database of its own, dropped when it is destroyed. Column types, default
+ * expressions, and JSON handling differ enough between dialects that SQLite
+ * alone will not reveal a defect in any of them.
  *
  * @module plugins/test-nextly
  */
+
+import { randomBytes } from "node:crypto";
 
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { ComponentConfig } from "../components/config/types";
 import { createAdapter } from "../database/factory";
+import {
+  createDatabaseStatement,
+  dropDatabaseStatement,
+  type ProvisionableDialect,
+} from "../database/test-database-ddl";
 import { getService, registerServices, shutdownServices } from "../di/register";
 import { getNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
@@ -24,6 +36,7 @@ import type { LocalizationConfig } from "../domains/i18n/config/types";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-policy";
+import { NextlyError } from "../errors/nextly-error";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
 import { resetFilterRegistry } from "../filters";
@@ -154,16 +167,6 @@ interface ProvisionedDatabase {
 }
 
 /**
- * Only ever fed a name this module generated, but validated anyway: the name
- * is interpolated into DDL, and `CREATE DATABASE` takes no bind parameters in
- * either dialect, so there is nowhere else to enforce it.
- */
-const SAFE_DATABASE_NAME = /^[a-z0-9_]+$/;
-
-/** Distinguishes concurrent processes; the counter distinguishes boots. */
-let databaseCounter = 0;
-
-/**
  * Create a dedicated database for this boot and connect to it.
  *
  * The environment is set before the adapters are built and restored by
@@ -174,13 +177,16 @@ let databaseCounter = 0;
  * the MySQL database name from it.
  */
 async function provisionDatabase(
-  dialect: "postgresql" | "mysql",
+  dialect: ProvisionableDialect,
   serverUrl: string
 ): Promise<ProvisionedDatabase> {
-  const name = `nextly_t_${process.pid}_${++databaseCounter}`;
-  if (!SAFE_DATABASE_NAME.test(name)) {
-    throw new Error(`Refusing to create a database named "${name}".`);
-  }
+  // Random, not derived from the process id: containers routinely run node as
+  // PID 1, so two runners sharing one server would pick the same name and
+  // delete each other's database mid-run. Random names are also why nothing
+  // is dropped before creating — there is no stale name to clear, and a
+  // pre-emptive DROP is exactly the statement that would destroy a peer's
+  // database if a name ever did collide.
+  const name = `nextly_t_${randomBytes(12).toString("hex")}`;
 
   const databaseUrl = new URL(serverUrl);
   databaseUrl.pathname = `/${name}`;
@@ -198,14 +204,15 @@ async function provisionDatabase(
   };
 
   let server: TestAdapter | undefined;
+  let databaseExists = false;
   try {
     process.env.DATABASE_URL = serverUrl;
     process.env.DB_DIALECT = dialect;
     server = await createAdapter({ type: dialect, url: serverUrl });
     const serverAdapter = server;
 
-    await serverAdapter.executeQuery(`DROP DATABASE IF EXISTS ${name}`);
-    await serverAdapter.executeQuery(`CREATE DATABASE ${name}`);
+    await serverAdapter.executeQuery(createDatabaseStatement(dialect, name));
+    databaseExists = true;
 
     process.env.DATABASE_URL = databaseUrl.toString();
     const adapter = await createAdapter({
@@ -216,24 +223,34 @@ async function provisionDatabase(
     return {
       adapter,
       async release() {
+        // Nested so each step still runs when an earlier one throws. A failed
+        // drop must not strand the environment pointing at a database this
+        // instance owns, and a failed disconnect must not either — the files
+        // that follow share this process.
         try {
-          // PostgreSQL refuses to drop a database with sessions attached, and
-          // a pool that outlived its test would otherwise leave the database
-          // behind for every later run to trip over.
           await serverAdapter.executeQuery(
-            dialect === "postgresql"
-              ? `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`
-              : `DROP DATABASE IF EXISTS ${name}`
+            dropDatabaseStatement(dialect, name)
           );
         } finally {
-          await serverAdapter.disconnect();
-          restoreEnv();
+          try {
+            await serverAdapter.disconnect();
+          } finally {
+            restoreEnv();
+          }
         }
       },
     };
   } catch (error) {
-    // Nothing is returned to release on this path, so the connection to the
-    // server and the environment are cleaned up here instead.
+    // Nothing is returned to release on this path, so the database, the
+    // connection to the server, and the environment are cleaned up here. The
+    // database is dropped only when it was actually created: without this a
+    // failure to connect to it — a transient blip, an exhausted connection
+    // limit — would abandon it on the server for good.
+    if (databaseExists && server) {
+      await server
+        .executeQuery(dropDatabaseStatement(dialect, name))
+        .catch(() => {});
+    }
     await server?.disconnect().catch(() => {});
     restoreEnv();
     throw error;
@@ -244,17 +261,20 @@ async function provisionDatabase(
  * Resolve the server URL for a dialect, or explain what is missing.
  */
 function resolveServerUrl(
-  dialect: "postgresql" | "mysql",
+  dialect: ProvisionableDialect,
   override: string | undefined
 ): string {
   const envName = DIALECT_SERVER_URL_ENV[dialect];
   const url = override ?? process.env[envName];
   if (!url) {
-    throw new Error(
-      `createTestNextly({ dialect: "${dialect}" }) needs a server to connect ` +
-        `to. Set ${envName}, or pass serverUrl. Use ` +
-        `getAvailableTestDialects() to skip when it is not configured.`
-    );
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          `createTestNextly({ dialect: "${dialect}" }) needs a server to ` +
+          `connect to. Set ${envName}, or pass serverUrl. Use ` +
+          `getAvailableTestDialects() to skip when it is not configured.`,
+      },
+    });
   }
   return url;
 }
@@ -333,6 +353,11 @@ export async function createTestNextly(
   try {
     return await bootServices(adapter, logger, opts, provisioned);
   } catch (error) {
+    // `registerServices` marks itself registered only on a successful boot, so
+    // a later `shutdownServices()` will not close this pool — it has to be
+    // disconnected here, and before the database is dropped. Only when this
+    // function created it: an adapter the caller supplied is theirs to close.
+    if (!opts.adapter) await adapter.disconnect().catch(() => {});
     // A boot that fails after the database was created would otherwise leave
     // it on the server, along with the environment this instance set.
     await provisioned?.release().catch(() => {});
