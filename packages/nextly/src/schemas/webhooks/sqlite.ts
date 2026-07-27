@@ -63,9 +63,7 @@ export const nextlyWebhooks = sqliteTable(
     eventTypes: text("event_types", { mode: "json" }).notNull(),
     filter: text("filter", { mode: "json" }),
     headers: text("headers", { mode: "json" }),
-    // Encrypted (AES-GCM) signing secrets, list-shaped for rotation; ciphertext,
-    // not a hash (the delivery engine decrypts to sign). See the PostgreSQL def.
-    secretCiphertext: text("secret_ciphertext", { mode: "json" }).notNull(),
+    secretHash: text("secret_hash", { mode: "json" }).notNull(),
     secretPrefix: text("secret_prefix").notNull(),
     fieldAllowlist: text("field_allowlist", { mode: "json" }),
     createdBy: text("created_by").references(() => users.id, {
@@ -89,9 +87,6 @@ export const nextlyWebhookDeliveries = sqliteTable(
   "nextly_webhook_deliveries",
   {
     id: text("id").primaryKey(),
-    // Both cascades are deliberate; see the PostgreSQL definition. Endpoints are
-    // soft-deleted so the webhook cascade never fires for retirement (history is
-    // kept); the event cascade is how retention prunes an event with its attempts.
     webhookId: text("webhook_id")
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),

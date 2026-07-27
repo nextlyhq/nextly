@@ -51,7 +51,7 @@ async function seedEnabledEndpoint(handle: TestNextly): Promise<void> {
     event_types: ["entry.created"],
     filter: null,
     headers: null,
-    secret_ciphertext: [],
+    secret_hash: [],
     secret_prefix: "whsec_",
     field_allowlist: null,
     created_by: null,

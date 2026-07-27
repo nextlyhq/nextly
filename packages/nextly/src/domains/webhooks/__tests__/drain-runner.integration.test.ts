@@ -95,7 +95,7 @@ describe("runWebhookDrain (real SQLite)", () => {
       event_types: ["entry.updated"],
       filter: null,
       headers: null,
-      secret_ciphertext: [SECRET],
+      secret_hash: [SECRET],
       secret_prefix: "whsec_",
       field_allowlist: null,
       created_by: null,

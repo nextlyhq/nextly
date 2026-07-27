@@ -2,7 +2,7 @@
  * Signing-secret rotation against a real Postgres/MySQL database.
  *
  * The endpoint-service integration suite exercises rotation on in-memory SQLite
- * only, so the `SELECT … FOR UPDATE` re-read and the `secret_ciphertext` JSON write in
+ * only, so the `SELECT … FOR UPDATE` re-read and the `secret_hash` JSON write in
  * `rotateSecret`/`expireOldSecrets` were never run on the pooled Postgres/MySQL
  * drivers, whose transaction + JSON handling differs. This leg closes that gap.
  *

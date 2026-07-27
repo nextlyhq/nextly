@@ -147,7 +147,7 @@ interface WebhookRow {
   enabled: boolean;
   eventTypes: unknown;
   headers: unknown;
-  secretCiphertext: unknown;
+  secretHash: unknown;
   secretPrefix: string;
   createdBy: string | null;
   createdAt: Date;
@@ -306,10 +306,10 @@ export class WebhookEndpointService extends BaseService {
    * decrypt), so expired overlap secrets are never surfaced or signed with.
    */
   private liveSecretEntries(
-    row: { secretCiphertext: unknown; secretPrefix: string; createdAt: Date },
+    row: { secretHash: unknown; secretPrefix: string; createdAt: Date },
     now: Date = new Date()
   ): StoredSecretEntry[] {
-    const entries = normalizeSecretEntries(row.secretCiphertext, {
+    const entries = normalizeSecretEntries(row.secretHash, {
       prefix: row.secretPrefix,
       createdAt: row.createdAt.toISOString(),
     });
@@ -372,7 +372,7 @@ export class WebhookEndpointService extends BaseService {
       eventTypes: input.eventTypes,
       filter: null,
       headers: input.headers ?? null,
-      secretCiphertext: [entry],
+      secretHash: [entry],
       secretPrefix: entry.prefix,
       fieldAllowlist: null,
       createdBy,
@@ -562,7 +562,7 @@ export class WebhookEndpointService extends BaseService {
             deletedAt: now,
             enabled: false,
             updatedAt: now,
-            secretCiphertext: [],
+            secretHash: [],
             headers: null,
           })
           .where(eq(this.table.id, id));
@@ -646,14 +646,14 @@ export class WebhookEndpointService extends BaseService {
   private async withLockedSecrets<T>(
     id: string,
     mutate: (
-      row: { secretCiphertext: unknown; secretPrefix: string; createdAt: Date },
+      row: { secretHash: unknown; secretPrefix: string; createdAt: Date },
       now: Date
     ) => { entries: StoredSecretEntry[]; result: T }
   ): Promise<T> {
     const outcome = await this.query(() =>
       this.adapter.transaction(async tx => {
         const rows = await tx.select<{
-          secretCiphertext: unknown;
+          secretHash: unknown;
           secretPrefix: string;
           createdAt: Date;
           deletedAt: Date | null;
@@ -670,7 +670,7 @@ export class WebhookEndpointService extends BaseService {
         await tx.update(
           "nextly_webhooks",
           {
-            secret_ciphertext: entries,
+            secret_hash: entries,
             secret_prefix: entries[0]?.prefix ?? row.secretPrefix,
             updated_at: now,
           },

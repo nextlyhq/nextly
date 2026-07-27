@@ -116,7 +116,7 @@ describe("webhook retention (integration)", () => {
       url: "https://example.test/hook",
       enabled: true,
       event_types: ["entry.created"],
-      secret_ciphertext: [],
+      secret_hash: [],
       secret_prefix: "whsec_y",
     });
 
@@ -235,7 +235,7 @@ describe("webhook retention (integration)", () => {
       url: "https://example.test/hook",
       enabled: true,
       event_types: ["entry.created"],
-      secret_ciphertext: [],
+      secret_hash: [],
       secret_prefix: "whsec_x",
     });
     await t.adapter.insert("nextly_webhook_deliveries", {

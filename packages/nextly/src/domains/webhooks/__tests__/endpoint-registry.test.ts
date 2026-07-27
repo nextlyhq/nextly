@@ -33,7 +33,7 @@ function row(id: string): Record<string, unknown> {
     eventTypes: ["entry.updated"],
     filter: null,
     headers: null,
-    secretCiphertext: [],
+    secretHash: [],
     secretPrefix: "",
     fieldAllowlist: null,
     createdBy: null,

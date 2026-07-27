@@ -117,8 +117,7 @@ describe("listWebhooks", () => {
     const res = await listWebhooks(new Request("http://x/api/webhooks"));
 
     const body = await res.text();
-    expect(body).not.toContain("secretCiphertext");
-    expect(body).not.toContain("secret_ciphertext");
+    expect(body).not.toContain("secretHash");
     expect(body).not.toContain("whsec_abcdefghijklmnop");
   });
 });

@@ -151,10 +151,10 @@ describe("webhook endpoint management (real SQLite)", () => {
     it("stores the secret encrypted, not in the clear", async () => {
       const { secret } = await create();
 
-      const raw = await adapter.executeQuery<{ secret_ciphertext: string }>(
-        "SELECT secret_ciphertext FROM nextly_webhooks"
+      const raw = await adapter.executeQuery<{ secret_hash: string }>(
+        "SELECT secret_hash FROM nextly_webhooks"
       );
-      const stored = String(raw[0]?.secret_ciphertext ?? "");
+      const stored = String(raw[0]?.secret_hash ?? "");
 
       expect(stored).not.toContain(secret);
       expect(stored).not.toContain(secret.slice(WEBHOOK_SECRET_PREFIX.length));
@@ -530,17 +530,15 @@ describe("webhook endpoint management (real SQLite)", () => {
       await service.deleteEndpoint(endpoint.id);
 
       const rows = await adapter.executeQuery<{
-        secret_ciphertext: string;
+        secret_hash: string;
         headers: string | null;
         name: string;
         url: string;
       }>(
-        `SELECT secret_ciphertext, headers, name, url FROM nextly_webhooks WHERE id = '${endpoint.id}'`
+        `SELECT secret_hash, headers, name, url FROM nextly_webhooks WHERE id = '${endpoint.id}'`
       );
-      expect(String(rows[0]?.secret_ciphertext)).not.toContain(
-        "receiver-token"
-      );
-      expect(rows[0]?.secret_ciphertext).toBe("[]");
+      expect(String(rows[0]?.secret_hash)).not.toContain("receiver-token");
+      expect(rows[0]?.secret_hash).toBe("[]");
       expect(rows[0]?.headers).toBeNull();
       // Attribution the delivery history relies on is kept.
       expect(rows[0]?.name).toBe("Orders");

@@ -17,7 +17,7 @@ function endpoint(over: Partial<WebhookEndpoint>): WebhookEndpoint {
     eventTypes: ["entry.updated"],
     filter: null,
     headers: null,
-    secretCiphertext: [],
+    secretHash: [],
     secretPrefix: "",
     fieldAllowlist: null,
     createdBy: null,

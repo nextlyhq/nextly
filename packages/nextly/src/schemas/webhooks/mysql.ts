@@ -65,9 +65,7 @@ export const nextlyWebhooks = mysqlTable(
     eventTypes: json("event_types").notNull(),
     filter: json("filter"),
     headers: json("headers"),
-    // Encrypted (AES-GCM) signing secrets, list-shaped for rotation; ciphertext,
-    // not a hash (the delivery engine decrypts to sign). See the PostgreSQL def.
-    secretCiphertext: json("secret_ciphertext").notNull(),
+    secretHash: json("secret_hash").notNull(),
     secretPrefix: varchar("secret_prefix", { length: 16 }).notNull(),
     fieldAllowlist: json("field_allowlist"),
     createdBy: varchar("created_by", { length: 191 }).references(
@@ -92,9 +90,6 @@ export const nextlyWebhookDeliveries = mysqlTable(
   "nextly_webhook_deliveries",
   {
     id: varchar("id", { length: 191 }).primaryKey(),
-    // Both cascades are deliberate; see the PostgreSQL definition. Endpoints are
-    // soft-deleted so the webhook cascade never fires for retirement (history is
-    // kept); the event cascade is how retention prunes an event with its attempts.
     webhookId: varchar("webhook_id", { length: 191 })
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),

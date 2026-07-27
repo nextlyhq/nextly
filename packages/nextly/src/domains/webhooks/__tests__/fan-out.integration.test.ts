@@ -83,7 +83,7 @@ describe("webhook fan-out (real SQLite)", () => {
       event_types: eventTypes,
       filter: null,
       headers: null,
-      secret_ciphertext: [],
+      secret_hash: [],
       secret_prefix: "",
       field_allowlist: null,
       created_by: null,
