@@ -296,7 +296,12 @@ function generateNextlyHelperTemplate(): string {
  * \`\`\`
  */
 
-import { getNextly, registerCollectionHooks, type Nextly } from "nextly";
+import {
+  getNextly,
+  registerCollectionHooks,
+  registerSingleHooks,
+  type Nextly,
+} from "nextly";
 import nextlyConfig from "../../nextly.config";
 
 // Track initialization state
@@ -351,6 +356,14 @@ export async function initializeNextly(): Promise<void> {
       const result = registerCollectionHooks(nextlyConfig.collections);
       console.log(
         \`[Nextly] Registered \${result.totalHooks} hooks for \${result.collections.length} collections\`
+      );
+    }
+
+    // Register code-first single hooks with the global registry
+    if (nextlyConfig.singles && nextlyConfig.singles.length > 0) {
+      const result = registerSingleHooks(nextlyConfig.singles);
+      console.log(
+        \`[Nextly] Registered \${result.totalHooks} hooks for \${result.singles.length} singles\`
       );
     }
 

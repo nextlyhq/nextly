@@ -90,6 +90,13 @@ export {
   type RegisterCollectionHooksResult,
 } from "./hooks/register-collection-hooks";
 
+export {
+  registerSingleHooks,
+  clearSingleHooks,
+  reregisterSingleHooks,
+  type RegisterSingleHooksResult,
+} from "./hooks/register-single-hooks";
+
 // ============================================================
 // INITIALIZATION API
 // ============================================================
