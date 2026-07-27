@@ -527,7 +527,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const className = cn(
               "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
-                ? "bg-muted text-primary"
+                ? "bg-muted text-sidebar-accent-foreground"
                 : "text-muted-foreground hover-unified"
             );
 

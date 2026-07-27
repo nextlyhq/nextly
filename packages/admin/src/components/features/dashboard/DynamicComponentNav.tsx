@@ -197,7 +197,10 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                 isActive={isAnyComponentActive}
                 className="group/trigger"
               >
-                <Puzzle className="text-primary" />
+                {/* Uncolored so the icon inherits the menu button's ink and
+                    tracks its resting/active states, as every other nav icon
+                    does. */}
+                <Puzzle />
                 <span className="flex-1">Components</span>
                 <ChevronDown className="ml-auto transition-transform duration-300 ease-out group-data-[state=open]/trigger:rotate-180" />
               </SidebarMenuButton>
@@ -259,7 +262,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
               isActive={isAnyComponentActive}
               className="group/trigger"
             >
-              <Puzzle className="text-primary" />
+              <Puzzle />
               <span className="flex-1">Components</span>
               <ChevronDown className="ml-auto transition-transform duration-300 ease-out group-data-[state=open]/trigger:rotate-180" />
             </SidebarMenuButton>
@@ -356,7 +359,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
         isActive={isAnyComponentActive}
       >
         <Link href={ROUTES.BUILDER_COMPONENTS}>
-          <Puzzle className="text-primary" />
+          <Puzzle />
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>

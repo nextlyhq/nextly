@@ -325,7 +325,11 @@ export function DynamicCollectionNav({
                 }
                 aria-pressed={collectionPinned}
                 title={collectionPinned ? "Unpin collection" : "Pin collection"}
-                className={collectionPinned ? "opacity-100 text-primary" : ""}
+                className={
+                  collectionPinned
+                    ? "opacity-100 text-sidebar-accent-foreground"
+                    : ""
+                }
               >
                 <Bookmark
                   className={
