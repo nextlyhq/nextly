@@ -767,6 +767,28 @@ export class CollectionMutationService extends BaseService {
    * already-parsed values pass through; a parse failure keeps the raw string.
    * Never mutates the input.
    */
+  /**
+   * Stringify JSON-backed values so a raw insert never hands the driver a live
+   * object.
+   *
+   * Each dialect does something different with one: mysql2 expands an object
+   * into assignment syntax and an array into a value list, and node-postgres
+   * encodes an array as a PostgreSQL array literal rather than JSON. Only
+   * SQLite happens to stringify, which is why a suite running there alone
+   * cannot show the difference.
+   */
+  private serializeJsonFieldsForInsert(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): void {
+    for (const field of fields) {
+      if (!isJsonFieldType(field.type, field)) continue;
+      const value = data[field.name];
+      if (value == null || typeof value !== "object") continue;
+      data[field.name] = JSON.stringify(value);
+    }
+  }
+
   private deserializeJsonFieldsForSnapshot(
     row: Record<string, unknown>,
     fields: FieldDefinition[]
@@ -5143,6 +5165,10 @@ export class CollectionMutationService extends BaseService {
 
       // Prepare entry data
       const nowForTxCreate = new Date();
+      // A raw tx.insert follows, with none of the pooled path's serialization
+      // in between, so JSON-backed values are stringified here instead.
+      this.serializeJsonFieldsForInsert(finalData, fields);
+
       const entryData = {
         id: this.collectionService.generateId(),
         // Strip client-supplied system columns (id / timestamps / created_by,
@@ -6366,6 +6392,10 @@ export class CollectionMutationService extends BaseService {
 
       // Prepare entry data
       const nowForTxCreate = new Date();
+      // A raw tx.insert follows, with none of the pooled path's serialization
+      // in between, so JSON-backed values are stringified here instead.
+      this.serializeJsonFieldsForInsert(finalData, fields);
+
       const entryData = {
         id: this.collectionService.generateId(),
         // Strip client-supplied system columns (id / timestamps / created_by,
