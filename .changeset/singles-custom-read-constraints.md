@@ -22,10 +22,10 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Custom read rules are now enforced on Singles. A custom rule can answer with a yes/no or with a filter describing which rows the caller may see. On a Single the filter had nowhere to be applied, so those rules were left unenforced and a Single you restricted with one was readable by anyone who could reach it.
+Custom read rules are now enforced on Singles. A Single you restricted with one was previously readable by anyone who could reach it, because the rule was never consulted.
 
-The filter is now handed to the database as the condition on the document fetch: if it selects nothing, the read is refused. That is the same filter a list read would apply, so a rule behaves the same way whether it guards a collection or a Single, and the decision is made against the stored document rather than a prediction about it.
+The rule is judged against the document you actually receive — after the Single is materialized on first read, after translations are overlaid, after component data is attached, and after your `beforeRead` hooks run. A rule reading `data` therefore sees the finished document rather than a partial row, which is what makes a rule such as `data.secret !== true` mean what it says.
 
-Filters are held to the same shape rules as on collections. One that cannot be applied exactly is refused rather than partly applied, and a refused read fails closed without creating the Single.
+Rules that return a **query constraint** are refused on Singles rather than partly applied. A constraint narrows a result set; by the time the read is decided, a Single's document has been assembled from several tables and no longer corresponds to one row for the database to test the predicate against. Return a boolean from a Single's read rule; constraints continue to work on collections, where they are folded into the query.
 
-A custom rule that returns no decision at all now denies. A rule is free to fall through without returning, and such a result was previously read as "allowed, with nothing to filter by" — admitting the caller and narrowing nothing. This affects collections as well as Singles.
+A rule that returns no decision at all now denies, on collections as well as Singles. A rule is free to fall through without returning, and such a result was previously read as "allowed, with nothing to filter by" — admitting the caller and narrowing nothing.

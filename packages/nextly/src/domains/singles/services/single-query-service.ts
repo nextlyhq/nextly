@@ -551,6 +551,80 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * The authoritative read decision, made on the fully assembled document.
+   *
+   * A document-dependent rule is only as good as the data it is shown. The
+   * earlier gate necessarily runs on the bare main-table row, because it has to
+   * refuse a caller BEFORE the stages that would materialize, translate and
+   * populate the document on their behalf. Those stages then change what `data`
+   * contains, so the rule is asked again here, about the object the caller would
+   * actually receive.
+   *
+   * A constraint returned at this point cannot be handed to the database — the
+   * document has already been assembled from several tables and no longer
+   * corresponds to a single row — so a constraint is refused rather than
+   * approximated in memory.
+   */
+  private async judgeAssembledDocument(params: {
+    slug: string;
+    readRule: { type?: string } | undefined;
+    accessRules: CollectionAccessRules | undefined;
+    user?: UserContext;
+    locale?: string;
+    fallbackLocale?: string | false;
+    document: SingleDocument;
+  }): Promise<SingleResult | null> {
+    const {
+      slug,
+      readRule,
+      accessRules,
+      user,
+      locale,
+      fallbackLocale,
+      document,
+    } = params;
+    if (!accessRules) return null;
+
+    const denied: SingleResult = {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: read on single "${slug}" is not permitted`,
+    };
+
+    if (readRule?.type === "owner-only") {
+      return this.evaluateOwnerOnlyRead({
+        slug,
+        rule: readRule as { ownerField?: string },
+        user,
+        document,
+      });
+    }
+
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      "read",
+      { user: user ? { ...user } : undefined, locale, fallbackLocale },
+      typeof document.id === "string" ? document.id : undefined,
+      document
+    );
+    if (!result.allowed) {
+      return { ...denied, message: result.reason ?? denied.message };
+    }
+    if (result.query !== undefined && result.query !== null) {
+      // The assembled document spans several tables, so there is no single row
+      // for the database to re-check this against.
+      this.logger.warn(
+        "Refused a constraint returned for an assembled single",
+        {
+          single: slug,
+        }
+      );
+      return denied;
+    }
+    return null;
+  }
+
+  /**
    * Decide an `owner-only` read against the loaded row.
    *
    * `checkSingleAccess` runs before the row is fetched and fails an owner-only
@@ -899,6 +973,28 @@ export class SingleQueryService extends BaseService {
       // a password value under its declared key.
       if (singleHasPassword) {
         stripPasswordFieldValues(doc, singleMeta.fields);
+      }
+
+      // 9. Judge the document being RETURNED, not the row the read started
+      // from. A document-dependent rule reads `data`, and `data` is assembled in
+      // stages after the earlier gate: defaults on auto-create, translations
+      // from the companion table, component rows from their own tables, and
+      // whatever a hook changed. A rule such as `data?.secret !== true` sees
+      // none of that on the bare main-table row and admits a caller the
+      // assembled document denies. The earlier gate stays because it refuses
+      // callers before those stages run any side effects; this is the decision
+      // that governs what is handed back.
+      if ((deferDocumentRule || deferCustomRule) && !options.overrideAccess) {
+        const finalDenial = await this.judgeAssembledDocument({
+          slug,
+          readRule,
+          accessRules: singleMeta.accessRules,
+          user: options.user,
+          locale: options.locale,
+          fallbackLocale: options.fallbackLocale,
+          document: doc,
+        });
+        if (finalDenial) return finalDenial;
       }
 
       return {

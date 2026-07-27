@@ -60,17 +60,25 @@ async function bootWithCustomRule(): Promise<SingleEntryService> {
 }
 
 describe("Single custom read rules (integration)", () => {
-  it("returns the document when the constraint selects it", async () => {
-    const entry = await bootWithCustomRule();
+  it.each([["acme"], ["system-column"], ["reads-data"], ["contains-op"]])(
+    "refuses a rule that returns a query constraint (%s)",
+    async userId => {
+      // The authoritative decision is made on the assembled document, which is
+      // built from the main row plus companion translations, component tables
+      // and whatever a hook changed — so there is no single row left for the
+      // database to test a predicate against. A constraint is refused rather
+      // than approximated in memory.
+      const entry = await bootWithCustomRule();
 
-    const result = await entry.get("branding", {
-      user: { id: "acme" },
-      routeAuthorized: true,
-    });
+      const result = await entry.get("branding", {
+        user: { id: userId },
+        routeAuthorized: true,
+      });
 
-    expect(result.success).toBe(true);
-    expect((result.data as { tenant?: string }).tenant).toBe("acme");
-  });
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    }
+  );
 
   it("denies when the constraint selects nothing", async () => {
     // The rule narrows to the caller's own tenant. A caller from another tenant
@@ -123,51 +131,6 @@ describe("Single custom read rules (integration)", () => {
 
     expect(result.success).toBe(false);
     expect(result.statusCode).toBe(403);
-  });
-
-  it("accepts a constraint on a system column the Single does not list as a field", async () => {
-    // `status` is a real queryable column but not a configured field, so
-    // validating against configured fields alone would refuse a valid rule.
-    const entry = await bootWithCustomRule();
-
-    const result = await entry.get("branding", {
-      user: { id: "system-column" },
-      routeAuthorized: true,
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("gives the rule the stored document to read", async () => {
-    // A rule using its documented `data` argument decides on nothing if the row
-    // is not loaded first, and one written as `data?.x !== true` would ALLOW
-    // where the real row denies.
-    const entry = await bootWithCustomRule();
-
-    const result = await entry.get("branding", {
-      user: { id: "reads-data" },
-      routeAuthorized: true,
-    });
-
-    // The rule constrains tenant to the value it read off the document, so it
-    // selects the row it was given.
-    expect(result.success).toBe(true);
-  });
-
-  it("applies a case-insensitive operator on engines that reject ILIKE", async () => {
-    // The adapter emits ILIKE unconditionally, so the clause is rewritten to
-    // LIKE for engines that do not accept it — the same rewrite the collection
-    // query builder applies. On SQLite this would otherwise be a database error
-    // rather than an allow or a deny.
-    const entry = await bootWithCustomRule();
-
-    const result = await entry.get("branding", {
-      user: { id: "contains-op" },
-      routeAuthorized: true,
-    });
-
-    // `contains: "acm"` matches the stored tenant "acme".
-    expect(result.success).toBe(true);
   });
 
   it("gives the rule the read's locale", async () => {
