@@ -115,7 +115,9 @@ describe.skipIf(!PG_URL)(
         expect(names).toContain("users");
       } finally {
         await pool.end();
-        await admin.query("DROP DATABASE IF EXISTS nextly_freshpush_scope");
+        // The database that was actually created — dropping the bare prefix
+        // matched nothing, so every run left its database behind.
+        await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
         await admin.end();
       }
     });

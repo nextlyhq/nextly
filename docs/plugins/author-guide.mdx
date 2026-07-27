@@ -137,6 +137,29 @@ await t.destroy();
 
 `createTestNextly` boots a real Nextly on in-memory SQLite and runs your full lifecycle.
 
+To check your plugin against a real database, pass `dialect`. Each boot gets its own database, created and dropped by `destroy()`, so runs never contaminate each other:
+
+```ts
+import {
+  createTestNextly,
+  getAvailableTestDialects,
+} from "@nextlyhq/plugin-sdk/testing";
+
+// "sqlite" is always available; the others need TEST_POSTGRES_URL /
+// TEST_MYSQL_URL to point at a server you are willing to create databases on.
+for (const dialect of getAvailableTestDialects()) {
+  describe(`myPlugin (${dialect})`, () => {
+    it("works", async () => {
+      const t = await createTestNextly({ dialect, plugins: [myPlugin()] });
+      // …
+      await t.destroy();
+    });
+  });
+}
+```
+
+Worth doing if your plugin contributes collections or touches the database directly: column types, default expressions, and JSON handling differ between dialects in ways SQLite alone will not reveal.
+
 ## Type safety (codegen)
 
 Run `nextly generate:types` in the consuming app to narrow `CollectionSlug`, `PermissionSlug`, and `EventName` to the real, installed values — including your plugin's. When a plugin contributes admin components, the same command emits a `plugin-admin-imports.generated.ts` import map so those React components load with no manual host imports.
