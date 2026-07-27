@@ -74,6 +74,7 @@
     "HEALTH_CHECK_CACHE_SECONDS",
     "INIT_CWD",
     "NEXTLY_ACCEPT_DATA_LOSS",
+    "NEXTLY_ALLOW_CODE_FIRST_DROPS", // schema pipeline: opt in to auto-confirmed destructive drops
     "NEXTLY_APPLIED_BY", // nextly migrate: override appliedBy actor (F11)
     "NEXTLY_DEBUG_TIMEZONE",
     "NEXTLY_DELETE_THRESHOLD",

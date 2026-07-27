@@ -49,7 +49,6 @@ function hasTTY(): boolean {
 // env opt-in, and NEXTLY_ACCEPT_DATA_LOSS is what `db:sync
 // --accept-data-loss` exports for the rest of the run.
 function shouldAutoConfirmDrops(): boolean {
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
   const allowCodeFirstDrops = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS === "1";
   const acceptDataLoss = process.env.NEXTLY_ACCEPT_DATA_LOSS === "1";
   return allowCodeFirstDrops || acceptDataLoss;
