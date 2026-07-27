@@ -51,6 +51,9 @@ import type {
  */
 const SEQUENCE_DEFAULT = /^nextval\(/i;
 
+/** The declared types whose sequence default is part of the type itself. */
+const SERIAL_TYPES = new Set(["serial", "bigserial", "smallserial"]);
+
 export function diffSnapshots(
   prev: NextlySchemaSnapshot,
   cur: NextlySchemaSnapshot
@@ -216,9 +219,15 @@ function diffColumns(
       // to the type, so the desired side declares no default while PostgreSQL
       // reports the materialised `nextval('<table>_id_seq'::regclass)`. Read
       // literally that is a default being removed on every reconcile.
-      const prevIsSequenceDefault = SEQUENCE_DEFAULT.test(prevC.default ?? "");
+      //
+      // Gated on the DESIRED column still being declared serial. A `nextval`
+      // default on any other column was set deliberately, and dropping it —
+      // by moving to a plain integer, say — is a real change that must still
+      // emit an op, or the column keeps drawing from the sequence forever.
       const sequenceDefaultUnchanged =
-        prevIsSequenceDefault && curC.default === undefined;
+        curC.default === undefined &&
+        SEQUENCE_DEFAULT.test(prevC.default ?? "") &&
+        SERIAL_TYPES.has((curC.type ?? "").trim().toLowerCase());
 
       if (
         !sequenceDefaultUnchanged &&
