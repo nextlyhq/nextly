@@ -130,6 +130,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * Resolve a urlFor path against the origin to a valid absolute URL, percent-
+ * encoding any unsafe characters. Returns `null` when the path is unusable or
+ * escapes the origin (a custom mapper returning an absolute/protocol-relative
+ * value) — such an entry is dropped rather than advertised at a foreign URL.
+ */
+function resolveOnOrigin(path: string, baseOrigin: string): string | null {
+  try {
+    const resolved = new URL(path, baseOrigin);
+    return resolved.origin === baseOrigin ? resolved.href : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Normalize a stored timestamp to ISO-8601, or undefined when unusable. */
 function toLastModified(value: unknown): string | undefined {
   if (value === null || value === undefined || value === "") return undefined;
@@ -306,43 +321,47 @@ export async function buildSitemapUrls(
         // stable URL (no slug, or a custom urlFor opted it out) — skip it.
         const path = urlFor(row, collection);
         if (!path) continue;
-        let loc = `${baseOrigin}${path}`;
+        // Normalize the path through URL so a custom mapper's spaces/non-ASCII
+        // are percent-encoded, and DROP an entry whose path escapes the origin
+        // (an absolute or protocol-relative value a custom urlFor returned).
+        let loc = resolveOnOrigin(path, baseOrigin);
+        if (loc === null) continue;
 
         // A declared canonical overrides the generated URL, but only a same-
-        // origin http(s) one. The `canonical` field is free text: resolve it
-        // against the origin (a relative `/about` becomes absolute); ignore a
-        // non-http scheme (`mailto:`/`javascript:`/`data:`), keeping the
-        // generated URL; and DROP the entry when the canonical is on another
-        // origin, since a sitemap must only list URLs on its own origin.
+        // origin http(s) one with no credentials. The `canonical` field is free
+        // text: resolve it against the origin (a relative `/about` becomes
+        // absolute); ignore a non-http scheme (`mailto:`/`javascript:`/`data:`)
+        // or embedded credentials, keeping the generated URL; and DROP the entry
+        // when the canonical is on another origin.
         const canonical =
           typeof seo?.canonical === "string" ? seo.canonical.trim() : "";
         if (canonical) {
-          let offHost = false;
+          let offOrigin = false;
           try {
             const resolved = new URL(canonical, baseOrigin);
             const isHttp =
               resolved.protocol === "http:" || resolved.protocol === "https:";
-            if (isHttp && resolved.origin === baseOrigin) {
+            const hasCreds =
+              resolved.username !== "" || resolved.password !== "";
+            if (isHttp && resolved.origin === baseOrigin && !hasCreds) {
               loc = resolved.href;
-            } else if (isHttp) {
-              offHost = true;
+            } else if (isHttp && resolved.origin !== baseOrigin) {
+              offOrigin = true;
             }
           } catch {
             // Malformed canonical → keep the generated URL.
           }
-          if (offHost) continue;
+          if (offOrigin) continue;
         }
         const entry: SitemapUrl = {
           loc,
           lastModified: toLastModified(row.updatedAt),
         };
-        // Stop before the serialized size would exceed the byte limit, but
-        // always emit at least one entry so a single oversized URL still yields
-        // a document. `+ 1` accounts for the newline joining entries.
+        // Stop before the serialized size would exceed the byte limit — for the
+        // FIRST entry too, so a single oversized URL never yields an over-limit
+        // document. `+ 1` accounts for the newline joining entries.
         const entryBytes = utf8Bytes(serializeUrlEntry(entry)) + 1;
-        if (urls.length > 0 && byteSize + entryBytes > maxBytes) {
-          return urls;
-        }
+        if (byteSize + entryBytes > maxBytes) return urls;
         byteSize += entryBytes;
         urls.push(entry);
         // Bound the document to the protocol limits so the single `<urlset>`

@@ -336,19 +336,63 @@ describe("buildSitemapUrls", () => {
   });
 
   it("bounds the document to the byte limit", async () => {
-    // A tiny maxBytes forces truncation after the first entry.
     const services = stubServices({
       posts: [[{ slug: "a" }, { slug: "b" }, { slug: "c" }]],
+    });
+
+    // Budget just enough for the wrapper plus a single entry.
+    const oneUrlDoc = serializeSitemap([{ loc: "https://x.com/posts/a" }]);
+    const maxBytes = new TextEncoder().encode(oneUrlDoc).length + 2;
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      maxBytes,
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/a"]);
+  });
+
+  it("returns empty when even the first entry exceeds the byte cap", async () => {
+    const services = stubServices({ posts: [[{ slug: "a" }]] });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      maxBytes: 10,
+    });
+
+    // The hard cap wins over emitting a single oversized document.
+    expect(urls).toEqual([]);
+  });
+
+  it("percent-encodes and origin-checks a custom urlFor path", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a" }, { slug: "evil" }]],
     });
 
     const urls = await buildSitemapUrls(services, {
       collections: ["posts"],
       baseUrl: "https://x.com",
-      maxBytes: 120,
+      urlFor: entry =>
+        // A space needs encoding; an absolute off-origin URL must be dropped.
+        entry.slug === "evil" ? "https://evil.com/x" : "/people/John Doe",
     });
 
-    // Only the first entry fits under the tiny cap (always emit at least one).
-    expect(urls).toHaveLength(1);
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/people/John%20Doe"]);
+  });
+
+  it("ignores a same-origin canonical that carries credentials", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a", seo: { canonical: "https://user:pass@x.com/a" } }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    // Credentials must never reach a public <loc>; fall back to the generated URL.
     expect(urls[0].loc).toBe("https://x.com/posts/a");
   });
 
