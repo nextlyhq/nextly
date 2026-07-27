@@ -74,9 +74,11 @@ export const ContentStatusWidget: React.FC = () => {
   const publishedPct = total > 0 ? Math.round((published / total) * 100) : 0;
   const draftPct = total > 0 ? Math.round((draft / total) * 100) : 0;
 
+  // Both swatches come from theme tokens so a rebrand moves the chart with the
+  // rest of the admin; the draft segment uses the amber slot of the chart ramp.
   const segments = [
     { label: "Published", value: published, color: "var(--nx-primary)" },
-    { label: "Draft", value: draft, color: "#f59e0b" }, // Amber
+    { label: "Draft", value: draft, color: "var(--nx-chart-4)" },
   ];
 
   return (
@@ -148,7 +150,7 @@ export const ContentStatusWidget: React.FC = () => {
                 label="Draft"
                 count={draft}
                 percentage={draftPct}
-                color="#f59e0b"
+                color="var(--nx-chart-4)"
               />
             </div>
             <p className="text-[9px] text-center text-muted-foreground font-black uppercase tracking-[0.2em] opacity-80 px-4">
