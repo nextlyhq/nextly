@@ -60,20 +60,20 @@ describe("single config honored — hooks + defaults (integration)", () => {
     const service =
       current.getService<SingleEntryService>("singleEntryService");
 
-    // First read auto-creates the row: its declared defaults apply (061) and the
-    // read hooks run (060).
+    // First read auto-creates the row: its declared defaults apply and the read
+    // hooks run.
     const read = await service.get("branding", { overrideAccess: true });
 
     expect(read.success).toBe(true);
-    // 061: function default resolved, structured default deserialized (not a
-    // stringified function).
+    // The function default is resolved and the structured default is
+    // deserialized (not a stringified function).
     expect(read.data?.siteName).toBe("Acme");
     expect(read.data?.settings).toEqual({ private: true });
-    // 060: read hooks fired.
+    // The read hooks fired.
     expect(beforeRead).toHaveBeenCalled();
     expect(afterRead).toHaveBeenCalled();
 
-    // An update runs the change hooks (060), mapped to the update lifecycle.
+    // An update runs the change hooks, mapped to the update lifecycle.
     const updated = await service.update(
       "branding",
       { siteName: "Beta" },
