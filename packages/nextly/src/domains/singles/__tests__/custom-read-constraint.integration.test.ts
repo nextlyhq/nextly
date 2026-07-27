@@ -185,6 +185,21 @@ describe("Single custom read rules (integration)", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("gives the rule the caller's non-canonical claims", async () => {
+    // `UserContext` carries arbitrary extra claims. Rebuilding the object from
+    // its canonical fields drops them, so a rule keyed on one sees undefined and
+    // can allow a caller it was written to deny.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "claim-aware", tenantId: "blocked" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("lets a trusted read through untouched", async () => {
     const entry = await bootWithCustomRule();
 

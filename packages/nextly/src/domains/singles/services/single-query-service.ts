@@ -472,14 +472,11 @@ export class SingleQueryService extends BaseService {
         accessRules,
         "read",
         {
-          user: user
-            ? {
-                id: user.id,
-                role: user.role,
-                roles: user.roles,
-                email: user.email,
-              }
-            : undefined,
+          // Spread rather than rebuild: `UserContext` carries arbitrary extra
+          // claims, and a rule reading one (a tenant id, a plan) sees undefined
+          // if the object is reconstructed from the canonical fields alone,
+          // which can allow a caller it was written to deny.
+          user: user ? { ...user } : undefined,
           // Part of the documented rule context: a rule keyed on the requested
           // language sees `undefined` without them, which can turn an
           // absence-tolerant check into an unintended allow.

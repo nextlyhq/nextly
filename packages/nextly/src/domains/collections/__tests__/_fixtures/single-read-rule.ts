@@ -42,6 +42,12 @@ export default function singleReadRule({
     // locale is threaded into its context.
     case "locale-aware":
       return req.locale === "secret" ? false : { tenant: { equals: "acme" } };
+    // Keyed on a non-canonical claim, which only survives if the caller's full
+    // user context reaches the rule rather than a rebuilt subset.
+    case "claim-aware":
+      return (req.user as { tenantId?: string })?.tenantId === "blocked"
+        ? false
+        : { tenant: { equals: "acme" } };
     // Narrow to the caller's own tenant.
     default:
       return { tenant: { equals: req.user?.id } };
