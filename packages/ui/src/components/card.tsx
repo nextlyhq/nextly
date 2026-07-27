@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
  * Cards provide a structured layout with header, content, and footer sections.
  *
  * Design Specs:
- * - Border radius: 0px (rounded-none)
+ * - Border radius: `rounded-lg`, the container step of the `--radius` scale
  * - Padding: 24px (p-6) for header/content, 16px 24px for footer
  * - Shadow: sm (default), md (hover/elevated)
  * - Border: 1px solid  border border-border color
@@ -55,7 +55,7 @@ import { cn } from "../lib/utils";
  * - Use aria-label or aria-labelledby for cards without visible text labels
  */
 const cardVariants = cva(
-  "bg-card text-foreground rounded-none  border border-border   transition-all duration-200",
+  "bg-card text-foreground rounded-lg  border border-border   transition-all duration-200",
   {
     variants: {
       variant: {

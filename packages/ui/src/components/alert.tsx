@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
  *
  * Design Specs:
  * - Padding: 16px (p-4)
- * - Border radius: 0px (rounded-none) - intentionally smaller than Card (12px)
+ * - Border radius: `rounded-md`, one step tighter than Card's `rounded-lg`
  *   for inline/flow content vs. larger container components
  * - Border: 1px solid matching variant color
  * - Shadow: sm (subtle elevation)
@@ -72,7 +72,7 @@ import { cn } from "../lib/utils";
  * - Destructive: <XCircle className="h-4 w-4" />
  */
 const alertVariants = cva(
-  "relative flex items-start gap-3 rounded-none  border border-border p-4 text-sm   transition-colors duration-150",
+  "relative flex items-start gap-3 rounded-md  border border-border p-4 text-sm   transition-colors duration-150",
   {
     variants: {
       variant: {

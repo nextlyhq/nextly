@@ -42,7 +42,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * ```
  *
  * @design-spec
- * - Border-radius: 0px (rounded-none) per design system spec
+ * - Border-radius: `rounded-lg`, the container step of the `--radius` scale
  * - Max-width: 512px (default), responsive sizes available
  * - Backdrop: black/80 with blur effect
  * - Padding: 24px (p-6)
@@ -145,7 +145,7 @@ const DialogContent = forwardRef<
         ref={ref}
         data-slot="dialog-content"
         className={cn(
-          "fixed left-[50%] top-[50%] z-[51] grid w-full translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-none duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
+          "fixed left-[50%] top-[50%] z-[51] grid w-full translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-lg duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
           dialogContentVariants({ size }),
           className
         )}
@@ -154,7 +154,7 @@ const DialogContent = forwardRef<
         {children}
         <DialogPrimitive.Close
           data-slot="dialog-close"
-          className="absolute right-4 top-4 rounded-none p-1 text-muted-foreground cursor-pointer transition-colors duration-150 hover-unified focus:outline-none focus:ring-2 focus:ring-ring disabled:pointer-events-none disabled:cursor-not-allowed"
+          className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground cursor-pointer transition-colors duration-150 hover-unified focus:outline-none focus:ring-2 focus:ring-ring disabled:pointer-events-none disabled:cursor-not-allowed"
         >
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>

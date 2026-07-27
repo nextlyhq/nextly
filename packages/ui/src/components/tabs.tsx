@@ -20,8 +20,9 @@ import type {
  * Built on Radix UI primitives with WAI-ARIA compliance.
  *
  * Design Specs:
- * - TabsList border-radius: 0px (rounded-none)
- * - TabsTrigger border-radius: 0px (rounded-none)
+ * - TabsList border-radius: square, independent of `--radius`
+ * - TabsTrigger border-radius: square, independent of `--radius`; the active
+ *   state is a 2px bottom border that has to stay flush with the tab edges
  * - TabsList height: 40px (h-10)
  * - TabsTrigger padding: 12px 24px (px-3 py-1.5)
  * - Transition duration: 150ms (design system standard)
@@ -107,6 +108,7 @@ const TabsList = forwardRef<TabsListRef, TabsListProps>(
       ref={ref}
       data-slot="tabs-list"
       className={cn(
+        // Square corners: underline tabs, so the list never draws a rounded surface.
         "inline-flex h-10 items-center justify-center gap-1 rounded-none p-0 text-muted-foreground",
         className
       )}
@@ -140,6 +142,8 @@ const TabsTrigger = forwardRef<TabsTriggerRef, TabsTriggerProps>(
       ref={ref}
       data-slot="tabs-trigger"
       className={cn(
+        // Square corners: the active state is a 2px bottom border that has to
+        // run the full width of the trigger.
         "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 text-sm font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
         className
       )}
