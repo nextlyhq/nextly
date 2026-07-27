@@ -86,9 +86,14 @@ export interface ResolveContentOptions {
    * so a content route enforces STORED access policies: a rule-less (public)
    * collection still renders, but one with a stored member-only/role-based read
    * rule is hidden from an unauthenticated request (resolves to `null` →
-   * `notFound()`). Pass `true` for a fully trusted read. NOTE: inline
-   * `defineCollection({ access })` code rules are only evaluated when a `user`
-   * is supplied — for an anonymous read, only stored (admin/schema) rules apply.
+   * `notFound()`). Pass `true` for a fully trusted read. NOTE on anonymous
+   * scope: an anonymous read enforces stored rules that DENY outright
+   * (public/authenticated/role-based). A row-level CONSTRAINT rule (owner-only,
+   * or a custom rule returning a query predicate) and inline
+   * `defineCollection({ access })` code rules require a `user` context to
+   * evaluate, so they are not applied for an anonymous read — gate such content
+   * behind an authenticated read (pass a `user`) rather than relying on the
+   * anonymous default.
    */
   overrideAccess?: boolean;
   /** User identity to evaluate access rules against (with `overrideAccess: false`). */
@@ -136,7 +141,11 @@ export async function resolveContent(
         depth,
         // Enforce the collection's read policy unless the caller opts out.
         overrideAccess,
-        ...(user ? { user } : {}),
+        // Pass the user explicitly (even `undefined`) so an anonymous read
+        // CLEARS any default user configured on the reader instead of merging
+        // over it — otherwise a reader booted with a default identity would make
+        // this "anonymous" read run as that member.
+        user,
         ...(options.richTextFormat
           ? { richTextFormat: options.richTextFormat }
           : {}),
@@ -148,19 +157,22 @@ export async function resolveContent(
       // An access denial (403) means the read policy hides this entry from the
       // caller — treat it as absent (→ notFound), never as a transient error.
       // Any other error still rethrows (retryable, not a permanently-cached 404).
-      if (error instanceof NextlyError && error.statusCode === 403) {
+      // `NextlyError.is` matches across bundled package copies where a plain
+      // `instanceof` would miss a differently-realmed error class.
+      if (NextlyError.is(error) && error.statusCode === 403) {
         return null;
       }
       throw error;
     }
   };
 
-  // A member read (enforcing access with a specific user) must NOT be cached:
-  // the caller's authorization can change — a granted role revoked, a new grant
-  // added — without any content write, so a cached access decision could serve
-  // stale content or a stale denial. Anonymous and trusted reads have no such
-  // per-user authorization state and are cached normally.
-  if (!overrideAccess && user) {
+  // Any read carrying a user is uncached. Two reasons: (1) the caller's
+  // authorization can change without a content write, so a cached access
+  // decision could go stale; (2) the query service passes the user to
+  // `afterRead` hooks, so even a trusted (`overrideAccess: true`) read can
+  // produce user-dependent output that must not land in a shared cache entry.
+  // Only userless (anonymous / trusted-anonymous) reads are cached.
+  if (user) {
     return read();
   }
 

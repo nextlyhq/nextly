@@ -237,12 +237,16 @@ export function createContentRoute<TNode>(
             limit: MAX_STATIC_PARAMS_PER_PAGE,
             page,
             overrideAccess,
+            // The build-time scan is anonymous — pass an explicit `undefined`
+            // so it can't inherit a default user configured on the reader.
+            user: undefined,
           });
         } catch (error) {
           // An access-restricted collection has no PUBLIC paths to pre-render —
           // skip it (its entries render on demand, enforced per request) rather
           // than fail the build. Any non-access error still surfaces.
-          if (error instanceof NextlyError && error.statusCode === 403) break;
+          // `NextlyError.is` matches across bundled package copies.
+          if (NextlyError.is(error) && error.statusCode === 403) break;
           throw error;
         }
         for (const item of result.items) {

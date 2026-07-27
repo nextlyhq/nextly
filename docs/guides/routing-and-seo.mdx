@@ -56,10 +56,12 @@ await resolveContent("posts", slug, { user: { id, role } });
 await resolveContent("posts", slug, { overrideAccess: true, status: "all" });
 ```
 
-> Inline `defineCollection({ access })` code rules are only evaluated when a
-> `user` is supplied. For an anonymous request, only **stored** (admin/schema)
-> read rules are enforced — configure member-only content through stored rules
-> if it must be hidden from anonymous visitors.
+> An anonymous read enforces stored rules that **deny outright**
+> (public/authenticated/role-based). A **row-level constraint** rule (owner-only,
+> or a custom rule returning a query) and inline `defineCollection({ access })`
+> code rules need a `user` context to evaluate, so they are not applied for an
+> anonymous read. Gate that content behind an authenticated read (pass a `user`)
+> rather than the anonymous default.
 
 Other options: `slugField` (default `"slug"`), `depth`, `locale`,
 `richTextFormat`, `tags` (extra cache tags for populated relations),

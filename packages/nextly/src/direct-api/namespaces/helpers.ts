@@ -51,12 +51,32 @@ export function createRequestContext(args: DirectAPIConfig): RequestContext {
   return {
     user: {
       id: args.user.id,
-      email: "",
+      // Preserve the caller's real email so email-based access rules match.
+      email: args.user.email ?? "",
       role: args.user.role ?? "user",
       permissions: [],
     },
     locale: args.locale,
   };
+}
+
+/**
+ * Forward the caller's full user context to a service call — the complete role
+ * set and email, not just the primary role — so role-based and email-based
+ * access rules evaluate against the real identity. Returns `undefined` for an
+ * unauthenticated (userless) call.
+ */
+export function forwardUserContext(
+  user: DirectAPIConfig["user"]
+): { id: string; role?: string; roles?: string[]; email?: string } | undefined {
+  return user
+    ? {
+        id: user.id,
+        role: user.role,
+        roles: user.roles,
+        email: user.email,
+      }
+    : undefined;
 }
 
 /**
