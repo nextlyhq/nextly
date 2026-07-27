@@ -261,7 +261,7 @@ describe("dispatchSingles getSingleDocument — status forwarding (Task 7 PR-5)"
     );
   });
 
-  it("drops unknown status values (passes undefined)", async () => {
+  it("rejects an unknown status value with 400 and never reads", async () => {
     const entryGet = vi.fn().mockResolvedValue({
       success: true,
       statusCode: 200,
@@ -269,16 +269,17 @@ describe("dispatchSingles getSingleDocument — status forwarding (Task 7 PR-5)"
     });
     wireDi(makeRegistry(), makeEntry({ get: entryGet }));
 
-    await dispatchSingles(
-      "getSingleDocument",
-      { slug: "site", status: "lol-injection" },
-      undefined
-    );
+    // An invalid status is rejected rather than silently widened to "all"
+    // (which would leak a draft Single): the handler throws before reading.
+    await expect(
+      dispatchSingles(
+        "getSingleDocument",
+        { slug: "site", status: "lol-injection" },
+        undefined
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
 
-    expect(entryGet).toHaveBeenCalledWith(
-      "site",
-      expect.objectContaining({ status: undefined })
-    );
+    expect(entryGet).not.toHaveBeenCalled();
   });
 
   it("omits status when ?status= is absent (preserves default published-only filter)", async () => {

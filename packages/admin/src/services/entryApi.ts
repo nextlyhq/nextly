@@ -38,6 +38,12 @@ export interface FindParams {
   search?: string;
   /** Query filters using Nextly where syntax */
   where?: Record<string, unknown>;
+  /**
+   * Status filter (`?status=`). The REST default is published-only, so the
+   * management list must pass `"all"` explicitly to include drafts. Omitted →
+   * the server's published-only default.
+   */
+  status?: "all" | "draft" | "published";
   /** Depth for relationship population (0-10) */
   depth?: number;
   /** Fields to select (reduces response size) */
@@ -251,6 +257,13 @@ export const buildFindQuery = (params: FindParams): string => {
   // Depth for relationship population
   if (params.depth !== undefined) {
     query.set("depth", String(params.depth));
+  }
+
+  // Status filter. The REST default is published-only; the management list
+  // sends `all` so editors still see drafts (the status dropdown narrows via
+  // `where` on top of this).
+  if (params.status !== undefined) {
+    query.set("status", params.status);
   }
 
   // Where clause (Nextly query syntax)

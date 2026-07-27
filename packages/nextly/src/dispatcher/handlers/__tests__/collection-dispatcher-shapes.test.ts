@@ -238,20 +238,22 @@ describe("dispatchCollections listEntries / countEntries — status forwarding",
     );
   });
 
-  it("listEntries drops unknown status values (passes undefined)", async () => {
+  it("listEntries rejects an unknown status value with 400 and never queries", async () => {
     const listEntries = vi.fn().mockResolvedValue(fakeListResult);
     const container = makeContainer({ listEntries });
 
-    await dispatchCollections(
-      container,
-      "listEntries",
-      { collectionName: "posts", status: "lol-injection" },
-      undefined
-    );
+    // An invalid status is rejected rather than silently widened to "all"
+    // (which would leak drafts): the handler throws before touching the service.
+    await expect(
+      dispatchCollections(
+        container,
+        "listEntries",
+        { collectionName: "posts", status: "lol-injection" },
+        undefined
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
 
-    expect(listEntries).toHaveBeenCalledWith(
-      expect.objectContaining({ status: undefined })
-    );
+    expect(listEntries).not.toHaveBeenCalled();
   });
 
   it("listEntries omits status when ?status= is absent (preserves default)", async () => {
@@ -292,20 +294,20 @@ describe("dispatchCollections listEntries / countEntries — status forwarding",
     );
   });
 
-  it("countEntries drops unknown status values", async () => {
+  it("countEntries rejects an unknown status value with 400 and never queries", async () => {
     const countEntries = vi.fn().mockResolvedValue(fakeCountResult);
     const container = makeContainer({ countEntries });
 
-    await dispatchCollections(
-      container,
-      "countEntries",
-      { collectionName: "posts", status: "garbage" },
-      undefined
-    );
+    await expect(
+      dispatchCollections(
+        container,
+        "countEntries",
+        { collectionName: "posts", status: "garbage" },
+        undefined
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
 
-    expect(countEntries).toHaveBeenCalledWith(
-      expect.objectContaining({ status: undefined })
-    );
+    expect(countEntries).not.toHaveBeenCalled();
   });
 });
 

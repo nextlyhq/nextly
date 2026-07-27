@@ -145,6 +145,9 @@ export function RelationshipSearch({
       search: debouncedSearch,
       limit,
       page: currentPage,
+      // Editors relate to draft content too, so the picker must not be limited
+      // to the REST published-only default — request all statuses.
+      status: "all",
     },
     enabled: !!selectedCollection,
   });

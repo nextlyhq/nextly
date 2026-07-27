@@ -306,6 +306,10 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       limit,
       sort,
       search: search || undefined,
+      // The REST default is published-only; the management list must see drafts
+      // too, so request `all` as the base. The status dropdown narrows to
+      // draft/published via `where` on top of this.
+      status: "all",
       where: whereFilter,
       translationStatus: wantsTranslationStatus || undefined,
     },

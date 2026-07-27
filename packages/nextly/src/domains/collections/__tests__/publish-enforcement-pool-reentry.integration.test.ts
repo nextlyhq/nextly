@@ -22,6 +22,10 @@ import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import {
+  refreshEndpointPresence,
+  setWebhookAuditEnabled,
+} from "../../../domains/webhooks/recording-activation";
 import { NextlyError } from "../../../errors/nextly-error";
 import { registerHook, unregisterHook } from "../../../hooks";
 import type { HookHandler } from "../../../hooks/types";
@@ -52,6 +56,10 @@ const BEFOREOP_SLUG = "poolreentrybeforeop";
 // transaction — the binding this fixture exercises. Its teardown also drops the
 // companion table (see `drop`).
 const LOCALIZED_DELETE_SLUG = "poolreentrylocdel";
+// A write whose outbox recording gate reads endpoint presence from a
+// synchronous out-of-band flag, never the database, so it takes no connection
+// inside the write transaction.
+const GATE_SLUG = "poolreentrygate";
 const SLUGS = [
   RBAC_SLUG,
   BULK_CREATE_SLUG,
@@ -64,6 +72,7 @@ const SLUGS = [
   DIRECT_DELETE_SLUG,
   BEFOREOP_SLUG,
   LOCALIZED_DELETE_SLUG,
+  GATE_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -161,6 +170,60 @@ describePg(
         }
       }
     }
+
+    it("completes a gated write without any endpoint read inside the transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        handle = await createTestNextly({
+          adapter,
+          collections: [openCollection(GATE_SLUG)],
+        });
+        // Turn the harness's audit default off so the recording gate consults
+        // endpoint presence. It reads a synchronous, out-of-band-refreshed flag —
+        // NOT the database — so the write never checks out a second connection.
+        // A regression that made the gate read endpoints inside the write
+        // transaction would deadlock forever on this `max: 1` pool.
+        setWebhookAuditEnabled(false);
+        // Prime the presence flag to its real (empty) value so the gate reads a
+        // deterministic `false` rather than the fail-open default while the boot
+        // prime is still in flight.
+        await refreshEndpointPresence();
+        const entries = handle
+          .getService<CollectionsHandler>("collectionsHandler")
+          .getEntryService() as CollectionEntryService;
+
+        // The shared system table persists rows from earlier cases, so measure
+        // the delta this write adds rather than asserting a global empty count.
+        const before = (
+          await handle.adapter.select<{ id: string }>("nextly_events")
+        ).length;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.createEntriesInTransaction(
+              tx,
+              { collectionName: GATE_SLUG, user: { id: "editor" } },
+              [{ title: "t" }]
+            )
+          ),
+          15_000
+        );
+
+        // The write reached completion instead of deadlocking on a second
+        // connection; with no endpoint and audit off, no event is recorded.
+        expect(result.successful).toBe(1);
+        expect(result.failed).toBe(0);
+        // Prove the gate actually closed: a regression that recorded despite no
+        // endpoint would still complete, so assert the outbox gained no row.
+        const after = (
+          await handle.adapter.select<{ id: string }>("nextly_events")
+        ).length;
+        expect(after).toBe(before);
+      } finally {
+        await handle?.destroy();
+      }
+    }, 30_000);
 
     it("resolves a publish RBAC check on the transaction's own connection", async () => {
       const adapter = await connectSingleConnection();

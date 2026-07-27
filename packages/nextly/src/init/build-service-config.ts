@@ -178,6 +178,16 @@ export function buildServiceConfig(
     ) {
       serviceConfig.webhookRetention = nextlyConfig.webhookRetention;
     }
+
+    // Audit seam — carry the resolved flag through so the webhook registration
+    // can publish it to the recording gate. `undefined` means not carried; the
+    // sanitizer always produces a boolean, so any value here is authoritative.
+    if (
+      serviceConfig.webhookAuditEnabled === undefined &&
+      nextlyConfig?.webhookAuditEnabled !== undefined
+    ) {
+      serviceConfig.webhookAuditEnabled = nextlyConfig.webhookAuditEnabled;
+    }
   }
 
   // Ensure imageProcessor is always provided
