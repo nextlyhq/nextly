@@ -102,7 +102,9 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
         </figcaption>
       )}
 
-      {/* Lightbox */}
+      {/* Lightbox. The scrim and its controls stay literal black/white: they
+          are read against the user's image, not against a themed surface, so
+          they must not follow the admin palette in either mode. */}
       {lightboxIndex !== null && (
         <div
           className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
