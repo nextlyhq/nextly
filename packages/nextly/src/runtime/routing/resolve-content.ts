@@ -17,6 +17,8 @@ import { NextlyError } from "../../errors/nextly-error";
 import { cachedFind } from "../cache/cached-find";
 import { nextlyTags } from "../cache/nextly-tags";
 
+import { markDynamic } from "./mark-dynamic";
+
 /** A resolved content entry (loose by design — shape is the app's collection). */
 export type ContentEntry = Record<string, unknown>;
 
@@ -170,6 +172,11 @@ export async function resolveContent(
   // pages reads its public content trusted (`overrideAccess: true`).
   const cacheable = overrideAccess && !user;
   if (!cacheable) {
+    // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
+    // Cache, so a page rendered while a policy was public could stay statically
+    // cached after it tightens. Mark the render dynamic so an enforced read
+    // genuinely runs fresh per request.
+    markDynamic();
     return read();
   }
 

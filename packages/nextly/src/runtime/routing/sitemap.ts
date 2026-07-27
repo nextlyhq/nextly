@@ -9,32 +9,11 @@
  *
  * @module runtime/routing/sitemap
  */
-import { createRequire } from "node:module";
-
 import type { MetadataRoute } from "next";
 
 import { cachedFind } from "../cache/cached-find";
 
-// `next/cache` is resolved lazily (opaque to bundlers) so importing this module
-// never forces `next` at load. `unstable_noStore()` opts the current render out
-// of Next's Data/Full Route Cache, which is what keeps an uncached sitemap from
-// being frozen as a build-time prerender.
-let cachedNoStore: (() => void) | null | undefined;
-function markDynamic(): void {
-  if (cachedNoStore === undefined) {
-    try {
-      const require = createRequire(import.meta.url);
-      const mod = require("next/cache") as { unstable_noStore?: () => void };
-      cachedNoStore =
-        typeof mod.unstable_noStore === "function"
-          ? mod.unstable_noStore
-          : null;
-    } catch {
-      cachedNoStore = null;
-    }
-  }
-  cachedNoStore?.();
-}
+import { markDynamic } from "./mark-dynamic";
 
 /** A sitemap entry (a superset-compatible slice of Next's `MetadataRoute.Sitemap`). */
 export interface NextlySitemapEntry {
