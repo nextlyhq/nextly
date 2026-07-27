@@ -37,8 +37,12 @@ const buttonVariants = cva(
         // composite the fill toward the page and drop white text under 4.5:1.
         destructive:
           "bg-destructive-solid text-destructive-foreground border border-transparent hover:bg-destructive-700",
-        // border-border (not a faint primary alpha) so the outline is a visible
-        // boundary at the 3:1 UI minimum.
+        // border-border is the decorative separator token, and it is the right
+        // one here: a button is identified by its label and fill, so its edge
+        // carries no meaning on its own and is not held to the 3:1 minimum that
+        // border-input meets for controls identified by their boundary. It is
+        // still used in preference to a faint primary alpha, which reads as a
+        // tint of the brand colour rather than as an edge.
         outline:
           "border border-border text-foreground hover-unified bg-background",
         secondary:
