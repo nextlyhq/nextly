@@ -441,8 +441,23 @@ export class SingleQueryService extends BaseService {
     doc: SingleDocument;
     options: GetSingleOptions;
     statusFilterValue: string | undefined;
+    /**
+     * Whether to apply the TARGET collection's field rules to related rows.
+     * Off for the copy an access rule is judged on: redaction removes the very
+     * values a rule may be written to inspect, and a rule shown `undefined`
+     * where the document holds something reads that absence as permission.
+     */
+    enforceRelatedFieldAccess: boolean;
+    /** Skip the companion overlay for a draft that carries its defaults inline. */
+    skipLocalizedOverlay?: boolean;
   }): Promise<SingleDocument> {
-    const { slug, singleMeta, options, statusFilterValue } = params;
+    const {
+      slug,
+      singleMeta,
+      options,
+      statusFilterValue,
+      enforceRelatedFieldAccess,
+    } = params;
     let doc = params.doc;
 
     // i18n: resolve translatable fields from the companion `_locales` table for the
@@ -450,14 +465,16 @@ export class SingleQueryService extends BaseService {
     // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
     // so the overlay must land before those transforms run (matching the collection read path).
     // No-op when localization is off or the single isn't localized.
-    await this.populateLocalized(
-      slug,
-      singleMeta,
-      doc,
-      options.locale,
-      options.fallbackLocale,
-      statusFilterValue
-    );
+    if (!params.skipLocalizedOverlay) {
+      await this.populateLocalized(
+        slug,
+        singleMeta,
+        doc,
+        options.locale,
+        options.fallbackLocale,
+        statusFilterValue
+      );
+    }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
     doc = await this.expandUploadFields(doc, singleMeta.fields);
@@ -466,7 +483,7 @@ export class SingleQueryService extends BaseService {
       singleMeta.fields,
       options.depth,
       {
-        enforceFieldAccess: true,
+        enforceFieldAccess: enforceRelatedFieldAccess,
         user: options.user,
         overrideAccess: options.overrideAccess,
       }
@@ -488,7 +505,7 @@ export class SingleQueryService extends BaseService {
         // collection, which a Single's field list never describes — so the
         // caller travels down to reach the related row's own rules.
         access: {
-          enforceFieldAccess: true,
+          enforceFieldAccess: enforceRelatedFieldAccess,
           user: options.user as Record<string, unknown> | undefined,
           overrideAccess: options.overrideAccess,
         },
@@ -496,6 +513,35 @@ export class SingleQueryService extends BaseService {
     }
 
     return doc;
+  }
+
+  /**
+   * Build the copy of a document that an access rule is judged on.
+   *
+   * Two things separate it from the response. Related rows keep the fields the
+   * target collection would hide from this caller, because a rule reading one
+   * must see the stored value rather than the hole redaction leaves — the same
+   * "absence means allowed" reading that admits a caller the rule exists to
+   * refuse. And it is detached, so a rule that writes to its `data` argument
+   * changes nothing the caller receives: a rule is a decision, not a
+   * transformation.
+   */
+  private async buildAuthorizationView(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    doc: SingleDocument;
+    options: GetSingleOptions;
+    statusFilterValue: string | undefined;
+    skipLocalizedOverlay?: boolean;
+  }): Promise<SingleDocument> {
+    const assembled = await this.assembleStoredDocument({
+      ...params,
+      // Assembled from a copy of the row: the transforms mutate what they are
+      // given, and the response is assembled from the same row afterwards.
+      doc: { ...params.doc },
+      enforceRelatedFieldAccess: false,
+    });
+    return structuredClone(assembled);
   }
 
   /**
@@ -525,6 +571,8 @@ export class SingleQueryService extends BaseService {
     accessRules: CollectionAccessRules | undefined;
     options: GetSingleOptions;
     statusFilterValue: string | undefined;
+    /** The stored row, already loaded and already screened for visibility. */
+    row: SingleDocument | null;
   }): Promise<{
     denied?: SingleResult;
     /**
@@ -534,7 +582,7 @@ export class SingleQueryService extends BaseService {
      */
     prospective?: DefaultDocumentDraft;
   }> {
-    const { slug, singleMeta, accessRules, options, statusFilterValue } =
+    const { slug, singleMeta, accessRules, options, statusFilterValue, row } =
       params;
     if (!accessRules) return {};
 
@@ -544,10 +592,6 @@ export class SingleQueryService extends BaseService {
       message: `Access denied: read on single "${slug}" is not permitted`,
     };
 
-    const row = await this.adapter.selectOne<SingleDocument>(
-      singleMeta.tableName,
-      {}
-    );
     // A Single that has never been written still has the document this read
     // would create: its declared field defaults. Judging those is what keeps a
     // rule such as `data.secret !== true` from admitting the read that
@@ -556,15 +600,19 @@ export class SingleQueryService extends BaseService {
     // denied. Built in memory; nothing is persisted here, and the row the read
     // goes on to create is judged again on the way out.
     const prospective = row ? undefined : this.buildDefaultDocument(singleMeta);
-    const document = row
-      ? await this.assembleStoredDocument({
-          slug,
-          singleMeta,
-          doc: row,
-          options,
-          statusFilterValue,
-        })
-      : prospective!.document;
+    // Either way the rule is shown the document as the read would render it.
+    // A draft's stored form is not that: `buildDefaultDocument` leaves group,
+    // repeater and JSON defaults in their serialized form, so a rule reading
+    // `data.settings.private` would be handed a string. Its localized defaults
+    // are already inline, which is why the companion overlay is skipped.
+    const document = await this.buildAuthorizationView({
+      slug,
+      singleMeta,
+      doc: row ?? prospective!.document,
+      options,
+      statusFilterValue,
+      skipLocalizedOverlay: !row,
+    });
 
     const result = await this.accessControlService.evaluateAccess(
       accessRules,
@@ -800,6 +848,30 @@ export class SingleQueryService extends BaseService {
         explicit: options.status,
       });
 
+      // 1.55. Load the row once for whichever deferred rule needs it, and screen
+      // it for visibility first. A draft Single answers 404 to an untrusted
+      // caller so its existence stays hidden; deciding a stored rule before that
+      // would answer 403 instead, which tells the caller both that the row is
+      // there and what the rule made of them.
+      let storedRow: SingleDocument | null = null;
+      if ((deferDocumentRule || deferCustomRule) && !options.overrideAccess) {
+        storedRow = await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        );
+        if (
+          storedRow &&
+          statusFilter &&
+          (storedRow as { status?: string }).status !== statusFilter.value
+        ) {
+          return {
+            success: false,
+            statusCode: 404,
+            message: `Single "${slug}" not found`,
+          };
+        }
+      }
+
       // 1.6. Settle a deferred document rule BEFORE any read side effect. Hooks
       // are user code and auto-create permanently materializes the document
       // (with its first version and localized defaults), so a caller the rule
@@ -809,10 +881,6 @@ export class SingleQueryService extends BaseService {
         // Ownership lives on the stored row, so the bare row settles it; none of
         // the stages that assemble the document can move a Single to a different
         // owner.
-        const storedRow = await this.adapter.selectOne<SingleDocument>(
-          singleMeta.tableName,
-          {}
-        );
         const documentRuleDenied = this.evaluateOwnerOnlyRead({
           slug,
           rule: readRule as { ownerField?: string } | undefined,
@@ -832,6 +900,7 @@ export class SingleQueryService extends BaseService {
           accessRules: singleMeta.accessRules,
           options,
           statusFilterValue: statusFilter ? statusFilter.value : undefined,
+          row: storedRow,
         });
         if (custom.denied) return custom.denied;
         prospectiveDefault = custom.prospective;
@@ -924,12 +993,21 @@ export class SingleQueryService extends BaseService {
 
       // 6.9 - 7.7. Resolve translations and expand uploads, relationships and
       // components into the document.
+      //
+      // Related rows are redacted HERE rather than after the decision below,
+      // unlike this Single's own fields. A related row's chosen label is a copy
+      // of one of its field values, derived while the row is expanded, so
+      // redacting afterwards would leave a withheld value standing in the label
+      // it was copied into. The rule still sees related fields unredacted: the
+      // decision that governs them is the one made before any of this ran, on
+      // an unredacted assembly of the stored row.
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
         doc,
         options,
         statusFilterValue: statusFilter ? statusFilter.value : undefined,
+        enforceRelatedFieldAccess: true,
       });
 
       // attach the per-locale `_translations` overview for the admin's language pills
@@ -994,11 +1072,13 @@ export class SingleQueryService extends BaseService {
           user: options.user,
           locale: options.locale,
           fallbackLocale: options.fallbackLocale,
-          // A copy, so the rule decides rather than edits. `data` is handed to
-          // user code, and passing the response object itself would let a rule
-          // that assigns to it rewrite what the caller receives — including
-          // putting back a value a later stage is meant to withhold.
-          document: { ...doc },
+          // A detached copy, so the rule decides rather than edits. `data` is
+          // handed to user code, and passing the response object itself would
+          // let a rule that assigns to it rewrite what the caller receives —
+          // including putting back a value a later stage is meant to withhold.
+          // Deep, because a shallow copy still shares every nested component,
+          // repeater and expanded relation with the response.
+          document: structuredClone(doc),
         });
         if (finalDenial) return finalDenial;
       }

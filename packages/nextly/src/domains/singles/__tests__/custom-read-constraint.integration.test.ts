@@ -12,11 +12,19 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, text } from "../../../config";
+import {
+  checkbox,
+  defineCollection,
+  defineSingle,
+  group,
+  relationship,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -314,6 +322,130 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.statusCode).toBe(403);
     // The refusal is only worth anything if the row was never written.
     expect(await current.adapter.selectOne("single_branding", {})).toBeNull();
+  });
+
+  it("shows the rule a related field the response redacts", async () => {
+    // Related-row redaction happens while the relationship is expanded, so the
+    // rule would be handed the hole it leaves. `data.author.suspended !== true`
+    // then reads `undefined` and admits a caller the stored data refuses.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: true }
+    );
+    const authorId = (created.data as { id: string }).id;
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: authorId },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("keeps a rule's writes deep inside its argument out of the response", async () => {
+    // A shallow copy still shares every nested object with the response, so a
+    // rule reaching into a component or group could rewrite what is returned.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "settings",
+              fields: [checkbox({ name: "private" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", settings: { private: false } },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "deep-mutating" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data!.settings).not.toHaveProperty("injected");
+  });
+
+  it("hides a draft Single rather than reporting the rule's verdict", async () => {
+    // A draft answers 404 to an untrusted caller so its existence stays hidden.
+    // Deciding the stored rule first answers 403 instead, which reveals both
+    // that the row is there and what the rule made of the caller.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          status: true,
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", status: "draft" },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "denied" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(404);
   });
 
   it("tells the rule the id the document it judges will carry", async () => {
