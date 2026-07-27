@@ -74,6 +74,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
@@ -777,6 +778,29 @@ export class CollectionMutationService extends BaseService {
    * SQLite happens to stringify, which is why a suite running there alone
    * cannot show the difference.
    */
+  /**
+   * The fields a transactional create may seed a default into.
+   *
+   * On a migrated localized collection the translatable columns live on the
+   * `_locales` companion, not the main table. The pooled path splits those
+   * values out and writes the companion row; the transactional paths have no
+   * such step, so seeding a translatable default here would put a key in the
+   * main-table insert for a column that does not exist. Skipping them keeps a
+   * declared default from turning every transactional create on such a
+   * collection into a failure — the translatable default simply does not
+   * apply on this path until the companion write exists here too.
+   */
+  private defaultableFields(
+    collection: unknown,
+    fields: FieldDefinition[]
+  ): FieldDefinition[] {
+    const isLocalized =
+      (collection as { localized?: boolean } | undefined)?.localized === true;
+    if (!isLocalized) return fields;
+    const translatable = new Set(resolveLocalizedFieldNames(fields, true));
+    return fields.filter(f => !translatable.has(f.name));
+  }
+
   private serializeJsonFieldsForInsert(
     data: Record<string, unknown>,
     fields: FieldDefinition[]
@@ -785,7 +809,37 @@ export class CollectionMutationService extends BaseService {
       if (!isJsonFieldType(field.type, field)) continue;
       const value = data[field.name];
       if (value == null || typeof value !== "object") continue;
-      data[field.name] = JSON.stringify(value);
+
+      // A relationship nested in a group or repeater is stored as its id. A
+      // populated object reaching the stringify below would be frozen into the
+      // JSON as a whole record, so the same normalization the pooled path runs
+      // has to happen here, before the value becomes text.
+      const nestedFields = field.fields ?? [];
+      const hasNestedRelationship = nestedFields.some(
+        f =>
+          isRelationshipField(f.type) ||
+          f.type === "repeater" ||
+          f.type === "group"
+      );
+      let normalized: unknown = value;
+      if (hasNestedRelationship) {
+        if (field.type === "repeater" && Array.isArray(value)) {
+          normalized = value.map(row =>
+            row && typeof row === "object" && !Array.isArray(row)
+              ? normalizeNestedRelationships(
+                  row as Record<string, unknown>,
+                  nestedFields
+                )
+              : row
+          );
+        } else if (field.type === "group" && !Array.isArray(value)) {
+          normalized = normalizeNestedRelationships(
+            value as Record<string, unknown>,
+            nestedFields
+          );
+        }
+      }
+      data[field.name] = JSON.stringify(normalized);
     }
   }
 
@@ -1567,28 +1621,34 @@ export class CollectionMutationService extends BaseService {
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
+      // Declared defaults are seeded before the first hook phase, so every hook
+      // — beforeOperation included — sees the values the entry will hold, and a
+      // hook that removes a defaulted field is not overridden by a later pass
+      // re-adding it. Seeded onto a copy so the caller's own object is not
+      // mutated. Everything after this point (generation, write access,
+      // validation, the insert) therefore works from complete data; generation
+      // still fills only the identity fields left unresolved, and running ahead
+      // of write access matches generation, so a field the caller may not
+      // create is not reintroduced.
+      const seededBody: Record<string, unknown> = { ...body };
+      applyFieldDefaults(seededBody, fields);
+
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
           operation: "create",
-          args: { data: body },
+          args: { data: seededBody },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
         });
 
-      // Use modified data if returned by beforeOperation
-      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
-      // Declared defaults are filled before any hook runs, so a collection
-      // hook deriving one field from another sees the value the entry will
-      // hold rather than undefined, and a hook that removes a defaulted field
-      // is not overridden by a later pass re-adding it. Everything after this
-      // point — generation, write access, validation, the insert — works from
-      // complete data. Generation still fills only the identity fields left
-      // unresolved, and running ahead of write access matches generation, so a
-      // field the caller may not create is not reintroduced.
-      applyFieldDefaults(currentData, fields);
+      // Use modified data if returned by beforeOperation. A hook returning its
+      // own object owns what is in it, defaults included — they are not
+      // re-applied here, or a hook could never drop one.
+      const currentData =
+        (beforeOpArgs as BeforeOperationArgs)?.data ?? seededBody;
 
       // Execute beforeCreate hooks (code-registered)
       // Hooks run before validation and can modify the incoming data
@@ -4948,11 +5008,26 @@ export class CollectionMutationService extends BaseService {
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
+      // Declared defaults are seeded before the first hook phase, so every hook
+      // — beforeOperation included — sees the values the entry will hold, and a
+      // hook that removes a defaulted field is not overridden by a later pass
+      // re-adding it. Seeded onto a copy so the caller's own object is not
+      // mutated. Everything after this point (generation, write access,
+      // validation, the insert) therefore works from complete data; generation
+      // still fills only the identity fields left unresolved, and running ahead
+      // of write access matches generation, so a field the caller may not
+      // create is not reintroduced.
+      const seededBody: Record<string, unknown> = { ...body };
+      applyFieldDefaults(
+        seededBody,
+        this.defaultableFields(collection, fields)
+      );
+
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
           operation: "create",
-          args: { data: body },
+          args: { data: seededBody },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
             : undefined,
@@ -4962,17 +5037,11 @@ export class CollectionMutationService extends BaseService {
           executor: tx.getDrizzle(),
         });
 
-      // Use modified data if returned by beforeOperation
-      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
-      // Declared defaults are filled before any hook runs, so a collection
-      // hook deriving one field from another sees the value the entry will
-      // hold rather than undefined, and a hook that removes a defaulted field
-      // is not overridden by a later pass re-adding it. Everything after this
-      // point — generation, write access, validation, the insert — works from
-      // complete data. Generation still fills only the identity fields left
-      // unresolved, and running ahead of write access matches generation, so a
-      // field the caller may not create is not reintroduced.
-      applyFieldDefaults(currentData, fields);
+      // Use modified data if returned by beforeOperation. A hook returning its
+      // own object owns what is in it, defaults included — they are not
+      // re-applied here, or a hook could never drop one.
+      const currentData =
+        (beforeOpArgs as BeforeOperationArgs)?.data ?? seededBody;
 
       // Execute beforeCreate hooks (code-registered)
       const beforeContext = this.hookService.buildHookContext({
@@ -6163,12 +6232,14 @@ export class CollectionMutationService extends BaseService {
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = {};
 
-      // Defaults are not hooks: a bulk import that opts out of hook execution
-      // still creates entries that must hold their declared defaults, and an
-      // omitted required field with a default would otherwise fail validation
-      // and abort the import. Applied again inside the block below because
-      // `beforeOperation` may replace the data object entirely.
-      applyFieldDefaults(currentData, fields);
+      // Seeded before the hook branch, so it happens either way: a default is
+      // not a hook, and an import opting out of hook execution still creates
+      // entries that must hold their declared values — an omitted required
+      // field with a default would otherwise abort the whole batch.
+      applyFieldDefaults(
+        currentData,
+        this.defaultableFields(collection, fields)
+      );
 
       // Execute hooks (unless skipped)
       if (!skipHooks) {
@@ -6178,7 +6249,7 @@ export class CollectionMutationService extends BaseService {
           await this.hookService.hookRegistry.executeBeforeOperation({
             collection: params.collectionName,
             operation: "create",
-            args: { data: body },
+            args: { data: currentData },
             user: params.user
               ? { id: params.user.id, email: params.user.email }
               : undefined,
@@ -6193,11 +6264,7 @@ export class CollectionMutationService extends BaseService {
           ((beforeOpArgs as BeforeOperationArgs)?.data as Record<
             string,
             unknown
-          >) ?? body;
-        // Re-applied because the line above may have swapped in a different
-        // object; filling before the beforeCreate pipeline means a collection
-        // hook sees the value the entry will hold rather than undefined.
-        applyFieldDefaults(currentData, fields);
+          >) ?? currentData;
 
         // Execute beforeCreate hooks (code-registered)
         const beforeContext = this.hookService.buildHookContext({
