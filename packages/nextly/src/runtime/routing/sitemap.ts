@@ -9,9 +9,32 @@
  *
  * @module runtime/routing/sitemap
  */
+import { createRequire } from "node:module";
+
 import type { MetadataRoute } from "next";
 
 import { cachedFind } from "../cache/cached-find";
+
+// `next/cache` is resolved lazily (opaque to bundlers) so importing this module
+// never forces `next` at load. `unstable_noStore()` opts the current render out
+// of Next's Data/Full Route Cache, which is what keeps an uncached sitemap from
+// being frozen as a build-time prerender.
+let cachedNoStore: (() => void) | null | undefined;
+function markDynamic(): void {
+  if (cachedNoStore === undefined) {
+    try {
+      const require = createRequire(import.meta.url);
+      const mod = require("next/cache") as { unstable_noStore?: () => void };
+      cachedNoStore =
+        typeof mod.unstable_noStore === "function"
+          ? mod.unstable_noStore
+          : null;
+    } catch {
+      cachedNoStore = null;
+    }
+  }
+  cachedNoStore?.();
+}
 
 /** A sitemap entry (a superset-compatible slice of Next's `MetadataRoute.Sitemap`). */
 export interface NextlySitemapEntry {
@@ -81,9 +104,13 @@ export function nextlySitemap(
       : false;
   // With neither invalidation tags nor a revalidate window, a cached entry would
   // pin the first render forever — publishes, edits, and deletes would never
-  // reach `/sitemap.xml`. Read uncached in that case so it always stays current.
+  // reach `/sitemap.xml`. Mark the render dynamic (so Next doesn't freeze it as
+  // a build-time prerender either) and read uncached so it always stays current.
   if (!hasTags && revalidate === false) {
-    return async () => normalize(await options.entries());
+    return async () => {
+      markDynamic();
+      return normalize(await options.entries());
+    };
   }
   // Default the key off the tags so multiple sitemap helpers (partitioned or
   // nested) that omit `keyParts` don't alias to one shared cache entry.

@@ -49,12 +49,23 @@ export interface ResolvedContext {
  * server component's return, e.g. `ReactNode`) — inferred from `render`, so
  * `nextly` needs no `react` dependency of its own.
  */
+/**
+ * A collection to resolve paths against: a bare slug (uses the route's default
+ * `statusField`), or an object that overrides the status field for THAT
+ * collection — so one catch-all can mix a lifecycle collection (filter by
+ * `status: "published"`) with a status-less one (`statusField: false`).
+ */
+export type ContentRouteCollection =
+  | string
+  | { slug: string; statusField?: string | false };
+
 export interface ContentRouteConfig<TNode> {
   /**
    * Collections to resolve a path against, in order — the first collection with
-   * a published entry whose slug matches the path wins.
+   * a published entry whose slug matches the path wins. Each entry may be a bare
+   * slug or `{ slug, statusField }` to set its status filter independently.
    */
-  collections: string[];
+  collections: ContentRouteCollection[];
   /** Render the resolved entry (your server component body). May be async. */
   render: (
     entry: ContentEntry,
@@ -161,11 +172,23 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
 export function createContentRoute<TNode>(
   config: ContentRouteConfig<TNode>
 ): ContentRoute<TNode> {
-  const collections = [...new Set(config.collections)];
   const slugField = config.slugField ?? "slug";
-  const statusField = config.statusField ?? "status";
+  const defaultStatusField = config.statusField ?? "status";
   const depth = config.depth ?? 1;
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
+
+  // Normalize each collection to `{ slug, statusField }` so a bare slug inherits
+  // the route default while an object can set its own filter — deduped by slug.
+  const collections = dedupeBySlug(
+    config.collections.map(entry =>
+      typeof entry === "string"
+        ? { slug: entry, statusField: defaultStatusField }
+        : {
+            slug: entry.slug,
+            statusField: entry.statusField ?? defaultStatusField,
+          }
+    )
+  );
 
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
@@ -173,7 +196,7 @@ export function createContentRoute<TNode>(
   async function resolve(
     slug: string
   ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
-    for (const collection of collections) {
+    for (const { slug: collection, statusField } of collections) {
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
@@ -195,14 +218,14 @@ export function createContentRoute<TNode>(
     if (staticParamsLimit <= 0) return [];
     const nextly = getInstance();
     const params: Array<{ slug: string[] }> = [];
-    for (const collection of collections) {
+    for (const { slug: collection, statusField } of collections) {
       let page = 1;
       let collected = 0;
       for (;;) {
         const result = await nextly.find({
           collection,
-          // Filter by `published` unless the caller opted out for a status-less
-          // collection (`statusField: false`), which has no such column.
+          // Filter by `published` unless this collection opted out
+          // (`statusField: false`), which has no such column.
           ...(statusField === false
             ? {}
             : { where: { [statusField]: { equals: "published" } } }),
@@ -252,4 +275,18 @@ export function createContentRoute<TNode>(
 /** Join the optional-catch-all segments into a slug path (no leading slash). */
 function joinSlug(params: { slug?: string[] }): string {
   return (params.slug ?? []).join("/");
+}
+
+/** Dedupe normalized collections by slug, keeping the first (its status filter). */
+function dedupeBySlug(
+  entries: Array<{ slug: string; statusField: string | false }>
+): Array<{ slug: string; statusField: string | false }> {
+  const seen = new Set<string>();
+  const out: Array<{ slug: string; statusField: string | false }> = [];
+  for (const entry of entries) {
+    if (seen.has(entry.slug)) continue;
+    seen.add(entry.slug);
+    out.push(entry);
+  }
+  return out;
 }

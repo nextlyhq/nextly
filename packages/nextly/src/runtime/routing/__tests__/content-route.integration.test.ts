@@ -52,6 +52,54 @@ async function seed(nextly: TestNextly["nextly"]) {
 }
 
 describe("createContentRoute (integration)", () => {
+  it("applies per-collection status filtering across mixed collections", async () => {
+    // `pages` has the lifecycle (filter by published); `docs` is status-less
+    // with its OWN `status` field — one global statusField can't serve both.
+    current = await createTestNextly({
+      collections: [
+        pages(),
+        defineCollection({
+          slug: "docs",
+          fields: [
+            text({ name: "slug" }),
+            text({ name: "title" }),
+            text({ name: "status" }),
+          ],
+        }),
+      ],
+    });
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "about", title: "About", status: "published" },
+    });
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "hidden", title: "Hidden", status: "draft" },
+    });
+    await current.nextly.create({
+      collection: "docs",
+      data: { slug: "intro", title: "Intro", status: "active" },
+    });
+
+    const { ContentPage } = createContentRoute({
+      collections: ["pages", { slug: "docs", statusField: false }],
+      nextly: current.nextly,
+      render: (entry: ContentEntry) => ({ title: entry.title }),
+    });
+
+    // Lifecycle collection: published resolves, draft is not found.
+    expect(await ContentPage({ params: { slug: ["about"] } })).toEqual({
+      title: "About",
+    });
+    await expect(
+      ContentPage({ params: { slug: ["hidden"] } })
+    ).rejects.toThrow();
+    // Status-less collection: resolved despite its non-"published" status.
+    expect(await ContentPage({ params: { slug: ["intro"] } })).toEqual({
+      title: "Intro",
+    });
+  });
+
   it("lists published paths (segmented) and excludes drafts", async () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
