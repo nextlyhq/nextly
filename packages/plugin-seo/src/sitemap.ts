@@ -39,9 +39,10 @@ export interface SitemapServices {
       query: {
         where?: Record<string, unknown>;
         depth?: number;
-        // Field projection — narrow the columns fetched to just what the default
-        // mapper reads, so a collection's large content columns are not
-        // transferred on every public request.
+        // Field projection passed to the managed service. It trims the returned
+        // rows to what the default mapper reads; note the current service
+        // applies it to the response, not the SQL, so it does not yet avoid
+        // reading the columns at the DB layer (a core enhancement).
         select?: Record<string, boolean>;
         // A stable, unique sort so consecutive pages don't overlap or skip
         // rows: the managed service adds `ORDER BY` only when `sort` is passed.
@@ -189,7 +190,7 @@ export const MAX_SITEMAP_BYTES = 50 * 1024 * 1024;
 /** The sitemap protocol limits a single `<loc>` to 2,048 characters. */
 export const MAX_LOC_LENGTH = 2048;
 
-/** The columns the default mapper reads — used to project the query. */
+/** The columns the default mapper reads — passed as the response projection. */
 const DEFAULT_SELECT: Record<string, boolean> = {
   slug: true,
   seo: true,
@@ -288,7 +289,13 @@ export async function buildSitemapUrls(
   const baseOrigin = resolveBaseOrigin(options.baseUrl);
   // Only `undefined` takes the default; a supplied value (including 0 or a
   // negative) is honored so the wrapper guard below rejects an impossible cap
-  // rather than silently substituting the 50 MB default.
+  // rather than silently substituting the 50 MB default. A non-finite value
+  // (NaN/Infinity) would defeat both guards, so reject it explicitly.
+  if (options.maxBytes !== undefined && !Number.isFinite(options.maxBytes)) {
+    throw new Error(
+      `sitemap: maxBytes must be a finite number, got: ${options.maxBytes}`
+    );
+  }
   const maxBytes =
     options.maxBytes === undefined
       ? MAX_SITEMAP_BYTES

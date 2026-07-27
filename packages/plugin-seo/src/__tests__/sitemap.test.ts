@@ -371,6 +371,18 @@ describe("buildSitemapUrls", () => {
     expect(urls).toEqual([]);
   });
 
+  it("rejects a non-finite maxBytes rather than disabling the cap", async () => {
+    const services = stubServices({ posts: [[{ slug: "a" }]] });
+
+    await expect(
+      buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "https://x.com",
+        maxBytes: Number.NaN,
+      })
+    ).rejects.toThrow(/finite/i);
+  });
+
   it("throws when maxBytes cannot hold the document wrapper", async () => {
     const services = stubServices({ posts: [[{ slug: "a" }]] });
 
