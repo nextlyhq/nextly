@@ -26,6 +26,7 @@ import {
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import { $createHeadingNode, $createQuoteNode } from "@lexical/rich-text";
 import { $setBlocksType } from "@lexical/selection";
+import { usePortalContainer } from "@nextlyhq/ui";
 import {
   $getSelection,
   $isRangeSelection,
@@ -350,6 +351,12 @@ export function SlashCommandPlugin({
 }: SlashCommandPluginProps) {
   const [editor] = useLexicalComposerContext();
   const [queryString, setQueryString] = useState<string | null>(null);
+  // The typeahead anchor is appended to whatever `parent` is given, defaulting
+  // to `ownerDocument.body`. Every token the menu styles read is declared on
+  // `.nextly-admin`, so a body-level anchor resolves none of them: the panel
+  // loses its surface, its border and its elevation. Anchoring inside the
+  // admin's scoped portal root keeps the menu within that cascade.
+  const portalContainer = usePortalContainer();
 
   // Check for "/" trigger
   const checkForSlashTrigger = useBasicTypeaheadTriggerMatch("/", {
@@ -403,6 +410,7 @@ export function SlashCommandPlugin({
       onSelectOption={onSelectOption}
       triggerFn={checkForMatch}
       options={options}
+      parent={portalContainer}
       menuRenderFn={(
         anchorElementRef,
         { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }
