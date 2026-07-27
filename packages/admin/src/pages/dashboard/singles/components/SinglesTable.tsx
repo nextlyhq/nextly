@@ -500,7 +500,8 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
                 <Filter className="h-4 w-4" />
                 Filter
                 {isFiltering && (
-                  <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-sm bg-primary" />
+                  // Notification dot: a fixed circle, not a --radius step.
+                  <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-primary" />
                 )}
               </Button>
             </DropdownMenuTrigger>

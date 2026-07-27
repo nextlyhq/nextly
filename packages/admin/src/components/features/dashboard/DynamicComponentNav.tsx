@@ -68,7 +68,7 @@ function MigrationIndicator({ status }: { status?: ComponentMigrationStatus }) {
 
   return (
     <span
-      className={`ml-auto h-2 w-2 rounded-sm ${colors[status]}`}
+      className={`ml-auto h-2 w-2 rounded-full ${colors[status]}`}
       title={titles[status]}
       aria-label={titles[status]}
     />

@@ -22,7 +22,7 @@ export function NotFoundPage() {
         {/* Neutral: a missing page is a state, not an outcome. This read as
             success — the same green the admin uses to say something worked. */}
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium bg-muted text-muted-foreground mb-6">
-          <span className="h-1.5 w-1.5 rounded-sm bg-muted-foreground" />
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
           Page Not Found
         </div>
 

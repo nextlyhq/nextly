@@ -8,8 +8,9 @@
  * ## Design Specifications
  *
  * - **Height**: 8px (h-2)
- * - **Border Radius**: `rounded-sm` on the track; the fill stays square so it
- *   always meets the clipped track edge flush
+ * - **Border Radius**: `rounded-full` on the track, fixed rather than derived
+ *   from `--radius` so an 8px bar always reads as a capsule; the fill stays
+ *   square so it always meets the clipped track edge flush
  * - **Animation**: Width transition (300ms linear) for smooth progress updates
  * - **Variants**:
  *   - `default`: Primary blue (bg-primary-500)
@@ -60,8 +61,9 @@ import { cn } from "../lib/utils";
  *
  * Defines color variants for different progress states.
  */
-// Square corners: the fill is clipped by the track, and a radius of its own
-// would notch the leading edge at partial progress.
+// Square corners: the capsule track clips the trailing edge already, so a radius
+// here would only round the leading edge, tapering low percentages into a sliver
+// narrower than the value they represent.
 export const progressVariants = cva("h-full rounded-none transition-all", {
   variants: {
     variant: {
@@ -175,7 +177,7 @@ const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
         aria-valuemax={max}
         aria-label={ariaLabel || `Progress: ${Math.round(percentage)}%`}
         className={cn(
-          "relative h-2 w-full overflow-hidden rounded-sm bg-accent",
+          "relative h-2 w-full overflow-hidden rounded-full bg-accent",
           className
         )}
         {...props}

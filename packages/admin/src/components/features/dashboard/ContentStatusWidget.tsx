@@ -28,7 +28,7 @@ function StatusItem({
     <div className="flex items-center justify-between p-3 rounded-md hover:bg-primary/[0.03] transition-all duration-500 group/item  border border-border border-transparent hover:border-border">
       <div className="flex items-center gap-3.5">
         <div
-          className="h-2 w-2 rounded-sm ring-4 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
+          className="h-2 w-2 rounded-full ring-4 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
           style={
             {
               backgroundColor: color,

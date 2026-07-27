@@ -56,16 +56,17 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
   return (
     <div className="flex items-center gap-5 p-3 rounded-md hover:bg-primary/[0.03] transition-all duration-500 group/item">
       <div className="relative">
-        <Avatar className="h-11 w-11 rounded-md border-2 border-background shadow-sm ring-1 ring-border/10">
+        <Avatar className="h-11 w-11 border-2 border-background shadow-sm ring-1 ring-border/10">
           <AvatarImage src={activity.user.avatar} alt={activity.user.name} />
           <AvatarFallback className="bg-primary/5 text-primary text-xs font-black">
             {activity.user.initials}
           </AvatarFallback>
         </Avatar>
-        <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-sm bg-background p-0.5 shadow-sm ring-1 ring-border/10">
+        {/* Activity badge: a circle so it sits cleanly on the round avatar. */}
+        <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full bg-background p-0.5 shadow-sm ring-1 ring-border/10">
           <div
             className={cn(
-              "h-full w-full rounded-md ring-1 ring-inset",
+              "h-full w-full rounded-full ring-1 ring-inset",
               activity.type.toLowerCase().includes("create")
                 ? "bg-success-500 ring-success-500/40"
                 : activity.type.toLowerCase().includes("delete")

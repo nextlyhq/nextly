@@ -289,9 +289,11 @@ export default function UserTable() {
           const initial = row.name.split(" ")[0].charAt(0).toUpperCase();
           return (
             <div className="flex items-center gap-3">
-              <Avatar className="w-9 rounded-md">
+              {/* Width and height are set together so the circular avatar
+                  cannot flatten into an ellipse. */}
+              <Avatar className="size-9">
                 <AvatarImage src={row.image} alt={row.name} />
-                <AvatarFallback className="rounded-md bg-muted text-foreground">
+                <AvatarFallback className="bg-muted text-foreground">
                   {initial}
                 </AvatarFallback>
               </Avatar>

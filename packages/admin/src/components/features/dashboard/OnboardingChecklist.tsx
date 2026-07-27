@@ -22,7 +22,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
           {step.isComplete ? (
             <CheckCircle2 className="h-3.5 w-3.5 text-success-500 shrink-0" />
           ) : (
-            <div className="h-1.5 w-1.5 rounded-sm bg-primary/20 group-hover:bg-primary/60 transition-colors" />
+            <div className="h-1.5 w-1.5 rounded-full bg-primary/20 group-hover:bg-primary/60 transition-colors" />
           )}
         </div>
         <span

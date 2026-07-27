@@ -37,13 +37,9 @@ export function UserProfileDropdown({
             className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary focus:outline-none hover-subtle-row group"
             aria-label="User profile menu"
           >
-            <Avatar className="h-11 w-11 rounded-md bg-primary/5  border border-border group-hover:border-border transition-colors">
-              <AvatarImage
-                src={user?.avatar}
-                alt={user?.name || "User"}
-                className="rounded-md"
-              />
-              <AvatarFallback className="bg-transparent text-sidebar-foreground text-xs font-bold rounded-md">
+            <Avatar className="h-11 w-11 bg-primary/5  border border-border group-hover:border-border transition-colors">
+              <AvatarImage src={user?.avatar} alt={user?.name || "User"} />
+              <AvatarFallback className="bg-transparent text-sidebar-foreground text-xs font-bold">
                 {user?.name?.charAt(0)?.toUpperCase() || "U"}
               </AvatarFallback>
             </Avatar>

@@ -256,9 +256,11 @@ function UploadCell({ value }: { value: unknown }) {
   return (
     <div className="flex items-center gap-2">
       {isImage && thumbnailUrl ? (
-        <Avatar size="md">
+        // Avatar is reused here as a media thumbnail, not an identity: the
+        // circular default would crop the image, so it takes a --radius step.
+        <Avatar size="md" className="rounded-md">
           <AvatarImage src={thumbnailUrl} alt={filename} />
-          <AvatarFallback>
+          <AvatarFallback className="rounded-md">
             <Image className="h-4 w-4" />
           </AvatarFallback>
         </Avatar>

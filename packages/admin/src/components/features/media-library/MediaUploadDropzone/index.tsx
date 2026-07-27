@@ -800,7 +800,9 @@ export function MediaUploadDropzone({
                     <X className="h-4 w-4 text-destructive" />
                   )}
                   {item.status === "pending" && (
-                    <div className="h-4 w-4 rounded-sm border-2 border-border" />
+                    // Empty ring: the pending peer of the round spinner and
+                    // check glyphs above, so it keeps their circular shape.
+                    <div className="h-4 w-4 rounded-full border-2 border-border" />
                   )}
                 </div>
 

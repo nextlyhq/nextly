@@ -63,13 +63,9 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                 type="button"
                 className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-md text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary! cursor-pointer relative"
               >
-                <Avatar className="h-full w-full bg-transparent rounded-md transition-all duration-200">
-                  <AvatarImage
-                    src={user?.avatar}
-                    alt={user?.name || "User"}
-                    className="rounded-md"
-                  />
-                  <AvatarFallback className="bg-transparent text-current text-sm font-bold rounded-md">
+                <Avatar className="h-full w-full bg-transparent transition-all duration-200">
+                  <AvatarImage src={user?.avatar} alt={user?.name || "User"} />
+                  <AvatarFallback className="bg-transparent text-current text-sm font-bold">
                     {user?.name?.charAt(0)?.toUpperCase() || "U"}
                   </AvatarFallback>
                 </Avatar>
