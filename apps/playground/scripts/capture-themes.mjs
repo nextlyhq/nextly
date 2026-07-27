@@ -6,10 +6,10 @@
  * ThemeProvider use and then navigating, rather than by clicking the panel,
  * so a change to the panel's markup cannot silently break a capture run:
  *
- *   - `nextly-theme-lab` holds the full `{ theme, layout, density }` selection
+ *   - `nextly-theme-lab` holds the full `{ theme, density }` selection
  *     `useThemeLab` persists (src/theme-lab/use-theme-lab.ts). Writing only
- *     `{ theme }` would drop layout/density back to whatever the last write
- *     left them at instead of the theme's own recommendation.
+ *     `{ theme }` would drop density back to whatever the last write left it
+ *     at instead of the theme's own recommendation.
  *   - `nextly-theme` is next-themes' own storage key (configured in
  *     packages/admin/src/context/providers/ThemeProvider.tsx), holding the
  *     plain string "light" or "dark" -- not JSON, and not the theme lab's
@@ -236,7 +236,6 @@ for (const theme of themes) {
       [
         {
           theme: theme.id,
-          layout: theme.recommendedLayout,
           density: theme.recommendedDensity,
         },
         "nextly-theme",

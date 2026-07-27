@@ -170,7 +170,6 @@ for (let i = 0; i < blocks.length; i++) {
     id: `tweakcn-${key}`,
     label,
     group: "tweakcn",
-    recommendedLayout: "rail-panel",
     recommendedDensity: "default",
     radius: light.radius ?? "0.5rem",
     fontSans: light["font-sans"] ?? "var(--font-inter), Inter, sans-serif",

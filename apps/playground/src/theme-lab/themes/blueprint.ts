@@ -19,9 +19,6 @@ export const BLUEPRINT: ThemeDefinition = {
   id: "blueprint",
   label: "Blueprint",
   group: "nextly",
-  // One continuous sidebar reads as the sheet's margin block, which is where a
-  // drawing keeps its index.
-  recommendedLayout: "single-sidebar",
   // A drawing packs information tightly; loose spacing would undo the premise.
   recommendedDensity: "compact",
   // Just enough to avoid a knife edge on inputs while still reading as drawn.

@@ -37,9 +37,6 @@ export const CALM: ThemeDefinition = {
   id: "calm",
   label: "Calm",
   group: "nextly",
-  // A single wide panel with room around it. An icon rail would concentrate
-  // the interface, which is the opposite of what the theme is arguing for.
-  recommendedLayout: "single-sidebar",
   // Air is load-bearing: with rules this faint, spacing is the only remaining
   // signal that two rows are two rows.
   recommendedDensity: "comfortable",

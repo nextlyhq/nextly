@@ -8,13 +8,6 @@
  * not preserve contrast and can leave the sRGB gamut.
  */
 
-export type LayoutId =
-  | "rail-panel"
-  | "single-sidebar"
-  | "topbar-sidebar"
-  | "right-panel"
-  | "rail-only";
-
 export type DensityId = "compact" | "default" | "comfortable";
 
 /** Token name without the `--nx-` prefix, mapped to a CSS color value. */
@@ -24,7 +17,6 @@ export interface ThemeDefinition {
   id: string;
   label: string;
   group: "nextly" | "tweakcn";
-  recommendedLayout: LayoutId;
   recommendedDensity: DensityId;
   /** Value for the unprefixed `--radius` knob the whole radius scale derives from. */
   radius: string;

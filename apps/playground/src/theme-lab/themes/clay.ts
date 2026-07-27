@@ -28,7 +28,6 @@ export const CLAY: ThemeDefinition = {
   id: "clay",
   label: "Clay",
   group: "nextly",
-  recommendedLayout: "single-sidebar",
   recommendedDensity: "default",
   radius: "6px",
   fontSans: "var(--font-inter), Inter, sans-serif",

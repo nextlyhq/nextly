@@ -19,9 +19,6 @@ export const INK: ThemeDefinition = {
   id: "ink",
   label: "Ink",
   group: "nextly",
-  // A masthead over a single column of content is the editorial reading shape;
-  // a narrow icon rail would fight the theme's calm.
-  recommendedLayout: "topbar-sidebar",
   // Print-like leading. The theme trades density for legibility on purpose.
   recommendedDensity: "comfortable",
   radius: "0px",

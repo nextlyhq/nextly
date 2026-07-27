@@ -26,7 +26,6 @@ export const EMBER: ThemeDefinition = {
   id: "ember",
   label: "Ember",
   group: "nextly",
-  recommendedLayout: "rail-panel",
   recommendedDensity: "default",
   radius: "4px",
   fontSans: "var(--font-inter), Inter, sans-serif",

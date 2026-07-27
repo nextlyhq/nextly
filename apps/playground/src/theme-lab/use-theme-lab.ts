@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * State and persistence for the theme lab's three self-contained axes:
- * theme, layout, and density. Mode (light/dark) is a fourth axis but is
+ * State and persistence for the theme lab's two self-contained axes:
+ * theme and density. Mode (light/dark) is a third axis but is
  * deliberately not modeled here -- the admin already owns light/dark through
  * next-themes (`packages/admin/src/context/providers/ThemeProvider.tsx`),
  * which persists its own choice and keeps every `.nextly-admin` container's
@@ -15,19 +15,17 @@ import { useCallback, useEffect, useState } from "react";
 
 import { NEXTLY_THEMES } from "./themes";
 import { TWEAKCN_THEMES } from "./themes/tweakcn.generated";
-import type { DensityId, LayoutId, ThemeDefinition } from "./types";
+import type { DensityId, ThemeDefinition } from "./types";
 
 const STORAGE_KEY = "nextly-theme-lab";
 
 export interface Selection {
   theme: string;
-  layout: LayoutId;
   density: DensityId;
 }
 
 export const DEFAULT_SELECTION: Selection = {
   theme: "mono",
-  layout: "rail-panel",
   density: "default",
 };
 
@@ -38,11 +36,26 @@ const ALL_THEMES: ThemeDefinition[] = [...NEXTLY_THEMES, ...TWEAKCN_THEMES];
 const KNOWN_THEMES = new Set(ALL_THEMES.map(theme => theme.id));
 const THEMES_BY_ID = new Map(ALL_THEMES.map(theme => [theme.id, theme]));
 
+// Runtime companion to the DensityId union, which is compile-time only and so
+// cannot vet a value that arrives as parsed JSON. Guards the stored density
+// the same way KNOWN_THEMES guards the stored theme id: anything the
+// densities stylesheet has no block for selects nothing, and an admin with no
+// density applied reads as a broken build rather than a stale preference.
+const KNOWN_DENSITIES = new Set<string>([
+  "compact",
+  "default",
+  "comfortable",
+] satisfies DensityId[]);
+
 /**
  * Reads the stored selection, falling back to the control for anything
  * unrecognised. A stale id from a renamed or removed theme would otherwise
  * render the admin with no tokens set at all, which looks like a broken
  * build rather than the stale preference it is.
+ *
+ * Reads only the keys it knows about, so a selection persisted by an older
+ * build with extra keys (the retired layout axis, say) is narrowed to the
+ * current shape rather than rejected.
  */
 export function readSelection(): Selection {
   if (typeof localStorage === "undefined") return DEFAULT_SELECTION;
@@ -56,8 +69,10 @@ export function readSelection(): Selection {
         parsed.theme && KNOWN_THEMES.has(parsed.theme)
           ? parsed.theme
           : DEFAULT_SELECTION.theme,
-      layout: parsed.layout ?? DEFAULT_SELECTION.layout,
-      density: parsed.density ?? DEFAULT_SELECTION.density,
+      density:
+        parsed.density && KNOWN_DENSITIES.has(parsed.density)
+          ? parsed.density
+          : DEFAULT_SELECTION.density,
     };
   } catch {
     return DEFAULT_SELECTION;
@@ -71,7 +86,7 @@ export function writeSelection(selection: Selection): void {
 
 /**
  * Applies the selection as data attributes on every admin root, which is what
- * the generated theme/layout/density stylesheets are all scoped to.
+ * the generated theme and density stylesheets are both scoped to.
  * Reapplied via a MutationObserver because the admin shell remounts its root
  * element between route navigations, which would otherwise drop whatever
  * this last set.
@@ -106,9 +121,6 @@ export function useThemeLab() {
         if (root.dataset.theme !== selection.theme) {
           root.dataset.theme = selection.theme;
         }
-        if (root.dataset.layout !== selection.layout) {
-          root.dataset.layout = selection.layout;
-        }
         if (root.dataset.density !== selection.density) {
           root.dataset.density = selection.density;
         }
@@ -127,7 +139,7 @@ export function useThemeLab() {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-theme", "data-layout", "data-density"],
+      attributeFilter: ["data-theme", "data-density"],
     });
 
     return () => observer.disconnect();
@@ -139,29 +151,21 @@ export function useThemeLab() {
       if (!nextTheme) return prev;
       const prevTheme = THEMES_BY_ID.get(prev.theme);
 
-      // Picking a theme applies its intended complete look (recommended
-      // layout + density) -- but only along axes the user hasn't already
-      // steered away from what the PREVIOUS theme recommended. This is
-      // derived from the persisted selection rather than a separate "user
-      // touched this" flag: an axis still sitting at what the last theme
-      // recommended is "following" and moves with the new theme; one that
-      // has drifted from it is a deliberate choice and is left alone across
-      // the switch, so it can't be silently overridden by picking a theme.
-      const layout =
-        prevTheme && prev.layout === prevTheme.recommendedLayout
-          ? nextTheme.recommendedLayout
-          : prev.layout;
+      // Picking a theme applies its intended complete look (its recommended
+      // density) -- but only if the user hasn't already steered density away
+      // from what the PREVIOUS theme recommended. This is derived from the
+      // persisted selection rather than a separate "user touched this" flag:
+      // a density still sitting at what the last theme recommended is
+      // "following" and moves with the new theme; one that has drifted from
+      // it is a deliberate choice and is left alone across the switch, so it
+      // can't be silently overridden by picking a theme.
       const density =
         prevTheme && prev.density === prevTheme.recommendedDensity
           ? nextTheme.recommendedDensity
           : prev.density;
 
-      return { theme, layout, density };
+      return { theme, density };
     });
-  }, []);
-
-  const setLayout = useCallback((layout: LayoutId) => {
-    setSelection(prev => ({ ...prev, layout }));
   }, []);
 
   const setDensity = useCallback((density: DensityId) => {
@@ -173,7 +177,6 @@ export function useThemeLab() {
   return {
     ...selection,
     setTheme,
-    setLayout,
     setDensity,
     reset,
   };

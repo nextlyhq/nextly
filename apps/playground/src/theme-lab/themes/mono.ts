@@ -8,7 +8,6 @@ export const MONO: ThemeDefinition = {
   id: "mono",
   label: "Mono",
   group: "nextly",
-  recommendedLayout: "rail-panel",
   recommendedDensity: "default",
   radius: "0px",
   fontSans: "var(--font-inter), Inter, sans-serif",

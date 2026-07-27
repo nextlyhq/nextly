@@ -27,7 +27,6 @@ export const SAND: ThemeDefinition = {
   id: "sand",
   label: "Sand",
   group: "nextly",
-  recommendedLayout: "single-sidebar",
   // Comfortable: elevation needs air around it. Packed rows would put two
   // shadows within a few pixels of each other and the depth cue collapses.
   recommendedDensity: "comfortable",

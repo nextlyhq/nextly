@@ -22,7 +22,6 @@ export const SIGNAL: ThemeDefinition = {
   id: "signal",
   label: "Signal",
   group: "nextly",
-  recommendedLayout: "rail-panel",
   recommendedDensity: "default",
   radius: "6px",
   fontSans: "var(--font-inter), Inter, sans-serif",

@@ -29,10 +29,6 @@ export const BRUTALIST: ThemeDefinition = {
   id: "brutalist",
   label: "Brutalist",
   group: "nextly",
-  // Icon-only rail: the navigation becomes a column of heavy square blocks,
-  // which is the layout that most looks like the theme rather than merely
-  // wearing it.
-  recommendedLayout: "rail-only",
   // Full-weight rules on every edge need whitespace or the page turns to mesh.
   recommendedDensity: "comfortable",
   radius: "0px",

@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The theme lab's switcher panel: four independent axes over the admin
- * shell it floats on top of -- theme, layout, density, and light/dark mode.
+ * The theme lab's switcher panel: three independent axes over the admin
+ * shell it floats on top of -- theme, density, and light/dark mode.
  * Replaces InterimThemeSwitcher, which only covered the Nextly theme axis.
  */
 import { useTheme } from "@nextlyhq/admin";
@@ -11,20 +11,13 @@ import { useState } from "react";
 import { CONTRAST_REPORT } from "./contrast-report.generated";
 import { NEXTLY_THEMES } from "./themes";
 import { TWEAKCN_THEMES } from "./themes/tweakcn.generated";
-import type { DensityId, LayoutId } from "./types";
+import type { DensityId } from "./types";
 import { useThemeLab } from "./use-theme-lab";
 
-// Mirrors the LayoutId / DensityId unions in types.ts. Those are compile-time
-// types with no runtime array of their own to iterate, so the options a
-// <select> offers are declared here the same way the layouts.css /
-// densities.css tests already enumerate them.
-const LAYOUTS: LayoutId[] = [
-  "rail-panel",
-  "single-sidebar",
-  "topbar-sidebar",
-  "right-panel",
-  "rail-only",
-];
+// Mirrors the DensityId union in types.ts. That is a compile-time type with
+// no runtime array of its own to iterate, so the options a <select> offers
+// are declared here the same way the densities.css test already enumerates
+// them.
 const DENSITIES: DensityId[] = ["compact", "default", "comfortable"];
 
 /**
@@ -77,8 +70,7 @@ const buttonStyle: React.CSSProperties = {
 
 export function ThemeSwitcher() {
   const [open, setOpen] = useState(false);
-  const { theme, layout, density, setTheme, setLayout, setDensity, reset } =
-    useThemeLab();
+  const { theme, density, setTheme, setDensity, reset } = useThemeLab();
 
   // Mode is the fourth axis but isn't tracked by useThemeLab: the admin
   // already owns light/dark through next-themes (re-exported from
@@ -164,21 +156,6 @@ export function ThemeSwitcher() {
       >
         {failures === 0 ? "WCAG AA: pass" : `WCAG AA: ${failures} failing`}
       </div>
-
-      <label style={{ display: "block", marginTop: 8 }}>
-        layout
-        <select
-          value={layout}
-          onChange={e => setLayout(e.target.value as LayoutId)}
-          style={selectStyle}
-        >
-          {LAYOUTS.map(id => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </select>
-      </label>
 
       <label style={{ display: "block", marginTop: 8 }}>
         density

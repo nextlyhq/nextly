@@ -2,7 +2,6 @@ import { getBrandingCss } from "nextly/config";
 
 import config from "../../../../nextly.config";
 import { themesToStylesheet } from "../../../theme-lab/generate-css";
-import "../../../theme-lab/layouts.css";
 import "../../../theme-lab/densities.css";
 // Makes the font and radius a theme declares actually reach the admin, which
 // reads neither `--font-sans` nor `--radius` on its own.

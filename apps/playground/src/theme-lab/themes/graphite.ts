@@ -15,7 +15,6 @@ export const GRAPHITE: ThemeDefinition = {
   id: "graphite",
   label: "Graphite",
   group: "nextly",
-  recommendedLayout: "rail-panel",
   recommendedDensity: "default",
   // Softens Mono's square corners by one step; small enough that dense tables
   // and inputs still align on a strict grid.

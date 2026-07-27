@@ -34,7 +34,6 @@ export const TERMINAL: ThemeDefinition = {
   id: "terminal",
   label: "Terminal",
   group: "nextly",
-  recommendedLayout: "rail-panel",
   recommendedDensity: "compact",
   radius: "0px",
   fontSans: MONO_STACK,
