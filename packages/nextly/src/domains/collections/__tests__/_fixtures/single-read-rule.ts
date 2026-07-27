@@ -8,8 +8,10 @@
  */
 export default function singleReadRule({
   req,
+  data,
 }: {
   req: { user?: { id?: string } };
+  data?: Record<string, unknown>;
 }): unknown {
   switch (req.user?.id) {
     case "denied":
@@ -21,6 +23,14 @@ export default function singleReadRule({
     // column instead — a different predicate than the rule states.
     case "dotted":
       return { "tenant.name": { equals: "acme" } };
+    // A system column the Single owns but does not list as a configured field.
+    // Validating against configured fields alone would refuse this valid rule.
+    case "system-column":
+      return { id: { not_equals: "no-such-id" } };
+    // A rule that reads the stored document, which it can only do if the row is
+    // loaded before the rule is evaluated.
+    case "reads-data":
+      return { tenant: { equals: (data as { tenant?: string })?.tenant } };
     // Narrow to the caller's own tenant.
     default:
       return { tenant: { equals: req.user?.id } };

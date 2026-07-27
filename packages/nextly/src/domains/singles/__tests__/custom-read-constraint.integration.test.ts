@@ -125,6 +125,35 @@ describe("Single custom read rules (integration)", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("accepts a constraint on a system column the Single does not list as a field", async () => {
+    // `status` is a real queryable column but not a configured field, so
+    // validating against configured fields alone would refuse a valid rule.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "system-column" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("gives the rule the stored document to read", async () => {
+    // A rule using its documented `data` argument decides on nothing if the row
+    // is not loaded first, and one written as `data?.x !== true` would ALLOW
+    // where the real row denies.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "reads-data" },
+      routeAuthorized: true,
+    });
+
+    // The rule constrains tenant to the value it read off the document, so it
+    // selects the row it was given.
+    expect(result.success).toBe(true);
+  });
+
   it("lets a trusted read through untouched", async () => {
     const entry = await bootWithCustomRule();
 

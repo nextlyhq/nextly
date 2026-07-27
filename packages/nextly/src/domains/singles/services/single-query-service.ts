@@ -443,7 +443,7 @@ export class SingleQueryService extends BaseService {
    */
   private async evaluateCustomRead(params: {
     slug: string;
-    singleMeta: { tableName: string; fields?: FieldConfig[] };
+    singleMeta: { tableName: string };
     accessRules: CollectionAccessRules | undefined;
     user?: UserContext;
   }): Promise<{ denied?: SingleResult; document?: SingleDocument | null }> {
@@ -455,6 +455,22 @@ export class SingleQueryService extends BaseService {
     };
     if (!accessRules) return {};
 
+    // Load first. The rule's documented `id`/`data` arguments must carry the
+    // stored document: a rule reading `data` evaluated against `undefined`
+    // decides on nothing, and one written as `data?.secret !== true` would ALLOW
+    // where the real row denies. The row also supplies the authoritative column
+    // list below.
+    const document = await this.adapter.selectOne<SingleDocument>(
+      singleMeta.tableName,
+      {}
+    );
+    // Nothing stored yet: a document-dependent rule has nothing to judge, and
+    // auto-creating for a caller it may refuse is a write triggered by a read
+    // about to be denied.
+    if (!document) return { denied };
+
+    const documentId =
+      typeof document.id === "string" ? document.id : undefined;
     const result = await this.accessControlService.evaluateAccess(
       accessRules,
       "read",
@@ -467,7 +483,9 @@ export class SingleQueryService extends BaseService {
               email: user.email,
             }
           : undefined,
-      }
+      },
+      documentId,
+      document
     );
     if (!result.allowed) {
       return {
@@ -475,14 +493,20 @@ export class SingleQueryService extends BaseService {
       };
     }
     // A boolean answer decides on the caller alone; there is nothing to filter.
-    if (result.query === undefined || result.query === null) return {};
+    if (result.query === undefined || result.query === null) {
+      return { document };
+    }
 
-    const constraint = result.query;
-    const fieldNames = new Set(
-      (singleMeta.fields ?? []).map(f => (f as { name?: string }).name ?? "")
-    );
-    const untranslatable = describeUntranslatableConstraint(constraint, name =>
-      fieldNames.has(name)
+    // Validate against the columns the row actually has. A Single's configured
+    // fields are the wrong set in both directions: system columns (`id`,
+    // `status`, timestamps) are queryable but not configured fields, while
+    // localized, component and many-to-many fields are configured but live in
+    // their own tables — filtering on one would make the fetch throw rather than
+    // deny.
+    const columns = new Set(Object.keys(document));
+    const untranslatable = describeUntranslatableConstraint(
+      result.query,
+      name => columns.has(name)
     );
     if (untranslatable !== null) {
       this.logger.warn("Refused an untranslatable access constraint", {
@@ -492,14 +516,15 @@ export class SingleQueryService extends BaseService {
       return { denied };
     }
 
-    const document = await this.adapter.selectOne<SingleDocument>(
+    // Re-read under the constraint so the database decides, applying the same
+    // predicate a list read would compile. Selecting nothing means the stored
+    // row does not satisfy the rule.
+    const permitted = await this.adapter.selectOne<SingleDocument>(
       singleMeta.tableName,
-      { where: buildWhereClause(constraint as WhereFilter) }
+      { where: buildWhereClause(result.query as WhereFilter) }
     );
-    // No row satisfies the rule. Denying also stops auto-create from
-    // materializing a document the constraint excludes.
-    if (!document) return { denied };
-    return { document };
+    if (!permitted) return { denied };
+    return { document: permitted };
   }
 
   /**
