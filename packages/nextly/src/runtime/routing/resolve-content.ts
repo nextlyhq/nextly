@@ -21,6 +21,14 @@ import { nextlyTags } from "../cache/nextly-tags";
 export type ContentEntry = Record<string, unknown>;
 
 /**
+ * Default safety window (seconds) for an ENFORCED anonymous read, so a change to
+ * a collection's stored read policy (which content tags don't invalidate)
+ * self-heals within an hour even without a content write. An explicit
+ * `revalidate` overrides it; trusted reads stay tag-only.
+ */
+const ENFORCED_READ_REVALIDATE_SECONDS = 3600;
+
+/**
  * The booted-Nextly surface these helpers need: just a `find` reader. Typed
  * structurally (not as the Direct API class) so BOTH the internal singleton and
  * the public instance returned by `await getNextly(config)` satisfy it — the
@@ -61,8 +69,10 @@ export interface ResolveContentOptions {
   tags?: string[];
   /**
    * Time-based revalidation in seconds — a safety net on top of tag-based
-   * busting. `false` (default) means the read only revalidates on a tag bust.
-   * A non-positive value is treated as `false` (`unstable_cache` rejects `0`).
+   * busting. Defaults to a finite window for an ENFORCED anonymous read (so a
+   * stored read-policy change self-heals even without a content write) and to
+   * `false` (tag-only) for a trusted read. Pass a number to set your own window,
+   * or `false` to force tag-only. A non-positive value is treated as `false`.
    */
   revalidate?: number | false;
   /**
@@ -179,11 +189,18 @@ export async function resolveContent(
       // uncached above), so the access identity is one of these two.
       overrideAccess ? "trusted" : "anon",
     ],
-    // `unstable_cache` rejects `revalidate: 0` (needs `false` or `> 0`), so a
-    // non-positive value degrades to tag-only busting rather than failing.
+    // Content writes bust the collection tag, but a change to the collection's
+    // stored READ POLICY does not — so an enforced anonymous read gets a finite
+    // default safety window (an explicit `revalidate` wins; `false` opts out), so
+    // a tightened policy self-heals within it rather than serving stale-public
+    // content until the next content write. A trusted read doesn't depend on the
+    // policy, so it stays tag-only. `unstable_cache` rejects `0`, so a
+    // non-positive value degrades to tag-only.
     revalidate:
       typeof options.revalidate === "number" && options.revalidate > 0
         ? options.revalidate
-        : false,
+        : options.revalidate === false || overrideAccess
+          ? false
+          : ENFORCED_READ_REVALIDATE_SECONDS,
   });
 }
