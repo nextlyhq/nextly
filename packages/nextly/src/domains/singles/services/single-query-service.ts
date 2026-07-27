@@ -28,6 +28,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   buildContext,
   type BuildContextOptions,
@@ -126,6 +127,13 @@ type DefaultDocumentDraft = {
   insertValues: Record<string, unknown>;
   localizedDefaults: Record<string, unknown>;
 };
+
+/**
+ * Relationship depth an unqualified read expands to. Named here because the
+ * authorization view has to reason about it: a rule must not see less than a
+ * default read would show, whatever depth the caller asked for.
+ */
+const DEFAULT_READ_DEPTH = 2;
 
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
@@ -451,6 +459,13 @@ export class SingleQueryService extends BaseService {
     enforceRelatedFieldAccess: boolean;
     /** Skip the companion overlay for a draft that carries its defaults inline. */
     skipLocalizedOverlay?: boolean;
+    /**
+     * Fail rather than degrade. The response assembly is best-effort by design
+     * — a relationship that cannot be expanded is returned unexpanded, and a
+     * component table that cannot be read yields empty values. Neither is safe
+     * for a document an access rule is about to be judged on.
+     */
+    strict?: boolean;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -458,6 +473,7 @@ export class SingleQueryService extends BaseService {
       options,
       statusFilterValue,
       enforceRelatedFieldAccess,
+      strict = false,
     } = params;
     let doc = params.doc;
 
@@ -487,7 +503,8 @@ export class SingleQueryService extends BaseService {
         enforceFieldAccess: enforceRelatedFieldAccess,
         user: options.user,
         overrideAccess: options.overrideAccess,
-      }
+      },
+      strict
     );
 
     if (this.componentDataService) {
@@ -510,6 +527,9 @@ export class SingleQueryService extends BaseService {
           user: options.user as Record<string, unknown> | undefined,
           overrideAccess: options.overrideAccess,
         },
+        // Read errors otherwise become empty component values, which reads to a
+        // rule exactly like a component that holds nothing.
+        strict,
       })) as SingleDocument;
     }
 
@@ -527,6 +547,58 @@ export class SingleQueryService extends BaseService {
    * changes nothing the caller receives: a rule is a decision, not a
    * transformation.
    */
+  /**
+   * Refuse an authorization view whose relationship evidence is incomplete.
+   *
+   * Expansion is best-effort several layers down: a related table that cannot
+   * be read is logged and yields nothing, so the field comes back as the bare
+   * id it started as. That is a fine response and a dangerous thing to judge —
+   * a rule reading into the related row sees nothing there and an
+   * absence-tolerant one reads that as permission. Rather than thread a strict
+   * flag through a service shared with the collection paths, the property that
+   * actually matters is checked directly: every stored reference that should
+   * have become a row did.
+   *
+   * Many-to-many relations are not covered, having no id on the main row to
+   * compare against.
+   */
+  private assertRelationshipsExpanded(
+    slug: string,
+    fields: FieldConfig[],
+    stored: SingleDocument,
+    assembled: SingleDocument
+  ): void {
+    const expanded = (value: unknown): boolean =>
+      typeof value === "object" && value !== null;
+
+    for (const field of fields) {
+      if (!("name" in field) || !field.name) continue;
+      const type = field.type as string;
+      if (type !== "relationship" && type !== "relation") continue;
+
+      const before = stored[field.name];
+      if (before === null || before === undefined || before === "") continue;
+
+      const after = assembled[field.name];
+      const complete = Array.isArray(after)
+        ? after.every(expanded)
+        : expanded(after);
+      if (complete) continue;
+
+      this.logger.error(
+        "Refusing a single read: relationship evidence could not be assembled",
+        { single: slug, field: field.name }
+      );
+      throw NextlyError.internal({
+        logContext: {
+          single: slug,
+          field: field.name,
+          reason: "incomplete-authorization-view",
+        },
+      });
+    }
+  }
+
   private async buildAuthorizationView(params: {
     slug: string;
     singleMeta: DynamicSingleRecord;
@@ -544,10 +616,24 @@ export class SingleQueryService extends BaseService {
       // Depth is the caller's preference about the SHAPE of the response, and
       // must not be able to shrink the evidence a rule is judged on: at
       // `depth: 0` a relationship stays an id, and a rule reading into the
-      // related row would be handed nothing and read that as permission.
-      // Authorization uses the full read depth whatever the caller asked for.
-      options: { ...params.options, depth: undefined },
+      // related row would be handed nothing and read that as permission. The
+      // view expands at least as far as an unqualified read would, and further
+      // when the caller asked for more. It does NOT expand without limit — a
+      // rule reaching past the requested depth is not covered, and cannot be
+      // without paying an unbounded fan-out on every restricted read.
+      options: {
+        ...params.options,
+        depth: Math.max(params.options.depth ?? 0, DEFAULT_READ_DEPTH),
+      },
+      // Judged on complete data or not at all.
+      strict: true,
     });
+    this.assertRelationshipsExpanded(
+      params.slug,
+      params.singleMeta.fields,
+      params.doc,
+      assembled
+    );
     // The response carries the per-locale overview when it is asked for, so a
     // rule deciding on translation state has to see it here too, or the two
     // decisions are made about documents that differ in what the rule reads.
@@ -982,6 +1068,24 @@ export class SingleQueryService extends BaseService {
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
+        // The row that was authorized is gone — a `beforeRead` hook or another
+        // writer removed it between the two fetches — so what would be created
+        // here is a default document no rule has seen. Judge it before writing
+        // it, the same way a first read of a Single that never existed is
+        // judged, rather than persisting the row, its localized defaults and
+        // its first version and refusing afterwards.
+        if (deferCustomRule && !options.overrideAccess && !prospectiveDefault) {
+          const lateDraft = await this.evaluateCustomRead({
+            slug,
+            singleMeta,
+            accessRules: singleMeta.accessRules,
+            options,
+            statusFilterValue: statusFilter ? statusFilter.value : undefined,
+            row: null,
+          });
+          if (lateDraft.denied) return lateDraft.denied;
+          prospectiveDefault = lateDraft.prospective;
+        }
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocument(singleMeta, {
           captureInitialVersion: true,
@@ -1745,10 +1849,21 @@ export class SingleQueryService extends BaseService {
       enforceFieldAccess?: boolean;
       user?: UserContext;
       overrideAccess?: boolean;
-    } = {}
+    } = {},
+    /**
+     * Propagate expansion failures instead of returning the document
+     * unexpanded. A response is better served incomplete than not at all, but a
+     * document being judged is not: an access rule reading a related value that
+     * a transient failure removed decides on its absence, and an
+     * absence-tolerant rule reads that as permission.
+     */
+    strict = false
   ): Promise<SingleDocument> {
     const relationshipService = this.resolveRelationshipService();
     if (!relationshipService) {
+      // Not an error in itself: a Single with no relationship fields has
+      // nothing to expand, and the caller checks separately that every stored
+      // reference the rule may read actually became a row.
       return doc;
     }
 
@@ -1772,7 +1887,7 @@ export class SingleQueryService extends BaseService {
         "", // Singles don't belong to a collection
         fields as unknown as FieldDefinition[],
         {
-          depth: depth ?? 2,
+          depth: depth ?? DEFAULT_READ_DEPTH,
           // Set by the read path, which forwards a real caller. The mutation
           // path does not, so its response keeps the fields it already returned
           // rather than having them stripped as if nobody were asking.
@@ -1786,6 +1901,7 @@ export class SingleQueryService extends BaseService {
       this.logger.error("Failed to expand relationship fields for Single", {
         error,
       });
+      if (strict) throw error;
       return doc;
     }
   }

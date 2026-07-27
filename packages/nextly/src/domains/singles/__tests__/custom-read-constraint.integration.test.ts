@@ -581,6 +581,107 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.statusCode).toBe(404);
   });
 
+  it("authorizes the defaults when the checked row disappears mid-read", async () => {
+    // The rule allowed the stored row. A `beforeRead` hook then deletes it, so
+    // what the read is about to create is a default document no rule has seen.
+    // Creating it and refusing afterwards leaves the row, its localized
+    // defaults and its first version behind for a caller who was denied.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme" },
+      { overrideAccess: true }
+    );
+    // Registered directly: hooks declared on `defineSingle` are never wired up
+    // (tracked separately), and this needs a hook that actually runs.
+    current.hooks.register("beforeRead", "single:branding", async () => {
+      await current!.adapter.delete("single_branding", {});
+      return undefined;
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "seeded-only" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(403);
+    // The refusal is only worth anything if nothing was written.
+    expect(await current.adapter.selectOne("single_branding", {})).toBeNull();
+  });
+
+  it("refuses the read when the rule's evidence cannot be assembled", async () => {
+    // Response assembly is best-effort: a relationship that cannot be expanded
+    // comes back as a bare id. For a document being JUDGED that turns a
+    // transient failure into missing evidence, and an absence-tolerant rule
+    // reads missing evidence as permission.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (created.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+
+    // Make expansion fail the way a transient fault would.
+    await (
+      current.adapter as unknown as {
+        executeQuery: (sql: string) => Promise<unknown>;
+      }
+    ).executeQuery('DROP TABLE "dc_authors"');
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
   it("tells the rule the id the document it judges will carry", async () => {
     // The first read of a Single that does not exist is judged against the
     // document it would create. Passing `undefined` for the id while `data`

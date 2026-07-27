@@ -21,6 +21,13 @@
  * exotic values alone cannot throw, and containers are the whole exposure: a
  * callback rewrites a response by reaching into a nested object, not by
  * replacing a function.
+ *
+ * A class instance is passed by reference, deliberately. Copying one means
+ * reconstructing it from its own enumerable properties, which silently discards
+ * whatever lives in private fields or internal slots — turning a callback that
+ * misbehaves into data that is quietly wrong, which is the worse failure. Map
+ * and Set are copied because their state is reachable and their reconstruction
+ * is exact.
  */
 export function detachData<T>(value: T): T {
   return detachValue(value) as T;
@@ -29,6 +36,14 @@ export function detachData<T>(value: T): T {
 function detachValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(detachValue);
   if (value instanceof Date) return new Date(value.getTime());
+  if (value instanceof Map) {
+    return new Map(
+      Array.from(value, ([key, entry]) => [key, detachValue(entry)])
+    );
+  }
+  if (value instanceof Set) {
+    return new Set(Array.from(value, detachValue));
+  }
   if (!value || typeof value !== "object") return value;
 
   // Plain objects only. A class instance carries behaviour that copying would

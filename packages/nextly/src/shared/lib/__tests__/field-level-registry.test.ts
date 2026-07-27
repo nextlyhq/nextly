@@ -182,6 +182,41 @@ describe("field-level registry", () => {
     expect(data.title).toBe("t");
   });
 
+  it("keeps a rule's writes to a Map or Set out of the payload", async () => {
+    // The snapshot copies plain containers, and a Map or Set is just as
+    // reachable and just as mutable — a callback writing into one would change
+    // the payload that goes on to be validated and persisted.
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            (data.tags as Map<string, string>).set("injected", "x");
+            (data.flags as Set<string>).add("injected");
+            return true;
+          },
+        },
+      },
+    ]);
+    const data: Record<string, unknown> = {
+      title: "t",
+      tags: new Map([["a", "1"]]),
+      flags: new Set(["a"]),
+    };
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(Array.from(data.tags as Map<string, string>)).toEqual([["a", "1"]]);
+    expect(Array.from(data.flags as Set<string>)).toEqual(["a"]);
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {
