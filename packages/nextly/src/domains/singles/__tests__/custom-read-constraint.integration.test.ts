@@ -415,6 +415,86 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data!.settings).not.toHaveProperty("injected");
   });
 
+  it("shows the rule the translation overview the response will carry", async () => {
+    // `_translations` is attached only when the read asks for it. Leaving it off
+    // the copy the rule is judged on makes the two decisions disagree about
+    // what the document contains: the first refuses a read the second allows.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          localized: true,
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme" },
+      { overrideAccess: true, locale: "en" }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "translation-aware" },
+      routeAuthorized: true,
+      translationStatus: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("keeps a field rule's writes out of the response", async () => {
+    // Field read rules run AFTER the document-level decision, so a callback
+    // that mutates its argument changes a document that has already been
+    // authorized — and nothing judges it again.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({
+              name: "siteName",
+              access: {
+                read: ({ data }) => {
+                  const settings = (
+                    data as { settings?: Record<string, unknown> }
+                  )?.settings;
+                  if (settings) settings.injected = "from-the-field-rule";
+                  return true;
+                },
+              },
+            }),
+            group({
+              name: "settings",
+              fields: [checkbox({ name: "private" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", settings: { private: false } },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "someone" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data!.settings).not.toHaveProperty("injected");
+  });
+
   it("hides a draft Single rather than reporting the rule's verdict", async () => {
     // A draft answers 404 to an untrusted caller so its existence stays hidden.
     // Deciding the stored rule first answers 403 instead, which reveals both

@@ -541,6 +541,16 @@ export class SingleQueryService extends BaseService {
       doc: { ...params.doc },
       enforceRelatedFieldAccess: false,
     });
+    // The response carries the per-locale overview when it is asked for, so a
+    // rule deciding on translation state has to see it here too, or the two
+    // decisions are made about documents that differ in what the rule reads.
+    if (params.options.translationStatus) {
+      await this.populateTranslationMeta(
+        params.slug,
+        params.singleMeta,
+        assembled
+      );
+    }
     return structuredClone(assembled);
   }
 

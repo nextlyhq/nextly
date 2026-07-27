@@ -32,6 +32,10 @@ export async function findSingle<TSlug extends SingleSlug>(
   const result = await ctx.singleEntryService.get(args.slug, {
     depth: config.depth,
     locale: config.locale,
+    // Fallback control belongs to the read: it decides whether an untranslated
+    // field falls back to the default language, and a rule keyed on it sees
+    // `undefined` when it is dropped here.
+    fallbackLocale: config.fallbackLocale,
     user: config.user,
     overrideAccess: config.overrideAccess,
     context: config.context,
@@ -112,6 +116,7 @@ export async function findSingles(
       const result = await ctx.singleEntryService.get(record.slug, {
         depth: config.depth,
         locale: config.locale,
+        fallbackLocale: config.fallbackLocale,
         user: config.user,
         overrideAccess: config.overrideAccess,
         context: config.context,

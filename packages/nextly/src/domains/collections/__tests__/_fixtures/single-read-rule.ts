@@ -73,6 +73,10 @@ export default function singleReadRule({
         (data as { author?: { suspended?: boolean } })?.author?.suspended !==
         true
       );
+    // Decides on the per-locale overview, which the read only attaches when it
+    // is asked for. A decision made before it is attached sees nothing.
+    case "translation-aware":
+      return Boolean((data as { _translations?: unknown })?._translations);
     // Writes deep inside its argument rather than at the top level.
     case "deep-mutating":
       {

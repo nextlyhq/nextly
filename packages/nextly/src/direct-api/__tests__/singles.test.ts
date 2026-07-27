@@ -93,6 +93,28 @@ describe("Direct API - Singles Operations", () => {
       ).rejects.toThrow(NextlyError);
     });
 
+    it("forwards the caller's fallback-locale choice", async () => {
+      // Fallback control decides whether an untranslated field falls back to the
+      // default language, so it shapes the document a rule is judged on — and a
+      // rule keyed on it reads `undefined` when the option is dropped here.
+      mocks.singleEntryService.get.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        data: { id: "1" },
+      });
+
+      await nextly.findSingle({
+        slug: "site-settings",
+        locale: "de",
+        fallbackLocale: false,
+      });
+
+      expect(mocks.singleEntryService.get).toHaveBeenCalledWith(
+        "site-settings",
+        expect.objectContaining({ fallbackLocale: false })
+      );
+    });
+
     it("forwards the caller's own claims to the access rules", async () => {
       // A `custom` rule may decide on a claim the framework does not know about
       // — a tenant, a plan, an entitlement. Rebuilding the caller from `id` and

@@ -251,6 +251,22 @@ function openNestedContainer(
 }
 
 /**
+ * The value an access callback is shown: a detached copy of the level's data.
+ *
+ * Access callbacks are app code and receive `data` as an argument, so a shallow
+ * copy leaves every nested group, repeater, component and expanded relation
+ * shared with the object being decided about — letting a callback rewrite the
+ * response (or the payload) it was only asked to judge. Built once per level
+ * and only when a callback will actually be run, so a level with no rules pays
+ * nothing.
+ */
+function detachedSnapshot(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  return structuredClone(data);
+}
+
+/**
  * Recursive worker for write access. Every rule at one level is evaluated
  * against the SAME immutable snapshot of that level's data, so a rule that
  * reads a sibling field's value can't flip from deny to allow purely
@@ -264,7 +280,7 @@ async function applyWriteAccessRec(
   operation: "create" | "update",
   ctx: { user?: Record<string, unknown>; id?: string }
 ): Promise<void> {
-  const snapshot = { ...data };
+  let snapshot: Record<string, unknown> | undefined;
   const denied: string[] = [];
   for (const [name, entry] of Object.entries(fns)) {
     if (!(name in data)) continue;
@@ -275,6 +291,9 @@ async function applyWriteAccessRec(
     }
     const fn = entry.access?.[operation];
     if (!fn) continue;
+    // Taken before the first rule runs, so every rule at this level sees the
+    // same data whatever an earlier one did with its argument.
+    snapshot ??= detachedSnapshot(data);
     let allowed = false;
     try {
       allowed = await fn({
@@ -326,7 +345,7 @@ async function applyReadAccessRec(
   fns: Record<string, FieldFunctions>,
   ctx: { user?: Record<string, unknown>; id?: string }
 ): Promise<void> {
-  const snapshot = { ...entry };
+  let snapshot: Record<string, unknown> | undefined;
   const denied: string[] = [];
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;
@@ -341,6 +360,7 @@ async function applyReadAccessRec(
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
+    snapshot ??= detachedSnapshot(entry);
     let allowed = false;
     try {
       allowed = await fn({
