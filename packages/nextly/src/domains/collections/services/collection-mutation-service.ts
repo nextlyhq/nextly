@@ -15,7 +15,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, ne, and, like, ilike } from "drizzle-orm";
+import { eq, ne, and, like, ilike, sql } from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
 // references it, so we import only `BeforeOperationArgs`.
@@ -649,14 +649,23 @@ export class CollectionMutationService extends BaseService {
 
   /** Whether the companion `_locales` table physically exists (migration has run). */
   private async companionTableExists(
-    companionTableName: string
+    companionTableName: string,
+    // Bind the probe to a caller's transaction when there is one. Issued
+    // against the pool instead, it would ask for a second connection while the
+    // transaction still holds the first, and on a single-connection pool that
+    // waits forever rather than failing.
+    executor?: { execute: (query: unknown) => Promise<unknown> }
   ): Promise<boolean> {
     const q =
       this.adapter.dialect === "mysql"
         ? `\`${companionTableName}\``
         : `"${companionTableName}"`;
     try {
-      await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
+      if (executor) {
+        await executor.execute(sql.raw(`SELECT 1 FROM ${q} LIMIT 0`));
+      } else {
+        await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
+      }
       return true;
     } catch {
       return false;
@@ -792,33 +801,35 @@ export class CollectionMutationService extends BaseService {
    * The fields a transactional create may seed a default into.
    *
    * Once the companion migration has run, a localized collection's translatable
-   * columns live on the `_locales` table and no longer exist on the main one.
-   * The pooled path splits those values out and writes the companion row; the
-   * transactional paths have no such step, so seeding a translatable default
-   * there would put a key in the main-table insert for a column that is gone.
+   * columns live on the `<table>_locales` table and no longer exist on the main
+   * one. The pooled path splits those values out and writes the companion row;
+   * the transactional paths have no such step, so seeding a translatable
+   * default there would put a key in the main-table insert for a column that is
+   * gone.
    *
-   * The companion is checked for existence rather than reading `localized`
-   * alone, matching `splitLocalizedWriteData`: before the migration the
-   * translatable columns are still on the main table, so their defaults apply
-   * exactly as they do on the pooled path. Only after it do they drop out,
-   * which leaves those fields behaving as they did before defaults existed at
-   * all — no worse, and unchanged for every collection that is not localized.
+   * Existence is probed rather than reading `localized` alone, matching
+   * `splitLocalizedWriteData`: before the migration the translatable columns are
+   * still on the main table and their defaults apply exactly as on the pooled
+   * path. The probe runs on the caller's transaction connection, and the
+   * companion name follows the `<table>_locales` convention rather than going
+   * through a metadata lookup, so neither asks the pool for a second connection
+   * while the transaction holds one.
    */
   private async defaultableFields(
-    collectionName: string,
+    tx: TransactionContext,
     collection: unknown,
+    tableName: string,
     fields: FieldDefinition[]
   ): Promise<FieldDefinition[]> {
     const isLocalized =
       (collection as { localized?: boolean } | undefined)?.localized === true;
     if (!isLocalized || !this.localization) return fields;
 
-    const companion =
-      await this.fileManager.loadCompanionSchema(collectionName);
-    if (!companion) return fields;
-    if (!(await this.companionTableExists(companion.companionTableName))) {
-      return fields;
-    }
+    const exists = await this.companionTableExists(
+      `${tableName}_locales`,
+      tx.getDrizzle()
+    );
+    if (!exists) return fields;
 
     const translatable = new Set(resolveLocalizedFieldNames(fields, true));
     return fields.filter(f => !translatable.has(f.name));
@@ -5053,7 +5064,7 @@ export class CollectionMutationService extends BaseService {
       const seededBody: Record<string, unknown> = { ...body };
       applyFieldDefaults(
         seededBody,
-        await this.defaultableFields(params.collectionName, collection, fields)
+        await this.defaultableFields(tx, collection, tableName, fields)
       );
 
       const beforeOpArgs =
@@ -6271,7 +6282,7 @@ export class CollectionMutationService extends BaseService {
       // field with a default would otherwise abort the whole batch.
       applyFieldDefaults(
         currentData,
-        await this.defaultableFields(params.collectionName, collection, fields)
+        await this.defaultableFields(tx, collection, tableName, fields)
       );
 
       // Execute hooks (unless skipped)
