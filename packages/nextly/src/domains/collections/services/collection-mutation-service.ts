@@ -6163,6 +6163,13 @@ export class CollectionMutationService extends BaseService {
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = {};
 
+      // Defaults are not hooks: a bulk import that opts out of hook execution
+      // still creates entries that must hold their declared defaults, and an
+      // omitted required field with a default would otherwise fail validation
+      // and abort the import. Applied again inside the block below because
+      // `beforeOperation` may replace the data object entirely.
+      applyFieldDefaults(currentData, fields);
+
       // Execute hooks (unless skipped)
       if (!skipHooks) {
         // Execute beforeOperation hooks FIRST (before operation-specific hooks)
@@ -6187,14 +6194,9 @@ export class CollectionMutationService extends BaseService {
             string,
             unknown
           >) ?? body;
-        // Declared defaults are filled before any hook runs, so a collection
-        // hook deriving one field from another sees the value the entry will
-        // hold rather than undefined, and a hook that removes a defaulted field
-        // is not overridden by a later pass re-adding it. Everything after this
-        // point — generation, write access, validation, the insert — works from
-        // complete data. Generation still fills only the identity fields left
-        // unresolved, and running ahead of write access matches generation, so a
-        // field the caller may not create is not reintroduced.
+        // Re-applied because the line above may have swapped in a different
+        // object; filling before the beforeCreate pipeline means a collection
+        // hook sees the value the entry will hold rather than undefined.
         applyFieldDefaults(currentData, fields);
 
         // Execute beforeCreate hooks (code-registered)

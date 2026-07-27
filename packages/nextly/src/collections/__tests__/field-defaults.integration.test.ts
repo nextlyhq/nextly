@@ -28,6 +28,7 @@ import {
 import { registerHook, unregisterHook } from "../../hooks";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
+import type { CollectionEntryService } from "../../services/collections/collection-entry-service";
 
 let current: TestNextly | undefined;
 
@@ -177,6 +178,33 @@ describe("field defaults on a collection create (integration)", () => {
       expect(seen).toEqual(["from-default"]);
     } finally {
       unregisterHook("beforeCreate", "pages", probe);
+    }
+  });
+
+  it("applies defaults on a bulk create that skips hooks", async () => {
+    // A default is not a hook: an import opting out of hook execution still
+    // creates entries that must hold their declared values, and an omitted
+    // required field with a default would otherwise abort the whole import.
+    const handler = await handlerFor();
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    const result = await entries.createEntries(
+      { collectionName: "pages", overrideAccess: true },
+      [{ title: "One" }, { title: "Two" }],
+      { skipHooks: true }
+    );
+    expect(result.failed, JSON.stringify(result)).toBe(0);
+
+    const list = await handler.listEntries({
+      collectionName: "pages",
+      overrideAccess: true,
+    });
+    const items = ((list as { data?: { docs?: unknown[] } }).data?.docs ??
+      []) as Record<string, unknown>[];
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      expect(item.subtitle).toBe("from-default");
+      expect(item.mandatory).toBe("filled");
     }
   });
 
