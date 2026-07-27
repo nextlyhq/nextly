@@ -36,34 +36,6 @@ function isMappableOperator(operator: string): boolean {
 export type HasColumn = (name: string) => boolean;
 
 /**
- * Rewrite `ILIKE` to `LIKE` for engines that do not accept it.
- *
- * The collection query builder does this while composing conditions. A caller
- * handing a translated clause straight to the adapter skips that step, and the
- * adapter emits `ILIKE` unconditionally — so the same rewrite has to happen
- * before the clause is handed over, or a case-insensitive operator produces SQL
- * MySQL and SQLite reject. Postgres keeps `ILIKE`, matching the collection path.
- */
-export function rewriteCaseInsensitiveOperators<T>(
-  clause: T,
-  dialect: string
-): T {
-  if (dialect === "postgresql" || !clause || typeof clause !== "object") {
-    return clause;
-  }
-  const node = clause as Record<string, unknown>;
-  for (const group of ["and", "or"] as const) {
-    if (Array.isArray(node[group])) {
-      node[group] = (node[group] as unknown[]).map(branch =>
-        rewriteCaseInsensitiveOperators(branch, dialect)
-      );
-    }
-  }
-  if (node.op === "ILIKE") node.op = "LIKE";
-  return clause;
-}
-
-/**
  * Why an access constraint cannot be applied exactly, or null when it can.
  *
  * Accepted:
@@ -116,13 +88,12 @@ export function describeUntranslatableConstraint(
       if (value === undefined) {
         return `operator "${operator}" on "${field}" has no value`;
       }
-      // An empty list is dropped rather than matching nothing, so a rule that
-      // should authorize no rows would leave its siblings deciding alone.
-      if (
-        (operator === "in" || operator === "not_in") &&
-        Array.isArray(value) &&
-        value.length === 0
-      ) {
+      // An empty `in` list is dropped rather than matching nothing, so a rule
+      // that should authorize no rows would leave its siblings deciding alone.
+      // An empty `not_in` excludes nothing and is therefore already a no-op, so
+      // dropping it changes no outcome and it stays accepted — refusing it would
+      // deny every caller of a rule whose exclusion list simply came back empty.
+      if (operator === "in" && Array.isArray(value) && value.length === 0) {
         return `operator "${operator}" on "${field}" has an empty list`;
       }
     }

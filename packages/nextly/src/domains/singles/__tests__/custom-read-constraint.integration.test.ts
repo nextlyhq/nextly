@@ -198,9 +198,16 @@ describe("Single custom read rules (integration)", () => {
  * guarded value here lives in the companion table, so the earlier gate cannot
  * see it either: the main row carries the default language's value.
  */
-describe("Single custom read rules vs field redaction (integration)", () => {
-  /** Boot a localized Single whose guarded field is unreadable to callers. */
-  async function bootLocalized(): Promise<SingleEntryService> {
+describe("Single custom read rules vs the assembled document (integration)", () => {
+  /**
+   * Boot a localized Single whose guarded field is unreadable to callers, with
+   * a different value per language so the main row and the requested
+   * translation disagree.
+   */
+  async function bootLocalized(values: {
+    en: string;
+    de: string;
+  }): Promise<SingleEntryService> {
     current = await createTestNextly({
       singles: [
         defineSingle({
@@ -224,19 +231,23 @@ describe("Single custom read rules vs field redaction (integration)", () => {
     const entry = current.getService<SingleEntryService>("singleEntryService");
     await entry.update(
       "branding",
-      { siteName: "Acme", visibility: "public" },
+      { siteName: "Acme", visibility: values.en },
       { overrideAccess: true, locale: "en" }
     );
     await entry.update(
       "branding",
-      { siteName: "Acme", visibility: "private" },
+      { siteName: "Acme", visibility: values.de },
       { overrideAccess: true, locale: "de" }
     );
     return entry;
   }
 
   it("denies on a guarded value the caller may not read", async () => {
-    const entry = await bootLocalized();
+    // Field-level read access removes the value from the response. Removing it
+    // before the decision leaves `data.visibility !== "private"` reading
+    // `undefined`, which passes — handing back the rest of a document the rule
+    // exists to withhold.
+    const entry = await bootLocalized({ en: "public", de: "private" });
 
     const result = await entry.get("branding", {
       user: { id: "assembled-aware" },
@@ -251,7 +262,7 @@ describe("Single custom read rules vs field redaction (integration)", () => {
   it("still redacts the guarded field from an allowed read", async () => {
     // The mirror case: authorizing on the unredacted document must not hand the
     // guarded value back once the read is allowed.
-    const entry = await bootLocalized();
+    const entry = await bootLocalized({ en: "public", de: "private" });
 
     const result = await entry.get("branding", {
       user: { id: "assembled-aware" },
@@ -261,5 +272,20 @@ describe("Single custom read rules vs field redaction (integration)", () => {
 
     expect(result.success).toBe(true);
     expect(result.data).not.toHaveProperty("visibility");
+  });
+
+  it("admits a caller the requested translation authorizes", async () => {
+    // The rule grants on the translated value. Judged against the bare main row
+    // it reads the default language instead and refuses a caller it admits, so
+    // the decision has to be made on the document the caller would receive.
+    const entry = await bootLocalized({ en: "internal", de: "public" });
+
+    const result = await entry.get("branding", {
+      user: { id: "assembled-grant" },
+      locale: "de",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
   });
 });

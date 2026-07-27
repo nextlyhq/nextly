@@ -285,16 +285,19 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
 });
 
 /**
- * Custom read rules are consulted on Singles.
+ * Custom read rules are consulted on Singles, and consulted early enough.
  *
- * A custom function may answer with a boolean or with a query constraint; the
- * constraint is applied BY THE DATABASE as the filter on a single-row fetch, so
- * the predicate a list read compiles is the one that decides. End-to-end
+ * The rule is judged against the document a caller would receive, assembled from
+ * the stored row before any user code runs. Deciding on the way out instead
+ * would let a caller the rule refuses trigger hooks on every attempt. End-to-end
  * behaviour is covered by `custom-read-constraint.integration.test.ts`, which
- * needs a real schema; this pins that the rule is reached at all.
+ * needs a real schema; this pins that the rule is reached, and reached first.
  */
 describe("SingleQueryService.get — custom read rules are consulted", () => {
-  function createCustomRuleService(row: Record<string, unknown> | null) {
+  function createCustomRuleService(
+    row: Record<string, unknown> | null,
+    evaluateAccess = vi.fn()
+  ) {
     const registry = createMockSingleRegistry();
     registry.registerSingle("site-settings", {
       ...siteSettingsMeta({
@@ -302,20 +305,21 @@ describe("SingleQueryService.get — custom read rules are consulted", () => {
       }),
       fields: [textField("siteName")],
     });
-    const evaluateAccess = vi.fn();
+    const hookRegistry = createMockHookRegistry();
+    hookRegistry.hasHooks = vi.fn().mockReturnValue(true);
     const service = new SingleQueryService(
       createMockAdapter({
         selectOne: vi.fn().mockResolvedValue(row),
       }) as unknown as Ctor[0],
       createSilentLogger() as unknown as Ctor[1],
       registry as unknown as Ctor[2],
-      createMockHookRegistry() as unknown as Ctor[3],
+      hookRegistry as unknown as Ctor[3],
       undefined,
       createMockRBACService(true) as unknown as Ctor[5],
       undefined,
       { evaluateAccess } as unknown as Ctor[7]
     );
-    return { service, evaluateAccess };
+    return { service, evaluateAccess, hookRegistry };
   }
 
   it("consults the rule rather than reading through", async () => {
@@ -333,6 +337,25 @@ describe("SingleQueryService.get — custom read rules are consulted", () => {
     // direction; what matters here is that it was asked.
     expect(evaluateAccess).toHaveBeenCalled();
     void result;
+  });
+
+  it("runs no user hook for a caller the rule refuses", async () => {
+    // Hooks are user code and can reach outside the process, so a read the rule
+    // refuses must not be able to trigger them — otherwise an unauthorized
+    // caller drives those side effects on every attempt.
+    const { service, hookRegistry } = createCustomRuleService(
+      { id: "doc1", siteName: "Nextly" },
+      vi.fn().mockResolvedValue({ allowed: false, reason: "no" })
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(403);
+    expect(hookRegistry.execute).not.toHaveBeenCalled();
+    expect(hookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
   });
 });
 

@@ -53,6 +53,11 @@ export default function singleReadRule({
     // locale's value.
     case "assembled-aware":
       return (data as { visibility?: string })?.visibility !== "private";
+    // The mirror of `assembled-aware`: grants ON the assembled value rather than
+    // tolerating its absence, so judging the bare row refuses a caller the rule
+    // admits.
+    case "assembled-grant":
+      return (data as { visibility?: string })?.visibility === "public";
     // A rule that falls through without returning a decision, as a dynamically
     // imported function is free to do — it is not checked against the contract
     // at runtime.

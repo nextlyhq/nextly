@@ -43,10 +43,6 @@ import {
   AccessControlService,
   isSuperAdminContext,
 } from "../../../services/access";
-import {
-  describeUntranslatableConstraint,
-  rewriteCaseInsensitiveOperators,
-} from "../../../services/access/constraint-shape";
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
@@ -63,10 +59,6 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
-import {
-  buildWhereClause,
-  type WhereFilter,
-} from "../../collections/query/query-operators";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   populateCompanionFields,
@@ -429,125 +421,158 @@ export class SingleQueryService extends BaseService {
   private readonly accessControlService: AccessControlService;
 
   /**
-   * Decide a `custom` read rule against the stored document.
+   * Build the document a caller would receive from a stored row.
    *
-   * The rule's function answers with a boolean or with a query constraint. A
-   * constraint is the predicate a list read would fold into SQL, and a Single
-   * has no list to fold it into — so it is handed to the database as the filter
-   * on a single-row fetch instead. Selecting nothing means the row does not
-   * satisfy the rule.
+   * Covers only the stages that read: the companion translation overlay, JSON
+   * deserialization, and upload, relationship and component expansion. No hook
+   * runs and nothing is written, so this is safe to perform for a caller who may
+   * still be refused.
+   */
+  private async assembleStoredDocument(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    doc: SingleDocument;
+    options: GetSingleOptions;
+    statusFilterValue: string | undefined;
+  }): Promise<SingleDocument> {
+    const { slug, singleMeta, options, statusFilterValue } = params;
+    let doc = params.doc;
+
+    // i18n: resolve translatable fields from the companion `_locales` table for the
+    // requested locale (with fallback) BEFORE deserialization and upload/relationship/component
+    // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
+    // so the overlay must land before those transforms run (matching the collection read path).
+    // No-op when localization is off or the single isn't localized.
+    await this.populateLocalized(
+      slug,
+      singleMeta,
+      doc,
+      options.locale,
+      options.fallbackLocale,
+      statusFilterValue
+    );
+
+    doc = this.deserializeJsonFields(doc, singleMeta.fields);
+    doc = await this.expandUploadFields(doc, singleMeta.fields);
+    doc = await this.expandRelationshipFields(
+      doc,
+      singleMeta.fields,
+      options.depth,
+      {
+        enforceFieldAccess: true,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      }
+    );
+
+    if (this.componentDataService) {
+      doc = (await this.componentDataService.populateComponentData({
+        entry: doc,
+        parentTable: singleMeta.tableName,
+        fields: singleMeta.fields,
+        depth: options.depth,
+        // i18n: thread the read locale so an embedded localized component resolves
+        // its translatable fields per language, and forward fallback control so a
+        // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
+        // fields blank instead of showing default-language text.
+        locale: options.locale,
+        fallbackLocale: options.fallbackLocale,
+        // A component's relationship fields copy whole rows out of the target
+        // collection, which a Single's field list never describes — so the
+        // caller travels down to reach the related row's own rules.
+        access: {
+          enforceFieldAccess: true,
+          user: options.user as Record<string, unknown> | undefined,
+          overrideAccess: options.overrideAccess,
+        },
+      })) as SingleDocument;
+    }
+
+    return doc;
+  }
+
+  /**
+   * Decide a `custom` read rule before the read causes anything to happen.
    *
-   * The constraint's shape is checked first, because the translator drops what
-   * it cannot handle: a partly translated constraint would select under a weaker
-   * predicate than the rule states.
+   * The rule is shown the document a caller would receive, assembled from the
+   * stored row: a rule reading `data` decides on translations and component
+   * values that the bare main-table row does not carry, so judging the row alone
+   * refuses callers the rule admits and admits callers it refuses. Assembling
+   * first costs a second pass over the read-only stages, and buys a decision
+   * made on the same evidence the caller would get.
    *
-   * Returns the denial to propagate, or the row the constraint selected so the
-   * caller reuses it rather than re-reading.
+   * Deciding here, rather than only on the way out, is what keeps a refused
+   * caller from reaching user hooks or from materializing a Single that has
+   * never been written — both permanent effects of a read that is about to be
+   * denied.
+   *
+   * A rule that answers with a query constraint is refused. A constraint
+   * narrows a result set, and a Single's document is assembled from several
+   * tables, so no single row remains for the database to test the predicate
+   * against; approximating it in memory would mean a second evaluator drifting
+   * from the one collection lists compile.
    */
   private async evaluateCustomRead(params: {
     slug: string;
-    singleMeta: { tableName: string };
+    singleMeta: DynamicSingleRecord;
     accessRules: CollectionAccessRules | undefined;
-    user?: UserContext;
-    locale?: string;
-    fallbackLocale?: string | false;
-  }): Promise<{ denied?: SingleResult; document?: SingleDocument | null }> {
-    const { slug, singleMeta, accessRules, user, locale, fallbackLocale } =
+    options: GetSingleOptions;
+    statusFilterValue: string | undefined;
+  }): Promise<SingleResult | null> {
+    const { slug, singleMeta, accessRules, options, statusFilterValue } =
       params;
+    if (!accessRules) return null;
+
     const denied: SingleResult = {
       success: false,
       statusCode: 403,
       message: `Access denied: read on single "${slug}" is not permitted`,
     };
-    if (!accessRules) return {};
 
-    // The rule's documented `id`/`data` arguments must carry the stored
-    // document: evaluated against nothing, a rule reading `data` decides on
-    // nothing, and one written as `data?.secret !== true` allows where the real
-    // row denies.
-    const load = () =>
-      this.adapter.selectOne<SingleDocument>(singleMeta.tableName, {});
-    const judge = (document: SingleDocument | null) =>
-      this.accessControlService.evaluateAccess(
-        accessRules,
-        "read",
-        {
-          // Spread rather than rebuild: `UserContext` carries arbitrary extra
-          // claims, and a rule reading one (a tenant id, a plan) sees undefined
-          // if the object is reconstructed from the canonical fields alone,
-          // which can allow a caller it was written to deny.
-          user: user ? { ...user } : undefined,
-          // Part of the documented rule context: a rule keyed on the requested
-          // language sees `undefined` without them, which can turn an
-          // absence-tolerant check into an unintended allow.
-          locale,
-          fallbackLocale,
-        },
-        typeof document?.id === "string" ? document.id : undefined,
-        document ?? undefined
-      );
-
-    const document = await load();
-    const result = await judge(document);
-    if (!result.allowed) {
-      return {
-        denied: { ...denied, message: result.reason ?? denied.message },
-      };
-    }
-    // A boolean answer decides on the caller alone. It carries no predicate, so
-    // it also authorizes the first read of a Single that has never been
-    // materialized — the read that auto-creates it.
-    if (result.query === undefined || result.query === null) {
-      return { document };
-    }
-    // A predicate with no row cannot be satisfied, and auto-creating for it
-    // would materialize a document the rule excludes.
-    if (!document) return { denied };
-
-    // Validate against the columns the row actually has. A Single's configured
-    // fields are the wrong set in both directions: system columns are queryable
-    // but not configured, while localized, component and many-to-many fields are
-    // configured but live in their own tables.
-    const columns = new Set(Object.keys(document));
-    const untranslatable = describeUntranslatableConstraint(
-      result.query,
-      name => columns.has(name)
-    );
-    if (untranslatable !== null) {
-      this.logger.warn("Refused an untranslatable access constraint", {
-        single: slug,
-        reason: untranslatable,
-      });
-      return { denied };
-    }
-
-    // Re-read under the constraint so the database decides, applying the same
-    // predicate a list read would compile.
-    const permitted = await this.adapter.selectOne<SingleDocument>(
+    const row = await this.adapter.selectOne<SingleDocument>(
       singleMeta.tableName,
-      {
-        // The adapter emits ILIKE unconditionally, so the same rewrite the
-        // collection query builder applies happens here before handing the
-        // clause over.
-        where: rewriteCaseInsensitiveOperators(
-          buildWhereClause(result.query as WhereFilter),
-          this.adapter.dialect
-        ),
-      }
+      {}
     );
-    if (!permitted) return { denied };
+    // A Single that has never been written has no document to judge. A rule
+    // deciding on the caller alone still authorizes that first read, which is
+    // the read that materializes it.
+    const document = row
+      ? await this.assembleStoredDocument({
+          slug,
+          singleMeta,
+          doc: row,
+          options,
+          statusFilterValue,
+        })
+      : null;
 
-    // Re-judge the row the constraint actually selected. A write landing between
-    // the two reads could satisfy a constraint derived from the earlier row
-    // while the rule would refuse the newer one, so the row being returned is
-    // the row the rule is asked about.
-    const recheck = await judge(permitted);
-    if (!recheck.allowed) {
-      return {
-        denied: { ...denied, message: recheck.reason ?? denied.message },
-      };
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      "read",
+      {
+        // Spread rather than rebuild: `UserContext` carries arbitrary extra
+        // claims, and a rule reading one (a tenant id, a plan) sees undefined
+        // if the object is reconstructed from the canonical fields alone,
+        // which can allow a caller it was written to deny.
+        user: options.user ? { ...options.user } : undefined,
+        // Part of the documented rule context: a rule keyed on the requested
+        // language sees `undefined` without them, which can turn an
+        // absence-tolerant check into an unintended allow.
+        locale: options.locale,
+        fallbackLocale: options.fallbackLocale,
+      },
+      typeof document?.id === "string" ? document.id : undefined,
+      document ?? undefined
+    );
+
+    if (!result.allowed) {
+      return { ...denied, message: result.reason ?? denied.message };
     }
-    return { document: permitted };
+    if (result.query !== undefined && result.query !== null) {
+      this.logger.warn("Refused a constraint returned for a single", { slug });
+      return denied;
+    }
+    return null;
   }
 
   /**
@@ -708,9 +733,9 @@ export class SingleQueryService extends BaseService {
         isSuperAdminContext(options.user) &&
         options.authenticatedScope?.actorType !== "apiKey";
       // Both kinds are skipped at the gate, which has no row to judge them
-      // against, and each is settled below against the loaded document: an
-      // owner-only rule by comparing the owner column, a custom rule by handing
-      // its constraint to the database as a filter.
+      // against, and each is settled below: an owner-only rule by comparing the
+      // owner column on the stored row, a custom rule by judging the document
+      // that row assembles into.
       const skipRuleAtGate =
         !isSuperAdminSession &&
         (readRule?.type === "owner-only" || readRule?.type === "custom");
@@ -740,15 +765,27 @@ export class SingleQueryService extends BaseService {
         return accessDenied;
       }
 
+      // The draft/published filter is resolved here rather than after the read
+      // because a deferred rule is judged on the assembled document, and the
+      // translation overlay it runs needs the same status the response will be
+      // built under.
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus:
+          (singleMeta as { status?: boolean }).status === true,
+        overrideAccess: options.overrideAccess === true,
+        explicit: options.status,
+      });
+
       // 1.6. Settle a deferred document rule BEFORE any read side effect. Hooks
       // are user code and auto-create permanently materializes the document
       // (with its first version and localized defaults), so a caller the rule
       // denies must not reach either by issuing a read it is not allowed to
-      // make. The row is loaded here rather than at step 5 so the decision has
-      // something to judge; step 5 reuses it.
-      let loadedDoc: SingleDocument | null = null;
+      // make.
       if (deferDocumentRule && !options.overrideAccess) {
-        loadedDoc = await this.adapter.selectOne<SingleDocument>(
+        // Ownership lives on the stored row, so the bare row settles it; none of
+        // the stages that assemble the document can move a Single to a different
+        // owner.
+        const storedRow = await this.adapter.selectOne<SingleDocument>(
           singleMeta.tableName,
           {}
         );
@@ -756,28 +793,22 @@ export class SingleQueryService extends BaseService {
           slug,
           rule: readRule as { ownerField?: string } | undefined,
           user: options.user,
-          document: loadedDoc,
+          document: storedRow,
         });
         if (documentRuleDenied) return documentRuleDenied;
       }
 
       // 1.7. Settle a custom rule the same way, and before the same side
-      // effects. A custom function may answer with a boolean or with a query
-      // constraint; a constraint is applied BY THE DATABASE rather than compared
-      // here, so the predicate a list read would compile is the one that decides
-      // — there is no second evaluator to drift from it — and the row it selects
-      // is the materialized row, not a prediction about it.
+      // effects.
       if (deferCustomRule && !options.overrideAccess) {
         const customDenied = await this.evaluateCustomRead({
           slug,
           singleMeta,
           accessRules: singleMeta.accessRules,
-          user: options.user,
-          locale: options.locale,
-          fallbackLocale: options.fallbackLocale,
+          options,
+          statusFilterValue: statusFilter ? statusFilter.value : undefined,
         });
-        if (customDenied.denied) return customDenied.denied;
-        loadedDoc = customDenied.document ?? loadedDoc;
+        if (customDenied) return customDenied;
       }
 
       // 2. Build shared context for hooks (seed with caller-provided context)
@@ -810,13 +841,14 @@ export class SingleQueryService extends BaseService {
         await this.hookRegistry.execute("beforeRead", beforeContext);
       }
 
-      // 5. Fetch document from database
-      let doc =
-        loadedDoc ??
-        (await this.adapter.selectOne<SingleDocument>(
-          singleMeta.tableName,
-          {}
-        ));
+      // 5. Fetch document from database. Read after the hooks rather than
+      // reusing the row an access decision loaded before them: a `beforeRead`
+      // hook may write, and a response built from the earlier snapshot would
+      // report values the read no longer finds.
+      let doc = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -833,12 +865,6 @@ export class SingleQueryService extends BaseService {
       // only published; trusted callers see all. A draft Single returns 404
       // so its existence is invisible to public callers — same response shape
       // as a not-yet-created Single.
-      const statusFilter = resolveStatusFilter({
-        collectionHasStatus:
-          (singleMeta as { status?: boolean }).status === true,
-        overrideAccess: options.overrideAccess === true,
-        explicit: options.status,
-      });
       if (
         statusFilter &&
         (doc as { status?: string }).status !== statusFilter.value
@@ -850,61 +876,15 @@ export class SingleQueryService extends BaseService {
         };
       }
 
-      // 6.9. i18n: resolve translatable fields from the companion `_locales` table for the
-      // requested locale (with fallback) BEFORE deserialization and upload/relationship/component
-      // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
-      // so the overlay must land before those transforms run (matching the collection read path).
-      // No-op when localization is off or the single isn't localized.
-      await this.populateLocalized(
+      // 6.9 - 7.7. Resolve translations and expand uploads, relationships and
+      // components into the document.
+      doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
         doc,
-        options.locale,
-        options.fallbackLocale,
-        statusFilter ? statusFilter.value : undefined
-      );
-
-      // 7. Deserialize JSON fields
-      doc = this.deserializeJsonFields(doc, singleMeta.fields);
-
-      // 7.5. Expand upload fields with full media data
-      doc = await this.expandUploadFields(doc, singleMeta.fields);
-
-      // 7.6. Expand relationship fields with full related entry data
-      doc = await this.expandRelationshipFields(
-        doc,
-        singleMeta.fields,
-        options.depth,
-        {
-          enforceFieldAccess: true,
-          user: options.user,
-          overrideAccess: options.overrideAccess,
-        }
-      );
-
-      // 7.7. Populate component field data from comp_{slug} tables
-      if (this.componentDataService) {
-        doc = (await this.componentDataService.populateComponentData({
-          entry: doc,
-          parentTable: singleMeta.tableName,
-          fields: singleMeta.fields,
-          depth: options.depth,
-          // i18n: thread the read locale so an embedded localized component resolves
-          // its translatable fields per language, and forward fallback control so a
-          // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
-          // fields blank instead of showing default-language text.
-          locale: options.locale,
-          fallbackLocale: options.fallbackLocale,
-          // A component's relationship fields copy whole rows out of the target
-          // collection, which a Single's field list never describes — so the
-          // caller travels down to reach the related row's own rules.
-          access: {
-            enforceFieldAccess: true,
-            user: options.user as Record<string, unknown> | undefined,
-            overrideAccess: options.overrideAccess,
-          },
-        })) as SingleDocument;
-      }
+        options,
+        statusFilterValue: statusFilter ? statusFilter.value : undefined,
+      });
 
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
