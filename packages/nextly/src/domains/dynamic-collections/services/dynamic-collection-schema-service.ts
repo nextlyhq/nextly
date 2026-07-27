@@ -66,6 +66,26 @@ export class DynamicCollectionSchemaService {
    * @param fields - Field definitions for the table
    * @param options - Optional configuration (reserved for future use)
    */
+  /**
+   * Keep a declared `slug` column indexable.
+   *
+   * Every generated table gets a UNIQUE index on `slug`, and MySQL cannot
+   * index a TEXT column without a prefix length — the system slug column is
+   * `varchar(255)` for exactly that reason. A `slug` the caller declared as a
+   * text field reached this as `text`, so the CREATE INDEX that follows failed
+   * and the whole table was left uncreated. The two now agree.
+   *
+   * Only MySQL, and only the identity column: nothing else here is indexed on
+   * creation, so nothing else needs its declared type narrowed.
+   */
+  private slugSafeType(fieldName: string, mappedType: string): string {
+    if (this.dialect !== "mysql") return mappedType;
+    if (this.toSnakeCase(fieldName) !== "slug") return mappedType;
+    return /^(tiny|medium|long)?(text|blob)$/i.test(mappedType.trim())
+      ? "varchar(255)"
+      : mappedType;
+  }
+
   generateMigrationSQL(
     tableName: string,
     fields: FieldDefinition[],
@@ -123,11 +143,9 @@ export class DynamicCollectionSchemaService {
           return null;
         }
 
-        const type = this.mapFieldTypeToSQL(
-          f.type,
-          f.length,
-          f.options,
-          f.validation
+        const type = this.slugSafeType(
+          f.name,
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation)
         );
         const nullable = f.required ? "NOT NULL" : "";
 

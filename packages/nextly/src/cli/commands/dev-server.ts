@@ -573,11 +573,16 @@ export async function performSinglesAutoSync(
   logger.newline();
   logger.info(`Auto-syncing ${singlesToSync.length} single table(s)...`);
 
-  // Import the schema service for generating migration SQL
+  // Import the schema service for generating migration SQL. The dialect comes
+  // from the adapter that will run the DDL: the service's own default reads
+  // DB_DIALECT, which is optional and falls back to "postgresql".
   const { DynamicCollectionSchemaService } = await import(
     "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
-  const schemaService = new DynamicCollectionSchemaService();
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.dialect
+  );
 
   const synced: string[] = [];
   const errors: Array<{ slug: string; error: string }> = [];
@@ -759,7 +764,11 @@ export async function performSinglesReconcile(
   const { DynamicCollectionSchemaService } = await import(
     "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
-  const schemaService = new DynamicCollectionSchemaService();
+  // Same as the auto-sync above: the adapter names the dialect, not DB_DIALECT.
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.dialect
+  );
 
   const reconciledSlugs: string[] = [];
 
