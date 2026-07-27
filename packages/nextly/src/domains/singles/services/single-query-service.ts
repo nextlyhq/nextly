@@ -1317,29 +1317,52 @@ export class SingleQueryService extends BaseService {
         : []
     );
 
+    // A field's `defaultValue` (a function, or a structured value) does not
+    // survive serialization to `dynamic_singles.fields`, so it is absent from
+    // `singleMeta.fields`. Resolve defaults from the live code-first config when
+    // the Single has one; UI-created singles have none and keep the serialized
+    // fields (which can only carry primitive defaults). Keyed by field name.
+    const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
+      singleMeta.slug
+    );
+    const codeFirstFieldByName = codeFirstFields
+      ? new Map(
+          codeFirstFields
+            .filter(field => "name" in field && field.name)
+            .map(field => [(field as { name: string }).name, field])
+        )
+      : undefined;
+
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
+
+      // Prefer the live code-first field for the declared default: the
+      // serialized `field` has lost any `defaultValue` function/structured value.
+      const defaultSource = codeFirstFieldByName?.get(field.name) ?? field;
 
       // Resolve the field's default (explicit defaultValue, else a required
       // field's type-default) once, regardless of whether it is localized — a
       // localized field's default must reach the companion just the same.
-      if ("defaultValue" in field && field.defaultValue !== undefined) {
+      if (
+        "defaultValue" in defaultSource &&
+        defaultSource.defaultValue !== undefined
+      ) {
         // `defaultValue` may be a function `(data) => value`; evaluate it against
         // the document built so far so the stored default is a real value, not a
         // function object. A raw function would be bound as an SQL parameter for
         // the companion/main upsert and fail or persist its stringified form —
         // localized fields now flow through this block, so it must be resolved.
         const resolved =
-          typeof field.defaultValue === "function"
-            ? field.defaultValue(defaults)
-            : field.defaultValue;
+          typeof defaultSource.defaultValue === "function"
+            ? defaultSource.defaultValue(defaults)
+            : defaultSource.defaultValue;
         // A blocks default is checked here rather than only at config load,
         // because a function default can only be resolved against real data.
         // This row is inserted directly on first read, without going through
         // the write path, so nothing downstream would catch a document the
         // field's own policy rejects — and the admin control is read-only, so
         // the stored value could not be corrected from the UI.
-        assertValidBlocksDefault(field, resolved, singleMeta.slug);
+        assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
         defaults[field.name] =
           shouldTreatAsJson(field) && typeof resolved === "object"
             ? JSON.stringify(resolved)

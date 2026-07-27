@@ -233,4 +233,70 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(localizedDefaults).toEqual({});
     expect(insertValues).toMatchObject({ region: "us" });
   });
+
+  // A `defaultValue` function does not survive serialization to
+  // `dynamic_singles.fields`, so the resolution must read it from the live
+  // code-first config the registry exposes via `getCodeFirstFields`.
+  it("resolves a defaultValue from the code-first config when the serialized meta lacks it", () => {
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    // Serialized meta: the function/structured defaults are gone.
+    const meta = siteSettingsMeta({
+      status: true,
+      fields: [
+        { name: "siteName", type: "text" },
+        {
+          name: "settings",
+          type: "group",
+          fields: [{ name: "private", type: "checkbox" }],
+        },
+      ],
+    });
+
+    // Live code-first fields still carry them.
+    registry.getCodeFirstFields.mockReturnValue([
+      { name: "siteName", type: "text", defaultValue: () => "Acme" },
+      {
+        name: "settings",
+        type: "group",
+        fields: [{ name: "private", type: "checkbox" }],
+        defaultValue: () => ({ private: true }),
+      },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    // The function default is resolved to its value (insertValues is keyed by
+    // DB column name, so `siteName` -> `site_name`)...
+    expect(insertValues).toMatchObject({ site_name: "Acme" });
+    // ...and a structured default is JSON-encoded for its json-backed column,
+    // parsing back to the real object rather than a stringified function.
+    expect(typeof insertValues.settings).toBe("string");
+    expect(JSON.parse(insertValues.settings as string)).toEqual({
+      private: true,
+    });
+  });
+
+  it("keeps the serialized-meta default for a UI-created single (no code-first fields)", () => {
+    // getCodeFirstFields returns undefined by default in the mock, mirroring a
+    // UI-created single; the serialized primitive default still applies.
+    const service = createQueryService();
+    const meta = siteSettingsMeta({
+      fields: [{ name: "region", type: "text", defaultValue: "us" }],
+    });
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues).toMatchObject({ region: "us" });
+  });
 });

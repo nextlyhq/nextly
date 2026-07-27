@@ -47,6 +47,7 @@ import {
   type BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import type { SingleConfig } from "../../../singles/config/types";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -170,8 +171,31 @@ export class SingleRegistryService extends BaseRegistryService<
   /** Optional PermissionSeedService for auto-permission management. */
   private permissionSeedService?: PermissionSeedService;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  /**
+   * Live code-first Single configs, kept for their field `defaultValue`s. A
+   * `defaultValue` is a function, which is dropped when field metadata is
+   * JSON-serialized to `dynamic_singles.fields`, so the default resolution on a
+   * first-read auto-create reads defaults from here instead of the serialized
+   * (function-less) registry row. Undefined for UI-created Singles.
+   */
+  private readonly codeFirstSingles?: SingleConfig[];
+
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    codeFirstSingles?: SingleConfig[]
+  ) {
     super(adapter, logger);
+    this.codeFirstSingles = codeFirstSingles;
+  }
+
+  /**
+   * The live code-first field definitions for a Single (with `defaultValue`
+   * functions intact), or undefined for a UI-created Single. Callers resolving
+   * declared defaults use these instead of the serialized `dynamic_singles.fields`.
+   */
+  getCodeFirstFields(slug: string): SingleConfig["fields"] | undefined {
+    return this.codeFirstSingles?.find(single => single.slug === slug)?.fields;
   }
 
   protected getSearchColumns(): string[] {

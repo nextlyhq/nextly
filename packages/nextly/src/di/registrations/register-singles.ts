@@ -30,7 +30,14 @@ export function registerSingleServices(ctx: RegistrationContext): void {
   container.registerSingleton<SingleRegistryService>(
     "singleRegistryService",
     () => {
-      const singleRegistryService = new SingleRegistryService(adapter, logger);
+      // Pass the live code-first single configs so field `defaultValue`
+      // functions (which do not survive serialization to `dynamic_singles`)
+      // remain available when a first read auto-creates the row.
+      const singleRegistryService = new SingleRegistryService(
+        adapter,
+        logger,
+        ctx.config.singles
+      );
 
       if (container.has("permissionSeedService")) {
         singleRegistryService.setPermissionSeedService(
