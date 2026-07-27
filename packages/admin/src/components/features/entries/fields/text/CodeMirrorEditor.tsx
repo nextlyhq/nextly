@@ -358,7 +358,7 @@ export function CodeMirrorEditor({
       }}
       placeholder={placeholder}
       onCreateEditor={onCreateEditor}
-      className="overflow-hidden rounded-none"
+      className="overflow-hidden rounded-md"
     />
   );
 }

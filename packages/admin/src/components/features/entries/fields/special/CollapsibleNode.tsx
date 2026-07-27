@@ -54,7 +54,7 @@ export class CollapsibleContainerNode extends ElementNode {
       "my-4",
       "border",
       "border-border",
-      "rounded-none",
+      "rounded-md",
       "overflow-hidden"
     );
     if (this.__open) {

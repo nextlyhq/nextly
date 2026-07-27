@@ -232,7 +232,7 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("single")}
             className={`
-              flex items-center gap-3 p-4 rounded-none  border border-border transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-md  border border-border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "single"
                   ? "border-primary text-primary bg-primary/5"
@@ -257,7 +257,7 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("multi")}
             className={`
-              flex items-center gap-3 p-4 rounded-none  border border-border transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-md  border border-border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "multi"
                   ? "border-primary text-primary bg-primary/5"
@@ -323,14 +323,14 @@ export function ComponentFieldEditor({
           </Select>
         ) : (
           // Multi-component selector (checkboxes)
-          <div className="space-y-2 max-h-48 overflow-y-auto rounded-none  border border-border p-2">
+          <div className="space-y-2 max-h-48 overflow-y-auto rounded-md  border border-border p-2">
             {availableComponents.map(comp => {
               const isSelected = components?.includes(comp.slug) || false;
               return (
                 <label
                   key={comp.slug}
                   className={`
-                    flex items-center gap-2 p-2 rounded-none cursor-pointer transition-colors
+                    flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors
                     ${isSelected ? "bg-primary/5" : "hover:bg-accent"}
                   `}
                 >

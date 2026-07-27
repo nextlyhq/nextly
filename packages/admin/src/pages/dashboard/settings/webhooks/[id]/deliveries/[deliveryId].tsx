@@ -90,7 +90,7 @@ const DeliveryDetailContent: React.FC<{
   }
 
   if (isLoading || !delivery) {
-    return <Skeleton className="h-130 w-full rounded-none" />;
+    return <Skeleton className="h-130 w-full rounded-lg" />;
   }
 
   // Newest attempt first, without mutating the query cache's array in place.

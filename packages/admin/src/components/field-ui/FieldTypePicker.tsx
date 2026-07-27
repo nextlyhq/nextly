@@ -108,7 +108,7 @@ export function FieldTypePicker<T extends string>({
             disabled={disabled}
             onClick={() => onChange(entry.type)}
             className={cn(
-              "relative flex flex-row items-center gap-4 rounded-none border p-4 text-left transition-all duration-200",
+              "relative flex flex-row items-center gap-4 rounded-md border p-4 text-left transition-all duration-200",
               isSelected
                 ? "border-primary bg-primary/5"
                 : "border-border hover-unified",
@@ -116,11 +116,11 @@ export function FieldTypePicker<T extends string>({
             )}
           >
             {isSelected && (
-              <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-none bg-primary text-primary-foreground">
+              <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-sm bg-primary text-primary-foreground">
                 <Check className="h-3 w-3" />
               </div>
             )}
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-none border border-border bg-primary/5 text-primary">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-primary/5 text-primary">
               <Icon className="h-5 w-5" />
             </div>
             <div className="flex min-w-0 flex-col gap-0.5">

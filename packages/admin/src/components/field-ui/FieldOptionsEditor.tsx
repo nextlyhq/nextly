@@ -220,7 +220,7 @@ function SortableOptionRow({
     <div
       ref={setNodeRef}
       style={style}
-      className="group flex items-center gap-2 rounded-none border border-border bg-background p-2"
+      className="group flex items-center gap-2 rounded-md border border-border bg-background p-2"
     >
       <button
         type="button"

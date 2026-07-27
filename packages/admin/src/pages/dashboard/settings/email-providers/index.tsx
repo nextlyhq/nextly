@@ -449,7 +449,7 @@ function EmailProviderTable() {
         header: "Configuration",
         hideOnMobile: true,
         cell: ({ row }) => (
-          <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
+          <code className="text-xs bg-muted px-1.5 py-0.5 rounded-sm font-mono">
             {maskConfiguration(row.type, row.configuration)}
           </code>
         ),
@@ -603,8 +603,8 @@ function EmailProviderTable() {
       />
 
       {isLoading && !data ? (
-        <div className="rounded-none border border-border bg-card p-4">
-          <Skeleton className="h-50 w-full rounded-none" />
+        <div className="rounded-lg border border-border bg-card p-4">
+          <Skeleton className="h-50 w-full rounded-lg" />
         </div>
       ) : (
         <>

@@ -404,7 +404,7 @@ function Segmented<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="inline-flex items-center rounded-none border border-input">
+    <div className="inline-flex items-center rounded-md border border-input">
       {options.map(o => (
         <button
           key={o.value}
@@ -486,7 +486,7 @@ function PreviewPane({
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Preview
         </span>
-        <span className="rounded-none border border-input px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+        <span className="rounded-sm border border-input px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
           {format === "text" ? "Plain text" : "HTML"}
         </span>
         <div className="ml-auto flex items-center gap-2">
@@ -542,7 +542,7 @@ function PreviewPane({
           title="Email preview"
           sandbox=""
           srcDoc={srcDoc}
-          className="h-full min-h-[420px] rounded-none border border-border bg-white"
+          className="h-full min-h-[420px] rounded-md border border-border bg-white"
           style={{ width: device === "mobile" ? 375 : 640, maxWidth: "100%" }}
         />
       </div>
@@ -567,7 +567,7 @@ function VariableChip({
       onClick={() => onInsert(name)}
       title={`Insert {{${name}}}`}
       // Full-strength foreground on hover so the border state change is perceivable.
-      className="inline-flex items-center gap-1 rounded-none border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground hover:bg-muted"
+      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground hover:bg-muted"
     >
       <Plus className="h-3 w-3 text-muted-foreground" />
       {`{{${name}}}`}
@@ -636,7 +636,7 @@ function VariablesRail({
             {fields.map((field, index) => (
               <div
                 key={field.id}
-                className="rounded-none border border-border bg-muted p-2.5"
+                className="rounded-md border border-border bg-muted p-2.5"
               >
                 <div className="flex items-start gap-2">
                   <div className="flex-1 space-y-1.5">
@@ -706,7 +706,7 @@ function VariablesRail({
             ))}
           </div>
         ) : (
-          <p className="rounded-none border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+          <p className="rounded-md border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
             No custom variables. Add one to document what this template expects.
           </p>
         )}
@@ -772,7 +772,7 @@ function DataRail({
         </h4>
         {unknownVariables.length > 0 ? (
           // Full-strength status border so the boundary is perceivable.
-          <div className="rounded-none border border-warning bg-warning/10 p-3">
+          <div className="rounded-md border border-warning bg-warning/10 p-3">
             <p className="text-xs text-foreground">
               Used but not declared or sampled (renders blank):
             </p>
@@ -785,7 +785,7 @@ function DataRail({
             </div>
           </div>
         ) : (
-          <p className="rounded-none border border-border bg-muted p-3 text-xs text-muted-foreground">
+          <p className="rounded-md border border-border bg-muted p-3 text-xs text-muted-foreground">
             All referenced variables are declared or sampled.
           </p>
         )}
@@ -850,7 +850,7 @@ function AttachmentsField({
           {fields.map((field, index) => (
             <div
               key={field.id}
-              className="flex items-center gap-2 rounded-none border border-border bg-muted p-2.5"
+              className="flex items-center gap-2 rounded-md border border-border bg-muted p-2.5"
             >
               <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
@@ -875,7 +875,7 @@ function AttachmentsField({
           ))}
         </div>
       ) : (
-        <p className="rounded-none border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
           No default attachments.
         </p>
       )}
@@ -909,7 +909,7 @@ function SettingsRail({
   return (
     <div className="space-y-5">
       {isLayoutRow && (
-        <p className="rounded-none border border-border-strong bg-muted px-3 py-2 text-xs text-muted-foreground">
+        <p className="rounded-md border border-border-strong bg-muted px-3 py-2 text-xs text-muted-foreground">
           This is a layout. Place{" "}
           <code className="font-mono text-foreground">{"{{content}}"}</code>{" "}
           where each email body should be injected.
@@ -1539,7 +1539,7 @@ export function EmailTemplateForm({
         <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
           <Link
             href={ROUTES.SETTINGS_EMAIL_TEMPLATES}
-            className="flex h-8 w-8 items-center justify-center rounded-none border border-input text-muted-foreground transition-colors hover:text-foreground"
+            className="flex h-8 w-8 items-center justify-center rounded-md border border-input text-muted-foreground transition-colors hover:text-foreground"
             aria-label="Back to templates"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1646,7 +1646,7 @@ export function EmailTemplateForm({
                 onClick={() => setRailOpen(false)}
                 aria-label="Hide panel"
                 title="Hide panel"
-                className="flex h-7 w-7 items-center justify-center rounded-none text-muted-foreground transition-colors hover:text-foreground"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
               >
                 <PanelLeftClose className="h-4 w-4" />
               </button>
@@ -1717,7 +1717,7 @@ export function EmailTemplateForm({
                   onClick={() => setRailOpen(true)}
                   aria-label="Show panel"
                   title="Show panel"
-                  className="flex h-7 w-7 items-center justify-center rounded-none border border-input text-muted-foreground transition-colors hover:text-foreground"
+                  className="flex h-7 w-7 items-center justify-center rounded-md border border-input text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <PanelLeftOpen className="h-4 w-4" />
                 </button>

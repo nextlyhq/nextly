@@ -191,7 +191,7 @@ export function RichTextTablePlugin({
           </label>
 
           {/* Preview */}
-          <div className="p-3 rounded-none bg-primary/5">
+          <div className="p-3 rounded-md bg-primary/5">
             <p className="text-xs text-muted-foreground mb-2">Preview:</p>
             <div className="overflow-auto">
               <table className="w-full border-collapse text-xs">

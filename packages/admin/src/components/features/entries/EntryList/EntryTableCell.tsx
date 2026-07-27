@@ -357,7 +357,7 @@ function JsonCell({ value }: { value: unknown }) {
     jsonStr.length > maxLength ? `${jsonStr.slice(0, maxLength)}...` : jsonStr;
 
   return (
-    <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
+    <code className="text-xs bg-muted px-1.5 py-0.5 rounded-sm font-mono">
       {truncated}
     </code>
   );

@@ -19,7 +19,7 @@
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
  * - **Border**: Default `border border-border`, Selected `border-primary`
- * - **Border Radius**: square corners (`rounded-none`, design system radius 0)
+ * - **Border Radius**: `rounded-lg`, the container step of the `--radius` scale
  * - **Hover State**: `hover:border-primary` on the card, image scales (`group-hover:scale-105`); no shadow
  * - **Selected State**: `border-primary`, no ring, no scale
  * - **Transition**: `transition-all duration-300`
@@ -162,7 +162,7 @@ export function MediaCard({
       aria-label={`${media.filename} - ${media.mimeType}`}
       aria-selected={isSelected}
       className={cn(
-        "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300  border border-border flex flex-col",
+        "group relative aspect-square rounded-lg overflow-hidden bg-card/50 transition-all duration-300  border border-border flex flex-col",
         // Selected uses border-primary; unselected gets it on hover, keeping the states distinct and the active boundary perceivable.
         isSelected
           ? "border-primary cursor-pointer"

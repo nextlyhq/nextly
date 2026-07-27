@@ -34,23 +34,23 @@ export function UserProfileDropdown({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary focus:outline-none hover-subtle-row group"
+            className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary focus:outline-none hover-subtle-row group"
             aria-label="User profile menu"
           >
-            <Avatar className="h-11 w-11 rounded-none bg-primary/5  border border-border group-hover:border-border transition-colors">
+            <Avatar className="h-11 w-11 rounded-md bg-primary/5  border border-border group-hover:border-border transition-colors">
               <AvatarImage
                 src={user?.avatar}
                 alt={user?.name || "User"}
-                className="rounded-none"
+                className="rounded-md"
               />
-              <AvatarFallback className="bg-transparent text-sidebar-foreground text-xs font-bold rounded-none">
+              <AvatarFallback className="bg-transparent text-sidebar-foreground text-xs font-bold rounded-md">
                 {user?.name?.charAt(0)?.toUpperCase() || "U"}
               </AvatarFallback>
             </Avatar>
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          className="w-64 p-2 mb-2 ml-2 rounded-none shadow-xl shadow-black/5 admin-dropdown-content border border-border bg-popover"
+          className="w-64 p-2 mb-2 ml-2 rounded-lg shadow-xl shadow-black/5 admin-dropdown-content border border-border bg-popover"
           side="bottom"
           align="end"
           forceMount
@@ -74,7 +74,7 @@ export function UserProfileDropdown({
               if (!user?.id) return;
               navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
             }}
-            className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
+            className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <UserIcon className="h-4 w-4 transition-colors" />
             <span>My Account</span>
@@ -83,7 +83,7 @@ export function UserProfileDropdown({
           {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             onClick={onLogout}
-            className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
+            className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <LogOut className="h-4 w-4 transition-colors" />
             <span>Sign out</span>

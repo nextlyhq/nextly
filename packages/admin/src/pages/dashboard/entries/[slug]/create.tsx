@@ -99,7 +99,7 @@ function CreateEntryPageSkeleton() {
             <Skeleton className="h-5 w-96" />
           </div>
 
-          <div className="bg-card  border border-border rounded-none p-6">
+          <div className="bg-card  border border-border rounded-lg p-6">
             <div className="space-y-6">
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />

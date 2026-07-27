@@ -204,7 +204,7 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
         <button
           type="button"
           onClick={handleClear}
-          className="absolute right-7 top-1/2 -translate-y-1/2 p-0.5 rounded-none hover:bg-primary/5 text-muted-foreground hover:text-foreground transition-colors"
+          className="absolute right-7 top-1/2 -translate-y-1/2 p-0.5 rounded-md hover:bg-primary/5 text-muted-foreground hover:text-foreground transition-colors"
           aria-label="Clear selection"
           tabIndex={-1}
         >

@@ -201,7 +201,7 @@ export function GroupInput({
               type="button"
               className={cn(
                 "flex items-center gap-2 w-full text-left",
-                "rounded-none px-1 py-0.5",
+                "rounded-md px-1 py-0.5",
                 "hover-unified focus:outline-none"
               )}
               aria-expanded={isOpen}
@@ -263,7 +263,7 @@ export function GroupInput({
                 type="button"
                 className={cn(
                   "flex items-center gap-2 w-full text-left cursor-pointer",
-                  "rounded-none p-4",
+                  "rounded-md p-4",
                   "hover-unified focus:outline-none"
                 )}
                 aria-expanded={isOpen}

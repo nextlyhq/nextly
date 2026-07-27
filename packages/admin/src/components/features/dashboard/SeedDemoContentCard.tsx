@@ -59,7 +59,7 @@ export function SeedDemoContentCard() {
     <Card
       // Full-strength hover and status borders so the card boundary is perceivable at the 3:1 UI minimum, not a fainter alpha.
       className={cn(
-        "group/card relative rounded-none border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden transition-all duration-700 hover:border-primary",
+        "group/card relative rounded-lg border-border bg-primary/[0.01] backdrop-blur-md overflow-hidden transition-all duration-700 hover:border-primary",
         // Subtle hairline tint — no gradient flood. The accent bar at
         // the top carries the dominant color cue; the card body stays
         // neutral so the eye reads the content first, status second.
@@ -106,7 +106,7 @@ export function SeedDemoContentCard() {
             type="button"
             onClick={skip}
             aria-label="Skip seeding"
-            className="rounded-none h-8 w-8 flex items-center justify-center text-primary/20 hover:text-primary hover:bg-primary/5 opacity-0 group-hover/card:opacity-100 transition-all duration-500"
+            className="rounded-md h-8 w-8 flex items-center justify-center text-primary/20 hover:text-primary hover:bg-primary/5 opacity-0 group-hover/card:opacity-100 transition-all duration-500"
           >
             <X className="h-4 w-4" />
           </button>
@@ -118,7 +118,7 @@ export function SeedDemoContentCard() {
           <>
             <p className="text-sm text-muted-foreground leading-relaxed max-w-xl">
               This project uses the{" "}
-              <span className="inline-flex items-center px-2 py-0.5 mx-0.5 text-[9px] font-bold uppercase tracking-[0.15em] rounded-none bg-primary/[0.04] border border-primary/[0.08] text-foreground align-baseline">
+              <span className="inline-flex items-center px-2 py-0.5 mx-0.5 text-[9px] font-bold uppercase tracking-[0.15em] rounded-md bg-primary/[0.04] border border-primary/[0.08] text-foreground align-baseline">
                 {status.template.label} template
               </span>{" "}
               — load sample posts, authors, categories, and a homepage to
@@ -128,7 +128,7 @@ export function SeedDemoContentCard() {
               <button
                 type="button"
                 onClick={startSeed}
-                className="inline-flex items-center gap-2 rounded-none bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground hover:bg-primary/85 hover:-translate-y-0.5 transition-all"
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground hover:bg-primary/85 hover:-translate-y-0.5 transition-all"
               >
                 Seed demo content
                 <span aria-hidden="true">→</span>
@@ -152,7 +152,7 @@ export function SeedDemoContentCard() {
                 type="button"
                 disabled
                 aria-busy="true"
-                className="inline-flex items-center gap-2 rounded-none bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground opacity-60 cursor-not-allowed"
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground opacity-60 cursor-not-allowed"
               >
                 <span className="h-3.5 w-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
                 Seeding…
@@ -249,7 +249,7 @@ export function SeedDemoContentCard() {
         {status.kind === "error" && (
           <>
             {/* Full-strength destructive border and label text so the error is readable and its boundary perceivable. */}
-            <div className="font-mono text-[12px] text-foreground bg-primary/[0.02] border border-destructive px-4 py-3 rounded-none">
+            <div className="font-mono text-[12px] text-foreground bg-primary/[0.02] border border-destructive px-4 py-3 rounded-md">
               <div className="text-[10px] font-black uppercase tracking-[0.2em] text-destructive mb-1">
                 Error
               </div>
@@ -259,7 +259,7 @@ export function SeedDemoContentCard() {
               <button
                 type="button"
                 onClick={startSeed}
-                className="inline-flex items-center gap-2 rounded-none bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground hover:bg-primary/85 hover:-translate-y-0.5 transition-all"
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground hover:bg-primary/85 hover:-translate-y-0.5 transition-all"
               >
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                 Retry seed

@@ -525,7 +525,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
             // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
             const className = cn(
-              "flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus:outline-none",
+              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
                 ? "bg-muted text-primary"
                 : "text-muted-foreground hover-unified"

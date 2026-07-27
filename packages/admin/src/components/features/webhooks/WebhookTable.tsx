@@ -108,7 +108,7 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         header: "Secret",
         hideOnMobile: true,
         cell: ({ row }) => (
-          <code className="rounded-none bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+          <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
             {row.secretPrefix}
             {"•".repeat(6)}
           </code>

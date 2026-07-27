@@ -239,7 +239,7 @@ export function RepeaterFieldEditor({
         </div>
 
         {labelableFields.length === 0 && nestedFields.length > 0 && (
-          <div className="flex items-start gap-2 p-2 rounded-none bg-primary/5">
+          <div className="flex items-start gap-2 p-2 rounded-md bg-primary/5">
             <Icons.Info className="h-3.5 w-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
             <p className="text-xs text-muted-foreground">
               Add a text, email, number, select, date, or slug field to use as

@@ -110,8 +110,8 @@ export function PageErrorFallback({
   return (
     <PageContainer>
       <div className="flex min-h-[60vh] items-center justify-center p-4">
-        <div className="w-full max-w-xl bg-background  border border-border rounded-none p-8 md:p-12 flex flex-col items-center text-center animate-in fade-in zoom-in duration-500">
-          <div className="h-16 w-16 bg-primary/5 rounded-none flex items-center justify-center mb-8">
+        <div className="w-full max-w-xl bg-background  border border-border rounded-lg p-8 md:p-12 flex flex-col items-center text-center animate-in fade-in zoom-in duration-500">
+          <div className="h-16 w-16 bg-primary/5 rounded-md flex items-center justify-center mb-8">
             <AlertCircle className="h-8 w-8 text-foreground" />
           </div>
 
@@ -129,7 +129,7 @@ export function PageErrorFallback({
               onClick={() => window.location.reload()}
               variant="default"
               size="md"
-              className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold active:scale-95 transition-all duration-200"
+              className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-md text-sm font-semibold active:scale-95 transition-all duration-200"
             >
               <RefreshCw className="h-4 w-4" />
               Reload page
@@ -141,7 +141,7 @@ export function PageErrorFallback({
                 onClick={reset}
                 variant="outline"
                 size="md"
-                className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold border-border hover:bg-accent active:scale-95 transition-all duration-200"
+                className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-md text-sm font-semibold border-border hover:bg-accent active:scale-95 transition-all duration-200"
               >
                 <RefreshCw className="h-4 w-4" />
                 Try again
@@ -154,7 +154,7 @@ export function PageErrorFallback({
                 <Button
                   variant="ghost"
                   size="md"
-                  className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold text-muted-foreground hover:text-foreground active:scale-95 transition-all duration-200"
+                  className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-md text-sm font-semibold text-muted-foreground hover:text-foreground active:scale-95 transition-all duration-200"
                 >
                   <LayoutDashboard className="h-4 w-4" />
                   Go home
@@ -170,7 +170,7 @@ export function PageErrorFallback({
                 <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-muted-foreground transition-colors flex items-center justify-center gap-2 outline-none">
                   <span>View technical details</span>
                 </summary>
-                <div className="mt-4 p-4 rounded-none bg-accent/50  border border-border overflow-hidden">
+                <div className="mt-4 p-4 rounded-lg bg-accent/50  border border-border overflow-hidden">
                   <pre className="text-[11px] font-mono text-muted-foreground overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[200px] custom-scrollbar">
                     {error.message}
                     {error.stack && (

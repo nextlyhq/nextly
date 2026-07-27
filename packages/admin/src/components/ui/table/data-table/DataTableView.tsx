@@ -289,7 +289,7 @@ export function DataTableView<Row extends object>({
   return (
     <div className={cn("@container/table w-full", className)}>
       {error && (
-        <div className="mb-3 rounded-none bg-destructive/10 p-3 text-sm text-destructive">
+        <div className="mb-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
           <TableError message={error} />
         </div>
       )}
@@ -378,7 +378,7 @@ export function DataTableView<Row extends object>({
         className={cn(
           "hidden overflow-hidden @md/table:block",
           bordered &&
-            "rounded-none border border-border bg-card text-card-foreground"
+            "rounded-md border border-border bg-card text-card-foreground"
         )}
       >
         <div className="overflow-x-auto">

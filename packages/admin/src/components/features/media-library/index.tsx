@@ -507,12 +507,12 @@ export function MediaLibrary({
             {/* Folder tree toggle: one button that shows/hides the tree
                 sub-sidebar. Inline folder navigation stays on the page either
                 way, so this never changes where folders live. */}
-            <div className="flex items-center bg-background border border-border rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-background border border-border rounded-md p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-none transition-all duration-200 cursor-pointer!",
+                  "h-8 w-8 rounded-sm transition-all duration-200 cursor-pointer!",
                   isFolderTreeVisible
                     ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -531,12 +531,12 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-background border border-border rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-background border border-border rounded-md p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
+                  "h-8 w-8 rounded-sm transition-all duration-200 !cursor-pointer",
                   viewMode === "grid"
                     ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -550,7 +550,7 @@ export function MediaLibrary({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
+                  "h-8 w-8 rounded-sm transition-all duration-200 !cursor-pointer",
                   viewMode === "list"
                     ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -566,7 +566,7 @@ export function MediaLibrary({
             <Button
               onClick={() => setIsUploadCollapsed(!isUploadCollapsed)}
               className={cn(
-                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-none",
+                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-md",
                 !isUploadCollapsed ? "opacity-90" : ""
               )}
             >
@@ -748,7 +748,7 @@ export function MediaLibrary({
         )}
 
         {/* Media Content - Grid or List view */}
-        <div className="rounded-none  border border-border bg-card overflow-hidden">
+        <div className="rounded-lg  border border-border bg-card overflow-hidden">
           {viewMode === "grid" ? (
             <>
               <div className="p-6">

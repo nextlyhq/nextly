@@ -289,9 +289,9 @@ export default function UserTable() {
           const initial = row.name.split(" ")[0].charAt(0).toUpperCase();
           return (
             <div className="flex items-center gap-3">
-              <Avatar className="w-9 rounded-none">
+              <Avatar className="w-9 rounded-md">
                 <AvatarImage src={row.image} alt={row.name} />
-                <AvatarFallback className="rounded-none bg-muted text-foreground">
+                <AvatarFallback className="rounded-md bg-muted text-foreground">
                   {initial}
                 </AvatarFallback>
               </Avatar>

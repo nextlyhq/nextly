@@ -92,7 +92,7 @@ function PermissionCheckboxRow({
   const isDisabled = disabled || lockedIds.includes(permission.id);
 
   return (
-    <div className="flex items-center justify-between py-3 px-3 rounded-none hover:bg-accent/50 min-h-[44px]">
+    <div className="flex items-center justify-between py-3 px-3 rounded-md hover:bg-accent/50 min-h-[44px]">
       <Label
         htmlFor={htmlId}
         className="text-sm font-normal cursor-pointer flex-1"
@@ -242,7 +242,7 @@ export function PermissionMatrixMobile({
           <AccordionItem
             key={contentType.id}
             value={contentType.id}
-            className="border rounded-none"
+            className="border rounded-lg"
           >
             <div className="flex items-center px-4 py-4 hover:bg-accent/50">
               {/* Checkbox - separate from accordion trigger to avoid nested buttons */}

@@ -33,11 +33,11 @@ function SingleCard({ single }: { single: ApiSingle }) {
     <Link
       href={buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug })}
       // Full-strength hover border, more visible than the resting border, not a fainter alpha.
-      className="block group h-full rounded-none overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
+      className="block group h-full rounded-lg overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
     >
       <Card
         variant="interactive"
-        className="h-full border-0! bg-transparent! transition-colors duration-200 rounded-none overflow-hidden relative"
+        className="h-full border-0! bg-transparent! transition-colors duration-200 rounded-lg overflow-hidden relative"
       >
         <CardContent className="p-5 relative z-10">
           <div className="flex items-start justify-between gap-4">
@@ -67,7 +67,7 @@ function LoadingSkeleton() {
       {Array.from({ length: 3 }, (_, i) => (
         <Skeleton
           key={i}
-          className="h-24 rounded-none bg-muted/30 border border-border"
+          className="h-24 rounded-lg bg-muted/30 border border-border"
         />
       ))}
     </div>
@@ -112,7 +112,7 @@ export const SinglesQuickLinks: React.FC = () => {
         <LoadingSkeleton />
       ) : error ? (
         // Full-strength destructive border so the boundary is perceivable at the 3:1 UI minimum.
-        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-none">
+        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-md">
           <AlertCircle className="h-4 w-4" />
           <span>Couldn&apos;t load singles.</span>
         </div>

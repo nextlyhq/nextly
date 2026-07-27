@@ -102,7 +102,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
           ]}
           className="mb-6"
         />
-        <div className="rounded-none border border-dashed border-border bg-card p-12 text-center">
+        <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
           <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
           <h3 className="text-sm font-medium text-foreground mb-1">
             Plugin not found
@@ -135,14 +135,14 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
       {/* Identity header */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-none bg-primary/5">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-primary/5">
             <IconComponent className="h-6 w-6 text-primary" />
           </div>
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
               {plugin.version && (
-                <span className="inline-flex items-center rounded-none bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
+                <span className="inline-flex items-center rounded-sm bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
                   v{plugin.version}
                 </span>
               )}
@@ -177,7 +177,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
               href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
                 slug: toSlug(plugin.name),
               })}
-              className="inline-flex items-center gap-1.5 rounded-none bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
             >
               <SettingsIcon className="h-3.5 w-3.5" />
               Open settings
@@ -229,7 +229,7 @@ function ExternalLinks({ plugin }: { plugin: PluginMetadata }) {
           href={link.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-none border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent/10 hover:text-foreground"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent/10 hover:text-foreground"
         >
           <link.icon className="h-3.5 w-3.5" />
           {link.label}
@@ -349,7 +349,7 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
         {groups.map(group => (
           <div
             key={group.key}
-            className="rounded-none border border-border bg-card p-4"
+            className="rounded-lg border border-border bg-card p-4"
           >
             <div className="mb-2 flex items-center gap-2">
               <group.icon className="h-4 w-4 text-muted-foreground" />
@@ -419,7 +419,7 @@ function About({ plugin }: { plugin: PluginMetadata }) {
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         About
       </h2>
-      <div className="rounded-none border border-border bg-card">
+      <div className="rounded-lg border border-border bg-card">
         <dl className="divide-y divide-border">
           {rows.map(row => (
             <div

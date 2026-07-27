@@ -639,7 +639,7 @@ export function MediaUploadDropzone({
                 e.stopPropagation();
                 onToggleCollapse();
               }}
-              className="absolute right-2 top-2 z-10 rounded-none bg-background/50 hover:bg-background/80 backdrop-blur-sm transition-colors"
+              className="absolute right-2 top-2 z-10 rounded-md bg-background/50 hover:bg-background/80 backdrop-blur-sm transition-colors"
               aria-label="Close upload zone"
             >
               <X className="h-4 w-4" />
@@ -657,7 +657,7 @@ export function MediaUploadDropzone({
               }
             }}
             className={cn(
-              "relative flex flex-col items-center justify-center rounded-none transition-all duration-200 group",
+              "relative flex flex-col items-center justify-center rounded-md transition-all duration-200 group",
               borderStyles[visualState],
               backgroundStyles[visualState],
               "min-h-48 md:min-h-56 py-16 px-8",
@@ -675,7 +675,7 @@ export function MediaUploadDropzone({
             {/* Icon circle — solid filled, primary light color background */}
             <div
               className={cn(
-                "flex items-center justify-center rounded-none mb-5 transition-all duration-200",
+                "flex items-center justify-center rounded-md mb-5 transition-all duration-200",
                 "w-16 h-16",
                 // Solid filled square — no ring/outline, just a clean bg fill
                 visualState === "default" &&
@@ -778,7 +778,7 @@ export function MediaUploadDropzone({
                 variant="ghost"
                 size="sm"
                 onClick={() => setUploadQueue([])}
-                className="rounded-none"
+                className="rounded-md"
               >
                 Dismiss
               </Button>
@@ -800,7 +800,7 @@ export function MediaUploadDropzone({
                     <X className="h-4 w-4 text-destructive" />
                   )}
                   {item.status === "pending" && (
-                    <div className="h-4 w-4 rounded-none border-2 border-border" />
+                    <div className="h-4 w-4 rounded-sm border-2 border-border" />
                   )}
                 </div>
 
@@ -842,7 +842,7 @@ export function MediaUploadDropzone({
                     variant="outline"
                     size="sm"
                     onClick={() => void handleRetry(item)}
-                    className="rounded-none shrink-0"
+                    className="rounded-md shrink-0"
                   >
                     <RefreshCw className="h-3.5 w-3.5" />
                     Retry

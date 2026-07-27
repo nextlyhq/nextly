@@ -515,7 +515,7 @@
 
 /* Table icon covers: flat shape with unified neutral background. */
 .table-row-icon-cover {
-  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary/5 text-foreground dark:bg-white/20;
+  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-md bg-primary/5 text-foreground dark:bg-white/20;
 }
 
 /* Normalize table pills/badges to one monochrome look across all tables. */

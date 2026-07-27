@@ -67,7 +67,7 @@ export function InviteLinkPanel({
       });
 
   return (
-    <div className="bg-card border border-border rounded-none p-6 shadow-none">
+    <div className="bg-card border border-border rounded-lg p-6 shadow-none">
       <div className="mb-6">
         <h2 className="text-xl font-semibold text-foreground">
           {userName} was created
@@ -89,7 +89,7 @@ export function InviteLinkPanel({
       <div className="space-y-2">
         <p className="text-sm font-medium">Set-password link</p>
         <div className="flex items-center gap-2">
-          <code className="flex-1 overflow-x-auto rounded-none border border-border bg-primary/5 px-3 py-2 font-mono text-sm break-all">
+          <code className="flex-1 overflow-x-auto rounded-sm border border-border bg-primary/5 px-3 py-2 font-mono text-sm break-all">
             {link}
           </code>
           <Button

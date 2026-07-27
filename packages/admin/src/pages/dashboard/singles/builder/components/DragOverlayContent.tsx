@@ -47,7 +47,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
   if (data.source === "palette") {
     const IconComponent = iconMap[data.icon] || Icons.FileText;
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-none  border border-border bg-background shadow-lg">
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg  border border-border bg-background shadow-lg">
         <IconComponent className="h-4 w-4 text-primary shrink-0" />
         <span className="text-xs font-medium text-foreground">
           {data.label}
@@ -64,7 +64,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
 
   return (
     <div
-      className="flex items-center gap-4 py-3 px-4 bg-background  border border-border rounded-none shadow-lg cursor-grabbing"
+      className="flex items-center gap-4 py-3 px-4 bg-background  border border-border rounded-lg shadow-lg cursor-grabbing"
       style={{ minWidth: 320 }}
     >
       {/* Drag handle */}
@@ -73,7 +73,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
       </div>
 
       {/* Field type icon */}
-      <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-none bg-primary/5 mr-1">
+      <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-md bg-primary/5 mr-1">
         <IconComponent className="h-4 w-4 text-muted-foreground" />
       </div>
 
@@ -84,7 +84,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
             {field.label || field.name || "Unnamed Field"}
           </span>
           {isRequired && (
-            <span className="text-[10px] px-2 py-0 bg-destructive-50 text-destructive-600 font-normal rounded-none  border border-border border-destructive-200">
+            <span className="text-[10px] px-2 py-0 bg-destructive-50 text-destructive-600 font-normal rounded-sm  border border-border border-destructive-200">
               Required
             </span>
           )}

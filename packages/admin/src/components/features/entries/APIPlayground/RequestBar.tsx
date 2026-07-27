@@ -122,7 +122,7 @@ export function RequestBar({
         // The shortcut is on the label because a control you can only reach
         // with the mouse teaches nobody it has a keyboard.
         title={isLoading ? "Cancel (Esc)" : "Send request (⌘↵)"}
-        className="w-40 shrink-0 gap-2 rounded-none"
+        className="w-40 shrink-0 gap-2 rounded-md"
       >
         {isLoading ? (
           <>

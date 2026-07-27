@@ -175,7 +175,7 @@ export function ResponseViewer({
           </div>
         ) : error ? (
           <div className="flex h-full flex-col items-center justify-center bg-destructive/5 p-12 text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-none bg-destructive/10">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-md bg-destructive/10">
               <AlertCircle className="h-6 w-6 text-destructive" />
             </div>
             <h3 className="mb-1 text-base font-semibold tracking-tight text-foreground">
@@ -187,7 +187,7 @@ export function ResponseViewer({
           </div>
         ) : !jsonString ? (
           <div className="flex h-full flex-col items-center justify-center bg-muted/30 p-12 text-center">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-none border border-border bg-card">
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-md border border-border bg-card">
               <FileJson className="h-6 w-6 text-muted-foreground" />
             </div>
             <h3 className="mb-1 text-base font-semibold tracking-tight text-foreground">
