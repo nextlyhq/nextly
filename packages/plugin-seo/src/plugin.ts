@@ -18,7 +18,11 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { defaultSeoFields } from "./fields";
-import { generateSitemap, type UrlForEntry } from "./sitemap";
+import {
+  generateSitemap,
+  resolveBaseOrigin,
+  type UrlForEntry,
+} from "./sitemap";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -90,21 +94,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     fields: options.fields ?? defaultSeoFields(),
   });
 
-  // A configured baseUrl must be an absolute http(s) origin — otherwise every
-  // `<loc>` is invalid. Fail fast at construction rather than at request time.
+  // A configured baseUrl must be an absolute http(s) ORIGIN — otherwise every
+  // `<loc>` is invalid (or doubles a base path). Validate at construction, using
+  // the same rule the generator applies, so a misconfig fails fast at boot.
   if (options.baseUrl !== undefined) {
-    let validBase = false;
-    try {
-      const parsed = new URL(options.baseUrl);
-      validBase = parsed.protocol === "http:" || parsed.protocol === "https:";
-    } catch {
-      validBase = false;
-    }
-    if (!validBase) {
-      throw new Error(
-        `seoPlugin: baseUrl must be an absolute http(s) URL, got: ${options.baseUrl}`
-      );
-    }
+    resolveBaseOrigin(options.baseUrl);
   }
 
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`

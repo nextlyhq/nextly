@@ -89,6 +89,11 @@ export interface SitemapOptions {
    * {@link MAX_PAGE_SIZE} (the managed service's per-page maximum).
    */
   pageSize?: number;
+  /**
+   * Advanced: cap the serialized document size in bytes. Defaults to and is
+   * capped at {@link MAX_SITEMAP_BYTES} (the 50 MB protocol limit).
+   */
+  maxBytes?: number;
 }
 
 /**
@@ -154,6 +159,14 @@ export const MAX_PAGE_SIZE = 500;
  */
 export const MAX_SITEMAP_URLS = 50_000;
 
+/**
+ * The sitemap protocol also limits an uncompressed document to 50 MB, so
+ * collection stops before the serialized size would cross this even if the URL
+ * count is under {@link MAX_SITEMAP_URLS} (long locations can hit the byte cap
+ * first).
+ */
+export const MAX_SITEMAP_BYTES = 50 * 1024 * 1024;
+
 /** The columns the default mapper reads — used to project the query. */
 const DEFAULT_SELECT: Record<string, boolean> = {
   slug: true,
@@ -161,21 +174,53 @@ const DEFAULT_SELECT: Record<string, boolean> = {
   updatedAt: true,
 };
 
-/** Resolve `baseUrl` to an origin, rejecting anything but an absolute http(s) URL. */
-function resolveBaseOrigin(baseUrl: string): string {
+const XML_HEADER =
+  `<?xml version="1.0" encoding="UTF-8"?>\n` +
+  `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`;
+const XML_FOOTER = `\n</urlset>`;
+
+/** Serialize one resolved URL into its `<url>` line (shared by size accounting). */
+function serializeUrlEntry({ loc, lastModified }: SitemapUrl): string {
+  const lastmod = lastModified
+    ? `<lastmod>${escapeXml(lastModified)}</lastmod>`
+    : "";
+  return `  <url><loc>${escapeXml(loc)}</loc>${lastmod}</url>`;
+}
+
+// UTF-8 byte length via the web-standard TextEncoder (no Node `Buffer`), so the
+// size cap works in any runtime the agnostic plugin runs in.
+const utf8Encoder = new TextEncoder();
+const utf8Bytes = (value: string): number => utf8Encoder.encode(value).length;
+const WRAPPER_BYTES = utf8Bytes(XML_HEADER) + utf8Bytes(XML_FOOTER);
+
+/**
+ * Resolve `baseUrl` to an origin, requiring an absolute http(s) origin with no
+ * path, query, fragment, or credentials — per-entry paths belong in `urlFor`.
+ * Rejecting a path avoids a doubled base like `https://x.com/cms/pages/a`, and
+ * rejecting credentials avoids leaking them into a public `<loc>`.
+ */
+export function resolveBaseOrigin(baseUrl: string): string {
+  const invalid = (): never => {
+    throw new Error(
+      `sitemap: baseUrl must be an absolute http(s) origin with no path, ` +
+        `query, fragment, or credentials (put per-entry paths in urlFor), ` +
+        `got: ${baseUrl}`
+    );
+  };
   let url: URL;
   try {
     url = new URL(baseUrl);
   } catch {
-    throw new Error(
-      `sitemap: baseUrl must be an absolute http(s) URL, got: ${baseUrl}`
-    );
+    return invalid();
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(
-      `sitemap: baseUrl must be an absolute http(s) URL, got: ${baseUrl}`
-    );
-  }
+  const isHttp = url.protocol === "http:" || url.protocol === "https:";
+  const isOriginOnly =
+    (url.pathname === "" || url.pathname === "/") &&
+    !url.search &&
+    !url.hash &&
+    !url.username &&
+    !url.password;
+  if (!isHttp || !isOriginOnly) return invalid();
   return url.origin;
 }
 
@@ -206,13 +251,18 @@ export async function buildSitemapUrls(
     options.pageSize && options.pageSize > 0
       ? Math.min(options.pageSize, MAX_PAGE_SIZE)
       : MAX_PAGE_SIZE;
-  // Trim a trailing slash so `${baseUrl}${"/path"}` never yields `//path`.
-  const baseUrl = options.baseUrl.replace(/\/+$/, "");
-  // The sitemap's own origin (scheme + host + port) — a `<loc>` must live on it,
-  // so a canonical on a different origin is dropped rather than mixed in.
-  // Rejects an empty/relative baseUrl up front so `<loc>` is never invalid.
-  const baseOrigin = resolveBaseOrigin(baseUrl);
+  // The sitemap's own origin (scheme + host + port). Every `<loc>` is built from
+  // it, and a canonical on a different origin is dropped rather than mixed in.
+  // Rejects a non-origin/relative baseUrl up front so `<loc>` is never invalid.
+  const baseOrigin = resolveBaseOrigin(options.baseUrl);
+  const maxBytes =
+    options.maxBytes && options.maxBytes > 0
+      ? Math.min(options.maxBytes, MAX_SITEMAP_BYTES)
+      : MAX_SITEMAP_BYTES;
   const urls: SitemapUrl[] = [];
+  // Running serialized size (the wrapper plus each `<url>` line and its join),
+  // so the document is bounded by BOTH the URL count and the byte limit.
+  let byteSize = WRAPPER_BYTES;
 
   for (const collection of options.collections) {
     // Apply the published filter ONLY to collections with the built-in
@@ -256,20 +306,20 @@ export async function buildSitemapUrls(
         // stable URL (no slug, or a custom urlFor opted it out) — skip it.
         const path = urlFor(row, collection);
         if (!path) continue;
-        let loc = `${baseUrl}${path}`;
+        let loc = `${baseOrigin}${path}`;
 
-        // A declared canonical overrides the generated URL, but only a same-host
-        // http(s) one. The `canonical` field is free text: resolve it against
-        // `baseUrl` (a relative `/about` becomes absolute); ignore a non-http
-        // scheme (`mailto:`/`javascript:`/`data:`), keeping the generated URL;
-        // and DROP the entry when the canonical is on another host, since a
-        // sitemap must only list URLs on its own host.
+        // A declared canonical overrides the generated URL, but only a same-
+        // origin http(s) one. The `canonical` field is free text: resolve it
+        // against the origin (a relative `/about` becomes absolute); ignore a
+        // non-http scheme (`mailto:`/`javascript:`/`data:`), keeping the
+        // generated URL; and DROP the entry when the canonical is on another
+        // origin, since a sitemap must only list URLs on its own origin.
         const canonical =
           typeof seo?.canonical === "string" ? seo.canonical.trim() : "";
         if (canonical) {
           let offHost = false;
           try {
-            const resolved = new URL(canonical, baseUrl);
+            const resolved = new URL(canonical, baseOrigin);
             const isHttp =
               resolved.protocol === "http:" || resolved.protocol === "https:";
             if (isHttp && resolved.origin === baseOrigin) {
@@ -282,8 +332,20 @@ export async function buildSitemapUrls(
           }
           if (offHost) continue;
         }
-        urls.push({ loc, lastModified: toLastModified(row.updatedAt) });
-        // Bound the document to the protocol limit so the single `<urlset>`
+        const entry: SitemapUrl = {
+          loc,
+          lastModified: toLastModified(row.updatedAt),
+        };
+        // Stop before the serialized size would exceed the byte limit, but
+        // always emit at least one entry so a single oversized URL still yields
+        // a document. `+ 1` accounts for the newline joining entries.
+        const entryBytes = utf8Bytes(serializeUrlEntry(entry)) + 1;
+        if (urls.length > 0 && byteSize + entryBytes > maxBytes) {
+          return urls;
+        }
+        byteSize += entryBytes;
+        urls.push(entry);
+        // Bound the document to the protocol limits so the single `<urlset>`
         // stays valid; a larger corpus needs a sitemap index (delivery layer).
         if (urls.length >= MAX_SITEMAP_URLS) return urls;
       }
@@ -298,15 +360,8 @@ export async function buildSitemapUrls(
 
 /** Serialize resolved URLs into a sitemaps.org `<urlset>` document. */
 export function serializeSitemap(urls: SitemapUrl[]): string {
-  const body = urls
-    .map(({ loc, lastModified }) => {
-      const lastmod = lastModified
-        ? `<lastmod>${escapeXml(lastModified)}</lastmod>`
-        : "";
-      return `  <url><loc>${escapeXml(loc)}</loc>${lastmod}</url>`;
-    })
-    .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>`;
+  const body = urls.map(serializeUrlEntry).join("\n");
+  return `${XML_HEADER}${body}${XML_FOOTER}`;
 }
 
 /** Build the full sitemap XML for the configured collections. */

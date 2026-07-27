@@ -320,15 +320,36 @@ describe("buildSitemapUrls", () => {
     expect(query.select).toBeUndefined();
   });
 
-  it("throws on a baseUrl that is not an absolute http(s) URL", async () => {
+  it("throws on a baseUrl that is not an absolute http(s) origin", async () => {
     const services = stubServices({ posts: [[{ slug: "a" }]] });
 
-    await expect(
-      buildSitemapUrls(services, {
-        collections: ["posts"],
-        baseUrl: "example.com",
-      })
-    ).rejects.toThrow(/absolute http/i);
+    for (const bad of [
+      "example.com", // no scheme
+      "https://x.com/cms", // has a path
+      "https://x.com?q=1", // has a query
+      "https://user:pass@x.com", // credentials
+    ]) {
+      await expect(
+        buildSitemapUrls(services, { collections: ["posts"], baseUrl: bad })
+      ).rejects.toThrow(/absolute http/i);
+    }
+  });
+
+  it("bounds the document to the byte limit", async () => {
+    // A tiny maxBytes forces truncation after the first entry.
+    const services = stubServices({
+      posts: [[{ slug: "a" }, { slug: "b" }, { slug: "c" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      maxBytes: 120,
+    });
+
+    // Only the first entry fits under the tiny cap (always emit at least one).
+    expect(urls).toHaveLength(1);
+    expect(urls[0].loc).toBe("https://x.com/posts/a");
   });
 
   it("bounds the document to the sitemap URL limit", async () => {
