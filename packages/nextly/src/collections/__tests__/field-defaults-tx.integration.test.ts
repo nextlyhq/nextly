@@ -104,4 +104,56 @@ describe("field defaults on a transactional create (integration)", () => {
     >;
     expect(data.mode).toBe("enabled");
   });
+
+  it("applies defaults on a localized collection", async () => {
+    // A localized collection is the only case that reaches the companion
+    // lookup, so without this the whole branch went unexercised — including
+    // which method the driver handle actually exposes, which differs between
+    // better-sqlite3 and the pg/mysql2 handles.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "txlocalized",
+          localized: true,
+          fields: [
+            // Non-translatable, so this exercises the companion lookup without
+            // running into the separate, pre-existing gap that transactional
+            // creates have no companion-write step for translatable values.
+            text({ name: "title", localized: false }),
+            text({
+              name: "subtitle",
+              localized: false,
+              defaultValue: "from-default",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const entries = current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    const created = await current.adapter.transaction(tx =>
+      entries.createEntryInTransaction(
+        tx as never,
+        { collectionName: "txlocalized", overrideAccess: true },
+        { title: "T" }
+      )
+    );
+    const id = (created as { data?: { id?: unknown } }).data?.id;
+    expect(typeof id, JSON.stringify(created)).toBe("string");
+
+    const read = await entries.getEntry({
+      collectionName: "txlocalized",
+      entryId: String(id),
+      overrideAccess: true,
+    });
+    const data = ((read as { data?: unknown }).data ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(data.subtitle).toBe("from-default");
+  });
 });

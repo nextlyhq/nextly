@@ -285,6 +285,27 @@ export interface TransitionAuthorization {
   } | null;
 }
 
+/**
+ * How many rows a driver returned, whatever shape it reports them in.
+ *
+ * mysql2 answers with a `[rows, fieldPackets]` tuple, node-postgres with an
+ * object carrying `rows`, and better-sqlite3 with the rows themselves. Reading
+ * the outer array blindly counts the mysql2 tuple as two rows, which turns
+ * "no such table" into "it exists".
+ */
+function countRows(result: unknown): number {
+  if (Array.isArray(result)) {
+    // A mysql2 tuple's first element is the row array; a plain row list's
+    // first element is a row object.
+    return Array.isArray(result[0]) ? result[0].length : result.length;
+  }
+  if (result && typeof result === "object" && "rows" in result) {
+    const rows = (result as { rows?: unknown }).rows;
+    return Array.isArray(rows) ? rows.length : 0;
+  }
+  return 0;
+}
+
 /** Whether a string is already the stored JSON representation of a value. */
 function isParsableJson(value: string): boolean {
   try {
@@ -682,14 +703,19 @@ export class CollectionMutationService extends BaseService {
           ? sql`SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ${companionTableName} LIMIT 1`
           : sql`SELECT 1 FROM information_schema.tables WHERE table_name = ${companionTableName} AND table_schema = ANY (current_schemas(false)) LIMIT 1`;
 
-    const result = (await executor.execute(query)) as
-      | { rows?: unknown[] }
-      | unknown[]
-      | undefined;
-    // Each driver reports rows differently: an array, or an object carrying
-    // one. Both are read rather than picking a shape per dialect.
-    const rows = Array.isArray(result) ? result : (result?.rows ?? []);
-    return rows.length > 0;
+    // The handles differ by driver: better-sqlite3 exposes `all` and has no
+    // `execute` at all, while the pg and mysql2 handles use `execute`. Picked
+    // by capability rather than by dialect, so a handle is never called
+    // through a method it does not have.
+    const handle = executor as {
+      all?: (query: unknown) => Promise<unknown>;
+      execute?: (query: unknown) => Promise<unknown>;
+    };
+    const raw = handle.all
+      ? await handle.all(query)
+      : await handle.execute?.(query);
+
+    return countRows(raw) > 0;
   }
 
   /**
