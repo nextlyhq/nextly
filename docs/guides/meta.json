@@ -8,6 +8,7 @@
     "email",
     "draft-published-status",
     "isr-caching",
-    "webhook-retention"
+    "webhook-retention",
+    "routing-and-seo"
   ]
 }

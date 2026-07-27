@@ -51,7 +51,8 @@ export function createRequestContext(args: DirectAPIConfig): RequestContext {
   return {
     user: {
       id: args.user.id,
-      email: "",
+      // Preserve the caller's real email so email-based access rules match.
+      email: typeof args.user.email === "string" ? args.user.email : "",
       role: args.user.role ?? "user",
       permissions: [],
     },
