@@ -18,6 +18,28 @@ import { nextlyTags } from "../cache/nextly-tags";
 /** A resolved content entry (loose by design — shape is the app's collection). */
 export type ContentEntry = Record<string, unknown>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Whether `collection` has the built-in draft/published lifecycle enabled
+ * (`status: true`). A status-less collection has no `status` column, so a
+ * blanket `status = published` predicate would either be silently dropped or —
+ * if the collection defines its own field named `status` — wrongly filter live
+ * rows; both routing reads gate the filter on this. Mirrors the sitemap plugin.
+ */
+export async function collectionHasStatusLifecycle(
+  nextly: Nextly,
+  collection: string
+): Promise<boolean> {
+  const result = await nextly.collectionsHandler.getCollection({
+    collectionName: collection,
+  });
+  const data = isRecord(result) ? result.data : undefined;
+  return isRecord(data) && data.status === true;
+}
+
 /** Options for {@link resolveContent}. */
 export interface ResolveContentOptions {
   /**
@@ -72,14 +94,19 @@ export async function resolveContent(
 
   return cachedFind(
     async () => {
+      // Only require `published` when the collection actually has that field: a
+      // custom `statusField` is the caller asserting it exists, and the default
+      // `status` field only exists when the built-in lifecycle is enabled.
+      const filterByStatus =
+        statusField !== "status" ||
+        (await collectionHasStatusLifecycle(nextly, collection));
+      const slugCondition = { [slugField]: { equals: slug } };
+      const where = filterByStatus
+        ? { and: [{ [statusField]: { equals: "published" } }, slugCondition] }
+        : slugCondition;
       const result = await nextly.find({
         collection,
-        where: {
-          and: [
-            { [statusField]: { equals: "published" } },
-            { [slugField]: { equals: slug } },
-          ],
-        },
+        where,
         limit: 1,
         depth,
         ...(options.richTextFormat

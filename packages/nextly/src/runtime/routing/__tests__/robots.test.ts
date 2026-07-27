@@ -10,7 +10,7 @@ describe("nextlyRobots", () => {
     expect(robots).toEqual({
       rules: {
         userAgent: "*",
-        disallow: ["/admin/", "/admin$", "/api/", "/api$"],
+        disallow: ["/admin/", "/admin$", "/admin?", "/api/", "/api$", "/api?"],
       },
       sitemap: "https://example.com/sitemap.xml",
     });
@@ -20,18 +20,34 @@ describe("nextlyRobots", () => {
     const { rules } = nextlyRobots()();
     const disallow = rules.disallow as string[];
     // A raw `/admin` prefix would match `/administration`; the boundary forms
-    // (`/admin/`, `/admin$`) do not.
+    // (`/admin/`, `/admin$`, `/admin?`) do not.
     expect(disallow).not.toContain("/admin");
     expect(disallow.some(rule => "/administration".startsWith(rule))).toBe(
       false
     );
   });
 
+  it("covers the bare root, subtree, and query variants of a framework root", () => {
+    const disallow = nextlyRobots()().rules.disallow as string[];
+    // Subtree, exact-root ($), and query-bearing root (?) are all pinned.
+    expect(disallow).toContain("/admin/");
+    expect(disallow).toContain("/admin$");
+    expect(disallow).toContain("/admin?");
+  });
+
   it("merges and dedupes extra disallow paths and keeps the defaults", () => {
     const robots = nextlyRobots({ disallow: ["/api/", "/drafts"] })();
     expect(robots.rules).toEqual({
       userAgent: "*",
-      disallow: ["/admin/", "/admin$", "/api/", "/api$", "/drafts"],
+      disallow: [
+        "/admin/",
+        "/admin$",
+        "/admin?",
+        "/api/",
+        "/api$",
+        "/api?",
+        "/drafts",
+      ],
     });
   });
 

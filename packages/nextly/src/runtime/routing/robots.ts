@@ -37,15 +37,18 @@ export function nextlyRobots(
   // Keep the admin panel and API out of the index; a caller can disallow more.
   // Exclude the framework roots on a path boundary, not a raw prefix: the
   // trailing-slash form (`/admin/`) covers the whole subtree on every crawler,
-  // and the `$`-anchored form (`/admin$`) pins the bare root on crawlers that
-  // support it — neither swallows similarly-prefixed content like
-  // `/administration`, which the router does serve.
+  // the `$`-anchored form (`/admin$`) pins the bare root where supported, and
+  // the `?` form (`/admin?`) covers query-bearing roots (`/admin?next=/x`).
+  // None swallows similarly-prefixed content like `/administration`, which the
+  // router does serve.
   const disallow = [
     ...new Set([
       "/admin/",
       "/admin$",
+      "/admin?",
       "/api/",
       "/api$",
+      "/api?",
       ...(options.disallow ?? []),
     ]),
   ];

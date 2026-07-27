@@ -23,7 +23,11 @@ import type { Nextly } from "../../direct-api/nextly";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { isReservedPath } from "./reserved-paths";
-import { resolveContent, type ContentEntry } from "./resolve-content";
+import {
+  collectionHasStatusLifecycle,
+  resolveContent,
+  type ContentEntry,
+} from "./resolve-content";
 
 /** Where a resolved entry was found — passed to `render`/`buildMetadata`. */
 export interface ResolvedContext {
@@ -121,6 +125,20 @@ function triggerNotFound(): never {
 
 const MAX_STATIC_PARAMS_PER_PAGE = 500;
 
+/**
+ * Map a stored slug value to a static param, or `null` to skip it. An empty
+ * slug is the site root (`/`) — emitted as the no-segment param so the homepage
+ * pre-renders — while whitespace-only, non-string, and reserved values are
+ * dropped (the page would only `notFound()` them).
+ */
+export function slugToStaticParam(value: unknown): { slug: string[] } | null {
+  if (typeof value !== "string") return null;
+  if (value === "") return isReservedPath("/") ? null : { slug: [] };
+  if (value.trim() === "") return null;
+  if (isReservedPath(`/${value}`)) return null;
+  return { slug: value.split("/") };
+}
+
 export function createContentRoute<TNode>(
   config: ContentRouteConfig<TNode>
 ): ContentRoute<TNode> {
@@ -156,24 +174,32 @@ export function createContentRoute<TNode>(
     const nextly = getInstance();
     const params: Array<{ slug: string[] }> = [];
     for (const collection of collections) {
+      // Filter by `published` only when the built-in lifecycle exists, else a
+      // status-less collection's read would drop rows or target a missing column.
+      const filterByStatus = await collectionHasStatusLifecycle(
+        nextly,
+        collection
+      );
       let page = 1;
       let collected = 0;
       for (;;) {
         const result = await nextly.find({
           collection,
-          where: { status: { equals: "published" } },
+          ...(filterByStatus
+            ? { where: { status: { equals: "published" } } }
+            : {}),
           select: { [slugField]: true },
-          sort: "createdAt",
+          // `id` is unique and present on every collection; `createdAt` may be
+          // absent (timestamps off) or non-unique, letting rows shift between
+          // pages and duplicate or vanish across the paginated scan.
+          sort: "id",
           limit: MAX_STATIC_PARAMS_PER_PAGE,
           page,
         });
         for (const item of result.items) {
-          const value = item[slugField];
-          if (typeof value !== "string" || value.trim() === "") continue;
-          // Skip reserved paths — `ContentPage` always `notFound()`s them, so
-          // pre-rendering them just schedules pages that can never be served.
-          if (isReservedPath(`/${value}`)) continue;
-          params.push({ slug: value.split("/") });
+          const param = slugToStaticParam(item[slugField]);
+          if (!param) continue;
+          params.push(param);
           collected += 1;
           if (collected >= staticParamsLimit) break;
         }

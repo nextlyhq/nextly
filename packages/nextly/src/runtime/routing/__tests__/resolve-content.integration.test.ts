@@ -50,4 +50,30 @@ describe("resolveContent (integration)", () => {
       await resolveContent("pages", "missing", { nextly: current.nextly })
     ).toBeNull();
   });
+
+  it("does not apply a published filter on a status-less collection", async () => {
+    // No `status: true` — the collection defines its own ordinary `status`
+    // field. A blanket `status = published` filter would wrongly drop this row.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "docs",
+          fields: [
+            text({ name: "slug" }),
+            text({ name: "title" }),
+            text({ name: "status" }),
+          ],
+        }),
+      ],
+    });
+    await current.nextly.create({
+      collection: "docs",
+      data: { slug: "intro", title: "Intro", status: "active" },
+    });
+
+    const doc = await resolveContent("docs", "intro", {
+      nextly: current.nextly,
+    });
+    expect((doc as { title?: string } | null)?.title).toBe("Intro");
+  });
 });

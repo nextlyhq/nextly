@@ -65,6 +65,15 @@ export interface NextlySitemapOptions {
 export function nextlySitemap(
   options: NextlySitemapOptions
 ): () => Promise<MetadataRoute.Sitemap> {
+  const hasTags = (options.tags?.length ?? 0) > 0;
+  const hasRevalidate =
+    typeof options.revalidate === "number" && options.revalidate >= 0;
+  // With neither invalidation tags nor a revalidate window, a cached entry would
+  // pin the first render forever — publishes, edits, and deletes would never
+  // reach `/sitemap.xml`. Read uncached in that case so it always stays current.
+  if (!hasTags && !hasRevalidate) {
+    return async () => normalize(await options.entries());
+  }
   return () =>
     cachedFind(async () => normalize(await options.entries()), {
       tags: options.tags ?? [],
