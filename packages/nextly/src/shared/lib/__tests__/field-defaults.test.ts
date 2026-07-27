@@ -60,6 +60,35 @@ describe("applyFieldDefaults", () => {
     expect(data).toEqual({});
   });
 
+  it("does not mistake an inherited property for a supplied value", () => {
+    // A field named after something on Object.prototype would otherwise
+    // resolve through the prototype chain, so an empty body would look as
+    // though it supplied an inherited function.
+    for (const name of ["constructor", "toString", "valueOf"]) {
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({ name, type: "text", defaultValue: "filled" }),
+      ]);
+      expect(data[name], name).toBe("filled");
+    }
+  });
+
+  it("still treats an own property set to undefined as absent", () => {
+    const data: Record<string, unknown> = { toString: undefined };
+    applyFieldDefaults(data, [
+      field({ name: "toString", type: "text", defaultValue: "filled" }),
+    ]);
+    expect(data.toString).toBe("filled");
+  });
+
+  it("does not overwrite an inherited-name field the caller did supply", () => {
+    const data: Record<string, unknown> = { constructor: "mine" };
+    applyFieldDefaults(data, [
+      field({ name: "constructor", type: "text", defaultValue: "filled" }),
+    ]);
+    expect(data.constructor).toBe("mine");
+  });
+
   describe("structured defaults are private to each entry", () => {
     it("gives each repeater row its own copy", () => {
       // The declared value lives on the field definition, which outlives the

@@ -285,6 +285,16 @@ export interface TransitionAuthorization {
   } | null;
 }
 
+/** Whether a string is already the stored JSON representation of a value. */
+function isParsableJson(value: string): boolean {
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class CollectionMutationService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -781,22 +791,35 @@ export class CollectionMutationService extends BaseService {
   /**
    * The fields a transactional create may seed a default into.
    *
-   * On a migrated localized collection the translatable columns live on the
-   * `_locales` companion, not the main table. The pooled path splits those
-   * values out and writes the companion row; the transactional paths have no
-   * such step, so seeding a translatable default here would put a key in the
-   * main-table insert for a column that does not exist. Skipping them keeps a
-   * declared default from turning every transactional create on such a
-   * collection into a failure — the translatable default simply does not
-   * apply on this path until the companion write exists here too.
+   * Once the companion migration has run, a localized collection's translatable
+   * columns live on the `_locales` table and no longer exist on the main one.
+   * The pooled path splits those values out and writes the companion row; the
+   * transactional paths have no such step, so seeding a translatable default
+   * there would put a key in the main-table insert for a column that is gone.
+   *
+   * The companion is checked for existence rather than reading `localized`
+   * alone, matching `splitLocalizedWriteData`: before the migration the
+   * translatable columns are still on the main table, so their defaults apply
+   * exactly as they do on the pooled path. Only after it do they drop out,
+   * which leaves those fields behaving as they did before defaults existed at
+   * all — no worse, and unchanged for every collection that is not localized.
    */
-  private defaultableFields(
+  private async defaultableFields(
+    collectionName: string,
     collection: unknown,
     fields: FieldDefinition[]
-  ): FieldDefinition[] {
+  ): Promise<FieldDefinition[]> {
     const isLocalized =
       (collection as { localized?: boolean } | undefined)?.localized === true;
-    if (!isLocalized) return fields;
+    if (!isLocalized || !this.localization) return fields;
+
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return fields;
+    if (!(await this.companionTableExists(companion.companionTableName))) {
+      return fields;
+    }
+
     const translatable = new Set(resolveLocalizedFieldNames(fields, true));
     return fields.filter(f => !translatable.has(f.name));
   }
@@ -808,7 +831,17 @@ export class CollectionMutationService extends BaseService {
     for (const field of fields) {
       if (!isJsonFieldType(field.type, field)) continue;
       const value = data[field.name];
-      if (value == null || typeof value !== "object") continue;
+      if (value == null) continue;
+
+      // A JSON column stores a JSON DOCUMENT, so a scalar has to be encoded
+      // too: the string `enabled` is not valid JSON, `"enabled"` is. A string
+      // that already parses is left alone, since it is the stored
+      // representation and encoding it again would nest it.
+      if (typeof value !== "object") {
+        if (typeof value === "string" && isParsableJson(value)) continue;
+        data[field.name] = JSON.stringify(value);
+        continue;
+      }
 
       // A relationship nested in a group or repeater is stored as its id. A
       // populated object reaching the stringify below would be frozen into the
@@ -5020,7 +5053,7 @@ export class CollectionMutationService extends BaseService {
       const seededBody: Record<string, unknown> = { ...body };
       applyFieldDefaults(
         seededBody,
-        this.defaultableFields(collection, fields)
+        await this.defaultableFields(params.collectionName, collection, fields)
       );
 
       const beforeOpArgs =
@@ -6238,7 +6271,7 @@ export class CollectionMutationService extends BaseService {
       // field with a default would otherwise abort the whole batch.
       applyFieldDefaults(
         currentData,
-        this.defaultableFields(collection, fields)
+        await this.defaultableFields(params.collectionName, collection, fields)
       );
 
       // Execute hooks (unless skipped)

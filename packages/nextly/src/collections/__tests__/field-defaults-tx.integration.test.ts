@@ -63,4 +63,45 @@ describe("field defaults on a transactional create (integration)", () => {
     >;
     expect(data.settings).toEqual(OBJECT_DEFAULT);
   });
+
+  it("encodes a scalar json default as a json document", async () => {
+    // A JSON column stores a document: the bare string `enabled` is not valid
+    // JSON, so a JSONB insert rejects it while `"enabled"` is accepted.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "txscalar",
+          fields: [
+            text({ name: "title" }),
+            json({ name: "mode", defaultValue: "enabled" }),
+          ],
+        }),
+      ],
+    });
+
+    const entries = current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    const created = await current.adapter.transaction(tx =>
+      entries.createEntryInTransaction(
+        tx as never,
+        { collectionName: "txscalar", overrideAccess: true },
+        { title: "T" }
+      )
+    );
+    const id = (created as { data?: { id?: unknown } }).data?.id;
+    expect(typeof id, JSON.stringify(created)).toBe("string");
+
+    const read = await entries.getEntry({
+      collectionName: "txscalar",
+      entryId: String(id),
+      overrideAccess: true,
+    });
+    const data = ((read as { data?: unknown }).data ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(data.mode).toBe("enabled");
+  });
 });

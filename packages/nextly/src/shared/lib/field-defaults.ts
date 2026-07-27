@@ -59,7 +59,15 @@ export function applyFieldDefaults(
     if (NON_COLUMN_TYPES.has(field.type)) continue;
 
     const declared = (field as { defaultValue?: unknown }).defaultValue;
-    if (declared !== undefined && data[field.name] === undefined) {
+    // Read as an OWN property: a field named after something on
+    // `Object.prototype` — `constructor`, `toString`, `valueOf` — would
+    // otherwise resolve through the prototype chain, so an empty request body
+    // would look as though it supplied an inherited function and the declared
+    // default would be skipped in favour of it.
+    const supplied = Object.prototype.hasOwnProperty.call(data, field.name)
+      ? data[field.name]
+      : undefined;
+    if (declared !== undefined && supplied === undefined) {
       // Resolved against the data built so far, so a default may read the
       // values the caller did supply, and earlier defaults in this same pass.
       data[field.name] = cloneDefault(
@@ -116,7 +124,9 @@ function fillGroup(
   name: string,
   fields: readonly ValidatableField[]
 ): void {
-  const existing = data[name];
+  const existing = Object.prototype.hasOwnProperty.call(data, name)
+    ? data[name]
+    : undefined;
   if (isPlainObject(existing)) {
     applyFieldDefaults(existing, fields);
     return;
