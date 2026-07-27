@@ -183,6 +183,21 @@ describe("Single custom read rules (integration)", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("keeps a rule's writes to its own argument out of the response", async () => {
+    // `data` is handed to app code. Passing the response object itself would
+    // make a rule that assigns to it a response transformer, able to put back
+    // a value a later stage is meant to withhold.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "mutating" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("injected");
+  });
 });
 
 /**
@@ -299,6 +314,33 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.statusCode).toBe(403);
     // The refusal is only worth anything if the row was never written.
     expect(await current.adapter.selectOne("single_branding", {})).toBeNull();
+  });
+
+  it("tells the rule the id the document it judges will carry", async () => {
+    // The first read of a Single that does not exist is judged against the
+    // document it would create. Passing `undefined` for the id while `data`
+    // carries one leaves the rule two disagreeing answers to the same question.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+
+    const result = await entry.get("branding", {
+      user: { id: "id-coherent" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it("admits a caller the requested translation authorizes", async () => {

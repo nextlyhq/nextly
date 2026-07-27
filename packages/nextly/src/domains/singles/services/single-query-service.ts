@@ -115,6 +115,17 @@ const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
  */
 const IDENTITY_TEXT_COLUMN_KINDS = new Set(["text", "varchar", "longText"]);
 
+/**
+ * A Single's default document, built but not yet written. The read path judges
+ * it before deciding whether the read may create the Single, then hands the
+ * same draft to the insert so the row written is the one that was judged.
+ */
+type DefaultDocumentDraft = {
+  document: SingleDocument;
+  insertValues: Record<string, unknown>;
+  localizedDefaults: Record<string, unknown>;
+};
+
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
 
@@ -265,14 +276,10 @@ export async function checkSingleAccess(params: {
       accessRules,
       operation,
       {
-        user: user
-          ? {
-              id: user.id,
-              role: user.role,
-              roles: user.roles,
-              email: user.email,
-            }
-          : undefined,
+        // Spread rather than rebuild: a `custom` rule may decide on a claim
+        // this framework does not know about, and copying named fields drops
+        // every one of them.
+        user: user ? { ...user } : undefined,
       },
       documentId,
       document
@@ -518,10 +525,18 @@ export class SingleQueryService extends BaseService {
     accessRules: CollectionAccessRules | undefined;
     options: GetSingleOptions;
     statusFilterValue: string | undefined;
-  }): Promise<SingleResult | null> {
+  }): Promise<{
+    denied?: SingleResult;
+    /**
+     * The document this read would create, when the Single has no row yet. The
+     * caller hands it back to the insert so the row that gets written is the one
+     * the rule was shown, down to its id.
+     */
+    prospective?: DefaultDocumentDraft;
+  }> {
     const { slug, singleMeta, accessRules, options, statusFilterValue } =
       params;
-    if (!accessRules) return null;
+    if (!accessRules) return {};
 
     const denied: SingleResult = {
       success: false,
@@ -540,6 +555,7 @@ export class SingleQueryService extends BaseService {
     // first version, its localized defaults) driven by a caller about to be
     // denied. Built in memory; nothing is persisted here, and the row the read
     // goes on to create is judged again on the way out.
+    const prospective = row ? undefined : this.buildDefaultDocument(singleMeta);
     const document = row
       ? await this.assembleStoredDocument({
           slug,
@@ -548,7 +564,7 @@ export class SingleQueryService extends BaseService {
           options,
           statusFilterValue,
         })
-      : this.buildDefaultDocument(singleMeta).document;
+      : prospective!.document;
 
     const result = await this.accessControlService.evaluateAccess(
       accessRules,
@@ -565,21 +581,22 @@ export class SingleQueryService extends BaseService {
         locale: options.locale,
         fallbackLocale: options.fallbackLocale,
       },
-      // The id of a stored row only. A Single that does not exist yet has no
-      // identity to name, and the defaults judged above carry a placeholder the
-      // eventual insert does not reuse.
-      typeof row?.id === "string" ? row.id : undefined,
+      // The same identity the rule sees in `data`: the stored row's id, or the
+      // one the prospective insert will carry.
+      typeof document.id === "string" ? document.id : undefined,
       document
     );
 
     if (!result.allowed) {
-      return { ...denied, message: result.reason ?? denied.message };
+      return {
+        denied: { ...denied, message: result.reason ?? denied.message },
+      };
     }
     if (result.query !== undefined && result.query !== null) {
       this.logger.warn("Refused a constraint returned for a single", { slug });
-      return denied;
+      return { denied };
     }
-    return null;
+    return { prospective };
   }
 
   /**
@@ -807,15 +824,17 @@ export class SingleQueryService extends BaseService {
 
       // 1.7. Settle a custom rule the same way, and before the same side
       // effects.
+      let prospectiveDefault: DefaultDocumentDraft | undefined;
       if (deferCustomRule && !options.overrideAccess) {
-        const customDenied = await this.evaluateCustomRead({
+        const custom = await this.evaluateCustomRead({
           slug,
           singleMeta,
           accessRules: singleMeta.accessRules,
           options,
           statusFilterValue: statusFilter ? statusFilter.value : undefined,
         });
-        if (customDenied) return customDenied;
+        if (custom.denied) return custom.denied;
+        prospectiveDefault = custom.prospective;
       }
 
       // 2. Build shared context for hooks (seed with caller-provided context)
@@ -880,6 +899,10 @@ export class SingleQueryService extends BaseService {
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocument(singleMeta, {
           captureInitialVersion: true,
+          // The draft an access decision already judged, so the row written is
+          // the one the rule was shown. Building a second one would give the
+          // final check a different id than the rule was asked about.
+          draft: prospectiveDefault,
         });
       }
 
@@ -955,12 +978,6 @@ export class SingleQueryService extends BaseService {
         user: options.user,
       });
 
-      // Defense in depth: re-strip after hooks in case a hook re-introduced
-      // a password value under its declared key.
-      if (singleHasPassword) {
-        stripPasswordFieldValues(doc, singleMeta.fields);
-      }
-
       // 9. Judge the document being RETURNED, not the row the read started
       // from. A document-dependent rule reads `data`, and `data` is assembled in
       // stages after the earlier gate: defaults on auto-create, translations
@@ -977,7 +994,11 @@ export class SingleQueryService extends BaseService {
           user: options.user,
           locale: options.locale,
           fallbackLocale: options.fallbackLocale,
-          document: doc,
+          // A copy, so the rule decides rather than edits. `data` is handed to
+          // user code, and passing the response object itself would let a rule
+          // that assigns to it rewrite what the caller receives — including
+          // putting back a value a later stage is meant to withhold.
+          document: { ...doc },
         });
         if (finalDenial) return finalDenial;
       }
@@ -995,6 +1016,13 @@ export class SingleQueryService extends BaseService {
         user: options.user,
         overrideAccess: options.overrideAccess,
       });
+
+      // Defense in depth, after every user callback on this document: hooks,
+      // access rules and field rules are all app code, and this is the last
+      // point at which a password value could still be put back.
+      if (singleHasPassword) {
+        stripPasswordFieldValues(doc, singleMeta.fields);
+      }
 
       return {
         success: true,
@@ -1397,13 +1425,13 @@ export class SingleQueryService extends BaseService {
 
   async createDefaultDocument(
     singleMeta: DynamicSingleRecord,
-    options?: { captureInitialVersion?: boolean }
+    options?: { captureInitialVersion?: boolean; draft?: DefaultDocumentDraft }
   ): Promise<SingleDocument> {
     const {
       insertValues: snakeCaseDefaults,
       document,
       localizedDefaults,
-    } = this.buildDefaultDocument(singleMeta);
+    } = options?.draft ?? this.buildDefaultDocument(singleMeta);
     const id = snakeCaseDefaults.id as string;
     const status = (document as { status?: string }).status;
 

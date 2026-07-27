@@ -45,7 +45,10 @@ import {
   resolveStatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
-import { describeUntranslatableConstraint } from "../../../services/access/constraint-shape";
+import {
+  describeUntranslatableConstraint,
+  stripNoOpConstraintMembers,
+} from "../../../services/access/constraint-shape";
 import type {
   CollectionFileManager,
   CompanionSchema,
@@ -954,15 +957,23 @@ export class CollectionQueryService extends BaseService {
             },
           });
         }
-        const accessCondition = this.buildDrizzleCondition(
-          buildWhereClause(accessConstraint as WhereFilter),
-          schema,
-          dialect,
-          localizedCtx
-        );
+        // Members that cannot narrow anything are removed before translation,
+        // so the "translated to nothing" check below judges only what was meant
+        // to restrict. A constraint made up entirely of them restricts nothing,
+        // and the rule already allowed the caller.
+        const restricting = stripNoOpConstraintMembers(accessConstraint);
+        const accessCondition =
+          Object.keys(restricting).length === 0
+            ? undefined
+            : this.buildDrizzleCondition(
+                buildWhereClause(restricting as WhereFilter),
+                schema,
+                dialect,
+                localizedCtx
+              );
         if (accessCondition) {
           whereConditions.push(accessCondition);
-        } else {
+        } else if (Object.keys(restricting).length > 0) {
           // A constraint that translates to nothing would widen the read to
           // every row. Fail closed instead: the rule asked to narrow.
           throw NextlyError.forbidden({
@@ -1760,15 +1771,23 @@ export class CollectionQueryService extends BaseService {
             },
           });
         }
-        const accessCondition = this.buildDrizzleCondition(
-          buildWhereClause(accessConstraint as WhereFilter),
-          schema,
-          this.adapter?.dialect || "postgresql",
-          localizedCtx
-        );
+        // Members that cannot narrow anything are removed before translation,
+        // so the "translated to nothing" check below judges only what was meant
+        // to restrict. A constraint made up entirely of them restricts nothing,
+        // and the rule already allowed the caller.
+        const restricting = stripNoOpConstraintMembers(accessConstraint);
+        const accessCondition =
+          Object.keys(restricting).length === 0
+            ? undefined
+            : this.buildDrizzleCondition(
+                buildWhereClause(restricting as WhereFilter),
+                schema,
+                this.adapter?.dialect || "postgresql",
+                localizedCtx
+              );
         if (accessCondition) {
           whereConditions.push(accessCondition);
-        } else {
+        } else if (Object.keys(restricting).length > 0) {
           // A constraint that translates to nothing would widen the read to
           // every row. Fail closed instead: the rule asked to narrow.
           throw NextlyError.forbidden({

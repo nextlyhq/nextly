@@ -8,9 +8,11 @@
  */
 export default function singleReadRule({
   req,
+  id,
   data,
 }: {
   req: { user?: { id?: string }; locale?: string };
+  id?: string;
   data?: Record<string, unknown>;
 }): unknown {
   switch (req.user?.id) {
@@ -63,6 +65,17 @@ export default function singleReadRule({
     // admits.
     case "assembled-grant":
       return (data as { visibility?: string })?.visibility === "public";
+    // Asserts the identity arguments agree. A read of a Single that does not
+    // exist yet is judged against the document it would create, so the id it is
+    // told about has to be the id that document carries.
+    case "id-coherent":
+      return typeof id === "string" && (data as { id?: string })?.id === id;
+    // Writes to its `data` argument, which a rule has no business doing. The
+    // response must not carry the edit.
+    case "mutating":
+      (data as Record<string, unknown> | undefined) &&
+        ((data as Record<string, unknown>).injected = "from-the-rule");
+      return true;
     // A rule that falls through without returning a decision, as a dynamically
     // imported function is free to do — it is not checked against the contract
     // at runtime.

@@ -36,6 +36,48 @@ function isMappableOperator(operator: string): boolean {
 export type HasColumn = (name: string) => boolean;
 
 /**
+ * Whether a predicate restricts nothing, whatever the row holds.
+ *
+ * `not_in` with an empty list excludes no value, so it is true of every row.
+ * The translator drops such a member, which for a restricting predicate would
+ * silently weaken the rule — but here there is nothing to weaken, and the
+ * distinction matters at the point where a constraint that translated to no
+ * condition at all has to be told apart from one that was quietly discarded.
+ */
+function isNoOpPredicate(predicate: unknown): boolean {
+  if (!predicate || typeof predicate !== "object") return false;
+  const entries = Object.entries(predicate as Record<string, unknown>);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      ([operator, value]) =>
+        operator === "not_in" && Array.isArray(value) && value.length === 0
+    )
+  );
+}
+
+/**
+ * Drop the members of a constraint that restrict nothing.
+ *
+ * An access constraint reaching translation must narrow the read, so a
+ * constraint that produces no condition is refused. A member that cannot
+ * narrow anything would trip that refusal and deny every caller — a rule
+ * returning `{ id: { not_in: blocked } }` would turn "nobody is blocked" into
+ * "nobody may read". Removing those members first lets the remainder be judged
+ * on whether IT narrows, and an empty remainder means the rule restricts
+ * nothing at all.
+ */
+export function stripNoOpConstraintMembers(
+  constraint: Record<string, unknown>
+): Record<string, unknown> {
+  const restricting: Record<string, unknown> = {};
+  for (const [field, predicate] of Object.entries(constraint)) {
+    if (!isNoOpPredicate(predicate)) restricting[field] = predicate;
+  }
+  return restricting;
+}
+
+/**
  * Why an access constraint cannot be applied exactly, or null when it can.
  *
  * Accepted:

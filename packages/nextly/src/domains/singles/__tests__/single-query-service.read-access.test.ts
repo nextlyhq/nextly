@@ -373,6 +373,25 @@ describe("SingleQueryService.get — custom read rules are consulted", () => {
     void result;
   });
 
+  it("creates the Single from the very draft the rule judged", async () => {
+    // The first read of an unmaterialized Single is authorized against the
+    // document it would create. Building a second draft for the insert gives
+    // the outgoing check a different identity than the rule was asked about,
+    // so the same draft has to carry through.
+    const { service } = createCustomRuleService(
+      null,
+      vi.fn().mockResolvedValue({ allowed: true })
+    );
+    const buildDraft = vi.spyOn(service, "buildDefaultDocument");
+
+    await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(buildDraft).toHaveBeenCalledTimes(1);
+  });
+
   it("runs no user hook for a caller the rule refuses", async () => {
     // Hooks are user code and can reach outside the process, so a read the rule
     // refuses must not be able to trigger them — otherwise an unauthorized
