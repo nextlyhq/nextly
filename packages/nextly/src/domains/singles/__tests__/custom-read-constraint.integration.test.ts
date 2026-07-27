@@ -201,6 +201,21 @@ describe("Single custom read rules (integration)", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("denies a rule that returns no decision", async () => {
+    // A non-boolean, non-constraint return used to be read as "allowed, with no
+    // predicate" — so a rule that simply fell through admitted the caller and
+    // narrowed nothing. A missing verdict is not an authorization.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "no-verdict" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("lets a trusted read through untouched", async () => {
     const entry = await bootWithCustomRule();
 

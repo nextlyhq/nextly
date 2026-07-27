@@ -48,6 +48,11 @@ export default function singleReadRule({
       return (req.user as { tenantId?: string })?.tenantId === "blocked"
         ? false
         : { tenant: { equals: "acme" } };
+    // A rule that falls through without returning a decision, as a dynamically
+    // imported function is free to do — it is not checked against the contract
+    // at runtime.
+    case "no-verdict":
+      return undefined;
     // Narrow to the caller's own tenant.
     default:
       return { tenant: { equals: req.user?.id } };
