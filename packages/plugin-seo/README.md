@@ -4,7 +4,7 @@
 
 First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
-This package is **framework-agnostic** (zero `next`): it adds SEO fields to your content and serves a sitemap of your published content over plain HTTP, nothing Next-specific, so it is safe in headless and admin-only projects. Turning the SEO fields into `<meta>` tags and wiring a canonical `app/sitemap.ts` / `robots.ts` are your app's job today; first-party Next.js helpers for that are planned as a separate, opt-in package.
+This package is **framework-agnostic** (zero `next`): it adds SEO fields to your content and serves a sitemap of your published content over plain HTTP, nothing Next-specific, so it is safe in headless and admin-only projects. In a Next.js app, turn the SEO fields into `<meta>` tags with `buildMetadata` from `nextly/runtime` (see [Next.js metadata](#nextjs-metadata) below); wiring a canonical `app/sitemap.ts` / `robots.ts` is still your app's job today, and first-party helpers for that are planned.
 
 ## Install
 
@@ -53,6 +53,36 @@ seoPlugin({
   fields: [text({ name: "focusKeyword" })],
 });
 ```
+
+## Next.js metadata
+
+In a Next.js app, `buildMetadata` from `nextly/runtime` turns the `seo` group into a Next `Metadata` object, so a page's `generateMetadata` is one call instead of a hand-written mapping. It sets the title, description, canonical, OpenGraph, Twitter card, and `robots` (from `noindex`), with per-call fallbacks for blank fields:
+
+```ts
+// app/blog/[slug]/page.tsx
+import { buildMetadata } from "nextly/runtime";
+
+export async function generateMetadata({ params }) {
+  const { slug } = await params;
+  const post = await getPostBySlug(slug);
+  if (!post) return {};
+  return buildMetadata(post, {
+    // Used when the matching seo field is blank.
+    fallback: {
+      title: post.title,
+      description: post.excerpt,
+      canonical: `/blog/${slug}`,
+    },
+    // Page-type specifics the seo group does not carry.
+    openGraph: {
+      type: "article",
+      publishedTime: post.publishedAt ?? undefined,
+    },
+  });
+}
+```
+
+Set `metadataBase` once in your root layout so a relative `canonical` resolves to an absolute URL. Pass `languages` (locale → URL) to emit `alternates.languages` (hreflang) for a localized page. `buildMetadata` lives in `nextly/runtime` (Next-only), so it stays out of the agnostic plugin.
 
 ## Sitemap
 

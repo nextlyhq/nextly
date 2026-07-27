@@ -135,6 +135,21 @@ describe("buildMetadata", () => {
     expect(meta.twitter).toMatchObject({ title: "T", creator: "@author" });
   });
 
+  it("rejects a non-http canonical and falls back to a usable one", () => {
+    const meta = buildMetadata(
+      { seo: { canonical: "mailto:hi@example.com" } },
+      { fallback: { canonical: "/blog/hello" } }
+    );
+    expect(meta.alternates).toEqual({ canonical: "/blog/hello" });
+    expect(meta.openGraph).toMatchObject({ url: "/blog/hello" });
+  });
+
+  it("drops an unusable canonical entirely when there is no usable fallback", () => {
+    const meta = buildMetadata({ seo: { canonical: "javascript:alert(1)" } });
+    expect(meta.alternates).toBeUndefined();
+    expect(meta.openGraph).toBeUndefined();
+  });
+
   it("does not set alternates when neither canonical nor languages are present", () => {
     const meta = buildMetadata({ seo: { metaTitle: "T" } });
     expect(meta.alternates).toBeUndefined();

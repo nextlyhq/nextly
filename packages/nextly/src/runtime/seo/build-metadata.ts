@@ -77,6 +77,34 @@ function imageUrl(ogImage: unknown): string | undefined {
 }
 
 /**
+ * A usable `<link rel="canonical">` value: a root-relative path (resolved
+ * against `metadataBase`) or an absolute http(s) URL. `canonical` is a free-text
+ * field, so a non-web value like `mailto:` / `javascript:` must not become the
+ * canonical URL.
+ */
+function isUsableCanonical(value: string): boolean {
+  if (value.startsWith("/")) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** The first non-blank, usable canonical among the candidates (trimmed), or undefined. */
+function firstUsableCanonical(
+  ...values: Array<string | null | undefined>
+): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed !== "" && isUsableCanonical(trimmed)) return trimmed;
+  }
+  return undefined;
+}
+
+/**
  * Map an entry's `seo` group to a Next.js `Metadata` object.
  *
  * @example
@@ -102,7 +130,7 @@ export function buildMetadata(
   const title = firstNonBlank(seo.metaTitle, fallback.title);
   const description = firstNonBlank(seo.metaDescription, fallback.description);
   const image = firstNonBlank(imageUrl(seo.ogImage), fallback.image);
-  const canonical = firstNonBlank(seo.canonical, fallback.canonical);
+  const canonical = firstUsableCanonical(seo.canonical, fallback.canonical);
   // A page is indexable unless it explicitly opts out.
   const noindex = seo.noindex === true;
 
