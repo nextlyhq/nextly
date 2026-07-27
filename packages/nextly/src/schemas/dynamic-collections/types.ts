@@ -289,7 +289,7 @@ export interface StoredHookConfig {
    * Reference to the pre-built hook ID.
    * Must match an ID in the prebuilt hooks registry.
    *
-   * @example 'auto-slug', 'audit-fields', 'webhook-notification'
+   * @example 'auto-slug', 'audit-fields', 'unique-validation'
    */
   hookId: string;
 
@@ -314,8 +314,8 @@ export interface StoredHookConfig {
    * // For auto-slug hook:
    * config: { sourceField: 'title', targetField: 'slug' }
    *
-   * // For webhook-notification hook:
-   * config: { url: 'https://example.com/webhook', events: ['create', 'update'] }
+   * // For unique-validation hook:
+   * config: { field: 'email', caseInsensitive: true }
    * ```
    */
   config: Record<string, unknown>;
