@@ -379,8 +379,49 @@
 
   /* ============================================
    * BORDER RADIUS (Tailwind v4.1)
-   * Derived from the single --radius knob (shadcn pattern). With
-   * --radius: 0 (sharp-corner design) every step resolves to 0.
+   *
+   * Every step derives from the single --radius knob (shadcn pattern), so the
+   * whole admin re-rounds from one declaration and --radius: 0 collapses the
+   * scale back to square corners.
+   *
+   * That only holds if components pick a TIER BY ELEMENT CATEGORY instead of
+   * naming a length. A component that hardcodes a corner value — `rounded-none`
+   * as much as `rounded-[6px]` — pins itself at that value and silently opts
+   * out of the knob. The tiers, and what belongs in each:
+   *
+   *   rounded-lg (--radius-lg, the knob itself)
+   *     Containers: cards, dialogs, popovers, dropdown and select panels,
+   *     sheets, table wrappers, alerts, empty states, image frames.
+   *
+   *   rounded-md (--radius-md, one step tighter)
+   *     Controls: buttons, inputs, textareas, select triggers, checkboxes,
+   *     switches, and other things you click or type into. A control nested in
+   *     a container reads as inset when its corner is tighter than the surface
+   *     holding it.
+   *
+   *   rounded-sm (--radius-sm, tighter again)
+   *     Small controls and adornments: menu and list items, badges, chips,
+   *     tags, tabs, icon buttons, toolbar affordances — anything already inside
+   *     a control or a dense row.
+   *
+   *   rounded-xl / rounded-2xl
+   *     Reserved for surfaces that must read as clearly softer than a card;
+   *     nothing in the admin needs them today.
+   *
+   * Circles sit deliberately outside the scale: avatars, status dots, spinners
+   * and pills use `rounded-full`, which is 9999px and not a --radius step. They
+   * are round because of their shape, not because of the theme, so a retheme
+   * must not flatten them.
+   *
+   * A site that genuinely must stay square keeps `rounded-none` WITH an inline
+   * comment saying why — overlapped-border strips, full-bleed fills inside an
+   * already-rounded parent, underline tabs. Square with a stated reason is a
+   * decision; square without one is an element that was never wired to the knob.
+   *
+   * Corollary for containers: a rounded box whose child paints a background to
+   * its edge must either clip that child (`overflow-hidden`) or give the child
+   * a matching corner (`rounded-b-[inherit]` and friends). Otherwise the child's
+   * fill paints square across the parent's curve at any nonzero --radius.
    * ============================================ */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
