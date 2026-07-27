@@ -907,8 +907,13 @@
   /* Sidebar specific colors - dark mode */
   --nx-sidebar-background: var(--nx-background);
   /* flat with the content surface; nav is separated by borders, not fill */
-  --nx-sidebar-foreground: oklch(0.9838 0.0035 247.86);
-  /* slate-50 */
+  /* Resting nav ink, dimmed off slate-50 so it sits a step below
+   * --nx-sidebar-accent-foreground the way the light pair does: the lightness
+   * gap here (0.164) is the same one light mode puts between slate-600 and
+   * slate-900, so an active row reads as emphasised by its ink and not only by
+   * its fill. Chroma and hue track the theme's other secondary ink
+   * (--nx-muted-foreground) so lightness alone carries the hierarchy. */
+  --nx-sidebar-foreground: oklch(0.82 0.0351 256.79);
   --nx-sidebar-primary: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
   --nx-sidebar-primary-foreground: oklch(0.2079 0.0399 265.73);
