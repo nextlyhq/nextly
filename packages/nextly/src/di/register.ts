@@ -72,7 +72,7 @@ import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
-import { reregisterSingleHooks } from "../hooks/register-single-hooks";
+import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
@@ -819,10 +819,12 @@ export async function registerServices(
 
     // Register hooks declared on code-first Singles so they run on the read and
     // update paths for every consumer (Direct API, REST, tests), not only apps
-    // that use the scaffolded init helper. reregister is clear-then-register, so
-    // a re-boot or config reload never double-registers into the global registry.
+    // that use the scaffolded init helper. `registerServices` runs once per
+    // process, so a plain append never double-registers; it also leaves hooks a
+    // plugin registered under the same `single:<slug>` namespace untouched (a
+    // clear-then-register would wipe those).
     if (transformedConfig.singles && transformedConfig.singles.length > 0) {
-      const singleHooks = reregisterSingleHooks(
+      const singleHooks = registerSingleHooks(
         transformedConfig.singles,
         hookRegistry
       );

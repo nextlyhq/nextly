@@ -1340,6 +1340,23 @@ export class SingleQueryService extends BaseService {
     // string instead of the object.
     const logicalDefaults: Record<string, unknown> = { ...defaults };
 
+    // The logical form of a DB-ready default value: a json-backed field's type
+    // default (e.g. `getDefaultValue` returning "{}"/"[]") is a string for the
+    // insert, but a later dependent default must see the decoded object/array.
+    const toLogical = (
+      field: Parameters<typeof shouldTreatAsJson>[0],
+      dbValue: unknown
+    ): unknown => {
+      if (shouldTreatAsJson(field) && typeof dbValue === "string") {
+        try {
+          return JSON.parse(dbValue);
+        } catch {
+          return dbValue;
+        }
+      }
+      return dbValue;
+    };
+
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
 
@@ -1398,7 +1415,7 @@ export class SingleQueryService extends BaseService {
         }
         if ("required" in field && field.required) {
           defaults[field.name] = getDefaultValue(field);
-          logicalDefaults[field.name] = defaults[field.name];
+          logicalDefaults[field.name] = toLogical(field, defaults[field.name]);
         } else {
           delete defaults[field.name];
           delete logicalDefaults[field.name];
@@ -1408,7 +1425,7 @@ export class SingleQueryService extends BaseService {
 
       if ("required" in field && field.required) {
         defaults[field.name] = getDefaultValue(field);
-        logicalDefaults[field.name] = defaults[field.name];
+        logicalDefaults[field.name] = toLogical(field, defaults[field.name]);
       }
     }
 
