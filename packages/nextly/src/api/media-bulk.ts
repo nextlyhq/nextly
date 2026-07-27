@@ -29,6 +29,7 @@
  * @module api/media-bulk
  */
 
+import type { RequestActor } from "../auth/request-actor";
 import { getService, isServicesRegistered } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import type { MediaService } from "../services/media/media-service";
@@ -85,11 +86,14 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
  * @param request - The incoming HTTP request containing `{ mediaIds: string[] }`
  * @param mediaService - Already-resolved MediaService instance
  * @param context - RequestContext for the operation
+ * @param actor - Transport-resolved caller, forwarded so each per-item delete
+ *   event attributes to the real session or API key.
  */
 export async function executeBulkDelete(
   request: Request,
   mediaService: MediaService,
-  context: RequestContext
+  context: RequestContext,
+  actor?: RequestActor
 ): Promise<Response> {
   const body = await readJsonBody<Record<string, unknown>>(request);
   const mediaIds = body.mediaIds;
@@ -106,7 +110,11 @@ export async function executeBulkDelete(
     });
   }
 
-  const result = await mediaService.bulkDelete(mediaIds as string[], context);
+  const result = await mediaService.bulkDelete(
+    mediaIds as string[],
+    context,
+    actor
+  );
 
   const message =
     result.failures.length === 0

@@ -25,9 +25,9 @@ jobs:
     environment: Production
 
     permissions:
-      contents: write       # create git tags + GitHub Releases
-      pull-requests: write  # open "Version Packages" PR
-      id-token: write       # OIDC token for npm Trusted Publishing (also covers provenance)
+      contents: write # create git tags + GitHub Releases
+      pull-requests: write # open "Version Packages" PR
+      id-token: write # OIDC token for npm Trusted Publishing (also covers provenance)
 
     steps:
       - name: Checkout
@@ -89,40 +89,64 @@ jobs:
           commit: "chore: version packages"
           title: "chore: version packages"
           # Disabled: per-package GitHub Releases (one for every published
-          # package, 12 per cycle: nextly + create-nextly-app + 10 @nextlyhq/*)
-          # made the Releases sidebar noisy and put whichever package
-          # timestamped last as "Latest". The consolidated release step below
-          # creates ONE `vX.Y.Z` release per cycle that matches our `fixed[]`
-          # lockstep model and Payload's release style.
+          # package in the train) made the Releases sidebar noisy and put
+          # whichever package timestamped last as "Latest". The consolidated
+          # release step below creates ONE `vX.Y.Z` release per cycle that
+          # matches our `fixed[]` lockstep model and Payload's release style.
           createGithubReleases: false
 
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
           TURBO_CACHE_DIR: .turbo
 
+      # `changeset publish` pushes packages one at a time and reports success
+      # even when some of them failed, so the only way to know a release is
+      # whole is to ask the registry afterwards. Failing here stops the tag and
+      # the GitHub Release from being created, which is what keeps npm, git and
+      # the Releases page describing the same release.
+      #
+      # Gated on `hasChangesets == 'false'` (this run took the publish path)
+      # rather than on `published == 'true'` (this run published something new).
+      # The two differ during recovery: publishing is resumable, so a re-run
+      # after a partial release skips the versions npm already has and reports
+      # nothing newly published. Keying off `published` would then skip both
+      # verification and finalization forever, leaving a complete npm release
+      # with no tag and no GitHub Release. Both steps below are idempotent, so
+      # running them on an already-finalized release is a no-op.
+      - name: Verify every package reached the registry
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: pnpm release:verify
+
       - name: Create consolidated GitHub Release
-        if: steps.changesets.outputs.published == 'true'
+        if: steps.changesets.outputs.hasChangesets == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          PUBLISHED: ${{ steps.changesets.outputs.publishedPackages }}
         run: |
           set -euo pipefail
 
-          # All 12 packages share a version via `fixed[]`, so the first
-          # entry's version is the canonical monorepo version.
-          VERSION=$(echo "$PUBLISHED" | jq -r '.[0].version')
+          # Build the notes from the workspace manifest, not from the publish
+          # step's output. On a recovery run that output lists only the
+          # stragglers it just published, which would produce a release claiming
+          # three packages shipped and omit the rest of the train's changelogs.
+          # Verification above has already confirmed the whole manifest is live.
+          MANIFEST=$(node scripts/release/manifest.mjs)
+
+          # Every publishable package shares a version via `fixed[]`, so the
+          # first entry's version is the canonical monorepo version.
+          VERSION=$(echo "$MANIFEST" | jq -r '.[0].version')
           TAG="v${VERSION}"
+          PKG_COUNT=$(echo "$MANIFEST" | jq -r 'length')
 
           # Build the release notes by extracting each package's CHANGELOG
           # section for this version and concatenating them under one
           # "What's changed" heading.
           NOTES_FILE=$(mktemp)
           {
-            echo "Released all 12 packages at \`${VERSION}\` in lockstep (\`nextly\`, \`create-nextly-app\`, and 10 \`@nextlyhq/*\` packages)."
+            echo "Released ${PKG_COUNT} packages at \`${VERSION}\` in lockstep."
             echo
             echo "## What's changed"
             echo
-            for pkg in $(echo "$PUBLISHED" | jq -r '.[].name'); do
+            for pkg in $(echo "$MANIFEST" | jq -r '.[].name'); do
               pkg_dir="packages/${pkg#@nextlyhq/}"
               CHANGELOG="${pkg_dir}/CHANGELOG.md"
               if [[ -f "$CHANGELOG" ]]; then
@@ -160,16 +184,42 @@ jobs:
             RELEASE_FLAG="--latest"
           fi
 
-          # Idempotent: skip if the release already exists (e.g. a previous
-          # workflow run partially completed)
+          # Idempotent: skip if the release already exists. This step now also
+          # runs on pushes after a release is finalized, so "already done" is a
+          # normal outcome rather than a sign something went wrong.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; skipping creation"
+            echo "Release $TAG already exists; nothing to finalize"
           else
-            # Create the unified tag pointing at the publish commit, then
-            # the GitHub Release on top of it
-            git tag "$TAG"
-            git push origin "$TAG"
+            # The tag has to point at the commit whose packages were published.
+            # `gh release create` creates a missing tag from the default branch,
+            # so if `main` moved while this ran, letting it fall back would tag a
+            # commit that was never released. Push the tag first and require it.
+            HEAD_SHA=$(git rev-parse HEAD)
+            # Peeled ref first so an annotated tag resolves to its commit.
+            REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/${TAG}^{}" | awk '{print $1}')
+            if [[ -z "$REMOTE_TAG_SHA" ]]; then
+              REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/${TAG}" | awk '{print $1}')
+            fi
+
+            if [[ -n "$REMOTE_TAG_SHA" && "$REMOTE_TAG_SHA" != "$HEAD_SHA" ]]; then
+              echo "::error::${TAG} already exists on origin at ${REMOTE_TAG_SHA}," \
+                "but this release was built from ${HEAD_SHA}."
+              exit 1
+            fi
+
+            if [[ -z "$REMOTE_TAG_SHA" ]]; then
+              # A previous run can have created the tag locally without pushing.
+              if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+                git tag "$TAG"
+              fi
+              # No `|| true` here: pushing a tag that already matches the remote
+              # exits zero on its own, so a failure is a real failure (auth, tag
+              # protection, network) and must stop the release.
+              git push origin "refs/tags/${TAG}"
+            fi
+
             gh release create "$TAG" \
+              --verify-tag \
               --title "$TAG" \
               --notes-file "$NOTES_FILE" \
               $RELEASE_FLAG
@@ -177,7 +227,7 @@ jobs:
 
           # Mirror the notes into the workflow run summary for visibility
           echo "## Released $TAG" >> $GITHUB_STEP_SUMMARY
-          echo '${{ steps.changesets.outputs.publishedPackages }}' \
+          echo "$MANIFEST" \
             | jq -r '.[] | "- **\(.name)** @ `\(.version)`"' \
             >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

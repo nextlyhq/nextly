@@ -1,0 +1,127 @@
+/**
+ * Smoke test for the blog template's tag-based ISR wiring.
+ *
+ * The blog template (repo-root /templates/blog) is downloaded at scaffold time
+ * and never built in this workspace, so there is no compile step to catch a
+ * regression here. These static assertions guard the F1 conversion: the query
+ * layer must cache reads through `nextly/runtime`, and the detail pages must
+ * keep build-time `generateStaticParams` while carrying no time-based
+ * `revalidate` (freshness comes from tag busting instead).
+ */
+
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+// /packages/create-nextly-app/src/__tests__ -> repo root -> /templates/blog
+const here = path.dirname(fileURLToPath(import.meta.url));
+const BLOG = path.resolve(here, "../../../../templates/blog");
+
+function read(rel: string): string {
+  return readFileSync(path.join(BLOG, rel), "utf-8");
+}
+
+const DETAIL_PAGES = [
+  "src/app/(frontend)/blog/[slug]/page.tsx",
+  "src/app/(frontend)/authors/[slug]/page.tsx",
+  "src/app/(frontend)/tags/[slug]/page.tsx",
+  "src/app/(frontend)/categories/[slug]/page.tsx",
+] as const;
+
+describe("blog template — tag-based ISR", () => {
+  it.each(DETAIL_PAGES)(
+    "%s pre-renders slugs but has no time-based revalidate",
+    page => {
+      const src = read(page);
+      expect(src).toContain("generateStaticParams");
+      expect(src).not.toMatch(/export\s+const\s+revalidate\s*=/);
+    }
+  );
+
+  const COLLECTION_QUERIES = [
+    "src/lib/queries/posts.ts",
+    "src/lib/queries/categories.ts",
+    "src/lib/queries/tags.ts",
+    "src/lib/queries/authors.ts",
+  ] as const;
+
+  it.each(COLLECTION_QUERIES)(
+    "%s caches reads via nextly/runtime cachedFind + nextlyTags",
+    file => {
+      const src = read(file);
+      expect(src).toContain('from "nextly/runtime"');
+      expect(src).toContain("cachedFind(");
+      expect(src).toContain("nextlyTags(");
+    }
+  );
+
+  it("post reads that embed relations carry the related collection tags", () => {
+    // Depth>=1 post reads populate author / category / tag records, so a write
+    // to any of those collections must refresh the post pages showing it — not
+    // only nextly:posts. Guards against a regression back to posts-tag-only.
+    const src = read("src/lib/queries/posts.ts");
+    expect(src).toContain('nextlyTags("categories")');
+    expect(src).toContain('nextlyTags("tags")');
+    expect(src).toContain('nextlyTags("users")');
+    // Posts embed media via featuredImage / seo.ogImage (depth>=1).
+    expect(src).toContain('nextlyTags("media")');
+  });
+
+  it("registers the Next cache adapter via instrumentation for serverless writes", () => {
+    // A serverless seed function never loads the admin catch-all route, so
+    // instrumentation.ts must register the adapter or its writes silently use
+    // the no-op revalidator and never bust the timerless singleton caches.
+    const src = read("src/instrumentation.ts");
+    expect(src).toContain("export async function register(");
+    expect(src).toContain("registerNextCacheRevalidator");
+  });
+
+  it("by-slug detail lookups rethrow transient errors instead of caching a 404", () => {
+    // Returning null on a fetch error lets the page bake a permanent, tagless
+    // notFound(); these lookups must rethrow so a transient failure stays a
+    // retryable error. A genuine miss still returns null (cached with a tag).
+    for (const file of [
+      "src/lib/queries/posts.ts",
+      "src/lib/queries/categories.ts",
+      "src/lib/queries/tags.ts",
+      "src/lib/queries/authors.ts",
+    ]) {
+      expect(read(file)).toContain("throw error;");
+    }
+  });
+
+  it("taxonomy count helpers do not cache a swallowed zero count", () => {
+    // A per-item count catch returning 0 would be cached under the read's tag;
+    // the count helpers must let a count failure reject the whole read instead.
+    for (const file of [
+      "src/lib/queries/categories.ts",
+      "src/lib/queries/tags.ts",
+    ]) {
+      expect(read(file)).not.toContain("postCount: 0");
+    }
+  });
+
+  const SINGLE_QUERIES = [
+    "src/lib/queries/site-settings.ts",
+    "src/lib/queries/navigation.ts",
+    "src/lib/queries/homepage.ts",
+  ] as const;
+
+  it.each(SINGLE_QUERIES)(
+    "%s caches the single via cachedFind + nextlySingleTags",
+    file => {
+      const src = read(file);
+      expect(src).toContain('from "nextly/runtime"');
+      expect(src).toContain("cachedFind(");
+      expect(src).toContain("nextlySingleTags(");
+    }
+  );
+
+  it("README documents tag-based revalidation, not a fixed ISR window", () => {
+    const readme = read("README.md");
+    expect(readme).toContain("tag-based revalidation");
+    expect(readme).not.toContain("revalidate every 60 seconds");
+  });
+});

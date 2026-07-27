@@ -77,4 +77,84 @@ describe("populateCompanionFields (real SQLite)", () => {
       })
     ).resolves.toBeUndefined();
   });
+
+  // A db whose read rejects with `err`, reusing the real companion table so the
+  // query builds before the (mocked) execution fails.
+  function rejectingDb(err: Error) {
+    return {
+      select: () => ({
+        from: () => ({ where: () => Promise.reject(err) }),
+      }),
+    };
+  }
+
+  it("swallows a missing-table read error even in strict mode", async () => {
+    const rows: Record<string, unknown>[] = [{ id: "p1" }];
+    await populateCompanionFields({
+      db: rejectingDb(new Error("no such table: dc_pages_locales")) as never,
+      companionTable,
+      localizedFields: [{ name: "body", column: "body" }],
+      rows,
+      localeChain: ["en"],
+      strict: true,
+    });
+    // The unmigrated-table case is tolerated: the row is left untouched so the
+    // main-table value stands.
+    expect(rows[0]).not.toHaveProperty("body");
+  });
+
+  it("propagates a non-missing-table read error in strict mode", async () => {
+    await expect(
+      populateCompanionFields({
+        db: rejectingDb(new Error("deadlock detected")) as never,
+        companionTable,
+        localizedFields: [{ name: "body", column: "body" }],
+        rows: [{ id: "p1" }],
+        localeChain: ["en"],
+        strict: true,
+      })
+    ).rejects.toThrow("deadlock");
+  });
+
+  it("propagates a Postgres missing-COLUMN error in strict mode", async () => {
+    // A migrated-but-mismatched companion (missing column) is a real schema
+    // error strict mode must surface — not the tolerated missing-table case.
+    await expect(
+      populateCompanionFields({
+        db: rejectingDb(new Error('column "body" does not exist')) as never,
+        companionTable,
+        localizedFields: [{ name: "body", column: "body" }],
+        rows: [{ id: "p1" }],
+        localeChain: ["en"],
+        strict: true,
+      })
+    ).rejects.toThrow("does not exist");
+  });
+
+  it("tolerates a Postgres missing-RELATION error in strict mode", async () => {
+    const rows: Record<string, unknown>[] = [{ id: "p1" }];
+    await populateCompanionFields({
+      db: rejectingDb(
+        new Error('relation "dc_pages_locales" does not exist')
+      ) as never,
+      companionTable,
+      localizedFields: [{ name: "body", column: "body" }],
+      rows,
+      localeChain: ["en"],
+      strict: true,
+    });
+    expect(rows[0]).not.toHaveProperty("body");
+  });
+
+  it("swallows any read error when not strict (default)", async () => {
+    await expect(
+      populateCompanionFields({
+        db: rejectingDb(new Error("deadlock detected")) as never,
+        companionTable,
+        localizedFields: [{ name: "body", column: "body" }],
+        rows: [{ id: "p1" }],
+        localeChain: ["en"],
+      })
+    ).resolves.toBeUndefined();
+  });
 });

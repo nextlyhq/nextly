@@ -36,6 +36,35 @@ function getDb(): unknown {
   return adapter.getDrizzle();
 }
 
+/**
+ * A minimal structural view of the Drizzle query builder used by the RBAC reads
+ * below. It exists so the pooled or transaction-bound executor can be typed for
+ * the `select(...).from(...).where(...) / .innerJoin(...) / .limit(...)` chain
+ * these queries use — instead of casting the executor to `any` — while staying
+ * dialect-agnostic (the concrete builder differs per driver). Each chain awaits
+ * to an array of rows; callers narrow a row to the columns they projected.
+ */
+type RbacRow = Record<string, unknown>;
+interface RbacSelectChain extends Promise<RbacRow[]> {
+  from(table: unknown): RbacSelectChain;
+  innerJoin(table: unknown, on: unknown): RbacSelectChain;
+  where(condition: unknown): RbacSelectChain;
+  limit(count: number): RbacSelectChain;
+}
+interface RbacQueryExecutor {
+  select(projection?: Record<string, unknown>): RbacSelectChain;
+}
+
+/**
+ * Resolve the executor for an RBAC read as the typed query builder above:
+ * the caller's transaction-bound instance when supplied, otherwise the pooled
+ * connection. `getDrizzle()` is typed `unknown`, so the cast narrows that opaque
+ * value to the exact chain surface used here (no `any`).
+ */
+function rbacQuery(executor?: unknown): RbacQueryExecutor {
+  return (executor ?? getDb()) as RbacQueryExecutor;
+}
+
 function getAdapter(): DrizzleAdapter {
   return container.get<DrizzleAdapter>("adapter");
 }
@@ -97,7 +126,13 @@ class PermissionChecker {
   async hasPermission(
     userId: string,
     action: string,
-    resource: string
+    resource: string,
+    // A transaction-bound Drizzle executor, supplied when the caller is already
+    // inside a write transaction so the role/permission reads run on that
+    // transaction's own connection instead of taking a second pooled one, which
+    // can stall against a small pool while the caller's transaction holds one.
+    // Defaults to the pooled connection when omitted.
+    executor?: unknown
   ): Promise<boolean> {
     if (!userId || !action || !resource) {
       getAuthLogger()?.log?.("debug", {
@@ -112,30 +147,41 @@ class PermissionChecker {
 
     const key = `${userId}|${action}|${resource}`;
 
-    // Tier 1: In-memory instance cache (ultra-fast <1ms)
-    const cached = this.memo.get(key);
-    if (typeof cached === "boolean") return cached;
+    // Skip EVERY cache tier when a transaction executor is supplied. Such a check
+    // reads through the caller's still-open (uncommitted) transaction, so its
+    // result must be neither served from nor promoted into the process-wide
+    // caches: if that transaction rolls back, a grant or denial that never
+    // committed would otherwise be reused by later, non-transactional requests
+    // for the cache TTL. An executor-backed check always computes fresh below.
+    if (!executor) {
+      // Tier 1: In-memory instance cache (ultra-fast <1ms)
+      const cached = this.memo.get(key);
+      if (typeof cached === "boolean") return cached;
 
-    // Tier 1b: Process-wide LRU cache (<1ms)
-    const hit = cache.get(key);
-    if (hit) {
-      if (hit.expiresAt > Date.now()) {
-        this.memo.set(key, hit.value);
-        // refresh LRU by deleting+setting
+      // Tier 1b: Process-wide LRU cache (<1ms)
+      const hit = cache.get(key);
+      if (hit) {
+        if (hit.expiresAt > Date.now()) {
+          this.memo.set(key, hit.value);
+          // refresh LRU by deleting+setting
+          cache.delete(key);
+          cache.set(key, hit);
+          return hit.value;
+        }
+        // expired -> clear reverse maps
         cache.delete(key);
-        cache.set(key, hit);
-        return hit.value;
+        const rids = keyToRoleIds.get(key);
+        keyToRoleIds.delete(key);
+        if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(key);
+        userIdToKeys.get(userId)?.delete(key);
       }
-      // expired -> clear reverse maps
-      cache.delete(key);
-      const rids = keyToRoleIds.get(key);
-      keyToRoleIds.delete(key);
-      if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(key);
-      userIdToKeys.get(userId)?.delete(key);
     }
 
-    // Tier 2: Database cache (fast ~3-5ms)
-    if (this.cacheService) {
+    // Tier 2: Database cache (fast ~3-5ms). Skipped when a transaction executor
+    // is supplied: this lookup is itself a pooled query, so running it inside the
+    // caller's transaction would re-enter the pool (and by the rule above must
+    // not serve a cached decision to a transaction-scoped check anyway).
+    if (this.cacheService && !executor) {
       try {
         const dbCached = await this.cacheService.getCachedPermission(
           userId,
@@ -164,34 +210,44 @@ class PermissionChecker {
 
     // Tier 3: Fresh computation (~10ms)
     try {
-      const roleIds = await this.getAllRoleIdsForUser(userId);
+      const roleIds = await this.getAllRoleIdsForUser(userId, executor);
 
       if (roleIds.size === 0) {
-        this.memo.set(key, false);
-        // Store negative result in DB cache
-        if (this.cacheService) {
-          void this.cacheService.setCachedPermission(
-            userId,
-            action,
-            resource,
-            false,
-            []
-          );
+        // Cache tiers are populated only for pooled (committed-view) checks; an
+        // executor-backed result must not leak into them (see the top-of-method
+        // skip). The DB write is also a pooled query the transaction would block on.
+        if (!executor) {
+          this.memo.set(key, false);
+          if (this.cacheService) {
+            void this.cacheService.setCachedPermission(
+              userId,
+              action,
+              resource,
+              false,
+              []
+            );
+          }
         }
         return false;
       }
       const allowed = await this.roleSetHasPermission(
         Array.from(roleIds),
         action,
-        resource
+        resource,
+        executor
       );
 
-      // Populate both cache tiers
-      this.memo.set(key, allowed);
-      setCacheEntry(key, allowed, userId, Array.from(roleIds));
+      // Populate the cache tiers only for pooled checks. An executor-backed
+      // result reflects the caller's uncommitted transaction and must not be
+      // promoted into the process-wide caches (see the top-of-method skip).
+      if (!executor) {
+        this.memo.set(key, allowed);
+        setCacheEntry(key, allowed, userId, Array.from(roleIds));
+      }
 
-      // Async write to DB cache (don't block response)
-      if (this.cacheService) {
+      // Async write to DB cache (don't block response). Skipped under a
+      // transaction executor for the same pooled-query reason as the read above.
+      if (this.cacheService && !executor) {
         void this.cacheService.setCachedPermission(
           userId,
           action,
@@ -237,8 +293,12 @@ class PermissionChecker {
     return true;
   }
 
-  async getAllRoleIdsForUser(userId: string): Promise<Set<string>> {
-    const direct = await this.getDirectRoleIds(userId);
+  async getAllRoleIdsForUser(
+    userId: string,
+    // Optional transaction-bound executor; see `hasPermission`.
+    executor?: unknown
+  ): Promise<Set<string>> {
+    const direct = await this.getDirectRoleIds(userId, executor);
     if (direct.size === 0) return direct;
 
     const all = new Set<string>(direct);
@@ -258,8 +318,7 @@ class PermissionChecker {
     while (queue.length > 0) {
       const batch = queue.splice(0, 50);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const childRows = await (getDb() as any)
+      const childRows = await rbacQuery(executor)
         .select({ childRoleId: roleInherits.childRoleId })
         .from(roleInherits)
         .where(inArray(roleInherits.parentRoleId, batch));
@@ -285,11 +344,14 @@ class PermissionChecker {
     return all;
   }
 
-  private async getDirectRoleIds(userId: string): Promise<Set<string>> {
+  private async getDirectRoleIds(
+    userId: string,
+    // Optional transaction-bound executor; see `hasPermission`.
+    executor?: unknown
+  ): Promise<Set<string>> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { userRoles } = this.t as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (getDb() as any)
+    const rows = await rbacQuery(executor)
       .select({ roleId: userRoles.roleId })
       .from(userRoles)
       .where(eq(userRoles.userId, userId));
@@ -301,7 +363,9 @@ class PermissionChecker {
   private async roleSetHasPermission(
     roleIds: string[],
     action: string,
-    resource: string
+    resource: string,
+    // Optional transaction-bound executor; see `hasPermission`.
+    executor?: unknown
   ): Promise<boolean> {
     if (roleIds.length === 0) return false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -309,18 +373,15 @@ class PermissionChecker {
 
     // Super Admin bypass: any role with slug 'super-admin' grants all permissions
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const superAdmin = await (getDb() as any)
+      const superAdmin = await rbacQuery(executor)
         .select({ id: roles.id })
         .from(roles)
         .where(and(inArray(roles.id, roleIds), eq(roles.slug, "super-admin")))
         .limit(1);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((superAdmin as any[]).length > 0) return true;
+      if (superAdmin.length > 0) return true;
 
       // Step 1: resolve permission id by action+resource
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const perm = await (getDb() as any)
+      const perm = await rbacQuery(executor)
         .select({ id: permissions.id })
         .from(permissions)
         .where(
@@ -330,12 +391,11 @@ class PermissionChecker {
           )
         )
         .limit(1);
-      const permId = (perm?.[0]?.id ?? null) as string | null;
+      const permId = (perm[0]?.id ?? null) as string | null;
       if (!permId) return false;
 
       // Step 2: check existence of mapping for any of the roles
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows = await (getDb() as any)
+      const rows = await rbacQuery(executor)
         .select({ id: rolePermissions.id })
         .from(rolePermissions)
         .where(
@@ -346,8 +406,7 @@ class PermissionChecker {
         )
         .limit(1);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (rows as any[]).length > 0;
+      return rows.length > 0;
     } catch {
       return false;
     }
@@ -398,11 +457,14 @@ function setCacheEntry(
 export async function hasPermission(
   userId: string,
   action: string,
-  resource: string
+  resource: string,
+  // Optional transaction-bound executor so the reads run on the caller's
+  // transaction connection instead of the pool; see the checker method above.
+  executor?: unknown
 ): Promise<boolean> {
   try {
     const checker = new PermissionChecker();
-    return await checker.hasPermission(userId, action, resource);
+    return await checker.hasPermission(userId, action, resource, executor);
   } catch {
     getAuthLogger()?.log?.("error", {
       category: "auth",
@@ -449,7 +511,9 @@ export async function hasAllPermissions(
  * Uses existing caching and database query optimization.
  */
 export async function listEffectivePermissions(
-  userId: string
+  userId: string,
+  // Optional transaction-bound executor; see `hasPermission`.
+  executor?: unknown
 ): Promise<string[]> {
   if (!userId) {
     getAuthLogger()?.log?.("debug", {
@@ -462,7 +526,7 @@ export async function listEffectivePermissions(
 
   try {
     const checker = new PermissionChecker();
-    const roleIds = await checker.getAllRoleIdsForUser(userId);
+    const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
     if (roleIds.size === 0) {
       return [];
@@ -473,8 +537,7 @@ export async function listEffectivePermissions(
     const { rolePermissions, permissions } = t as any;
 
     // Join role_permissions with permissions to get all permissions for user's roles
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (getDb() as any)
+    const rows = await rbacQuery(executor)
       .select({
         action: permissions.action,
         resource: permissions.resource,
@@ -619,24 +682,37 @@ const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
  * }
  * ```
  */
-export async function isSuperAdmin(userId: string): Promise<boolean> {
+export async function isSuperAdmin(
+  userId: string,
+  // Optional transaction-bound executor so the role read runs on the caller's
+  // transaction connection instead of the pool; see `hasPermission`. When
+  // supplied, the process-wide super-admin cache is bypassed for both read and
+  // write: the check reads through the caller's uncommitted transaction, so its
+  // result must not be served from — nor promoted into — a cache shared with
+  // later requests (a rolled-back transaction would otherwise poison it).
+  executor?: unknown
+): Promise<boolean> {
   if (!userId) return false;
 
-  // Check in-memory cache
-  const cached = superAdminCache.get(userId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.value;
+  // Check in-memory cache (only for pooled, committed-view checks).
+  if (!executor) {
+    const cached = superAdminCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
   }
 
   try {
     const checker = new PermissionChecker();
-    const roleIds = await checker.getAllRoleIdsForUser(userId);
+    const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
     if (roleIds.size === 0) {
-      superAdminCache.set(userId, {
-        value: false,
-        expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
-      });
+      if (!executor) {
+        superAdminCache.set(userId, {
+          value: false,
+          expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+        });
+      }
       return false;
     }
 
@@ -644,8 +720,7 @@ export async function isSuperAdmin(userId: string): Promise<boolean> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roles } = t as any;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const superAdmin = await (getDb() as any)
+    const superAdmin = await rbacQuery(executor)
       .select({ id: roles.id })
       .from(roles)
       .where(
@@ -656,18 +731,21 @@ export async function isSuperAdmin(userId: string): Promise<boolean> {
       )
       .limit(1);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = (superAdmin as any[]).length > 0;
+    const result = superAdmin.length > 0;
 
-    superAdminCache.set(userId, {
-      value: result,
-      expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
-    });
+    // Populate the process-wide cache only for pooled checks; an executor-backed
+    // result reflects the caller's uncommitted transaction (see the param note).
+    if (!executor) {
+      superAdminCache.set(userId, {
+        value: result,
+        expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+      });
 
-    // Evict oldest if cache grows too large
-    if (superAdminCache.size > 1000) {
-      const oldest = superAdminCache.keys().next().value;
-      if (oldest) superAdminCache.delete(oldest);
+      // Evict oldest if cache grows too large
+      if (superAdminCache.size > 1000) {
+        const oldest = superAdminCache.keys().next().value;
+        if (oldest) superAdminCache.delete(oldest);
+      }
     }
 
     return result;
@@ -779,12 +857,16 @@ export async function containsSuperAdminRole(
  * @param userId - The user ID
  * @returns Array of role slugs (e.g., ['super-admin', 'editor'])
  */
-export async function listRoleSlugsForUser(userId: string): Promise<string[]> {
+export async function listRoleSlugsForUser(
+  userId: string,
+  // Optional transaction-bound executor; see `hasPermission`.
+  executor?: unknown
+): Promise<string[]> {
   if (!userId) return [];
 
   try {
     const checker = new PermissionChecker();
-    const roleIds = await checker.getAllRoleIdsForUser(userId);
+    const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
     if (roleIds.size === 0) return [];
 
@@ -792,8 +874,7 @@ export async function listRoleSlugsForUser(userId: string): Promise<string[]> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roles } = t as any;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (getDb() as any)
+    const rows = await rbacQuery(executor)
       .select({ slug: roles.slug })
       .from(roles)
       .where(inArray(roles.id, Array.from(roleIds)));

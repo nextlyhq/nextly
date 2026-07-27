@@ -771,6 +771,51 @@ describe("ComponentDataService", () => {
       expect(ctx.relationship.expandRelationships).toHaveBeenCalled();
     });
 
+    it("carries the caller down to the related row's own field rules", async () => {
+      // A component's relationship fields copy whole rows out of the TARGET
+      // collection. Neither the parent entity's field registry nor the
+      // component's describes that collection's fields, so without the caller
+      // reaching the expansion a field the target protects is returned inside
+      // the populated component to anyone who reads the parent.
+      ctx.adapter.select.mockResolvedValue([
+        { id: "seo-1", _parent_id: "entry-1", _order: 0, meta_title: "X" },
+      ]);
+
+      await ctx.service.populateComponentData({
+        entry: { id: "entry-1" },
+        parentTable: "dc_pages",
+        fields: [seoComponentField()],
+        depth: 2,
+        access: {
+          enforceFieldAccess: true,
+          user: { id: "u1", roles: ["editor"] },
+        },
+      });
+
+      const options = ctx.relationship.expandRelationships.mock.calls[0][3];
+      expect(options.enforceFieldAccess).toBe(true);
+      expect(options.user).toMatchObject({ id: "u1" });
+    });
+
+    it("leaves enforcement off for a caller that supplies no access context", async () => {
+      // Write-side callers assembling a payload pass no caller. Enforcing for
+      // them would judge everyone anonymous and strip protected related fields
+      // from a response returned to the very user who just wrote it.
+      ctx.adapter.select.mockResolvedValue([
+        { id: "seo-1", _parent_id: "entry-1", _order: 0, meta_title: "X" },
+      ]);
+
+      await ctx.service.populateComponentData({
+        entry: { id: "entry-1" },
+        parentTable: "dc_pages",
+        fields: [seoComponentField()],
+        depth: 2,
+      });
+
+      const options = ctx.relationship.expandRelationships.mock.calls[0][3];
+      expect(options.enforceFieldAccess).toBeFalsy();
+    });
+
     it("skips relationship expansion when depth is 0", async () => {
       ctx.adapter.select.mockResolvedValue([
         { id: "seo-1", _parent_id: "entry-1", _order: 0, meta_title: "X" },

@@ -36,6 +36,8 @@ import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { offsetPaginationToMeta } from "../dispatcher/helpers/service-envelope";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
+import { DRAIN_REQUEST_TIMEOUT_MS } from "../domains/webhooks/deliver";
 import {
   runWebhookDrain,
   type RunWebhookDrainOptions,
@@ -48,6 +50,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
   CreateWebhookSchema,
+  RotateWebhookSchema,
   UpdateWebhookSchema,
 } from "../schemas/_zod/webhooks";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
@@ -130,7 +133,15 @@ async function requireWebhookPermission(
  * live in `logContext` for operator triage.
  */
 function denySessionOnly(
-  action: "create" | "update" | "delete" | "reveal"
+  action:
+    | "create"
+    | "update"
+    | "delete"
+    | "reveal"
+    | "test"
+    | "redeliver"
+    | "rotate"
+    | "expire-secrets"
 ): never {
   throw NextlyError.forbidden({
     logContext: { reason: "session-only", action },
@@ -168,7 +179,6 @@ const DRAIN_DELIVER_BATCH = 25;
 // batch so a tick creates roughly what it can attempt; the rest waits.
 const DRAIN_FANOUT_BATCH = 50;
 const DRAIN_MAX_DURATION_MS = 25_000;
-const DRAIN_REQUEST_TIMEOUT_MS = 10_000;
 
 /** The bearer token on the request, or null when there is no bearer header. */
 function bearerToken(request: Request): string | null {
@@ -433,6 +443,94 @@ export function getWebhookDelivery(
 }
 
 /**
+ * Send a synthetic signed ping to an endpoint and report the outcome.
+ *
+ * A connectivity probe: it makes one outbound request and writes nothing to the
+ * outbox or the delivery queue, so an operator can verify a receiver (reachable
+ * + signature accepted) without producing a real event. Works on a disabled
+ * endpoint too, so a receiver can be verified before it is enabled.
+ *
+ * Auth: **session only** + `update-webhooks` (a side-effecting action, not a read).
+ *
+ * Response: `{ message, result: WebhookTestResult }` via `respondAction`.
+ */
+export function testWebhookEndpoint(
+  req: Request,
+  id: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("test");
+
+    const service = await getWebhookService();
+    const result = await service.testEndpoint(id);
+
+    // The receiver's snippet is echoed verbatim; skip timezone rewriting.
+    // Spread into a fresh object so the typed result satisfies the action
+    // envelope's `Record<string, unknown>` shape.
+    return respondAction(
+      "Test event sent.",
+      { ...result },
+      { headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" } }
+    );
+  })(req);
+}
+
+/**
+ * Re-attempt a specific past delivery.
+ *
+ * Re-arms the existing delivery row for another attempt from its stored event
+ * payload (the unique `(webhook, event)` index forbids a duplicate row, so the
+ * delivery id — the Standard-Webhooks `webhook-id` — is reused and a receiver
+ * that already processed it dedupes), then nudges the drain so it goes out
+ * promptly. The outcome surfaces in the delivery log.
+ *
+ * Auth: **session only** + `update-webhooks`.
+ *
+ * Response: `{ message, item: WebhookDeliveryDetail }` via `respondMutation`.
+ */
+export function redeliverWebhookDelivery(
+  req: Request,
+  webhookId: string,
+  deliveryId: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("redeliver");
+
+    const service = await getWebhookService();
+    await service.redeliverDelivery(webhookId, deliveryId);
+
+    // Offer the post-response fast drain so the re-armed delivery is attempted
+    // promptly; the scheduled drain is the backstop when no runtime `after()`
+    // is available.
+    if (container.has("webhookFastDrainScheduler")) {
+      container
+        .get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+        .offer();
+    }
+
+    // Read back the re-armed delivery for the response so the operator sees its
+    // reset state (status `pending`, attempt count 0) and prior attempt history.
+    const deliveryService = await getWebhookDeliveryService();
+    const delivery = await deliveryService.getDelivery(webhookId, deliveryId);
+    if (!delivery) {
+      throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+
+    return respondMutation("Redelivery queued.", delivery, {
+      headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
+    });
+  })(req);
+}
+
+/**
  * Register a webhook endpoint.
  *
  * The URL is resolved and checked by the service before it is stored, so a
@@ -571,5 +669,94 @@ export function revealWebhookSecret(
     const secrets = await service.revealSecrets(id);
 
     return respondData({ secrets }, { headers: PRIVATE_NO_STORE_HEADERS });
+  })(req);
+}
+
+/**
+ * Rotate an endpoint's signing secret with an overlap window.
+ *
+ * A fresh secret becomes the primary; the previous one stays valid for
+ * `overlapSeconds` (default when omitted, 0 to retire it at once) so a receiver
+ * can switch over without dropping a delivery. Deliveries in the window carry a
+ * signature for both, so either secret verifies.
+ *
+ * Auth: **session only** + `update-webhooks` — rotation mints new key material.
+ *
+ * Response: `{ message, item: { doc, secret } }` via `respondMutation`. The new
+ * secret is returned here once, the same as on create, and is retrievable after
+ * through the reveal action until it is rotated away.
+ */
+export function rotateWebhookSecret(
+  req: Request,
+  id: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("rotate");
+
+    // The body is optional: a rotate with no body takes the default overlap. An
+    // empty body reads as `{}` rather than failing JSON parsing.
+    const raw = await request.text();
+    let body: unknown = {};
+    if (raw.trim() !== "") {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "",
+              code: "invalid_json",
+              message: "Request body is not valid JSON.",
+            },
+          ],
+          logContext: { reason: "invalid-json-body", entity: "webhook-rotate" },
+        });
+      }
+    }
+
+    let validated: z.infer<typeof RotateWebhookSchema>;
+    try {
+      validated = RotateWebhookSchema.parse(body);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
+    }
+
+    const service = await getWebhookService();
+    const { endpoint, secret } = await service.rotateSecret(id, validated);
+
+    return respondMutation("Webhook signing secret rotated.", {
+      doc: endpoint,
+      secret,
+    });
+  })(req);
+}
+
+/**
+ * Retire every overlapping (rotated-away) signing secret immediately, leaving
+ * only the primary. The way to cut a rotation's overlap short once the receiver
+ * has switched to the new secret.
+ *
+ * Auth: **session only** + `update-webhooks`.
+ *
+ * Response: `{ message, item: WebhookEndpointSummary }` via `respondMutation`.
+ */
+export function expireWebhookOldSecrets(
+  req: Request,
+  id: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireWebhookPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("expire-secrets");
+
+    const service = await getWebhookService();
+    const updated = await service.expireOldSecrets(id);
+
+    return respondMutation("Old signing secrets expired.", updated);
   })(req);
 }

@@ -25,3 +25,7 @@ export { GroupInput, type GroupInputProps } from "./GroupInput";
 
 // JSON field component
 export { JsonInput, type JsonInputProps } from "./JsonInput";
+// The read-only form renderer for a blocks field. It lives with the other
+// structured-field controls because a page document is structured content, and
+// it is exported here so FieldRenderer resolves it the same way as the rest.
+export { BlocksSummary } from "./BlocksSummary";

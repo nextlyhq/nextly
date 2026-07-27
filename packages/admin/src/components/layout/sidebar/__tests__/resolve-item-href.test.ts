@@ -46,6 +46,20 @@ describe("resolveItemHref", () => {
     ).toBe("#");
   });
 
+  it("routes the settings icon to the first reachable subpage when given one", () => {
+    const settings = makeItem({
+      id: "settings",
+      label: "Settings",
+      href: ROUTES.SETTINGS,
+    });
+    // Webhook-only role: General is manage-settings-guarded, so land on Webhooks.
+    expect(resolveItemHref(settings, [], ROUTES.SETTINGS_WEBHOOKS)).toBe(
+      ROUTES.SETTINGS_WEBHOOKS
+    );
+    // No override → the item's own href (General).
+    expect(resolveItemHref(settings, [])).toBe(ROUTES.SETTINGS);
+  });
+
   it("returns the item's own href for non-categorical items (e.g. builders)", () => {
     expect(
       resolveItemHref(

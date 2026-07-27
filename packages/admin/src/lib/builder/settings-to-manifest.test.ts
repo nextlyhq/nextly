@@ -133,3 +133,31 @@ describe("version history in the manifest mirror", () => {
     });
   }
 });
+
+describe("cache revalidation in the manifest mirror", () => {
+  const cases = [
+    ["collection", collectionEntityFromSettings],
+    ["single", singleEntityFromSettings],
+  ] as const;
+
+  const base = {
+    singularName: "Post",
+    pluralName: "Posts",
+    slug: "posts",
+    icon: "FileText",
+  };
+
+  for (const [kind, build] of cases) {
+    it(`${kind}: mirrors the opt-out when off`, () => {
+      const entity = build("posts", { ...base, revalidate: false }, FIELDS);
+      expect(entity.revalidate).toBe(false);
+    });
+
+    it(`${kind}: defaults to on when the setting is absent`, () => {
+      // Revalidation is on unless explicitly disabled, so an absent value must
+      // land as true in the manifest, not undefined (which would drop the key).
+      const entity = build("posts", base, FIELDS);
+      expect(entity.revalidate).toBe(true);
+    });
+  }
+});

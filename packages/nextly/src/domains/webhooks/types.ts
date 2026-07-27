@@ -10,6 +10,8 @@
  * @module domains/webhooks/types
  */
 
+import type { StoredSecretEntry } from "./secret-entries";
+
 /**
  * Canonical webhook event types, grouped by resource. Stable string ids; the
  * envelope's `specversion` (not renames) carries breaking changes. A webhook
@@ -100,6 +102,14 @@ export type WebhookResource =
   | {
       kind: "single" | "media" | "user" | "form";
       collection?: never;
+      /**
+       * The stable slug of the changed resource (e.g. the Single's slug), so a
+       * receiver can route `single.updated`/`single.published` without scanning
+       * for the opaque document id. Distinct from `entry.collection`: it never
+       * feeds the endpoint `collections` filter (that reads `collection`), so a
+       * single slug cannot be caught by a collection-scoped subscription.
+       */
+      slug?: string;
       id?: string;
       locale?: string;
     };
@@ -133,6 +143,14 @@ export interface WebhookEvent {
   /** Top-level keys whose value changed; drives changed-field filtering. */
   changedFields: string[];
   actor?: WebhookActor;
+  /**
+   * The status delta for a lifecycle event (`entry.published` /
+   * `entry.unpublished` / `entry.status_changed`). Present only on those events,
+   * so a `status_changed` subscriber reads from/to directly instead of diffing
+   * `data.status` against `previous.status`. `from` is null on a create-as-
+   * published. Additive + optional: existing subscribers are unaffected.
+   */
+  statusChange?: { from: string | null; to: string };
 }
 
 /** Lifecycle of one delivery row in the outbox ledger. */
@@ -185,8 +203,12 @@ export interface WebhookEndpoint {
   filter: FilterSpec | null;
   /** Static request headers merged into every delivery. */
   headers: Record<string, string> | null;
-  /** List of active signing-secret hashes (list-shaped for rotation). */
-  secretHash: string[];
+  /**
+   * Stored signing-secret entries (list-shaped for rotation). Carried for
+   * completeness; the delivery path reads and signs from its own row rather
+   * than this cached copy.
+   */
+  secretHash: StoredSecretEntry[];
   secretPrefix: string;
   /** Reserved per-endpoint field projection; not applied yet. */
   fieldAllowlist: string[] | null;

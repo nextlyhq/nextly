@@ -20,6 +20,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import type { RevalidateConfig } from "../../revalidation/types";
 import type { StoredAccessRule } from "../../services/access/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
 // Registry-facing resolved versioning config shape for the `versions` column.
@@ -224,6 +225,13 @@ export interface DynamicSingleInsert {
    * reads it back to decide whether to capture a version snapshot on write.
    */
   versions?: ResolvedVersionsConfig | null;
+
+  /**
+   * Cache-revalidation config (`{ tags?, disable? }`), or null when the single
+   * sets none. Persisted on the `revalidate` column; the write path reads it
+   * back to honor `disable` and merge extra `tags`.
+   */
+  revalidate?: RevalidateConfig | null;
 
   /**
    * Path to the config file (code-first Singles only).

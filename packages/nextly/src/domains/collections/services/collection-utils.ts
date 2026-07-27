@@ -17,6 +17,7 @@ export const ALWAYS_JSON_TYPES = new Set([
   "group",
   "json",
   "chips", // Chips fields store string[] as JSON
+  "blocks", // A blocks field stores one page document as JSON
 ]);
 
 /**

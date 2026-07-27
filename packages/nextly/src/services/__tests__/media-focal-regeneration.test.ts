@@ -1,0 +1,225 @@
+/**
+ * Focal-point crop regeneration must be content-addressed: new variants are
+ * written to fresh keys, the row is committed pointing at them, and only THEN
+ * are the superseded old variants deleted — so a rollback or a lost update race
+ * never leaves the committed row referencing bytes that were already deleted.
+ *
+ * These use hand-rolled collaborators (no real DB) to pin the delete ORDERING
+ * and the rollback/void cleanup, which are the correctness contract of the fix.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const deleteSpy = vi.fn(async () => {});
+const calls: string[] = [];
+// The path the regenerated variant lands on. Mutable so a test can simulate a
+// deterministic-key adapter that reuses the existing path (new === old).
+// `filenames` records the destination base names passed to generateImageSizes,
+// so a test can assert regeneration forces a unique destination.
+const regen = { thumbPath: "NEW/thumb.webp", filenames: [] as string[] };
+
+const storageMock = {
+  getAdapterForCollection: () => ({
+    read: async () => Buffer.from("original-image-bytes"),
+  }),
+  upload: async () => ({ url: "http://x/new", path: "NEW/thumb.webp" }),
+  delete: async (path: string) => {
+    calls.push(`delete:${path}`);
+    return deleteSpy(path);
+  },
+};
+
+vi.mock("@nextly/storage", () => ({
+  getMediaStorage: () => storageMock,
+  getImageProcessor: () => ({}),
+  withRetry: (fn: () => unknown) => fn(),
+  isTransientError: () => false,
+  // The regenerated variants land on the configured key (fresh/unique by
+  // default; a test can point it at the existing path to model a deterministic
+  // adapter that overwrites in place). The destination base name is recorded so
+  // a test can assert regeneration forces a unique destination.
+  generateImageSizes: async (_buffer: unknown, originalFilename: string) => {
+    regen.filenames.push(originalFilename);
+    return {
+      thumbnail: {
+        path: regen.thumbPath,
+        url: "http://x/new",
+        width: 100,
+        height: 100,
+      },
+    };
+  },
+  deleteImageSizes: async () => {},
+}));
+
+vi.mock("../../domains/webhooks/record-mutation-event", () => ({
+  recordMutationEvent: async () => {},
+}));
+
+vi.mock("../image-size", () => ({
+  ImageSizeService: class {
+    async getActiveSizeConfigs() {
+      return [{ name: "thumbnail", width: 100, height: 100 }];
+    }
+  },
+}));
+
+import { NextlyError } from "../../errors";
+import { MediaService } from "../media";
+
+const OLD_PATH = "OLD/thumb.webp";
+const NEW_PATH = "NEW/thumb.webp";
+
+const existingMedia = {
+  id: "m1",
+  mimeType: "image/png",
+  filename: "m1.png",
+  originalFilename: "m1.png",
+  sizes: { thumbnail: { path: OLD_PATH, url: "http://x/old" } },
+};
+
+function makeAdapter(
+  txBehavior: "commit" | "throw" | "row-gone",
+  // The row the in-transaction locked read returns. Defaults to the same row the
+  // pre-transaction read saw; a test overrides it to model a concurrent update
+  // that committed a different variant set before this transaction locked.
+  lockedRow: typeof existingMedia = existingMedia
+) {
+  const tx = {
+    lockRow: async () => {},
+    select: async () => (txBehavior === "row-gone" ? [] : [lockedRow]),
+    update: async () => {
+      calls.push("update");
+    },
+  };
+  return {
+    dialect: "sqlite" as const,
+    getDrizzle: () => ({}),
+    transaction: async <T>(fn: (t: typeof tx) => Promise<T>): Promise<T> => {
+      const result = await fn(tx);
+      if (txBehavior === "throw") {
+        // Mirror how the DB layer surfaces a failed write (a typed NextlyError),
+        // not a bare Error, matching this package's error convention.
+        throw NextlyError.internal({
+          logContext: { reason: "test-simulated-db-failure" },
+        });
+      }
+      return result;
+    },
+  };
+}
+
+function makeService(
+  txBehavior: "commit" | "throw" | "row-gone",
+  lockedRow: typeof existingMedia = existingMedia
+) {
+  const logger = {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  };
+  const service = new MediaService(
+    makeAdapter(txBehavior, lockedRow) as never,
+    logger as never
+  );
+  // getMediaById is the pre-transaction existence read; stub it to the image.
+  vi.spyOn(
+    service as unknown as { getMediaById: () => Promise<unknown> },
+    "getMediaById"
+  ).mockResolvedValue({ success: true, statusCode: 200, data: existingMedia });
+  return service;
+}
+
+describe("MediaService focal-point regeneration ordering", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    deleteSpy.mockClear();
+    regen.thumbPath = NEW_PATH;
+    regen.filenames.length = 0;
+  });
+
+  it("regenerates onto a unique destination base, never the item's stored filename", async () => {
+    // A random token is injected before the extension so the regenerated variant
+    // keys cannot collide with the item's existing ones on a deterministic
+    // (filename -> fixed path) storage adapter — which would otherwise fail the
+    // upload or overwrite live bytes before the row commits.
+    const service = makeService("commit");
+    await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(regen.filenames).toHaveLength(1);
+    const base = regen.filenames[0];
+    expect(base).not.toBe(existingMedia.originalFilename);
+    // `m1.png` -> `m1-<uuid>.png`: token before the extension.
+    expect(base).toMatch(/^m1-[0-9a-f-]{36}\.png$/i);
+  });
+
+  it("deletes the old variant only AFTER the row commits, and never the new one", async () => {
+    const service = makeService("commit");
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(true);
+    // The old path is deleted, the new path (now referenced by the row) is not.
+    expect(deleteSpy).toHaveBeenCalledWith(OLD_PATH);
+    expect(deleteSpy).not.toHaveBeenCalledWith(NEW_PATH);
+    // Ordering: the delete happens strictly after the committing update.
+    expect(calls.indexOf("update")).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf(`delete:${OLD_PATH}`)).toBeGreaterThan(
+      calls.indexOf("update")
+    );
+  });
+
+  it("cleans up the new (orphaned) variant and keeps the old one when the write fails", async () => {
+    const service = makeService("throw");
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(false);
+    // The freshly-uploaded new variant is deleted; the old one is untouched.
+    expect(deleteSpy).toHaveBeenCalledWith(NEW_PATH);
+    expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  it("cleans up the new variant when the row was concurrently deleted", async () => {
+    const service = makeService("row-gone");
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.statusCode).toBe(404);
+    expect(deleteSpy).toHaveBeenCalledWith(NEW_PATH);
+    expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  it("does not delete a shared path on rollback for a deterministic-key adapter", async () => {
+    // A deterministic adapter regenerates onto the SAME path the row already
+    // references. On a failed write the un-updated row still points there, so the
+    // rollback cleanup must not delete it (which would drop the live variant).
+    regen.thumbPath = OLD_PATH;
+    const service = makeService("throw");
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(false);
+    expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  it("keeps the locked row's variant (not the pre-transaction one) on rollback", async () => {
+    // Lost-update race with a deterministic-key adapter: this update read OLD
+    // before the transaction, a concurrent update committed variant A, and this
+    // update then locked and read A before its own write failed. The rollback
+    // must filter the orphans against the LOCKED row (A), not the stale pre-
+    // transaction read (OLD): the row the database still references is A, so
+    // deleting A would drop a live variant. Filtering against OLD would delete A.
+    const A_PATH = "A/thumb.webp";
+    regen.thumbPath = A_PATH;
+    const lockedRow = {
+      ...existingMedia,
+      sizes: { thumbnail: { path: A_PATH, url: "http://x/a" } },
+    };
+    const service = makeService("throw", lockedRow);
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(false);
+    // The variant the surviving (locked) row references is kept.
+    expect(deleteSpy).not.toHaveBeenCalledWith(A_PATH);
+    // The stale pre-transaction variant is not the one referenced, so it is not
+    // wrongly kept as "live" either — nothing gets deleted here at all.
+    expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+});

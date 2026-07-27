@@ -37,6 +37,8 @@ export const UI_SCHEMA_FIELD_TYPES = [
   "component",
   "json",
   "chips",
+  // A page built from blocks.
+  "blocks",
 ] as const;
 
 export type UiSchemaFieldType = (typeof UI_SCHEMA_FIELD_TYPES)[number];

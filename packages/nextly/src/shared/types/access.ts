@@ -134,6 +134,18 @@ export interface CollectionAccessControl {
   update?: AccessControlFunction | boolean;
   /** Access rule for deleting documents */
   delete?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving a document INTO published (publishing). Evaluated on
+   * top of `update`, so a caller must satisfy both to publish. Absent means the
+   * publish permission is resolved from DB grants alone (`publish-<slug>`).
+   */
+  publish?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving a document OUT of published (unpublishing). Evaluated
+   * on top of `update`. Absent means it is resolved from DB grants alone
+   * (`unpublish-<slug>`).
+   */
+  unpublish?: AccessControlFunction | boolean;
 }
 
 // ============================================================
@@ -163,6 +175,18 @@ export interface SingleAccessControl {
   read?: AccessControlFunction | boolean;
   /** Access rule for updating the single document */
   update?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving the single INTO published (publishing). Evaluated on
+   * top of `update`. Absent means it is resolved from DB grants alone
+   * (`publish-<slug>`).
+   */
+  publish?: AccessControlFunction | boolean;
+  /**
+   * Access rule for moving the single OUT of published (unpublishing). Evaluated
+   * on top of `update`. Absent means it is resolved from DB grants alone
+   * (`unpublish-<slug>`).
+   */
+  unpublish?: AccessControlFunction | boolean;
 }
 
 // ============================================================
@@ -181,4 +205,11 @@ export interface CheckAccessParams {
   resource: string;
   /** Optional code-defined access control from defineCollection/defineSingle */
   codeAccess?: CollectionAccessControl | SingleAccessControl;
+  /**
+   * Optional transaction-bound Drizzle executor. Supplied when the caller is
+   * already inside a write transaction so the role/permission reads run on that
+   * transaction's own connection rather than taking a second pooled one, which
+   * can stall against a small pool. Defaults to the pooled connection.
+   */
+  executor?: unknown;
 }

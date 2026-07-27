@@ -1,0 +1,336 @@
+/**
+ * The block registry: the single place that knows which block types exist in a
+ * running app, and the gate every definition passes through.
+ *
+ * `globalThis`-pinned and cleared per boot (clear-and-rebuild), so a dev-server
+ * hot reload re-registering the same blocks never collides with itself, while a
+ * genuine duplicate name inside one boot still fails loudly.
+ *
+ * Registration is where definition rules are enforced — a malformed block fails
+ * at boot with a named error rather than producing broken pages later.
+ */
+import type { AnyBlockDefinition, BlockSupports } from "./block";
+import { COMPONENT_INSTANCE_TYPE } from "./document";
+import type { MigrationSource } from "./migration";
+import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
+import type { BlockTypeLookup } from "./validation";
+
+/** A style capability blocks may opt into. */
+export interface SupportDefinition {
+  /** The key blocks use inside `supports`, e.g. "spacing". */
+  key: string;
+  /** Human label for editor grouping. */
+  label?: string;
+  /** Sub-flags this support recognizes, e.g. ["padding", "margin"]. */
+  flags?: string[];
+}
+
+/** Where a set of blocks came from, for collision messages. */
+export interface RegisterOptions {
+  /** e.g. a plugin name; surfaced when two sources claim the same block name. */
+  source?: string;
+}
+
+interface RegistryEntry {
+  definition: AnyBlockDefinition;
+  source: string;
+}
+
+/** Style capabilities available to every app before any extension. */
+const BUILT_IN_SUPPORTS: SupportDefinition[] = [
+  {
+    key: "spacing",
+    label: "Spacing",
+    flags: ["margin", "padding", "blockGap"],
+  },
+  { key: "layout", label: "Layout" },
+  { key: "dimensions", label: "Dimensions" },
+  { key: "typography", label: "Typography" },
+  { key: "color", label: "Color", flags: ["text", "background", "link"] },
+  { key: "background", label: "Background", flags: ["image", "gradient"] },
+  {
+    key: "border",
+    label: "Border",
+    flags: ["width", "style", "color", "radius"],
+  },
+  { key: "shadow", label: "Shadow" },
+  { key: "effects", label: "Effects" },
+  { key: "position", label: "Position" },
+  { key: "container", label: "Container queries" },
+  { key: "customCss", label: "Custom CSS" },
+];
+
+const globalForBlocks = globalThis as unknown as {
+  __nextly_blocks?: Map<string, RegistryEntry>;
+  __nextly_blockSupports?: Map<string, SupportDefinition>;
+};
+
+function blockStore(): Map<string, RegistryEntry> {
+  globalForBlocks.__nextly_blocks ??= new Map();
+  return globalForBlocks.__nextly_blocks;
+}
+
+function supportStore(): Map<string, SupportDefinition> {
+  if (!globalForBlocks.__nextly_blockSupports) {
+    const map = new Map<string, SupportDefinition>();
+    // Seed here rather than at module load so a cleared store always comes
+    // back with the built-ins present.
+    for (const support of BUILT_IN_SUPPORTS) map.set(support.key, support);
+    globalForBlocks.__nextly_blockSupports = map;
+  }
+  return globalForBlocks.__nextly_blockSupports;
+}
+
+/** A block name is a namespaced slug, e.g. "core/heading". */
+const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The highest version a block may declare. Migration chains a bounded number of
+ * steps, so a version above this could never carry its oldest stored nodes
+ * forward — registration refuses it rather than promise an upgrade path that
+ * does not exist.
+ */
+export const MAX_BLOCK_VERSION = 1 + MAX_MIGRATION_STEPS;
+
+/**
+ * Names the engine owns. They identify nodes resolved by the engine's own
+ * machinery rather than by a registered block, so a block may not claim one.
+ */
+const RESERVED_BLOCK_NAMES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
+
+/** A support key is a single lowerCamel/slug token. */
+const SUPPORT_KEY_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
+
+function fail(code: string, message: string): never {
+  throw new Error(`${code}: ${message}`);
+}
+
+/** A key/value object — not null, not an array, not a function. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Check one definition against the rules registration enforces. Split out so a
+ * caller can validate a definition without committing it to the registry.
+ */
+function assertValidDefinition(def: AnyBlockDefinition): void {
+  if (typeof def.name !== "string" || !BLOCK_NAME_RE.test(def.name)) {
+    fail(
+      "NEXTLY_BLOCK_INVALID",
+      `block name "${String(def.name)}" must be a namespaced slug like "core/heading".`
+    );
+  }
+  if (RESERVED_BLOCK_NAMES.has(def.name)) {
+    fail(
+      "NEXTLY_BLOCK_RESERVED_NAME",
+      `block name "${def.name}" is reserved by the engine and cannot be registered.`
+    );
+  }
+  if (
+    !Number.isInteger(def.version) ||
+    def.version < 1 ||
+    // A version further above 1 than migration will chain cannot have an
+    // upgrade path for its oldest stored nodes, so accepting it here would
+    // promise something migration cannot honor.
+    def.version > MAX_BLOCK_VERSION
+  ) {
+    fail(
+      "NEXTLY_BLOCK_INVALID",
+      `block "${def.name}" must declare an integer version between 1 and ${MAX_BLOCK_VERSION}.`
+    );
+  }
+  // description and example are required so generated documentation, palette
+  // entries, and previews are never empty for a registered block.
+  if (typeof def.description !== "string" || def.description.trim() === "") {
+    fail(
+      "NEXTLY_BLOCK_INVALID",
+      `block "${def.name}" must declare a non-empty description.`
+    );
+  }
+  if (
+    typeof def.example !== "object" ||
+    def.example === null ||
+    // Props must be a plain record: a stored node's props are a key/value map,
+    // and document validation rejects an array, so an array-shaped example
+    // could never become a valid node.
+    !isPlainRecord(def.example.props)
+  ) {
+    fail(
+      "NEXTLY_BLOCK_INVALID",
+      `block "${def.name}" must declare an example whose props are a plain object.`
+    );
+  }
+  if (def.defaultProps !== undefined && !isPlainRecord(def.defaultProps)) {
+    fail(
+      "NEXTLY_BLOCK_INVALID",
+      `block "${def.name}" defaultProps must be a plain object.`
+    );
+  }
+  if (typeof def.render !== "function") {
+    fail(
+      "NEXTLY_BLOCK_INVALID",
+      `block "${def.name}" must declare a render function.`
+    );
+  }
+
+  // A version above 1 means stored nodes exist at older versions; every step
+  // between must be covered or those nodes could never be upgraded.
+  const gaps = findMigrationGaps(1, def.version, def.migrate);
+  if (gaps.length > 0) {
+    fail(
+      "NEXTLY_BLOCK_MIGRATION_GAP",
+      `block "${def.name}" is at version ${def.version} but has no migration from version${
+        gaps.length > 1 ? "s" : ""
+      } ${gaps.join(", ")}. Add the missing step(s) so stored blocks can be upgraded.`
+    );
+  }
+
+  assertKnownSupports(def.name, def.supports);
+}
+
+function assertKnownSupports(
+  blockName: string,
+  supports: BlockSupports | undefined
+): void {
+  if (!supports) return;
+  const known = supportStore();
+  for (const [key, value] of Object.entries(supports)) {
+    const support = known.get(key);
+    if (!support) {
+      fail(
+        "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
+        `block "${blockName}" declares unknown support "${key}". Register it with registerSupport() first.`
+      );
+    }
+    // When a support enumerates its sub-flags, an unrecognized nested flag is
+    // as much a typo as an unknown support key and would silently enable
+    // nothing, so it is rejected the same way.
+    if (support.flags && isPlainRecord(value)) {
+      for (const flag of Object.keys(value)) {
+        if (!support.flags.includes(flag)) {
+          fail(
+            "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
+            `block "${blockName}" declares unknown "${key}" flag "${flag}". Known flags: ${support.flags.join(", ")}.`
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Register block definitions. Called once per boot per source; a duplicate name
+ * within a boot is a collision, naming both sources so the conflict is
+ * actionable. Registration is all-or-nothing per call: the batch is validated
+ * before anything is stored, so a bad definition cannot leave the registry
+ * half-populated.
+ */
+export function registerBlocks(
+  definitions: AnyBlockDefinition[],
+  options: RegisterOptions = {}
+): void {
+  const source = options.source ?? "app";
+  const map = blockStore();
+
+  const seenInBatch = new Set<string>();
+  for (const def of definitions) {
+    assertValidDefinition(def);
+    const existing = map.get(def.name);
+    if (existing) {
+      fail(
+        "NEXTLY_BLOCK_COLLISION",
+        `block "${def.name}" is already registered by "${existing.source}" and cannot be redefined by "${source}".`
+      );
+    }
+    if (seenInBatch.has(def.name)) {
+      fail(
+        "NEXTLY_BLOCK_COLLISION",
+        `block "${def.name}" is registered twice by "${source}".`
+      );
+    }
+    seenInBatch.add(def.name);
+  }
+
+  for (const def of definitions) map.set(def.name, { definition: def, source });
+}
+
+/**
+ * Add a style capability blocks may opt into. Third parties extend the support
+ * vocabulary through this rather than by editing the engine.
+ */
+export function registerSupport(support: SupportDefinition): void {
+  if (typeof support.key !== "string" || !SUPPORT_KEY_RE.test(support.key)) {
+    fail(
+      "NEXTLY_SUPPORT_INVALID",
+      `support key "${String(support.key)}" must be a single alphanumeric token.`
+    );
+  }
+  const map = supportStore();
+  if (map.has(support.key)) {
+    fail(
+      "NEXTLY_SUPPORT_COLLISION",
+      `support "${support.key}" is already registered.`
+    );
+  }
+  map.set(support.key, support);
+}
+
+/** A registered block definition, or `undefined`. */
+export function getBlock(name: string): AnyBlockDefinition | undefined {
+  return blockStore().get(name)?.definition;
+}
+
+export function hasBlock(name: string): boolean {
+  return blockStore().has(name);
+}
+
+/** Every registered block definition. */
+export function allBlocks(): AnyBlockDefinition[] {
+  return [...blockStore().values()].map(entry => entry.definition);
+}
+
+/** Which source registered a block, for diagnostics. */
+export function getBlockSource(name: string): string | undefined {
+  return blockStore().get(name)?.source;
+}
+
+export function getSupport(key: string): SupportDefinition | undefined {
+  return supportStore().get(key);
+}
+
+export function allSupports(): SupportDefinition[] {
+  return [...supportStore().values()];
+}
+
+/**
+ * Drop every registered block and reset supports to the built-ins. Called at
+ * the start of each boot (and by tests) so re-registration is idempotent.
+ */
+export function clearBlocks(): void {
+  blockStore().clear();
+  globalForBlocks.__nextly_blockSupports = undefined;
+}
+
+/**
+ * The registry as the block-type lookup validation expects, so validating a
+ * document against the running app's blocks needs no adapter at the call site.
+ * Reads through to the live registry, so it stays correct across a re-register.
+ */
+export function registryLookup(): BlockTypeLookup {
+  return { has: hasBlock };
+}
+
+/**
+ * The registry as the migration source, exposing each block's current version
+ * and upgrade steps so a stored document can be brought up to date.
+ */
+export function registryMigrationSource(): MigrationSource {
+  return {
+    get: name => {
+      const definition = getBlock(name);
+      if (!definition) return undefined;
+      return { version: definition.version, migrate: definition.migrate };
+    },
+  };
+}

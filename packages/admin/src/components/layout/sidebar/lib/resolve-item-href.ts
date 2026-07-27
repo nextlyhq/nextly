@@ -11,11 +11,17 @@ import type { MainMenuItem } from "../sidebar-types";
 // logic is unit-testable without mounting the full DualSidebar tree.
 export function resolveItemHref(
   item: MainMenuItem,
-  visibleStandalonePlugins: PluginMetadata[]
+  visibleStandalonePlugins: PluginMetadata[],
+  // The first settings subpage the user can actually open. The default settings
+  // href (/admin/settings) is guarded by `manage-settings`, so a user whose only
+  // settings access is API Keys or Webhooks would be redirected away; the caller
+  // resolves this to a reachable subpage for them.
+  settingsHref?: string
 ): string {
   if (item.id === "collections") return ROUTES.COLLECTIONS;
   if (item.id === "singles") return ROUTES.SINGLES;
   if (item.id === "plugins") return "#";
+  if (item.id === "settings" && settingsHref) return settingsHref;
   if (item.id.startsWith("standalone-")) {
     const slug = item.id.replace("standalone-", "");
     const sp = visibleStandalonePlugins.find(

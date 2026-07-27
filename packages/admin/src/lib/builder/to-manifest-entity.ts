@@ -65,6 +65,8 @@ export interface BuilderFieldInput {
   mimeTypes?: string;
   maxFileSize?: number;
   labels?: { singular?: string; plural?: string };
+  /** A blocks field's accepted block names and document kinds. */
+  blocks?: { allow?: string[]; kinds?: string[] };
   initCollapsed?: boolean;
   rowLabelField?: string;
   component?: string;
@@ -82,6 +84,8 @@ export interface BuilderSettingsInput {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Whether writes bust cache tags. Defaults on; false opts out. */
+  revalidate?: boolean;
   useAsTitle?: string;
   defaultColumns?: string[];
   group?: string;
@@ -121,6 +125,8 @@ export interface ManifestField {
   mimeTypes?: string;
   maxFileSize?: number;
   labels?: { singular?: string; plural?: string };
+  /** A blocks field's accepted block names and document kinds. */
+  blocks?: { allow?: string[]; kinds?: string[] };
   initCollapsed?: boolean;
   rowLabelField?: string;
   component?: string;
@@ -139,6 +145,8 @@ export interface ManifestEntity {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Whether writes bust cache tags. Defaults on; false opts out. */
+  revalidate?: boolean;
   fields: ManifestField[];
 }
 
@@ -163,6 +171,9 @@ const PASSTHROUGH_KEYS = [
   "mimeTypes",
   "maxFileSize",
   "labels",
+  // A blocks field's policy: which registered blocks and document kinds it
+  // accepts. Dropped here, an unrelated schema save would widen the field.
+  "blocks",
   "initCollapsed",
   "rowLabelField",
   "component",
@@ -202,8 +213,15 @@ export function applyCommonSettings(
   entity: ManifestEntity,
   settings: BuilderSettingsInput
 ): void {
-  const { useAsTitle, defaultColumns, group, status, localized, versions } =
-    settings;
+  const {
+    useAsTitle,
+    defaultColumns,
+    group,
+    status,
+    localized,
+    versions,
+    revalidate,
+  } = settings;
   const admin: NonNullable<ManifestEntity["admin"]> = {};
   if (useAsTitle) admin.useAsTitle = useAsTitle;
   if (defaultColumns && defaultColumns.length > 0) {
@@ -214,6 +232,7 @@ export function applyCommonSettings(
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;
   if (versions !== undefined) entity.versions = versions;
+  if (revalidate !== undefined) entity.revalidate = revalidate;
 }
 
 export function collectionToManifestEntity(

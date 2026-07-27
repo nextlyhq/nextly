@@ -92,6 +92,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "EventEnvelope (type)",
   "EventHandler (type)",
   "EventName (type)",
+  "FieldConfig (type)",
   "Filter (type)",
   "FilterSeams (value)",
   "HookContext (type)",
@@ -132,8 +133,13 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "ScheduledTask (type)",
   "Secret (value)",
   "ServiceOpts (type)",
+  "checkbox (value)",
   "definePlugin (value)",
+  "group (value)",
   "isSecret (value)",
   "secret (value)",
+  "text (value)",
+  "textarea (value)",
+  "upload (value)",
 ]
 `;

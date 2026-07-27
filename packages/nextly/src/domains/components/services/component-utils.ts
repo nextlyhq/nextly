@@ -74,6 +74,8 @@ const ALWAYS_JSON_TYPES: ReadonlySet<string> = new Set([
   "group",
   "richText",
   "component",
+  // A blocks field stores one page document as JSON.
+  "blocks",
 ]);
 
 export function shouldTreatAsJson(field: FieldConfig): boolean {

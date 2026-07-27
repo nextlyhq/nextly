@@ -22,8 +22,10 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { env } from "../../../shared/lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
@@ -587,7 +589,7 @@ ${allColumnDefs.join(",\n")}
           defaultVal = `DEFAULT ${this.formatDefaultValue(field.default, field.type)}`;
         } else if (field.required) {
           // Required field without explicit default - provide sensible default for existing rows
-          defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type)}`;
+          defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
         }
 
         const addColName = this.toSnakeCase(field.name);
@@ -969,6 +971,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "text", // JSON stored as text in SQLite
         chips: "text", // Chips stored as JSON text in SQLite
+        blocks: "text", // A page document is JSON, stored as text in SQLite
         relationship: "text", // Store foreign key as text (UUID or ID)
       };
       return sqliteTypeMap[type] || "text";
@@ -991,6 +994,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "json", // MySQL uses 'json' type, not 'jsonb'
         chips: "json", // Chips stored as JSON array
+        blocks: "json", // A page document is one JSON value
         relationship: "varchar(36)", // Store foreign key as varchar(36) for UUIDs
       };
       return mysqlTypeMap[type] || "text";
@@ -1012,6 +1016,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       richText: "text",
       json: "jsonb",
       chips: "jsonb", // Chips stored as JSON array
+      blocks: "jsonb", // A page document is one JSON value
       relationship: "text", // Store foreign key as text (UUID or ID)
     };
     return typeMap[type] || "text";
@@ -1021,7 +1026,10 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * Get a sensible default value for a field type.
    * Used when adding NOT NULL columns to existing tables.
    */
-  private getDefaultValueForType(type: string): string {
+  private getDefaultValueForType(
+    type: string,
+    field?: Pick<FieldDefinition, "blocks">
+  ): string {
     switch (type) {
       case "text":
       case "textarea":
@@ -1042,9 +1050,16 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "json":
       case "repeater":
       case "group":
-        return "'{}'";
+        return quoteJsonSqlDefault("{}", this.dialect);
+      case "blocks":
+        // A required blocks column needs a document, not an empty object: the
+        // generic `{}` has no formatVersion, kind, or nodes.
+        return quoteJsonSqlDefault(
+          emptyBlockDocumentJson(field?.blocks?.kinds),
+          this.dialect
+        );
       case "chips":
-        return "'[]'";
+        return quoteJsonSqlDefault("[]", this.dialect);
       case "relationship":
       case "upload":
         // Relations are nullable by nature when adding to existing tables
@@ -1084,8 +1099,11 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     }
 
     // Handle JSON (needs to be a quoted JSON string)
-    if (type === "json") {
-      return `'${typeof value === "string" ? value : JSON.stringify(value)}'`;
+    if (type === "json" || type === "blocks") {
+      return quoteJsonSqlDefault(
+        typeof value === "string" ? value : JSON.stringify(value),
+        this.dialect
+      );
     }
 
     // Handle date/timestamp

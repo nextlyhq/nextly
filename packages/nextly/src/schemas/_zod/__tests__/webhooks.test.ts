@@ -13,7 +13,12 @@ import {
   REDACTED_HEADER_VALUE,
   WEBHOOK_EVENT_TYPES,
 } from "../../../domains/webhooks/types";
-import { CreateWebhookSchema, UpdateWebhookSchema } from "../webhooks";
+import {
+  CreateWebhookSchema,
+  RotateWebhookSchema,
+  UpdateWebhookSchema,
+} from "../webhooks";
+import { WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS } from "../../../domains/webhooks/secret-entries";
 
 const valid = {
   name: "Orders",
@@ -162,5 +167,36 @@ describe("UpdateWebhookSchema", () => {
       headers: { "webhook-signature": "forged" },
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("RotateWebhookSchema", () => {
+  it("accepts an empty body (default overlap) and a zero window", () => {
+    expect(RotateWebhookSchema.safeParse({}).success).toBe(true);
+    expect(RotateWebhookSchema.safeParse({ overlapSeconds: 0 }).success).toBe(
+      true
+    );
+  });
+
+  it("accepts a window up to the ceiling", () => {
+    expect(
+      RotateWebhookSchema.safeParse({
+        overlapSeconds: WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS,
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects a negative, fractional, or over-ceiling window", () => {
+    expect(RotateWebhookSchema.safeParse({ overlapSeconds: -1 }).success).toBe(
+      false
+    );
+    expect(RotateWebhookSchema.safeParse({ overlapSeconds: 1.5 }).success).toBe(
+      false
+    );
+    expect(
+      RotateWebhookSchema.safeParse({
+        overlapSeconds: WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS + 1,
+      }).success
+    ).toBe(false);
   });
 });

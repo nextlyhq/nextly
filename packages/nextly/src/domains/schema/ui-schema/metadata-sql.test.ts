@@ -224,3 +224,98 @@ describe("versions column", () => {
     expect(sql).not.toContain('"enabled":true');
   });
 });
+
+describe("revalidate column", () => {
+  // Revalidation is on by default, so the manifest boolean is inverted from
+  // versions: false persists the disable config, true/absent persists NULL.
+  const off = uiSchemaManifest.parse({
+    collections: [
+      {
+        slug: "posts",
+        revalidate: false,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    singles: [
+      {
+        slug: "about",
+        revalidate: false,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    components: [],
+  });
+
+  const on = uiSchemaManifest.parse({
+    collections: [
+      {
+        slug: "posts",
+        revalidate: true,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    singles: [
+      {
+        slug: "about",
+        revalidate: true,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    components: [],
+  });
+
+  const cases = [
+    ["collection", buildCollectionMetadataUpsert, off.collections[0]],
+    ["single", buildSingleMetadataUpsert, off.singles[0]],
+  ] as const;
+
+  for (const [kind, build, entity] of cases) {
+    it(`${kind}: stores the disable config when revalidation is off`, () => {
+      // The write path reads `revalidate.disable`, so an off entity must land
+      // the resolved config, not a bare boolean.
+      const sql = build(entity, "sqlite");
+      expect(sql).toContain('"revalidate"');
+      expect(sql).toContain('"disable":true');
+    });
+
+    it(`${kind}: keeps the column updatable on conflict`, () => {
+      const sql = build(entity, "postgresql");
+      expect(sql).toContain('"revalidate" = EXCLUDED."revalidate"');
+    });
+  }
+
+  const onCases = [
+    ["collection", buildCollectionMetadataUpsert, on.collections[0]],
+    ["single", buildSingleMetadataUpsert, on.singles[0]],
+  ] as const;
+
+  for (const [kind, build, entity] of onCases) {
+    it(`${kind}: writes NULL when revalidation is on`, () => {
+      // On is the default (standard tag busting), stored as NULL so no override
+      // is persisted. The column must still be written, so flipping off later
+      // is not left untouched by the upsert's DO UPDATE SET.
+      const sql = build(entity, "sqlite");
+      expect(sql).toContain('"revalidate"');
+      expect(sql).not.toContain('"disable"');
+      expect(sql).toMatch(/NULL/);
+    });
+  }
+
+  it("rejects revalidate on a component", () => {
+    // Components hold no entries and no registry row, so the key would persist
+    // a setting nothing reads.
+    const parsed = uiSchemaManifest.safeParse({
+      collections: [],
+      singles: [],
+      components: [
+        {
+          slug: "seo",
+          revalidate: false,
+          fields: [{ name: "t", type: "text" }],
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+});

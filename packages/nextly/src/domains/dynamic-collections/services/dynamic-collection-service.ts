@@ -8,6 +8,7 @@ import { createHash, randomBytes } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors";
+import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
@@ -80,6 +81,8 @@ export interface CreateCollectionInput {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Whether writes bust cache tags. Default on; false opts out entirely. */
+  revalidate?: boolean;
   fields: FieldDefinition[];
   hooks?: Record<string, unknown>[];
   createdBy?: string;
@@ -101,6 +104,8 @@ export interface UpdateCollectionInput {
   localized?: boolean;
   /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
   versions?: boolean;
+  /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
+  revalidate?: boolean;
   fields?: FieldDefinition[];
   hooks?: Record<string, unknown>[];
 }
@@ -282,6 +287,9 @@ export class DynamicCollectionService extends BaseService {
       // collection created with the switch on is written unversioned and the
       // switch reads as off the moment the editor loads.
       versions: resolveBuilderVersions(data.versions),
+      // Persist the cache-revalidation opt-out from the create payload (null =
+      // standard tags, { disable: true } = off) so the write path reads it back.
+      revalidate: resolveBuilderRevalidate(data.revalidate),
       schemaHash,
       schemaVersion: 1,
       migrationStatus: "pending" as const,
@@ -507,6 +515,12 @@ export class DynamicCollectionService extends BaseService {
     // toggle from ever turning versioning off on a Draft/Published entity.
     if (updates.versions !== undefined) {
       metadataUpdates.versions = resolveBuilderVersions(updates.versions);
+    }
+    // Cache-revalidation toggle. The column holds the resolved config the write
+    // path reads, so the boolean is normalized before storing; off writes the
+    // disable config, on writes null.
+    if (updates.revalidate !== undefined) {
+      metadataUpdates.revalidate = resolveBuilderRevalidate(updates.revalidate);
     }
 
     let migrationSQL: string | null = null;
@@ -763,10 +777,14 @@ export class DynamicCollectionService extends BaseService {
   }
 
   async getCollection(
-    name: string
+    name: string,
+    // Optional transaction-bound executor so the registry read runs on the
+    // caller's transaction connection instead of the pool; see the base
+    // registry service's `getRecordBySlug`.
+    executor?: unknown
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- callers index dialect-specific row shapes
   ): Promise<any> {
-    return this.registryService.getCollection(name);
+    return this.registryService.getCollection(name, executor);
   }
 
   async unregisterCollection(name: string): Promise<unknown> {

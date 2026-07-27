@@ -106,6 +106,42 @@ describe("AdvancedTab -- version history", () => {
   });
 });
 
+describe("AdvancedTab -- cache revalidation", () => {
+  it("renders nothing when the kind does not enable it", () => {
+    render(<Controlled fields={["status"]} />);
+    expect(
+      screen.queryByRole("switch", { name: /cache revalidation/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders checked by default because revalidation is on", () => {
+    // Unlike version history, an absent value means ON — the switch must show
+    // checked so the user is not misled into thinking caching is off.
+    render(<Controlled fields={["revalidate"]} />);
+    const sw = screen.getByRole("switch", { name: /cache revalidation/i });
+    expect(sw.getAttribute("data-state")).toBe("checked");
+  });
+
+  it("sets revalidate to false when toggled off", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled fields={["revalidate"]} onChange={onChange} />);
+    await user.click(
+      screen.getByRole("switch", { name: /cache revalidation/i })
+    );
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.revalidate).toBe(false);
+  });
+
+  it("renders unchecked when revalidation was turned off", () => {
+    render(
+      <Controlled fields={["revalidate"]} initial={{ revalidate: false }} />
+    );
+    const sw = screen.getByRole("switch", { name: /cache revalidation/i });
+    expect(sw.getAttribute("data-state")).toBe("unchecked");
+  });
+});
+
 describe("AdvancedTab -- showSystemFields", () => {
   beforeEach(() => {
     localStorage.clear();

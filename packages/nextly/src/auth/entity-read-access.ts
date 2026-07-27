@@ -61,7 +61,7 @@ function getRBACService(): RBACAccessControlService | undefined {
  */
 export async function codeAccessAllows(
   codeAccess: CollectionAccessControl | SingleAccessControl,
-  operation: "create" | "read" | "update" | "delete",
+  operation: "create" | "read" | "update" | "delete" | "publish" | "unpublish",
   resource: string,
   caller: ReadAccessCaller
 ): Promise<boolean> {

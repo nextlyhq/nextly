@@ -1,7 +1,17 @@
 {
   "name": "@nextlyhq/admin-css",
-  "version": "0.0.2-alpha.39",
+  "version": "0.0.2-alpha.41",
   "description": "Build tooling to scope and compile Nextly admin CSS (shared by the admin build and third-party plugins).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/admin-css"
+  },
+  "homepage": "https://nextlyhq.com/docs",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.mjs"
@@ -17,6 +27,9 @@
     "test": "vitest run",
     "lint": "eslint ."
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "@tailwindcss/cli": "^4.3.2"
   },
@@ -25,5 +38,16 @@
     "eslint": "^9.39.1",
     "tailwindcss": "^4.3.2",
     "vitest": "^4.1.0"
-  }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "keywords": [
+    "nextly",
+    "admin",
+    "css",
+    "tailwind"
+  ]
 }

@@ -33,4 +33,12 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
     );
     expect(collection.admin?.disableCreate).toBe(true);
   });
+
+  it("opts submissions out of webhook recording (they carry ipAddress/userAgent)", () => {
+    // Submission records hold submitted content plus visitor metadata
+    // (ipAddress, userAgent), so they are excluded from the webhook outbox to
+    // keep that PII off the delivery path — hence `webhooks: false`.
+    const collection = submissionsCollection(formBuilder().config);
+    expect(collection.webhooks).toBe(false);
+  });
 });

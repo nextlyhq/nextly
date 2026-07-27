@@ -52,12 +52,12 @@ Status updates are posted in the private thread until disclosure.
 
 ## Scope
 
-**In scope:** all packages under `packages/*` of this monorepo. Currently supported: the **`0.x`** series (beta).
+**In scope:** all packages under `packages/*` of this monorepo. Currently supported: the current **`0.0.x-alpha`** prerelease line. Nextly is in alpha: fixes land on the newest alpha release, and there is no backport window for older alphas.
 
 **Out of scope:**
 
 - Vulnerabilities in transitive dependencies that have no proven additional impact via Nextly's surface — please report those upstream first.
-- Versions older than the current `0.x` minor.
+- Alpha releases older than the current one.
 - Intentional misconfiguration (e.g. setting `security.trustProxy: true` without an `TRUSTED_PROXY_IPS` allowlist).
 - Social engineering and phishing of maintainers.
 - Denial of service via legitimate-but-expensive operations whose cost is bounded by configurable limits.

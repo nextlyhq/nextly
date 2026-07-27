@@ -22,6 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
@@ -41,6 +42,10 @@ import type { DynamicCollectionService } from "../../domains/dynamic-collections
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
+import type {
+  CacheRevalidator,
+  RevalidationIntent,
+} from "../../revalidation/types";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
@@ -100,7 +105,18 @@ export class CollectionEntryService extends BaseService {
      * the first delivery attempt does not wait for the next scheduled trigger.
      * Wired at the same seam as `retentionRunner` for the same reason.
      */
-    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
+    /**
+     * Resolves the cache revalidator that flushes a write's revalidation intent
+     * post-commit. Wired at the same seam as `fastDrainScheduler` because every
+     * event-appending write runs through this service. A resolver (not the
+     * instance) so it is read at flush time: this service is constructed during
+     * boot, before a Next cache adapter registers, and an eager capture would
+     * memoize the no-op default. Returns undefined when no adapter is present.
+     */
+    private readonly resolveCacheRevalidator?: () =>
+      | CacheRevalidator
+      | undefined
   ) {
     super(adapter, logger);
 
@@ -161,6 +177,10 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    routeAuthorized?: boolean;
+    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return this.queryService.listEntries(params);
   }
@@ -176,6 +196,10 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    routeAuthorized?: boolean;
+    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return this.queryService.countEntries(params);
   }
@@ -200,6 +224,10 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    routeAuthorized?: boolean;
+    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.queryService.getEntry(params);
   }
@@ -231,22 +259,6 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * The post-write side effects, run after every write that appends an event.
-   *
-   * The drain fast path goes first so the `after()` callback is scheduled
-   * promptly (it only runs post-response, so it adds no latency); the retention
-   * pass follows. Both absorb their own failures, so this never turns a
-   * successful save into an error. `offer()` is synchronous — it only registers
-   * the post-response callback, whose work `after()` owns — so it is not awaited;
-   * the retention pass is awaited for the reason `offerRetentionPass` documents:
-   * a detached promise may not survive a serverless response.
-   */
-  private async afterWrite(): Promise<void> {
-    this.fastDrainScheduler?.offer();
-    await this.offerRetentionPass();
-  }
-
-  /**
    * Run the post-write side effects only when the mutation actually recorded a
    * change (and therefore appended an outbox event). A rejected write — a
    * validation or access failure surfaced as `success: false`, or a bulk/batch
@@ -266,20 +278,130 @@ export class CollectionEntryService extends BaseService {
     result:
       | CollectionServiceResult<unknown>
       | BulkOperationResult<unknown>
+      | BatchOperationResult,
+    disableRevalidate = false
+  ): Promise<void> {
+    // Revalidation flushes whenever a committed write produced intents. It is
+    // NOT tied to the outbox-event gate below: an intent is only ever set after
+    // a write commits, so its presence is the "content changed" signal, and a
+    // publish-all-locales or a batch create (which record no outbox event) still
+    // bust their tags. The per-operation `disableRevalidate` escape hatch skips
+    // it (a CLI / seed / bulk-import write that owns its own cache strategy);
+    // the outbox drain still runs, so webhooks and retention are unaffected.
+    if (!disableRevalidate) {
+      await this.flushRevalidation(result);
+    }
+
+    // Retention is opportunistic write-path cleanup — the write path is the only
+    // prune trigger for installs with no webhook drain, so even a write to only
+    // opted-out (`webhooks: false`) entities must still offer a pass. It is NOT
+    // the outbox gate, but it IS gated on a committed write: a rejected request
+    // (validation / access / not-found) — and a no-op that wrote nothing —
+    // committed no content, so paying for an awaited outbox-deletion pass on its
+    // behalf is wasted latency. An opted-out write still qualifies (it carries a
+    // revalidation intent even though it recorded no event), so coverage holds.
+    if (CollectionEntryService.hasCommittedWrite(result)) {
+      await this.offerRetentionPass();
+    }
+
+    // The fast drain, by contrast, only matters when an outbox event was actually
+    // recorded to deliver. Every result — single, bulk (`successCount`), and
+    // batch (`successful`) — carries an aggregated `eventRecorded`, so a write of
+    // only opted-out entries records nothing and schedules no drain, rather than
+    // draining unrelated pending events off a positive success count.
+    if (result.eventRecorded === true) {
+      this.fastDrainScheduler?.offer();
+    }
+  }
+
+  /**
+   * Whether a mutation result represents at least one committed content write.
+   * A single create/update/delete carries the explicit `committed` flag (set the
+   * moment its transaction commits, independent of the recording and revalidation
+   * opt-outs), so even a write that opts out of BOTH — no event, no intent — is
+   * covered, while a rejected request (validation / access / not-found) and a
+   * `publishAllLocales` no-op are not. Bulk/batch results use their positive
+   * counts; `eventRecorded` covers a committed-but-hook-failed batch. NOT keyed
+   * off `success`, which a no-op update also reports.
+   */
+  private static hasCommittedWrite(
+    result:
+      | CollectionServiceResult<unknown>
+      | BulkOperationResult<unknown>
+      | BatchOperationResult
+  ): boolean {
+    if ("committed" in result && result.committed === true) return true;
+    if (result.eventRecorded === true) return true;
+    if ("successCount" in result && result.successCount > 0) return true;
+    if ("successful" in result && result.successful > 0) return true;
+    // Covers single ops that flush an intent without setting `committed` (e.g. a
+    // publish-all-locales transition) — a present intent means content changed.
+    if ("revalidationIntent" in result && result.revalidationIntent != null) {
+      return true;
+    }
+    if (
+      "revalidationIntents" in result &&
+      (result.revalidationIntents?.length ?? 0) > 0
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Flush a committed write's cache-revalidation intents through the registered
+   * revalidator (a no-op when no cache adapter is present). Runs on the same
+   * gate as the drain — a write that recorded nothing revalidates nothing — and
+   * absorbs its own failure so it never turns a committed write into an error.
+   * Awaited (like the retention pass) so an async revalidator's work is not left
+   * detached, where a serverless response could cut it off before it completes.
+   */
+  private async flushRevalidation(
+    result:
+      | CollectionServiceResult<unknown>
+      | BulkOperationResult<unknown>
       | BatchOperationResult
   ): Promise<void> {
-    const recorded =
-      "success" in result
-        ? result.eventRecorded === true
-        : "successCount" in result
-          ? result.successCount > 0 || result.eventRecorded === true
-          : result.successful > 0 || result.eventRecorded === true;
-    if (recorded) await this.afterWrite();
+    const intents =
+      "revalidationIntents" in result && result.revalidationIntents
+        ? result.revalidationIntents
+        : "revalidationIntent" in result && result.revalidationIntent
+          ? [result.revalidationIntent]
+          : [];
+    await this.flushRevalidationIntents(intents);
+  }
+
+  /**
+   * Flush an explicit set of revalidation intents collected by a caller-owned
+   * transaction (for example the `CollectionService` transaction wrappers, whose
+   * return values carry only the entry). Shares the automatic post-write path:
+   * a no-op when no cache adapter is registered, and self-absorbing on error so
+   * a revalidator fault never turns a committed write into a failure.
+   */
+  async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
+    if (intents.length === 0) return;
+    // Resolve at flush time so a Next cache adapter registered after this
+    // service was constructed (at request time, well after boot) is honored.
+    const revalidator = this.resolveCacheRevalidator?.();
+    if (!revalidator) return;
+    try {
+      // Await so a Promise-returning revalidator finishes here; `revalidateTag`
+      // is synchronous, so this adds no latency for the common case.
+      await revalidator.flush(intents);
+    } catch (error) {
+      this.logger.error("Cache revalidation failed after a write", { error });
+    }
   }
 
   async createEntry(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       user?: UserContext;
       /** Who performed the write, recorded on the outbox event. */
       actor?: RequestActor;
@@ -287,12 +409,17 @@ export class CollectionEntryService extends BaseService {
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       context?: Record<string, unknown>;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST create the
+       * publish transition gate (create-as-published) judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
   ) {
     const result = await this.mutationService.createEntry(params, body, depth);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -308,6 +435,8 @@ export class CollectionEntryService extends BaseService {
     entryId: string;
     user?: UserContext;
     routeAuthorized?: boolean;
+    /** API-key scope; judges the update gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
@@ -315,6 +444,12 @@ export class CollectionEntryService extends BaseService {
   async updateEntry(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       entryId: string;
       user?: UserContext;
       /** Who performed the write, recorded on the outbox event. */
@@ -328,38 +463,65 @@ export class CollectionEntryService extends BaseService {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST write the
+       * publish/unpublish transition gate judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
     },
     body: Record<string, unknown>,
     depth?: number
   ) {
     const result = await this.mutationService.updateEntry(params, body, depth);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   /** i18n M7: publish every language of an entry at once (spec §10). */
   async publishAllLocales(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     entryId: string;
     user?: UserContext;
     overrideAccess?: boolean;
+    /**
+     * Set by the REST dispatcher: the route already authorized this POST as
+     * `update`, so the preliminary update gate skips its redundant RBAC re-check.
+     */
+    routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional publish check. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async deleteEntry(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     entryId: string;
     user?: UserContext;
     /** Who performed the delete, recorded on the outbox event. */
     actor?: RequestActor;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.mutationService.deleteEntry(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -394,6 +556,12 @@ export class CollectionEntryService extends BaseService {
 
   async duplicateEntry(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     entryId: string;
     user?: UserContext;
     overrides?: Record<string, unknown>;
@@ -401,9 +569,11 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** API-key scope; judges the create-as-published on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     const result = await this.bulkService.duplicateEntry(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
@@ -411,36 +581,60 @@ export class CollectionEntryService extends BaseService {
   // the post-mutation values) and minimal {id} records on delete.
   async bulkDeleteEntries(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     ids: string[];
     user?: UserContext;
     /** Who performed the delete, recorded on each entry's outbox event. */
     actor?: RequestActor;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** API-key scope; judges each per-id delete on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteEntries(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async bulkUpdateEntries(params: {
     collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
     ids: string[];
     data: Record<string, unknown>;
     user?: UserContext;
     overrideAccess?: boolean;
+    routeAuthorized?: boolean;
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** API-key scope; judges each per-id transition on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateEntries(params);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async bulkUpdateByQuery(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       where: WhereFilter;
       data: Record<string, unknown>;
       user?: UserContext;
@@ -450,36 +644,54 @@ export class CollectionEntryService extends BaseService {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /** API-key scope; judges the collection gate + transitions on the key's own grant. */
+      authenticatedScope?: AuthenticatedScope;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await this.bulkService.bulkUpdateByQuery(params, options);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async bulkDeleteByQuery(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       where: WhereFilter;
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /** Caller's authenticated scope; a scoped key is judged on its own grant. */
+      authenticatedScope?: AuthenticatedScope;
+      routeAuthorized?: boolean;
       overrideAccess?: boolean;
       context?: Record<string, unknown>;
     },
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
     const result = await this.bulkService.bulkDeleteByQuery(params, options);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async createEntries(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       user?: UserContext;
       overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
     },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
@@ -489,13 +701,17 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async createEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -508,7 +724,17 @@ export class CollectionEntryService extends BaseService {
   }
 
   async updateEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -517,13 +743,17 @@ export class CollectionEntryService extends BaseService {
       entries,
       options
     );
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   async updateEntriesInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -538,6 +768,12 @@ export class CollectionEntryService extends BaseService {
   async deleteEntries(
     params: {
       collectionName: string;
+      /**
+       * Skip cache revalidation for this write (the outbox drain still runs).
+       * Set by callers that own their cache strategy — a CLI, seed, or
+       * bulk-import write — so it does not fan out a revalidation per row.
+       */
+      disableRevalidate?: boolean;
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
@@ -546,7 +782,7 @@ export class CollectionEntryService extends BaseService {
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
     const result = await this.bulkService.deleteEntries(params, ids, options);
-    await this.afterWriteIfRecorded(result);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 

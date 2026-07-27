@@ -15,6 +15,7 @@
  * @module api/versions-access
  */
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { checkSingleAccess } from "../domains/singles";
@@ -63,7 +64,22 @@ export async function requireRouteVersionReadAccess(
     role: roles?.[0],
   };
 
-  await assertVersionDocumentReadable(scopeKind, slug, entryId, user);
+  // For an API-key request the live-document read gate must judge the key's OWN
+  // read grant, not the key owner's roles — otherwise a super-admin-owned key
+  // scoped for read could see a document's history while bypassing its stored
+  // owner-only/custom read rule (the dispatcher path does the same).
+  const authenticatedScope: AuthenticatedScope | undefined =
+    auth.authMethod === "api-key"
+      ? { actorType: "apiKey", permissions: auth.permissions }
+      : undefined;
+
+  await assertVersionDocumentReadable(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope
+  );
 
   return user;
 }
@@ -84,9 +100,20 @@ export async function assertVersionDocumentReadable(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  // The caller's authenticated scope. Version history is a read of the live
+  // document, so a scoped API key is judged on its OWN read grant here — a
+  // super-admin-owned key does not skip the document's stored owner-only/custom
+  // read rules before its snapshots are exposed.
+  authenticatedScope?: AuthenticatedScope
 ): Promise<void> {
-  const readable = await canReadLiveDocument(scopeKind, slug, entryId, user);
+  const readable = await canReadLiveDocument(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope
+  );
   if (!readable) {
     // Deliberately "not found" rather than "forbidden": a distinct 403 would
     // confirm the document exists to a caller not allowed to know that.
@@ -125,11 +152,15 @@ export async function assertVersionDocumentUpdatable(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  // The caller's authenticated scope. A version-label edit is a route-authorized
+  // `update`, so a scoped API key is judged on its OWN update grant here and a
+  // super-admin-owned key does not skip stored owner/role update rules.
+  authenticatedScope?: AuthenticatedScope
 ): Promise<void> {
   const allowed =
     scopeKind === "single"
-      ? await canUpdateLiveSingle(slug, entryId, user)
+      ? await canUpdateLiveSingle(slug, entryId, user, authenticatedScope)
       : await getService("collectionsHandler").canUpdateEntry({
           collectionName: slug,
           entryId,
@@ -138,6 +169,7 @@ export async function assertVersionDocumentUpdatable(
           // only the redundant coarse re-check. The stored per-document rules
           // this gate exists for still run.
           routeAuthorized: true,
+          authenticatedScope,
         });
 
   if (!allowed) {
@@ -165,7 +197,8 @@ export async function assertVersionDocumentUpdatable(
 async function canUpdateLiveSingle(
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -195,6 +228,9 @@ async function canUpdateLiveSingle(
     accessControlService: new AccessControlService(),
     accessRules: record.accessRules,
     document,
+    // A scoped API key is judged on its own update grant, so a super-admin-owned
+    // key does not skip stored owner/role rules on a version-label edit.
+    authenticatedScope,
     logger: getService("logger"),
   });
   return denied === null;
@@ -214,10 +250,11 @@ async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
   if (scopeKind === "single") {
-    return canReadLiveSingle(slug, entryId, user);
+    return canReadLiveSingle(slug, entryId, user, authenticatedScope);
   }
 
   const collections = getService("collectionsHandler");
@@ -230,6 +267,9 @@ async function canReadLiveDocument(
     // the redundant RBAC re-check (which would reject a scoped API key by
     // resolving its creator's stored roles). Document-level rules still run.
     routeAuthorized: true,
+    // A scoped API key is judged on its OWN read grant, so a super-admin-owned
+    // key does not skip the collection's stored owner-only/custom read rule.
+    authenticatedScope,
     // Match the authenticated read path: without this, a status-enabled
     // collection filters to published only, and a draft would report no
     // history — exactly when an author needs it most.
@@ -252,7 +292,8 @@ async function canReadLiveDocument(
 async function canReadLiveSingle(
   slug: string,
   entryId: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -268,6 +309,9 @@ async function canReadLiveSingle(
     user,
     overrideAccess: false,
     routeAuthorized: true,
+    // A scoped API key is judged on its OWN read grant, mirroring the collection
+    // read gate above.
+    authenticatedScope,
     status: "all",
   });
   return interpretReadResult(result.success, result.statusCode);

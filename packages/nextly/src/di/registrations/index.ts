@@ -12,6 +12,7 @@ export { registerDashboardServices } from "./register-dashboard";
 export { registerEmailServices } from "./register-email";
 export { registerMediaServices } from "./register-media";
 export { registerMetaServices } from "./register-meta";
+export { registerRevalidationServices } from "./register-revalidation";
 export { registerSingleServices } from "./register-singles";
 export { registerUserServices } from "./register-users";
 export { registerVersionServices } from "./register-versions";

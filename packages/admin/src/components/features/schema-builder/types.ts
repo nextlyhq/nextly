@@ -325,6 +325,12 @@ export interface BuilderField extends FieldConfig {
   /** When true, the Builder shows this field read-only (inspect only). */
   locked?: boolean;
   /**
+   * A blocks field's policy: which registered block names and document kinds
+   * it accepts. Carried through the builder so an edit elsewhere in the schema
+   * cannot rewrite the field without it.
+   */
+  blocks?: { allow?: string[]; kinds?: string[] };
+  /**
    * Field description/help text
    */
   description?: string;
