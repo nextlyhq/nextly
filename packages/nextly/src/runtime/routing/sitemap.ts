@@ -38,7 +38,14 @@ export interface NextlySitemapOptions {
    * with the pages — use `nextlyTags(collection)` for each configured collection.
    */
   tags?: string[];
-  /** Cache key parts (default a single stable key). */
+  /**
+   * Cache key parts. Defaults to `["nextly", "sitemap", ...tags]`, which keeps
+   * sitemaps with distinct tags apart. Multiple sitemap helpers that share the
+   * SAME tags (e.g. partitioned routes over the same collections) MUST pass
+   * distinct `keyParts` — the `entries` provider lives in a closure and the
+   * route pathname is not part of Next's cache key, so there is no automatic
+   * way to tell two same-tagged providers apart.
+   */
   keyParts?: string[];
   /** Time-based revalidation seconds (safety net on top of tag busting). */
   revalidate?: number | false;

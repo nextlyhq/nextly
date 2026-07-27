@@ -81,6 +81,23 @@ describe("applyCache (passthrough without Next)", () => {
       )
     ).rejects.toBe(boom);
   });
+
+  it("propagates an unrelated error that merely mentions incrementalCache", async () => {
+    // A bare `incrementalCache` substring must NOT be mistaken for Next's
+    // missing-scope invariant, or a real failure would be retried and masked.
+    const boom = new Error("failed to warm the incrementalCache for posts");
+    const reader = vi.fn(async () => ({ id: "z" }));
+    const throwsUnrelated: UnstableCache = () => () => {
+      throw boom;
+    };
+    await expect(
+      applyCache(throwsUnrelated, reader, {
+        tags: nextlyTags("posts"),
+        keyParts: ["posts", "detail"],
+      })
+    ).rejects.toBe(boom);
+    expect(reader).not.toHaveBeenCalled();
+  });
 });
 
 describe("applyCache — key forwarding and per-caller isolation", () => {

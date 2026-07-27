@@ -23,6 +23,7 @@ describe("isReservedPath", () => {
       "/robots.txt",
       "/favicon.ico",
       "/manifest.webmanifest",
+      "/manifest.json",
       "/opengraph-image",
       "/twitter-image",
     ]) {

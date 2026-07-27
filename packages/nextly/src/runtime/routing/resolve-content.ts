@@ -59,8 +59,15 @@ export interface ResolveContentOptions {
   /**
    * Time-based revalidation in seconds — a safety net on top of tag-based
    * busting. `false` (default) means the read only revalidates on a tag bust.
+   * A non-positive value is treated as `false` (`unstable_cache` rejects `0`).
    */
   revalidate?: number | false;
+  /**
+   * A stable discriminator folded into the cache key. Supply a unique value when
+   * distinct `nextly` readers (e.g. per-tenant or per-database) can resolve the
+   * same collection + slug, so their cached reads never alias each other.
+   */
+  cacheScope?: string;
 }
 
 /**
@@ -118,6 +125,9 @@ export async function resolveContent(
       keyParts: [
         "nextly",
         "resolve-content",
+        // A caller-supplied scope so distinct readers (per-tenant/per-database)
+        // resolving the same collection + slug never share a cache entry.
+        options.cacheScope ?? "",
         collection,
         slugField,
         slug,
@@ -126,7 +136,12 @@ export async function resolveContent(
         String(depth),
         options.richTextFormat ?? "json",
       ],
-      revalidate: options.revalidate ?? false,
+      // `unstable_cache` rejects `revalidate: 0` (needs `false` or `> 0`), so a
+      // non-positive value degrades to tag-only busting rather than failing.
+      revalidate:
+        typeof options.revalidate === "number" && options.revalidate > 0
+          ? options.revalidate
+          : false,
     }
   );
 }

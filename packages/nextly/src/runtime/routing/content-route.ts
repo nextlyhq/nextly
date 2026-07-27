@@ -79,6 +79,12 @@ export interface ContentRouteConfig<TNode> {
   /** Time-based revalidation seconds for the resolved read. */
   revalidate?: number | false;
   /**
+   * A stable discriminator folded into the resolved read's cache key — supply
+   * one when distinct `nextly` readers (per-tenant/per-database) can resolve the
+   * same collection + slug, so their cached reads never alias.
+   */
+  cacheScope?: string;
+  /**
    * Max published paths to pre-render per collection in `generateStaticParams`
    * (default `1000`). The rest render on demand via `dynamicParams`.
    */
@@ -167,6 +173,7 @@ export function createContentRoute<TNode>(
         depth,
         tags: config.tags,
         revalidate: config.revalidate,
+        cacheScope: config.cacheScope,
       });
       if (entry) return { entry, context: { collection, slug } };
     }

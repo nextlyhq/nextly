@@ -132,5 +132,10 @@ async function runCachedOrDirect<T>(
 
 /** True for the `unstable_cache` "no incremental cache in this scope" invariant. */
 function isMissingCacheScopeError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("incrementalCache");
+  // Match Next's specific invariant phrase, not a bare `incrementalCache`
+  // substring — an unrelated reader error mentioning the cache must propagate
+  // rather than be retried uncached.
+  return (
+    error instanceof Error && error.message.includes("incrementalCache missing")
+  );
 }

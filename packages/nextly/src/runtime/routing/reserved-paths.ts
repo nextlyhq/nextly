@@ -15,6 +15,7 @@ const RESERVED_EXACT = new Set([
   "/robots.txt",
   "/favicon.ico",
   "/manifest.webmanifest",
+  "/manifest.json",
   "/opengraph-image",
   "/twitter-image",
 ]);
