@@ -138,7 +138,10 @@ export async function resolveContent(
         locale ?? "",
         statusField === false ? "no-status" : statusField,
         String(depth),
-        options.richTextFormat ?? "json",
+        // When omitted, the read inherits the reader's default format (which may
+        // not be "json"), so key it as "inherit" — never as a concrete format —
+        // so an explicit-format call can't reuse an inherited-shape cache entry.
+        options.richTextFormat ?? "inherit",
       ],
       // `unstable_cache` rejects `revalidate: 0` (needs `false` or `> 0`), so a
       // non-positive value degrades to tag-only busting rather than failing.
