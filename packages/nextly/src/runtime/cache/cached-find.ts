@@ -107,5 +107,30 @@ export function applyCache<T>(
     tags: options.tags,
     revalidate: options.revalidate ?? false,
   });
-  return cached();
+  return runCachedOrDirect(cached, reader);
+}
+
+/**
+ * `unstable_cache` throws an "incrementalCache missing" invariant when invoked
+ * outside a Next request/build scope (a standalone script, a test, a non-Next
+ * caller that still has `next` installed). Run the reader UNCACHED there rather
+ * than surfacing a cryptic framework error — inside a Next scope the cache is
+ * present and this fallback never runs. A genuine reader error is rethrown so
+ * callers that rethrow-on-error keep working.
+ */
+async function runCachedOrDirect<T>(
+  cached: () => Promise<T>,
+  reader: () => Promise<T>
+): Promise<T> {
+  try {
+    return await cached();
+  } catch (error) {
+    if (isMissingCacheScopeError(error)) return reader();
+    throw error;
+  }
+}
+
+/** True for the `unstable_cache` "no incremental cache in this scope" invariant. */
+function isMissingCacheScopeError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("incrementalCache");
 }
