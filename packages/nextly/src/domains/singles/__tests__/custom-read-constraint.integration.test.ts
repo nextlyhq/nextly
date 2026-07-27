@@ -682,6 +682,186 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data).toBeUndefined();
   });
 
+  it("refuses when a has-many reference goes missing from the expansion", async () => {
+    // A `hasMany` expansion drops the entries it could not fetch, so the list
+    // comes back shorter rather than absent. Checking only that each surviving
+    // element is a row accepts evidence that quietly went missing — and accepts
+    // an empty list vacuously.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: "authors",
+              hasMany: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const kept = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: false }
+    );
+    const removed = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "B", suspended: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        author: [
+          (kept.data as { id: string }).id,
+          (removed.data as { id: string }).id,
+        ],
+      },
+      { overrideAccess: true }
+    );
+    // The row the rule would refuse on disappears from under the reference,
+    // exactly as a failed lookup leaves it: still referenced by the Single,
+    // absent from the expansion. Removed at the adapter so the reference is
+    // left dangling rather than cleaned up.
+    await current.adapter.delete("dc_authors", {
+      and: [
+        { column: "id", op: "=", value: (removed.data as { id: string }).id },
+      ],
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+    // And the refusal says nothing about the schema it failed on.
+    expect(result.message).not.toContain("dc_authors");
+  });
+
+  it("refuses when a relationship nested in a group cannot be assembled", async () => {
+    // Expansion reaches into groups and repeaters, so the same guarantee has
+    // to. Checking only top-level fields leaves a rule reading
+    // `data.meta.author` deciding on evidence that never arrived.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    const authorId = (author.data as { id: string }).id;
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: { author: authorId } },
+      { overrideAccess: true }
+    );
+    // Leaves the nested reference dangling, the way a failed lookup does.
+    await current.adapter.delete("dc_authors", {
+      and: [{ column: "id", op: "=", value: authorId }],
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("leaves a relationship configured not to populate alone", async () => {
+    // `maxDepth: 0` asks for the reference itself, so an unexpanded id is the
+    // configured outcome. Demanding a row there refuses every read of the
+    // Single, whatever the rule says.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: "authors",
+              maxDepth: 0,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("tells the rule the id the document it judges will carry", async () => {
     // The first read of a Single that does not exist is judged against the
     // document it would create. Passing `undefined` for the id while `data`

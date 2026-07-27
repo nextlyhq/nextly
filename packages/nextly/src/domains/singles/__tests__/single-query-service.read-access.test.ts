@@ -438,6 +438,34 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
     return { service, expandRelationships };
   }
 
+  it("hides the underlying failure when a strict expansion throws", async () => {
+    // The strict path exists for the authorization view, and a failure there
+    // reaches the caller. `buildSingleErrorResult` puts a bare Error's own
+    // message on the wire, which for a driver fault is schema detail.
+    const expandRelationships = vi
+      .fn()
+      .mockRejectedValue(new Error('no such table: "dc_authors"'));
+    container.register("collectionsHandler", () => ({
+      getRelationshipService: () => ({ expandRelationships }),
+    }));
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      createMockSingleRegistry() as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    await expect(
+      service.expandRelationshipFields(
+        { id: "doc1", author: "a1" } as never,
+        RELATION_FIELDS as never,
+        1,
+        {},
+        true
+      )
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
   it("leaves enforcement off for a caller that supplies no access context", async () => {
     const { service, expandRelationships } = serviceWithRelationshipSpy();
 

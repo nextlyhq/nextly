@@ -135,6 +135,70 @@ type DefaultDocumentDraft = {
  */
 const DEFAULT_READ_DEPTH = 2;
 
+/**
+ * A relationship field's configured population limit, when it declares one.
+ * `0` means the reference is meant to stay a reference.
+ */
+function relationshipMaxDepth(field: FieldConfig): number | undefined {
+  const config = field as {
+    maxDepth?: number;
+    options?: { maxDepth?: number };
+  };
+  return config.options?.maxDepth ?? config.maxDepth;
+}
+
+/** Parse a container that may still be a JSON string (SQLite's shape). */
+function parseContainer(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The rows of a group (one) or repeater (many), whatever form they arrive in. */
+function containerRows(
+  value: unknown,
+  type: "group" | "repeater"
+): (Record<string, unknown> | undefined)[] {
+  const parsed = parseContainer(value);
+  if (type === "repeater") {
+    return Array.isArray(parsed)
+      ? parsed.map(row =>
+          row && typeof row === "object"
+            ? (row as Record<string, unknown>)
+            : undefined
+        )
+      : [];
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? [parsed as Record<string, unknown>]
+    : [];
+}
+
+/**
+ * Whether every stored reference became a row.
+ *
+ * Cardinality is part of the question: a `hasMany` expansion drops the entries
+ * it could not fetch, so a shorter list — or an empty one — is evidence that
+ * went missing rather than evidence that says nothing is there.
+ */
+function referencesExpanded(stored: unknown, assembled: unknown): boolean {
+  const isRow = (value: unknown): boolean =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+
+  const storedList = parseContainer(stored);
+  if (Array.isArray(storedList)) {
+    const references = storedList.filter(
+      id => id !== null && id !== undefined && id !== ""
+    );
+    if (!Array.isArray(assembled)) return references.length === 0;
+    return assembled.length === references.length && assembled.every(isRow);
+  }
+  return isRow(assembled);
+}
+
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
 
@@ -552,12 +616,13 @@ export class SingleQueryService extends BaseService {
    *
    * Expansion is best-effort several layers down: a related table that cannot
    * be read is logged and yields nothing, so the field comes back as the bare
-   * id it started as. That is a fine response and a dangerous thing to judge —
-   * a rule reading into the related row sees nothing there and an
-   * absence-tolerant one reads that as permission. Rather than thread a strict
-   * flag through a service shared with the collection paths, the property that
-   * actually matters is checked directly: every stored reference that should
-   * have become a row did.
+   * id it started as, and a `hasMany` list quietly loses the entries that could
+   * not be fetched. That is a fine response and a dangerous thing to judge — a
+   * rule reading into a related row sees nothing there, and an absence-tolerant
+   * one reads that as permission. Rather than thread a strict flag through a
+   * service shared with the collection paths, the property that actually
+   * matters is checked directly: every stored reference that should have become
+   * a row did, and none went missing on the way.
    *
    * Many-to-many relations are not covered, having no id on the main row to
    * compare against.
@@ -565,37 +630,57 @@ export class SingleQueryService extends BaseService {
   private assertRelationshipsExpanded(
     slug: string,
     fields: FieldConfig[],
-    stored: SingleDocument,
-    assembled: SingleDocument
+    stored: Record<string, unknown> | undefined,
+    assembled: Record<string, unknown> | undefined,
+    path = ""
   ): void {
-    const expanded = (value: unknown): boolean =>
-      typeof value === "object" && value !== null;
+    if (!stored || !assembled) return;
 
     for (const field of fields) {
       if (!("name" in field) || !field.name) continue;
+      const name = field.name;
       const type = field.type as string;
-      if (type !== "relationship" && type !== "relation") continue;
-
-      const before = stored[field.name];
+      const before = stored[name];
       if (before === null || before === undefined || before === "") continue;
+      const where = path ? `${path}.${name}` : name;
 
-      const after = assembled[field.name];
-      const complete = Array.isArray(after)
-        ? after.every(expanded)
-        : expanded(after);
-      if (complete) continue;
+      if (type === "relationship" || type === "relation") {
+        // `maxDepth: 0` asks for the reference itself, so an unexpanded id is
+        // the configured outcome rather than a failure to expand.
+        if (relationshipMaxDepth(field) === 0) continue;
+        if (!referencesExpanded(before, assembled[name])) {
+          this.logger.error(
+            "Refusing a single read: relationship evidence could not be assembled",
+            { single: slug, field: where }
+          );
+          throw NextlyError.internal({
+            logContext: {
+              single: slug,
+              field: where,
+              reason: "incomplete-authorization-view",
+            },
+          });
+        }
+        continue;
+      }
 
-      this.logger.error(
-        "Refusing a single read: relationship evidence could not be assembled",
-        { single: slug, field: field.name }
-      );
-      throw NextlyError.internal({
-        logContext: {
-          single: slug,
-          field: field.name,
-          reason: "incomplete-authorization-view",
-        },
-      });
+      // A relationship nested in a container is expanded too, so the same
+      // guarantee has to reach it.
+      if (type !== "group" && type !== "repeater") continue;
+      const nested = "fields" in field ? (field.fields as FieldConfig[]) : [];
+      if (!nested || nested.length === 0) continue;
+
+      const storedRows = containerRows(before, type);
+      const assembledRows = containerRows(assembled[name], type);
+      for (let index = 0; index < storedRows.length; index += 1) {
+        this.assertRelationshipsExpanded(
+          slug,
+          nested,
+          storedRows[index],
+          assembledRows[index],
+          type === "repeater" ? `${where}[${index}]` : where
+        );
+      }
     }
   }
 
@@ -1901,7 +1986,19 @@ export class SingleQueryService extends BaseService {
       this.logger.error("Failed to expand relationship fields for Single", {
         error,
       });
-      if (strict) throw error;
+      if (strict) {
+        // Wrapped rather than rethrown: the result builder puts a bare Error's
+        // own message on the wire, which for a driver failure is schema detail
+        // the caller has no business seeing.
+        throw NextlyError.is(error)
+          ? error
+          : NextlyError.internal({
+              cause: error instanceof Error ? error : undefined,
+              logContext: {
+                reason: "relationship-expansion-failed-during-authorization",
+              },
+            });
+      }
       return doc;
     }
   }

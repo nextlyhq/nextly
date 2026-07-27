@@ -217,6 +217,71 @@ describe("field-level registry", () => {
     expect(Array.from(data.flags as Set<string>)).toEqual(["a"]);
   });
 
+  it("keeps a rule's writes to a Map KEY out of the payload", async () => {
+    // A mutable object used as a key is as reachable, and as writable, as the
+    // value it points at.
+    const key = { id: "k" };
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            for (const [entryKey] of data.tags as Map<
+              Record<string, unknown>,
+              string
+            >) {
+              entryKey.injected = "x";
+            }
+            return true;
+          },
+        },
+      },
+    ]);
+    const data: Record<string, unknown> = {
+      title: "t",
+      tags: new Map([[key, "1"]]),
+    };
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(key).toEqual({ id: "k" });
+  });
+
+  it("survives a payload that refers to itself", async () => {
+    // A hook is free to build a cycle. A naive deep copy would recurse until
+    // the stack gives out, failing a read or write that has nothing wrong with
+    // it. Shared references stay shared in the copy, so a rule comparing two
+    // paths still sees what the document says.
+    registerFieldFunctions("collection", "posts", [
+      { name: "title", type: "text", access: { update: () => true } },
+    ]);
+    const shared: Record<string, unknown> = { name: "s" };
+    const cyclic: Record<string, unknown> = { shared };
+    cyclic.self = cyclic;
+    const data: Record<string, unknown> = {
+      title: "t",
+      a: cyclic,
+      b: shared,
+    };
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(data.title).toBe("t");
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {
