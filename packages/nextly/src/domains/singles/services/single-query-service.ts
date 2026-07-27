@@ -49,6 +49,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { detachData } from "../../../shared/lib/detach";
 import {
   applyFieldReadAccess,
   runFieldHooks,
@@ -114,6 +115,17 @@ const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
  * field's own default instead, so a label string never lands in them.
  */
 const IDENTITY_TEXT_COLUMN_KINDS = new Set(["text", "varchar", "longText"]);
+
+/**
+ * A Single's default document, built but not yet written. The read path judges
+ * it before deciding whether the read may create the Single, then hands the
+ * same draft to the insert so the row written is the one that was judged.
+ */
+type DefaultDocumentDraft = {
+  document: SingleDocument;
+  insertValues: Record<string, unknown>;
+  localizedDefaults: Record<string, unknown>;
+};
 
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
@@ -265,14 +277,10 @@ export async function checkSingleAccess(params: {
       accessRules,
       operation,
       {
-        user: user
-          ? {
-              id: user.id,
-              role: user.role,
-              roles: user.roles,
-              email: user.email,
-            }
-          : undefined,
+        // Spread rather than rebuild: a `custom` rule may decide on a claim
+        // this framework does not know about, and copying named fields drops
+        // every one of them.
+        user: user ? { ...user } : undefined,
       },
       documentId,
       document
@@ -421,6 +429,305 @@ export class SingleQueryService extends BaseService {
   private readonly accessControlService: AccessControlService;
 
   /**
+   * Build the document a caller would receive from a stored row.
+   *
+   * Covers only the stages that read: the companion translation overlay, JSON
+   * deserialization, and upload, relationship and component expansion. No hook
+   * runs and nothing is written, so this is safe to perform for a caller who may
+   * still be refused.
+   */
+  private async assembleStoredDocument(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    doc: SingleDocument;
+    options: GetSingleOptions;
+    statusFilterValue: string | undefined;
+    /**
+     * Whether to apply the TARGET collection's field rules to related rows.
+     * Off for the copy an access rule is judged on: redaction removes the very
+     * values a rule may be written to inspect, and a rule shown `undefined`
+     * where the document holds something reads that absence as permission.
+     */
+    enforceRelatedFieldAccess: boolean;
+    /** Skip the companion overlay for a draft that carries its defaults inline. */
+    skipLocalizedOverlay?: boolean;
+  }): Promise<SingleDocument> {
+    const {
+      slug,
+      singleMeta,
+      options,
+      statusFilterValue,
+      enforceRelatedFieldAccess,
+    } = params;
+    let doc = params.doc;
+
+    // i18n: resolve translatable fields from the companion `_locales` table for the
+    // requested locale (with fallback) BEFORE deserialization and upload/relationship/component
+    // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
+    // so the overlay must land before those transforms run (matching the collection read path).
+    // No-op when localization is off or the single isn't localized.
+    if (!params.skipLocalizedOverlay) {
+      await this.populateLocalized(
+        slug,
+        singleMeta,
+        doc,
+        options.locale,
+        options.fallbackLocale,
+        statusFilterValue
+      );
+    }
+
+    doc = this.deserializeJsonFields(doc, singleMeta.fields);
+    doc = await this.expandUploadFields(doc, singleMeta.fields);
+    doc = await this.expandRelationshipFields(
+      doc,
+      singleMeta.fields,
+      options.depth,
+      {
+        enforceFieldAccess: enforceRelatedFieldAccess,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      }
+    );
+
+    if (this.componentDataService) {
+      doc = (await this.componentDataService.populateComponentData({
+        entry: doc,
+        parentTable: singleMeta.tableName,
+        fields: singleMeta.fields,
+        depth: options.depth,
+        // i18n: thread the read locale so an embedded localized component resolves
+        // its translatable fields per language, and forward fallback control so a
+        // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
+        // fields blank instead of showing default-language text.
+        locale: options.locale,
+        fallbackLocale: options.fallbackLocale,
+        // A component's relationship fields copy whole rows out of the target
+        // collection, which a Single's field list never describes — so the
+        // caller travels down to reach the related row's own rules.
+        access: {
+          enforceFieldAccess: enforceRelatedFieldAccess,
+          user: options.user as Record<string, unknown> | undefined,
+          overrideAccess: options.overrideAccess,
+        },
+      })) as SingleDocument;
+    }
+
+    return doc;
+  }
+
+  /**
+   * Build the copy of a document that an access rule is judged on.
+   *
+   * Two things separate it from the response. Related rows keep the fields the
+   * target collection would hide from this caller, because a rule reading one
+   * must see the stored value rather than the hole redaction leaves — the same
+   * "absence means allowed" reading that admits a caller the rule exists to
+   * refuse. And it is detached, so a rule that writes to its `data` argument
+   * changes nothing the caller receives: a rule is a decision, not a
+   * transformation.
+   */
+  private async buildAuthorizationView(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    doc: SingleDocument;
+    options: GetSingleOptions;
+    statusFilterValue: string | undefined;
+    skipLocalizedOverlay?: boolean;
+  }): Promise<SingleDocument> {
+    const assembled = await this.assembleStoredDocument({
+      ...params,
+      // Assembled from a copy of the row: the transforms mutate what they are
+      // given, and the response is assembled from the same row afterwards.
+      doc: { ...params.doc },
+      enforceRelatedFieldAccess: false,
+      // Depth is the caller's preference about the SHAPE of the response, and
+      // must not be able to shrink the evidence a rule is judged on: at
+      // `depth: 0` a relationship stays an id, and a rule reading into the
+      // related row would be handed nothing and read that as permission.
+      // Authorization uses the full read depth whatever the caller asked for.
+      options: { ...params.options, depth: undefined },
+    });
+    // The response carries the per-locale overview when it is asked for, so a
+    // rule deciding on translation state has to see it here too, or the two
+    // decisions are made about documents that differ in what the rule reads.
+    if (params.options.translationStatus) {
+      await this.populateTranslationMeta(
+        params.slug,
+        params.singleMeta,
+        assembled
+      );
+    }
+    return detachData(assembled);
+  }
+
+  /**
+   * Decide a `custom` read rule before the read causes anything to happen.
+   *
+   * The rule is shown the document a caller would receive, assembled from the
+   * stored row: a rule reading `data` decides on translations and component
+   * values that the bare main-table row does not carry, so judging the row alone
+   * refuses callers the rule admits and admits callers it refuses. Assembling
+   * first costs a second pass over the read-only stages, and buys a decision
+   * made on the same evidence the caller would get.
+   *
+   * Deciding here, rather than only on the way out, is what keeps a refused
+   * caller from reaching user hooks or from materializing a Single that has
+   * never been written — both permanent effects of a read that is about to be
+   * denied.
+   *
+   * A rule that answers with a query constraint is refused. A constraint
+   * narrows a result set, and a Single's document is assembled from several
+   * tables, so no single row remains for the database to test the predicate
+   * against; approximating it in memory would mean a second evaluator drifting
+   * from the one collection lists compile.
+   */
+  private async evaluateCustomRead(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    accessRules: CollectionAccessRules | undefined;
+    options: GetSingleOptions;
+    statusFilterValue: string | undefined;
+    /** The stored row, already loaded and already screened for visibility. */
+    row: SingleDocument | null;
+  }): Promise<{
+    denied?: SingleResult;
+    /**
+     * The document this read would create, when the Single has no row yet. The
+     * caller hands it back to the insert so the row that gets written is the one
+     * the rule was shown, down to its id.
+     */
+    prospective?: DefaultDocumentDraft;
+  }> {
+    const { slug, singleMeta, accessRules, options, statusFilterValue, row } =
+      params;
+    if (!accessRules) return {};
+
+    const denied: SingleResult = {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: read on single "${slug}" is not permitted`,
+    };
+
+    // A Single that has never been written still has the document this read
+    // would create: its declared field defaults. Judging those is what keeps a
+    // rule such as `data.secret !== true` from admitting the read that
+    // materializes a document the rule refuses — a permanent write (the row, its
+    // first version, its localized defaults) driven by a caller about to be
+    // denied. Built in memory; nothing is persisted here, and the row the read
+    // goes on to create is judged again on the way out.
+    const prospective = row ? undefined : this.buildDefaultDocument(singleMeta);
+    // Either way the rule is shown the document as the read would render it.
+    // A draft's stored form is not that: `buildDefaultDocument` leaves group,
+    // repeater and JSON defaults in their serialized form, so a rule reading
+    // `data.settings.private` would be handed a string. Its localized defaults
+    // are already inline, which is why the companion overlay is skipped.
+    const document = await this.buildAuthorizationView({
+      slug,
+      singleMeta,
+      doc: row ?? prospective!.document,
+      options,
+      statusFilterValue,
+      skipLocalizedOverlay: !row,
+    });
+
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      "read",
+      {
+        // Spread rather than rebuild: `UserContext` carries arbitrary extra
+        // claims, and a rule reading one (a tenant id, a plan) sees undefined
+        // if the object is reconstructed from the canonical fields alone,
+        // which can allow a caller it was written to deny.
+        user: options.user ? { ...options.user } : undefined,
+        // Part of the documented rule context: a rule keyed on the requested
+        // language sees `undefined` without them, which can turn an
+        // absence-tolerant check into an unintended allow.
+        locale: options.locale,
+        fallbackLocale: options.fallbackLocale,
+      },
+      // The same identity the rule sees in `data`: the stored row's id, or the
+      // one the prospective insert will carry.
+      typeof document.id === "string" ? document.id : undefined,
+      document
+    );
+
+    if (!result.allowed) {
+      return {
+        denied: { ...denied, message: result.reason ?? denied.message },
+      };
+    }
+    if (result.query !== undefined && result.query !== null) {
+      this.logger.warn("Refused a constraint returned for a single", { slug });
+      return { denied };
+    }
+    return { prospective };
+  }
+
+  /**
+   * The authoritative read decision, made on the fully assembled document.
+   *
+   * A document-dependent rule is only as good as the data it is shown. The
+   * earlier gate necessarily runs on the bare main-table row, because it has to
+   * refuse a caller BEFORE the stages that would materialize, translate and
+   * populate the document on their behalf. Those stages then change what `data`
+   * contains, so the rule is asked again here, about the object the caller would
+   * actually receive.
+   *
+   * A constraint returned at this point cannot be handed to the database — the
+   * document has already been assembled from several tables and no longer
+   * corresponds to a single row — so a constraint is refused rather than
+   * approximated in memory.
+   *
+   * Only a `custom` rule is asked again. Ownership is settled once, against the
+   * stored row: none of the assembly stages can transfer a document to a
+   * different owner, while a hook is free to drop or rewrite the owner value in
+   * the response — so asking again here could only refuse the caller the first
+   * check already recognised as the owner.
+   */
+  private async judgeAssembledDocument(params: {
+    slug: string;
+    accessRules: CollectionAccessRules | undefined;
+    user?: UserContext;
+    locale?: string;
+    fallbackLocale?: string | false;
+    document: SingleDocument;
+  }): Promise<SingleResult | null> {
+    const { slug, accessRules, user, locale, fallbackLocale, document } =
+      params;
+    if (!accessRules) return null;
+
+    const denied: SingleResult = {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: read on single "${slug}" is not permitted`,
+    };
+
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      "read",
+      { user: user ? { ...user } : undefined, locale, fallbackLocale },
+      typeof document.id === "string" ? document.id : undefined,
+      document
+    );
+    if (!result.allowed) {
+      return { ...denied, message: result.reason ?? denied.message };
+    }
+    if (result.query !== undefined && result.query !== null) {
+      // The assembled document spans several tables, so there is no single row
+      // for the database to re-check this against.
+      this.logger.warn(
+        "Refused a constraint returned for an assembled single",
+        {
+          single: slug,
+        }
+      );
+      return denied;
+    }
+    return null;
+  }
+
+  /**
    * Decide an `owner-only` read against the loaded row.
    *
    * `checkSingleAccess` runs before the row is fetched and fails an owner-only
@@ -515,16 +822,16 @@ export class SingleQueryService extends BaseService {
         isSuperAdminContext(options.user) &&
         options.authenticatedScope?.actorType !== "apiKey";
       // Both kinds are skipped at the gate, which has no row to judge them
-      // against, but only owner-only is settled below. A `custom` function may
-      // return an arbitrary query constraint, and honouring that on one document
-      // means re-implementing the filter grammar a list read compiles in SQL —
-      // a second evaluator to drift from the first. Custom read rules on Singles
-      // are therefore left unenforced here rather than half-enforced.
+      // against, and each is settled below: an owner-only rule by comparing the
+      // owner column on the stored row, a custom rule by judging the document
+      // that row assembles into.
       const skipRuleAtGate =
         !isSuperAdminSession &&
         (readRule?.type === "owner-only" || readRule?.type === "custom");
       const deferDocumentRule =
         !isSuperAdminSession && readRule?.type === "owner-only";
+      const deferCustomRule =
+        !isSuperAdminSession && readRule?.type === "custom";
 
       const accessDenied = await checkSingleAccess({
         slug,
@@ -547,25 +854,73 @@ export class SingleQueryService extends BaseService {
         return accessDenied;
       }
 
+      // The draft/published filter is resolved here rather than after the read
+      // because a deferred rule is judged on the assembled document, and the
+      // translation overlay it runs needs the same status the response will be
+      // built under.
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus:
+          (singleMeta as { status?: boolean }).status === true,
+        overrideAccess: options.overrideAccess === true,
+        explicit: options.status,
+      });
+
+      // 1.55. Load the row once for whichever deferred rule needs it, and screen
+      // it for visibility first. A draft Single answers 404 to an untrusted
+      // caller so its existence stays hidden; deciding a stored rule before that
+      // would answer 403 instead, which tells the caller both that the row is
+      // there and what the rule made of them.
+      let storedRow: SingleDocument | null = null;
+      if ((deferDocumentRule || deferCustomRule) && !options.overrideAccess) {
+        storedRow = await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        );
+        if (
+          storedRow &&
+          statusFilter &&
+          (storedRow as { status?: string }).status !== statusFilter.value
+        ) {
+          return {
+            success: false,
+            statusCode: 404,
+            message: `Single "${slug}" not found`,
+          };
+        }
+      }
+
       // 1.6. Settle a deferred document rule BEFORE any read side effect. Hooks
       // are user code and auto-create permanently materializes the document
       // (with its first version and localized defaults), so a caller the rule
       // denies must not reach either by issuing a read it is not allowed to
-      // make. The row is loaded here rather than at step 5 so the decision has
-      // something to judge; step 5 reuses it.
-      let loadedDoc: SingleDocument | null = null;
+      // make.
       if (deferDocumentRule && !options.overrideAccess) {
-        loadedDoc = await this.adapter.selectOne<SingleDocument>(
-          singleMeta.tableName,
-          {}
-        );
+        // Ownership lives on the stored row, so the bare row settles it; none of
+        // the stages that assemble the document can move a Single to a different
+        // owner.
         const documentRuleDenied = this.evaluateOwnerOnlyRead({
           slug,
           rule: readRule as { ownerField?: string } | undefined,
           user: options.user,
-          document: loadedDoc,
+          document: storedRow,
         });
         if (documentRuleDenied) return documentRuleDenied;
+      }
+
+      // 1.7. Settle a custom rule the same way, and before the same side
+      // effects.
+      let prospectiveDefault: DefaultDocumentDraft | undefined;
+      if (deferCustomRule && !options.overrideAccess) {
+        const custom = await this.evaluateCustomRead({
+          slug,
+          singleMeta,
+          accessRules: singleMeta.accessRules,
+          options,
+          statusFilterValue: statusFilter ? statusFilter.value : undefined,
+          row: storedRow,
+        });
+        if (custom.denied) return custom.denied;
+        prospectiveDefault = custom.prospective;
       }
 
       // 2. Build shared context for hooks (seed with caller-provided context)
@@ -598,13 +953,30 @@ export class SingleQueryService extends BaseService {
         await this.hookRegistry.execute("beforeRead", beforeContext);
       }
 
-      // 5. Fetch document from database
-      let doc =
-        loadedDoc ??
-        (await this.adapter.selectOne<SingleDocument>(
-          singleMeta.tableName,
-          {}
-        ));
+      // 5. Fetch document from database. Read after the hooks rather than
+      // reusing the row an access decision loaded before them: a `beforeRead`
+      // hook may write, and a response built from the earlier snapshot would
+      // report values the read no longer finds.
+      let doc = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+
+      // 5.5. Ownership was established on the row loaded before the hooks, and
+      // this is a different read of it. A `beforeRead` hook may write, and
+      // another writer may reassign the owner column between the two, so the row
+      // actually being returned is checked as well. This judges the stored row,
+      // not the response: hooks and field rules transform the owner value on the
+      // way out, and a check made after them refuses the real owner.
+      if (deferDocumentRule && !options.overrideAccess) {
+        const ownershipLapsed = this.evaluateOwnerOnlyRead({
+          slug,
+          rule: readRule as { ownerField?: string } | undefined,
+          user: options.user,
+          document: doc,
+        });
+        if (ownershipLapsed) return ownershipLapsed;
+      }
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -613,6 +985,10 @@ export class SingleQueryService extends BaseService {
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocument(singleMeta, {
           captureInitialVersion: true,
+          // The draft an access decision already judged, so the row written is
+          // the one the rule was shown. Building a second one would give the
+          // final check a different id than the rule was asked about.
+          draft: prospectiveDefault,
         });
       }
 
@@ -621,12 +997,6 @@ export class SingleQueryService extends BaseService {
       // only published; trusted callers see all. A draft Single returns 404
       // so its existence is invisible to public callers — same response shape
       // as a not-yet-created Single.
-      const statusFilter = resolveStatusFilter({
-        collectionHasStatus:
-          (singleMeta as { status?: boolean }).status === true,
-        overrideAccess: options.overrideAccess === true,
-        explicit: options.status,
-      });
       if (
         statusFilter &&
         (doc as { status?: string }).status !== statusFilter.value
@@ -638,61 +1008,24 @@ export class SingleQueryService extends BaseService {
         };
       }
 
-      // 6.9. i18n: resolve translatable fields from the companion `_locales` table for the
-      // requested locale (with fallback) BEFORE deserialization and upload/relationship/component
-      // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
-      // so the overlay must land before those transforms run (matching the collection read path).
-      // No-op when localization is off or the single isn't localized.
-      await this.populateLocalized(
+      // 6.9 - 7.7. Resolve translations and expand uploads, relationships and
+      // components into the document.
+      //
+      // Related rows are redacted HERE rather than after the decision below,
+      // unlike this Single's own fields. A related row's chosen label is a copy
+      // of one of its field values, derived while the row is expanded, so
+      // redacting afterwards would leave a withheld value standing in the label
+      // it was copied into. The rule still sees related fields unredacted: the
+      // decision that governs them is the one made before any of this ran, on
+      // an unredacted assembly of the stored row.
+      doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
         doc,
-        options.locale,
-        options.fallbackLocale,
-        statusFilter ? statusFilter.value : undefined
-      );
-
-      // 7. Deserialize JSON fields
-      doc = this.deserializeJsonFields(doc, singleMeta.fields);
-
-      // 7.5. Expand upload fields with full media data
-      doc = await this.expandUploadFields(doc, singleMeta.fields);
-
-      // 7.6. Expand relationship fields with full related entry data
-      doc = await this.expandRelationshipFields(
-        doc,
-        singleMeta.fields,
-        options.depth,
-        {
-          enforceFieldAccess: true,
-          user: options.user,
-          overrideAccess: options.overrideAccess,
-        }
-      );
-
-      // 7.7. Populate component field data from comp_{slug} tables
-      if (this.componentDataService) {
-        doc = (await this.componentDataService.populateComponentData({
-          entry: doc,
-          parentTable: singleMeta.tableName,
-          fields: singleMeta.fields,
-          depth: options.depth,
-          // i18n: thread the read locale so an embedded localized component resolves
-          // its translatable fields per language, and forward fallback control so a
-          // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
-          // fields blank instead of showing default-language text.
-          locale: options.locale,
-          fallbackLocale: options.fallbackLocale,
-          // A component's relationship fields copy whole rows out of the target
-          // collection, which a Single's field list never describes — so the
-          // caller travels down to reach the related row's own rules.
-          access: {
-            enforceFieldAccess: true,
-            user: options.user as Record<string, unknown> | undefined,
-            overrideAccess: options.overrideAccess,
-          },
-        })) as SingleDocument;
-      }
+        options,
+        statusFilterValue: statusFilter ? statusFilter.value : undefined,
+        enforceRelatedFieldAccess: true,
+      });
 
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
@@ -728,8 +1061,9 @@ export class SingleQueryService extends BaseService {
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
-      // Field-level afterRead hooks + read access (functions resolved via
-      // the field-level registry).
+      // Field-level afterRead hooks (functions resolved via the field-level
+      // registry). Field read access runs further down, once the document-level
+      // decision has been made.
       await runFieldHooks({
         kind: "single",
         slug,
@@ -738,6 +1072,40 @@ export class SingleQueryService extends BaseService {
         operation: "read",
         user: options.user,
       });
+
+      // 9. Judge the document being RETURNED, not the row the read started
+      // from. A document-dependent rule reads `data`, and `data` is assembled in
+      // stages after the earlier gate: defaults on auto-create, translations
+      // from the companion table, component rows from their own tables, and
+      // whatever a hook changed. A rule such as `data?.secret !== true` sees
+      // none of that on the bare main-table row and admits a caller the
+      // assembled document denies. The earlier gate stays because it refuses
+      // callers before those stages run any side effects; this is the decision
+      // that governs what is handed back.
+      if (deferCustomRule && !options.overrideAccess) {
+        const finalDenial = await this.judgeAssembledDocument({
+          slug,
+          accessRules: singleMeta.accessRules,
+          user: options.user,
+          locale: options.locale,
+          fallbackLocale: options.fallbackLocale,
+          // A detached copy, so the rule decides rather than edits. `data` is
+          // handed to user code, and passing the response object itself would
+          // let a rule that assigns to it rewrite what the caller receives —
+          // including putting back a value a later stage is meant to withhold.
+          // Deep, because a shallow copy still shares every nested component,
+          // repeater and expanded relation with the response.
+          document: detachData(doc),
+        });
+        if (finalDenial) return finalDenial;
+      }
+
+      // 10. Redact fields the caller may not read, AFTER the document-level
+      // decision. Redaction removes values a rule may be written to inspect, so
+      // running it first lets a rule guarding a companion- or component-backed
+      // field see that field absent — the same "missing means allowed" reading
+      // that admits a caller the rule exists to refuse. Access decides on the
+      // document as assembled; the response is narrowed once it is decided.
       await applyFieldReadAccess({
         kind: "single",
         slug,
@@ -746,8 +1114,9 @@ export class SingleQueryService extends BaseService {
         overrideAccess: options.overrideAccess,
       });
 
-      // Defense in depth: re-strip after hooks in case a hook re-introduced
-      // a password value under its declared key.
+      // Defense in depth, after every user callback on this document: hooks,
+      // access rules and field rules are all app code, and this is the last
+      // point at which a password value could still be put back.
       if (singleHasPassword) {
         stripPasswordFieldValues(doc, singleMeta.fields);
       }
@@ -1153,13 +1522,13 @@ export class SingleQueryService extends BaseService {
 
   async createDefaultDocument(
     singleMeta: DynamicSingleRecord,
-    options?: { captureInitialVersion?: boolean }
+    options?: { captureInitialVersion?: boolean; draft?: DefaultDocumentDraft }
   ): Promise<SingleDocument> {
     const {
       insertValues: snakeCaseDefaults,
       document,
       localizedDefaults,
-    } = this.buildDefaultDocument(singleMeta);
+    } = options?.draft ?? this.buildDefaultDocument(singleMeta);
     const id = snakeCaseDefaults.id as string;
     const status = (document as { status?: string }).status;
 

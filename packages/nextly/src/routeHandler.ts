@@ -1637,6 +1637,7 @@ async function setAuthenticatedRouteParams(
   delete routeParams._authenticatedActorType;
   delete routeParams._authenticatedActorId;
   delete routeParams._authenticatedPermissions;
+  delete routeParams._authenticatedClaims;
 
   if (!authorizedUser) return;
 
@@ -1658,6 +1659,12 @@ async function setAuthenticatedRouteParams(
     routeParams._authenticatedPermissions = JSON.stringify(
       authorizedUser.permissions ?? []
     );
+  }
+  // Verified extra claims, so a stored `custom` rule decides on the same
+  // identity over HTTP that it gets through the Direct API. Server-authored
+  // like the keys above: the client-supplied copy was deleted first.
+  if (authorizedUser.claims) {
+    routeParams._authenticatedClaims = JSON.stringify(authorizedUser.claims);
   }
 
   if (!needsRoles) return;

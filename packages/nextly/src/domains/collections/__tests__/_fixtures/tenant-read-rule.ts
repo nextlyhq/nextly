@@ -13,7 +13,7 @@
 export default function tenantReadRule({
   req,
 }: {
-  req: { user?: { id?: string } };
+  req: { user?: { id?: string; tenantId?: string } };
 }): unknown {
   switch (req.user?.id) {
     // Two fields: both have to bind, or rows from the other region come back.
@@ -73,6 +73,25 @@ export default function tenantReadRule({
     // it is a valid rule and must NOT be refused.
     case "scalar-in":
       return { region: { in: "eu" } };
+    // Keyed on a claim the framework knows nothing about. It survives only if
+    // the caller's whole user object reaches the rule rather than a rebuilt
+    // subset of the canonical fields.
+    case "claim-aware":
+      return req.user?.tenantId === "acme"
+        ? { tenant: { equals: "acme" } }
+        : false;
+    // An exclusion list that came back empty. It excludes nothing, so the rule
+    // restricts nothing and every row is readable — refusing it would turn
+    // "nobody is blocked" into "nobody may read".
+    case "empty-exclusion":
+      return { region: { not_in: [] } };
+    // The same no-op alongside a real predicate: the sibling still decides.
+    case "empty-exclusion-with-sibling":
+      return { region: { not_in: [] }, tenant: { equals: "acme" } };
+    // An empty `in` matches nothing, and the translator drops it — which would
+    // widen the read instead of narrowing it — so it stays refused.
+    case "empty-inclusion":
+      return { region: { in: [] } };
     default:
       return true;
   }

@@ -1,0 +1,108 @@
+/**
+ * A stored `custom` read rule for a Single, as a real module so the access
+ * service's dynamic `import(functionPath)` can load it.
+ *
+ * Answers differently per caller so one fixture covers a constraint that
+ * selects, one that selects nothing, an outright refusal, a caller-only
+ * decision, and a shape that cannot be translated exactly.
+ */
+export default function singleReadRule({
+  req,
+  id,
+  data,
+}: {
+  req: { user?: { id?: string }; locale?: string };
+  id?: string;
+  data?: Record<string, unknown>;
+}): unknown {
+  switch (req.user?.id) {
+    case "denied":
+      return false;
+    // No predicate: the caller alone decides, so nothing is filtered.
+    case "always":
+      return true;
+    // A dotted path, whose suffix translation discards while comparing the base
+    // column instead — a different predicate than the rule states.
+    case "dotted":
+      return { "tenant.name": { equals: "acme" } };
+    // A system column the Single owns but does not list as a configured field.
+    // Validating against configured fields alone would refuse this valid rule.
+    case "system-column":
+      return { id: { not_equals: "no-such-id" } };
+    // A rule that reads the stored document, which it can only do if the row is
+    // loaded before the rule is evaluated.
+    case "reads-data":
+      return { tenant: { equals: (data as { tenant?: string })?.tenant } };
+    // A caller-only decision, used to check the first read of a Single that has
+    // never been materialized can still authorize its creation.
+    case "caller-only":
+      return Boolean(req.user);
+    // A case-insensitive operator, whose SQL differs by dialect.
+    case "contains-op":
+      return { tenant: { contains: "acm" } };
+    // Keyed on the requested language, which the rule only sees if the read's
+    // locale is threaded into its context.
+    case "locale-aware":
+      return req.locale === "secret" ? false : { tenant: { equals: "acme" } };
+    // Keyed on a non-canonical claim, which only survives if the caller's full
+    // user context reaches the rule rather than a rebuilt subset.
+    case "claim-aware":
+      return (req.user as { tenantId?: string })?.tenantId === "blocked"
+        ? false
+        : { tenant: { equals: "acme" } };
+    // Guards a value the bare main row cannot show: the companion table holds
+    // it per language, so only the assembled document carries the requested
+    // locale's value.
+    case "assembled-aware":
+      return (data as { visibility?: string })?.visibility !== "private";
+    // Refuses on a value that exists only in the document a first read would
+    // create, so the rule can decide correctly only if those defaults are judged
+    // before the write that materializes them.
+    case "default-aware":
+      return (data as { title?: string })?.title !== "Branding";
+    // The mirror of `assembled-aware`: grants ON the assembled value rather than
+    // tolerating its absence, so judging the bare row refuses a caller the rule
+    // admits.
+    case "assembled-grant":
+      return (data as { visibility?: string })?.visibility === "public";
+    // Reads a field on an expanded related row that the target collection hides
+    // from this caller. Redacting before the rule is judged shows it `undefined`
+    // and the Single walks out.
+    case "relation-aware":
+      return (
+        (data as { author?: { suspended?: boolean } })?.author?.suspended !==
+        true
+      );
+    // Decides on the per-locale overview, which the read only attaches when it
+    // is asked for. A decision made before it is attached sees nothing.
+    case "translation-aware":
+      return Boolean((data as { _translations?: unknown })?._translations);
+    // Writes deep inside its argument rather than at the top level.
+    case "deep-mutating":
+      {
+        const settings = (data as { settings?: Record<string, unknown> })
+          ?.settings;
+        if (settings) settings.injected = "from-the-rule";
+      }
+      return true;
+    // Asserts the identity arguments agree. A read of a Single that does not
+    // exist yet is judged against the document it would create, so the id it is
+    // told about has to be the id that document carries.
+    case "id-coherent":
+      return typeof id === "string" && (data as { id?: string })?.id === id;
+    // Writes to its `data` argument, which a rule has no business doing. The
+    // response must not carry the edit.
+    case "mutating":
+      (data as Record<string, unknown> | undefined) &&
+        ((data as Record<string, unknown>).injected = "from-the-rule");
+      return true;
+    // A rule that falls through without returning a decision, as a dynamically
+    // imported function is free to do — it is not checked against the contract
+    // at runtime.
+    case "no-verdict":
+      return undefined;
+    // Narrow to the caller's own tenant.
+    default:
+      return { tenant: { equals: req.user?.id } };
+  }
+}
