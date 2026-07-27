@@ -15,7 +15,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, ne, and, like, ilike, sql } from "drizzle-orm";
+import { eq, ne, and, like, ilike } from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
 // references it, so we import only `BeforeOperationArgs`.
@@ -74,7 +74,6 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
-import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
@@ -285,36 +284,7 @@ export interface TransitionAuthorization {
   } | null;
 }
 
-/**
- * How many rows a driver returned, whatever shape it reports them in.
- *
- * mysql2 answers with a `[rows, fieldPackets]` tuple, node-postgres with an
- * object carrying `rows`, and better-sqlite3 with the rows themselves. Reading
- * the outer array blindly counts the mysql2 tuple as two rows, which turns
- * "no such table" into "it exists".
- */
-function countRows(result: unknown): number {
-  if (Array.isArray(result)) {
-    // A mysql2 tuple's first element is the row array; a plain row list's
-    // first element is a row object.
-    return Array.isArray(result[0]) ? result[0].length : result.length;
-  }
-  if (result && typeof result === "object" && "rows" in result) {
-    const rows = (result as { rows?: unknown }).rows;
-    return Array.isArray(rows) ? rows.length : 0;
-  }
-  return 0;
-}
-
 /** Whether a string is already the stored JSON representation of a value. */
-function isParsableJson(value: string): boolean {
-  try {
-    JSON.parse(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export class CollectionMutationService extends BaseService {
   constructor(
@@ -670,52 +640,18 @@ export class CollectionMutationService extends BaseService {
 
   /** Whether the companion `_locales` table physically exists (migration has run). */
   private async companionTableExists(
-    companionTableName: string,
-    // Bind the probe to a caller's transaction when there is one. Issued
-    // against the pool instead, it would ask for a second connection while the
-    // transaction still holds the first, and on a single-connection pool that
-    // waits forever rather than failing.
-    executor?: { execute: (query: unknown) => Promise<unknown> }
+    companionTableName: string
   ): Promise<boolean> {
-    if (!executor) {
-      const q =
-        this.adapter.dialect === "mysql"
-          ? `\`${companionTableName}\``
-          : `"${companionTableName}"`;
-      try {
-        await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
-        return true;
-      } catch {
-        return false;
-      }
+    const q =
+      this.adapter.dialect === "mysql"
+        ? `\`${companionTableName}\``
+        : `"${companionTableName}"`;
+    try {
+      await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
+      return true;
+    } catch {
+      return false;
     }
-
-    // Inside a transaction the question has to be asked WITHOUT touching the
-    // table, because selecting from one that does not exist is an error, and
-    // PostgreSQL marks the whole transaction aborted the moment a statement
-    // fails — every later statement then fails too, however the error was
-    // caught. Reading the catalog succeeds either way and answers the same
-    // question.
-    const query =
-      this.adapter.dialect === "sqlite"
-        ? sql`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ${companionTableName} LIMIT 1`
-        : this.adapter.dialect === "mysql"
-          ? sql`SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ${companionTableName} LIMIT 1`
-          : sql`SELECT 1 FROM information_schema.tables WHERE table_name = ${companionTableName} AND table_schema = ANY (current_schemas(false)) LIMIT 1`;
-
-    // The handles differ by driver: better-sqlite3 exposes `all` and has no
-    // `execute` at all, while the pg and mysql2 handles use `execute`. Picked
-    // by capability rather than by dialect, so a handle is never called
-    // through a method it does not have.
-    const handle = executor as {
-      all?: (query: unknown) => Promise<unknown>;
-      execute?: (query: unknown) => Promise<unknown>;
-    };
-    const raw = handle.all
-      ? await handle.all(query)
-      : await handle.execute?.(query);
-
-    return countRows(raw) > 0;
   }
 
   /**
@@ -843,95 +779,6 @@ export class CollectionMutationService extends BaseService {
    * SQLite happens to stringify, which is why a suite running there alone
    * cannot show the difference.
    */
-  /**
-   * The fields a transactional create may seed a default into.
-   *
-   * Once the companion migration has run, a localized collection's translatable
-   * columns live on the `<table>_locales` table and no longer exist on the main
-   * one. The pooled path splits those values out and writes the companion row;
-   * the transactional paths have no such step, so seeding a translatable
-   * default there would put a key in the main-table insert for a column that is
-   * gone.
-   *
-   * Existence is probed rather than reading `localized` alone, matching
-   * `splitLocalizedWriteData`: before the migration the translatable columns are
-   * still on the main table and their defaults apply exactly as on the pooled
-   * path. The probe runs on the caller's transaction connection, and the
-   * companion name follows the `<table>_locales` convention rather than going
-   * through a metadata lookup, so neither asks the pool for a second connection
-   * while the transaction holds one.
-   */
-  private async defaultableFields(
-    tx: TransactionContext,
-    collection: unknown,
-    tableName: string,
-    fields: FieldDefinition[]
-  ): Promise<FieldDefinition[]> {
-    const isLocalized =
-      (collection as { localized?: boolean } | undefined)?.localized === true;
-    if (!isLocalized || !this.localization) return fields;
-
-    const exists = await this.companionTableExists(
-      `${tableName}_locales`,
-      tx.getDrizzle()
-    );
-    if (!exists) return fields;
-
-    const translatable = new Set(resolveLocalizedFieldNames(fields, true));
-    return fields.filter(f => !translatable.has(f.name));
-  }
-
-  private serializeJsonFieldsForInsert(
-    data: Record<string, unknown>,
-    fields: FieldDefinition[]
-  ): void {
-    for (const field of fields) {
-      if (!isJsonFieldType(field.type, field)) continue;
-      const value = data[field.name];
-      if (value == null) continue;
-
-      // A JSON column stores a JSON DOCUMENT, so a scalar has to be encoded
-      // too: the string `enabled` is not valid JSON, `"enabled"` is. A string
-      // that already parses is left alone, since it is the stored
-      // representation and encoding it again would nest it.
-      if (typeof value !== "object") {
-        if (typeof value === "string" && isParsableJson(value)) continue;
-        data[field.name] = JSON.stringify(value);
-        continue;
-      }
-
-      // A relationship nested in a group or repeater is stored as its id. A
-      // populated object reaching the stringify below would be frozen into the
-      // JSON as a whole record, so the same normalization the pooled path runs
-      // has to happen here, before the value becomes text.
-      const nestedFields = field.fields ?? [];
-      const hasNestedRelationship = nestedFields.some(
-        f =>
-          isRelationshipField(f.type) ||
-          f.type === "repeater" ||
-          f.type === "group"
-      );
-      let normalized: unknown = value;
-      if (hasNestedRelationship) {
-        if (field.type === "repeater" && Array.isArray(value)) {
-          normalized = value.map(row =>
-            row && typeof row === "object" && !Array.isArray(row)
-              ? normalizeNestedRelationships(
-                  row as Record<string, unknown>,
-                  nestedFields
-                )
-              : row
-          );
-        } else if (field.type === "group" && !Array.isArray(value)) {
-          normalized = normalizeNestedRelationships(
-            value as Record<string, unknown>,
-            nestedFields
-          );
-        }
-      }
-      data[field.name] = JSON.stringify(normalized);
-    }
-  }
 
   private deserializeJsonFieldsForSnapshot(
     row: Record<string, unknown>,
@@ -5098,26 +4945,11 @@ export class CollectionMutationService extends BaseService {
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
-      // Declared defaults are seeded before the first hook phase, so every hook
-      // — beforeOperation included — sees the values the entry will hold, and a
-      // hook that removes a defaulted field is not overridden by a later pass
-      // re-adding it. Seeded onto a copy so the caller's own object is not
-      // mutated. Everything after this point (generation, write access,
-      // validation, the insert) therefore works from complete data; generation
-      // still fills only the identity fields left unresolved, and running ahead
-      // of write access matches generation, so a field the caller may not
-      // create is not reintroduced.
-      const seededBody: Record<string, unknown> = { ...body };
-      applyFieldDefaults(
-        seededBody,
-        await this.defaultableFields(tx, collection, tableName, fields)
-      );
-
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
           operation: "create",
-          args: { data: seededBody },
+          args: { data: body },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
             : undefined,
@@ -5130,8 +4962,7 @@ export class CollectionMutationService extends BaseService {
       // Use modified data if returned by beforeOperation. A hook returning its
       // own object owns what is in it, defaults included — they are not
       // re-applied here, or a hook could never drop one.
-      const currentData =
-        (beforeOpArgs as BeforeOperationArgs)?.data ?? seededBody;
+      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
 
       // Execute beforeCreate hooks (code-registered)
       const beforeContext = this.hookService.buildHookContext({
@@ -5324,10 +5155,6 @@ export class CollectionMutationService extends BaseService {
 
       // Prepare entry data
       const nowForTxCreate = new Date();
-      // A raw tx.insert follows, with none of the pooled path's serialization
-      // in between, so JSON-backed values are stringified here instead.
-      this.serializeJsonFieldsForInsert(finalData, fields);
-
       const entryData = {
         id: this.collectionService.generateId(),
         // Strip client-supplied system columns (id / timestamps / created_by,
@@ -6322,15 +6149,6 @@ export class CollectionMutationService extends BaseService {
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = {};
 
-      // Seeded before the hook branch, so it happens either way: a default is
-      // not a hook, and an import opting out of hook execution still creates
-      // entries that must hold their declared values — an omitted required
-      // field with a default would otherwise abort the whole batch.
-      applyFieldDefaults(
-        currentData,
-        await this.defaultableFields(tx, collection, tableName, fields)
-      );
-
       // Execute hooks (unless skipped)
       if (!skipHooks) {
         // Execute beforeOperation hooks FIRST (before operation-specific hooks)
@@ -6551,10 +6369,6 @@ export class CollectionMutationService extends BaseService {
 
       // Prepare entry data
       const nowForTxCreate = new Date();
-      // A raw tx.insert follows, with none of the pooled path's serialization
-      // in between, so JSON-backed values are stringified here instead.
-      this.serializeJsonFieldsForInsert(finalData, fields);
-
       const entryData = {
         id: this.collectionService.generateId(),
         // Strip client-supplied system columns (id / timestamps / created_by,

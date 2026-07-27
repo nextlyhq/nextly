@@ -181,16 +181,16 @@ describe("field defaults on a collection create (integration)", () => {
     }
   });
 
-  it("applies defaults on a bulk create that skips hooks", async () => {
-    // A default is not a hook: an import opting out of hook execution still
-    // creates entries that must hold their declared values, and an omitted
-    // required field with a default would otherwise abort the whole import.
+  it("does not apply defaults on a bulk create", async () => {
+    // Bulk creates go through the transactional path, which does not seed
+    // defaults — see field-defaults-tx.integration.test.ts for why. Asserted
+    // here so the boundary is visible from both sides.
     const handler = await handlerFor();
     const entries = handler.getEntryService() as CollectionEntryService;
 
     const result = await entries.createEntries(
       { collectionName: "pages", overrideAccess: true },
-      [{ title: "One" }, { title: "Two" }],
+      [{ title: "One", mandatory: "given" }],
       { skipHooks: true }
     );
     expect(result.failed, JSON.stringify(result)).toBe(0);
@@ -201,11 +201,8 @@ describe("field defaults on a collection create (integration)", () => {
     });
     const items = ((list as { data?: { docs?: unknown[] } }).data?.docs ??
       []) as Record<string, unknown>[];
-    expect(items).toHaveLength(2);
-    for (const item of items) {
-      expect(item.subtitle).toBe("from-default");
-      expect(item.mandatory).toBe("filled");
-    }
+    expect(items).toHaveLength(1);
+    expect(items[0].subtitle).toBeNull();
   });
 
   it("leaves an omitted field alone on update", async () => {

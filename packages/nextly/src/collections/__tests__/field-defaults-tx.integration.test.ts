@@ -1,18 +1,25 @@
 /**
- * Defaults on the transactional create path.
+ * Where declared defaults stop.
  *
- * `createEntryInTransaction` builds its insert payload straight from the write
- * data, without the JSON serialization pass the pooled create runs. A default
- * that is an object or an array therefore reaches the driver as a live value
- * rather than as JSON text, which each dialect handles differently — so the
- * path a default arrives on has to be exercised, not just the value.
+ * Defaults are applied on the pooled create path only. The transactional and
+ * bulk paths build their insert payload directly and run none of the pooled
+ * path's preparation — no JSON serialization, no nested-relationship
+ * normalization, and no companion write for a localized collection's
+ * translatable values. Seeding defaults into them means reproducing all three,
+ * on paths whose behaviour cannot currently be exercised against Postgres or
+ * MySQL, so that is left until both paths share one write pipeline.
+ *
+ * This asserts the boundary rather than leaving it implicit: a transactional
+ * create stores nothing for an omitted field, exactly as it did before
+ * defaults existed. Moving the boundary should be a deliberate change that
+ * updates this test, not a silent one.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, json, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
-import type { CollectionsHandler } from "../../services/collections-handler";
 import type { CollectionEntryService } from "../../services/collections/collection-entry-service";
+import type { CollectionsHandler } from "../../services/collections-handler";
 
 let current: TestNextly | undefined;
 
@@ -21,17 +28,16 @@ afterEach(async () => {
   current = undefined;
 });
 
-const OBJECT_DEFAULT = { a: 1, nested: { b: [1, 2] } };
-
 describe("field defaults on a transactional create (integration)", () => {
-  it("stores an object default as JSON, not as a driver expression", async () => {
+  it("does not apply declared defaults", async () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
           slug: "txdefaults",
           fields: [
             text({ name: "title" }),
-            json({ name: "settings", defaultValue: OBJECT_DEFAULT }),
+            text({ name: "subtitle", defaultValue: "from-default" }),
+            json({ name: "settings", defaultValue: { a: 1 } }),
           ],
         }),
       ],
@@ -48,7 +54,6 @@ describe("field defaults on a transactional create (integration)", () => {
         { title: "T" }
       )
     );
-
     const id = (created as { data?: { id?: unknown } }).data?.id;
     expect(typeof id, JSON.stringify(created)).toBe("string");
 
@@ -61,99 +66,11 @@ describe("field defaults on a transactional create (integration)", () => {
       string,
       unknown
     >;
-    expect(data.settings).toEqual(OBJECT_DEFAULT);
-  });
 
-  it("encodes a scalar json default as a json document", async () => {
-    // A JSON column stores a document: the bare string `enabled` is not valid
-    // JSON, so a JSONB insert rejects it while `"enabled"` is accepted.
-    current = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug: "txscalar",
-          fields: [
-            text({ name: "title" }),
-            json({ name: "mode", defaultValue: "enabled" }),
-          ],
-        }),
-      ],
-    });
-
-    const entries = current
-      .getService<CollectionsHandler>("collectionsHandler")
-      .getEntryService() as CollectionEntryService;
-
-    const created = await current.adapter.transaction(tx =>
-      entries.createEntryInTransaction(
-        tx as never,
-        { collectionName: "txscalar", overrideAccess: true },
-        { title: "T" }
-      )
-    );
-    const id = (created as { data?: { id?: unknown } }).data?.id;
-    expect(typeof id, JSON.stringify(created)).toBe("string");
-
-    const read = await entries.getEntry({
-      collectionName: "txscalar",
-      entryId: String(id),
-      overrideAccess: true,
-    });
-    const data = ((read as { data?: unknown }).data ?? {}) as Record<
-      string,
-      unknown
-    >;
-    expect(data.mode).toBe("enabled");
-  });
-
-  it("applies defaults on a localized collection", async () => {
-    // A localized collection is the only case that reaches the companion
-    // lookup, so without this the whole branch went unexercised — including
-    // which method the driver handle actually exposes, which differs between
-    // better-sqlite3 and the pg/mysql2 handles.
-    current = await createTestNextly({
-      localization: { locales: ["en", "de"], defaultLocale: "en" },
-      collections: [
-        defineCollection({
-          slug: "txlocalized",
-          localized: true,
-          fields: [
-            // Non-translatable, so this exercises the companion lookup without
-            // running into the separate, pre-existing gap that transactional
-            // creates have no companion-write step for translatable values.
-            text({ name: "title", localized: false }),
-            text({
-              name: "subtitle",
-              localized: false,
-              defaultValue: "from-default",
-            }),
-          ],
-        }),
-      ],
-    });
-
-    const entries = current
-      .getService<CollectionsHandler>("collectionsHandler")
-      .getEntryService() as CollectionEntryService;
-
-    const created = await current.adapter.transaction(tx =>
-      entries.createEntryInTransaction(
-        tx as never,
-        { collectionName: "txlocalized", overrideAccess: true },
-        { title: "T" }
-      )
-    );
-    const id = (created as { data?: { id?: unknown } }).data?.id;
-    expect(typeof id, JSON.stringify(created)).toBe("string");
-
-    const read = await entries.getEntry({
-      collectionName: "txlocalized",
-      entryId: String(id),
-      overrideAccess: true,
-    });
-    const data = ((read as { data?: unknown }).data ?? {}) as Record<
-      string,
-      unknown
-    >;
-    expect(data.subtitle).toBe("from-default");
+    // Unchanged from before this feature: the create succeeds and the omitted
+    // fields are simply empty.
+    expect(data.title).toBe("T");
+    expect(data.subtitle).toBeNull();
+    expect(data.settings).toBeNull();
   });
 });
