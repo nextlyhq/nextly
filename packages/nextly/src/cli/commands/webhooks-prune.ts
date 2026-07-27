@@ -48,12 +48,8 @@ export async function runWebhooksPruneCommand(
   const { logger } = context;
   logger.header("Webhooks prune");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) logger.error(error);
-    process.exit(1);
-  }
-
+  // Resolve the policy before requiring a database: a disabled-retention install
+  // should report that and exit cleanly even with no DATABASE_URL configured.
   const configResult = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
@@ -66,6 +62,12 @@ export async function runWebhooksPruneCommand(
   if (!policy) {
     logger.info("Webhook retention is disabled (webhooks.retention = false).");
     return;
+  }
+
+  const dbValidation = validateDatabaseEnv();
+  if (!dbValidation.valid) {
+    for (const error of dbValidation.errors) logger.error(error);
+    process.exit(1);
   }
 
   let adapter: CLIDatabaseAdapter;

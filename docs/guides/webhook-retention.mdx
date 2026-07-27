@@ -49,16 +49,18 @@ Set `webhooks.retention: false` to disable pruning entirely (the tables then gro
 
 ## Pruning by hand: `nextly webhooks:prune`
 
-Installs that never run the drain — for example, a cron-driven or serverless deploy where no long-lived process fans out deliveries — should trigger a retention pass on a schedule.
+`nextly webhooks:prune` runs one retention pass immediately.
 
 ```bash
 nextly webhooks:prune            # run one retention pass now
 nextly webhooks:prune --dry-run  # report what a pass would remove, delete nothing
 ```
 
-The command reports how many webhook events, audit events, and terminal delivery rows it removed. If a batch bound stops the pass before the queue is drained, it says so — run it again to continue. It reads the same `webhooks.retention` policy as the automatic passes, and does nothing when retention is disabled.
+The command reports how many webhook events, audit events, and terminal delivery rows it removed. If a batch bound stops the pass before it finishes, it says so — run it again to continue. It reads the same `webhooks.retention` policy as the automatic passes, and does nothing when retention is disabled.
 
-A daily cron is a good baseline:
+**`webhooks:prune` is cleanup, not delivery.** It does not fan out or deliver anything. It only reclaims events that have already been fanned out, plus terminal (`delivered`/`failed`) deliveries. An event that was never fanned out — because no drain ran — is left in place, since it may still be delivered. So if you have **enabled endpoints, you still need the drain running** to fan out and deliver; `webhooks:prune` supplements the drain with a scheduled cleanup, it does not replace it. It is most useful where events accrue but you want space reclaimed on a schedule — for example an audit-only install with no enabled endpoint, or alongside a drain whose retention you want to run more aggressively.
+
+A daily cron is a good baseline where you want scheduled cleanup:
 
 ```bash
 0 3 * * *  cd /path/to/app && nextly webhooks:prune

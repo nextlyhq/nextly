@@ -87,6 +87,9 @@ export const nextlyWebhookDeliveries = sqliteTable(
   "nextly_webhook_deliveries",
   {
     id: text("id").primaryKey(),
+    // Both cascades are deliberate; see the PostgreSQL definition. Endpoints are
+    // soft-deleted so the webhook cascade never fires for retirement (history is
+    // kept); the event cascade is how retention prunes an event with its attempts.
     webhookId: text("webhook_id")
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),

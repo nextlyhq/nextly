@@ -22,15 +22,10 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Add `nextly webhooks:prune` and rename the webhook secret column
+Add the `nextly webhooks:prune` command
 
 `nextly webhooks:prune` runs a webhook-queue retention pass on demand (with
-`--dry-run`), so self-hosters without a running drain can reclaim the event
-ledger and delivery log from a cron job. See the new "Webhook queue retention
-& VACUUM" guide.
-
-The webhook signing-secret column is renamed from `secret_hash` to
-`secret_ciphertext`, since it holds encrypted secrets rather than a hash. The
-rename is applied automatically during `nextly migrate` (and run-on-boot),
-in place and idempotently, so existing endpoints keep their secrets with no
-action required.
+`--dry-run`), so a self-hosted install can reclaim the fanned-out event ledger
+and terminal delivery log from a cron job. It reads the same `webhooks.retention`
+policy as the automatic passes and does nothing when retention is disabled. See
+the new "Webhook queue retention & VACUUM" guide.
