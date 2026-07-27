@@ -32,9 +32,7 @@ export async function findSingle<TSlug extends SingleSlug>(
   const result = await ctx.singleEntryService.get(args.slug, {
     depth: config.depth,
     locale: config.locale,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     overrideAccess: config.overrideAccess,
     context: config.context,
   });
@@ -78,9 +76,7 @@ export async function updateSingle<TSlug extends SingleSlug>(
 
   const result = await ctx.singleEntryService.update(args.slug, args.data, {
     locale: config.locale,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     overrideAccess: config.overrideAccess,
     context: config.context,
     disableRevalidate: config.disableRevalidate,
@@ -116,9 +112,7 @@ export async function findSingles(
       const result = await ctx.singleEntryService.get(record.slug, {
         depth: config.depth,
         locale: config.locale,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
+        user: config.user,
         overrideAccess: config.overrideAccess,
         context: config.context,
       });

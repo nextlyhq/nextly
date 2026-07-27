@@ -35,3 +35,7 @@ A rule that returns no decision at all now denies, on collections as well as Sin
 Field-level read access is applied to a Single **after** the read is decided, not before. A field your rule inspects is no longer removed from the document the rule is shown, so a rule guarding a value the caller may not read decides on that value rather than on its absence.
 
 Ownership is decided once, against the stored row. An `owner-only` Single is no longer re-checked against the response object, which an `afterRead` hook or a field read rule is free to strip the owner identifier from — a transformation that could refuse the document to its actual owner.
+
+A first read of a Single that has never been written is judged against the defaults it would create, so a rule that refuses those defaults no longer lets the read materialize the document (and its first version) before returning 403.
+
+The Direct API now forwards your whole `user` object to the access rules instead of rebuilding it as `{ id, role }`. A `custom` rule reading a claim of your own — a tenant, a plan, an entitlement — saw `undefined` through `findSingle`, `find`, `create` and friends, so a rule written to refuse a caller admitted it. `UserContext` accepts those claims explicitly now, along with `roles` for rules that decide on more than one.

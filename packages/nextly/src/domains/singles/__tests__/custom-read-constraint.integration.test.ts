@@ -270,6 +270,37 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data).not.toHaveProperty("visibility");
   });
 
+  it("materializes nothing for a caller its defaults refuse", async () => {
+    // A Single that has never been written is created by the first read that
+    // reaches it, along with its first version. If the rule is judged with no
+    // document, one that refuses on a default value admits that read, the write
+    // lands, and only the outgoing check returns 403 — a permanent effect
+    // driven by a caller the rule denies.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+
+    const result = await entry.get("branding", {
+      user: { id: "default-aware" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(403);
+    // The refusal is only worth anything if the row was never written.
+    expect(await current.adapter.selectOne("single_branding", {})).toBeNull();
+  });
+
   it("admits a caller the requested translation authorizes", async () => {
     // The rule grants on the translated value. Judged against the bare main row
     // it reads the default language instead and refuses a caller it admits, so

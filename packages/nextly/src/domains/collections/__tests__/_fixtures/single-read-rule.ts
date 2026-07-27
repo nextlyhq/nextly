@@ -53,6 +53,11 @@ export default function singleReadRule({
     // locale's value.
     case "assembled-aware":
       return (data as { visibility?: string })?.visibility !== "private";
+    // Refuses on a value that exists only in the document a first read would
+    // create, so the rule can decide correctly only if those defaults are judged
+    // before the write that materializes them.
+    case "default-aware":
+      return (data as { title?: string })?.title !== "Branding";
     // The mirror of `assembled-aware`: grants ON the assembled value rather than
     // tolerating its absence, so judging the bare row refuses a caller the rule
     // admits.

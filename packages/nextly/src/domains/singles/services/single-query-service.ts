@@ -533,9 +533,13 @@ export class SingleQueryService extends BaseService {
       singleMeta.tableName,
       {}
     );
-    // A Single that has never been written has no document to judge. A rule
-    // deciding on the caller alone still authorizes that first read, which is
-    // the read that materializes it.
+    // A Single that has never been written still has the document this read
+    // would create: its declared field defaults. Judging those is what keeps a
+    // rule such as `data.secret !== true` from admitting the read that
+    // materializes a document the rule refuses — a permanent write (the row, its
+    // first version, its localized defaults) driven by a caller about to be
+    // denied. Built in memory; nothing is persisted here, and the row the read
+    // goes on to create is judged again on the way out.
     const document = row
       ? await this.assembleStoredDocument({
           slug,
@@ -544,7 +548,7 @@ export class SingleQueryService extends BaseService {
           options,
           statusFilterValue,
         })
-      : null;
+      : this.buildDefaultDocument(singleMeta).document;
 
     const result = await this.accessControlService.evaluateAccess(
       accessRules,
@@ -561,8 +565,11 @@ export class SingleQueryService extends BaseService {
         locale: options.locale,
         fallbackLocale: options.fallbackLocale,
       },
-      typeof document?.id === "string" ? document.id : undefined,
-      document ?? undefined
+      // The id of a stored row only. A Single that does not exist yet has no
+      // identity to name, and the defaults judged above carry a placeholder the
+      // eventual insert does not reuse.
+      typeof row?.id === "string" ? row.id : undefined,
+      document
     );
 
     if (!result.allowed) {
@@ -849,6 +856,22 @@ export class SingleQueryService extends BaseService {
         singleMeta.tableName,
         {}
       );
+
+      // 5.5. Ownership was established on the row loaded before the hooks, and
+      // this is a different read of it. A `beforeRead` hook may write, and
+      // another writer may reassign the owner column between the two, so the row
+      // actually being returned is checked as well. This judges the stored row,
+      // not the response: hooks and field rules transform the owner value on the
+      // way out, and a check made after them refuses the real owner.
+      if (deferDocumentRule && !options.overrideAccess) {
+        const ownershipLapsed = this.evaluateOwnerOnlyRead({
+          slug,
+          rule: readRule as { ownerField?: string } | undefined,
+          user: options.user,
+          document: doc,
+        });
+        if (ownershipLapsed) return ownershipLapsed;
+      }
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still

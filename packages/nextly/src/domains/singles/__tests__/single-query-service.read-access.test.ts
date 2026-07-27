@@ -251,6 +251,40 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
     expect(result.success).toBe(true);
   });
 
+  it("refuses when the row loses its owner between the two reads", async () => {
+    // Access is decided on a row read before the hooks, and the response is
+    // read again after them. A `beforeRead` hook may write, and another writer
+    // may reassign the owner column in between, so the row actually being
+    // returned has to be judged too — otherwise the caller receives a document
+    // someone else now owns.
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({ accessRules: OWNER_ONLY_READ }),
+      fields: [textField("siteName")],
+    });
+    const selectOne = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "doc1", created_by: "owner-1" })
+      .mockResolvedValue({ id: "doc1", created_by: "someone-else" });
+
+    const service = new SingleQueryService(
+      createMockAdapter({ selectOne }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      undefined,
+      createMockRBACService(true) as unknown as Ctor[5]
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "owner-1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("still admits the owner when a hook drops the owner value", async () => {
     // Ownership is settled once, against the stored row. An `afterRead` hook
     // shapes the RESPONSE and is free to drop the owner identifier from it, so

@@ -92,6 +92,31 @@ describe("Direct API - Singles Operations", () => {
         nextly.findSingle({ slug: "site-settings" })
       ).rejects.toThrow(NextlyError);
     });
+
+    it("forwards the caller's own claims to the access rules", async () => {
+      // A `custom` rule may decide on a claim the framework does not know about
+      // — a tenant, a plan, an entitlement. Rebuilding the caller from `id` and
+      // `role` alone drops those, so a rule written to refuse a caller reads
+      // `undefined` and admits it instead.
+      mocks.singleEntryService.get.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        data: { id: "1" },
+      });
+
+      await nextly.findSingle({
+        slug: "site-settings",
+        overrideAccess: false,
+        user: { id: "u1", role: "editor", tenantId: "blocked" },
+      });
+
+      expect(mocks.singleEntryService.get).toHaveBeenCalledWith(
+        "site-settings",
+        expect.objectContaining({
+          user: expect.objectContaining({ id: "u1", tenantId: "blocked" }),
+        })
+      );
+    });
   });
 
   describe("updateSingle()", () => {

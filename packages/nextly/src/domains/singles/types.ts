@@ -24,7 +24,7 @@ export interface UserContext {
   /** User email */
   email?: string;
 
-  /** Singular authorized role (the Direct API forwards only this). */
+  /** Singular authorized role. */
   role?: string;
 
   /**
