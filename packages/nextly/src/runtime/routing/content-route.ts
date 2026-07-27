@@ -27,7 +27,6 @@ import { createRequire } from "node:module";
 import type { Metadata } from "next";
 
 import { getNextly } from "../../direct-api/nextly";
-import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { isReservedPath } from "./reserved-paths";
@@ -84,13 +83,14 @@ export interface ContentRouteConfig<TNode> {
    * Whether to bypass the collections' read-access rules. Defaults to `false`
    * (enforce — the same secure default as `resolveContent`): a rule-less
    * collection still renders, but a stored member-only/role-based collection is
-   * hidden from anonymous requests (both the resolved read and the
-   * `generateStaticParams` scan skip it). Pass `user` to render member content;
-   * pass `overrideAccess: true` for a fully trusted read.
+   * hidden from ANONYMOUS requests (both the resolved read and the
+   * `generateStaticParams` scan skip it), and `overrideAccess: true` reads
+   * everything trusted. This route always resolves ANONYMOUSLY — its config is
+   * captured once at module scope, so it cannot carry a per-request user. For a
+   * route that renders per-visitor member content, call `resolveContent` with
+   * the request's `user` inside your own page instead.
    */
   overrideAccess?: boolean;
-  /** User identity to evaluate access rules against (with `overrideAccess: false`). */
-  user?: UserContext;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
    * collection (a populated author, category, media) can bust the page. The
@@ -186,7 +186,6 @@ export function createContentRoute<TNode>(
   const status = config.status ?? "published";
   const depth = config.depth ?? 1;
   const overrideAccess = config.overrideAccess ?? false;
-  const user = config.user;
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
 
   const collections = [...new Set(config.collections)];
@@ -207,7 +206,6 @@ export function createContentRoute<TNode>(
         revalidate: config.revalidate,
         cacheScope: config.cacheScope,
         overrideAccess,
-        ...(user ? { user } : {}),
       });
       if (entry) return { entry, context: { collection, slug } };
     }
@@ -239,7 +237,6 @@ export function createContentRoute<TNode>(
             limit: MAX_STATIC_PARAMS_PER_PAGE,
             page,
             overrideAccess,
-            ...(user ? { user } : {}),
           });
         } catch (error) {
           // An access-restricted collection has no PUBLIC paths to pre-render —

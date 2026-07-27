@@ -160,8 +160,16 @@ export type DataFromSingleSlug<TSlug extends string> = GeneratedTypes extends {
 export interface UserContext {
   /** Unique user identifier */
   id: string;
-  /** User's role for role-based access control */
+  /** User's primary role for role-based access control */
   role?: string;
+  /**
+   * The user's full role set (the user/role model is many-to-many). Access
+   * evaluation matches a role-based rule against ANY of these, so a secondary
+   * role can authorize a read — supply it when known, not just `role`.
+   */
+  roles?: string[];
+  /** User's email (some stored access rules match on it). */
+  email?: string;
 }
 
 /**

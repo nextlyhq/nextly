@@ -92,8 +92,12 @@ It resolves a path across the configured collections (first match wins), calls
 `/static`, and metadata files like `sitemap.xml`), and pre-renders published
 paths in `generateStaticParams`. Access-restricted collections are skipped by
 the static scan (they have no public paths to pre-render) and enforced per
-request instead. `status`, `overrideAccess`, and `user` behave exactly as in
-`resolveContent`.
+request instead. `status` and `overrideAccess` behave as in `resolveContent`.
+
+This route always resolves **anonymously** — its config is captured once at
+module scope, so it cannot carry a per-request user. For a route that renders
+per-visitor member content, call `resolveContent` with the request's `user`
+inside your own page rather than using `createContentRoute`.
 
 > **Next 16 Cache Components:** an exported `generateStaticParams` must return at
 > least one entry under Cache Components. For a no-prerender or empty-site setup

@@ -122,6 +122,37 @@ describe("Direct API - Collection Operations", () => {
       );
     });
 
+    it("should forward the user's full role set (not just the primary role)", async () => {
+      mocks.collectionsHandler.listEntries.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "OK",
+        data: { docs: [], totalDocs: 0, limit: 10, page: 1, totalPages: 0 },
+      });
+
+      await nextly.find({
+        collection: "posts",
+        overrideAccess: false,
+        user: {
+          id: "u1",
+          role: "viewer",
+          roles: ["viewer", "editor"],
+          email: "u1@example.com",
+        },
+      });
+
+      expect(mocks.collectionsHandler.listEntries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user: {
+            id: "u1",
+            role: "viewer",
+            roles: ["viewer", "editor"],
+            email: "u1@example.com",
+          },
+        })
+      );
+    });
+
     it("should throw NextlyError on failure", async () => {
       mocks.collectionsHandler.listEntries.mockResolvedValue({
         success: false,

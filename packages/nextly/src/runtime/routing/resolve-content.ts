@@ -108,76 +108,82 @@ export async function resolveContent(
   const overrideAccess = options.overrideAccess ?? false;
   const user = options.user;
 
-  return cachedFind(
-    async () => {
-      try {
-        const result = await nextly.find({
-          collection,
-          where: { [slugField]: { equals: slug } },
-          // Lifecycle-aware publish scope — drives the query service's status
-          // filter, so it also constrains a localized collection's companion
-          // `_status` (a draft translation never leaks). A no-op on status-less
-          // collections. The `where` clause no longer carries a status predicate.
-          status,
-          limit: 1,
-          // A slug field is ordinary text and need not be unique; sort by the
-          // always-present unique `id` so duplicate-slug rows resolve to the same
-          // entry deterministically instead of an arbitrary one.
-          sort: "id",
-          depth,
-          // Enforce the collection's read policy unless the caller opts out.
-          overrideAccess,
-          ...(user ? { user } : {}),
-          ...(options.richTextFormat
-            ? { richTextFormat: options.richTextFormat }
-            : {}),
-          // The content locale drives the localized read + fallback.
-          ...(locale ? { locale } : {}),
-        });
-        return result.items[0] ?? null;
-      } catch (error) {
-        // An access denial (403) means the read policy hides this entry from the
-        // caller — treat it as absent (→ notFound), never as a transient error.
-        // Any other error still rethrows (retryable, not a permanently-cached 404).
-        if (error instanceof NextlyError && error.statusCode === 403) {
-          return null;
-        }
-        throw error;
-      }
-    },
-    {
-      // Tag by the collection so any write to it makes this read fresh, plus any
-      // caller-supplied tags (related collections a populated read depends on).
-      tags: [...nextlyTags(collection), ...(options.tags ?? [])],
-      keyParts: [
-        "nextly",
-        "resolve-content",
-        // A caller-supplied scope so distinct readers (per-tenant/per-database)
-        // resolving the same collection + slug never share a cache entry.
-        options.cacheScope ?? "",
+  const read = async (): Promise<ContentEntry | null> => {
+    try {
+      const result = await nextly.find({
         collection,
-        slugField,
-        slug,
-        locale ?? "",
-        // The key varies by every dimension that changes the read result.
+        where: { [slugField]: { equals: slug } },
+        // Lifecycle-aware publish scope — drives the query service's status
+        // filter, so it also constrains a localized collection's companion
+        // `_status` (a draft translation never leaks). A no-op on status-less
+        // collections. The `where` clause no longer carries a status predicate.
         status,
-        String(depth),
-        // When omitted, the read inherits the reader's default format (which may
-        // not be "json"), so key it as "inherit" — never as a concrete format —
-        // so an explicit-format call can't reuse an inherited-shape cache entry.
-        options.richTextFormat ?? "inherit",
-        // Access identity — a trusted read and an access-scoped read (and reads
-        // as different users) resolve to different entries, so never share a key.
-        overrideAccess
-          ? "trusted"
-          : `scoped:${user?.id ?? "anon"}:${user?.role ?? ""}`,
-      ],
-      // `unstable_cache` rejects `revalidate: 0` (needs `false` or `> 0`), so a
-      // non-positive value degrades to tag-only busting rather than failing.
-      revalidate:
-        typeof options.revalidate === "number" && options.revalidate > 0
-          ? options.revalidate
-          : false,
+        limit: 1,
+        // A slug field is ordinary text and need not be unique; sort by the
+        // always-present unique `id` so duplicate-slug rows resolve to the same
+        // entry deterministically instead of an arbitrary one.
+        sort: "id",
+        depth,
+        // Enforce the collection's read policy unless the caller opts out.
+        overrideAccess,
+        ...(user ? { user } : {}),
+        ...(options.richTextFormat
+          ? { richTextFormat: options.richTextFormat }
+          : {}),
+        // The content locale drives the localized read + fallback.
+        ...(locale ? { locale } : {}),
+      });
+      return result.items[0] ?? null;
+    } catch (error) {
+      // An access denial (403) means the read policy hides this entry from the
+      // caller — treat it as absent (→ notFound), never as a transient error.
+      // Any other error still rethrows (retryable, not a permanently-cached 404).
+      if (error instanceof NextlyError && error.statusCode === 403) {
+        return null;
+      }
+      throw error;
     }
-  );
+  };
+
+  // A member read (enforcing access with a specific user) must NOT be cached:
+  // the caller's authorization can change — a granted role revoked, a new grant
+  // added — without any content write, so a cached access decision could serve
+  // stale content or a stale denial. Anonymous and trusted reads have no such
+  // per-user authorization state and are cached normally.
+  if (!overrideAccess && user) {
+    return read();
+  }
+
+  return cachedFind(read, {
+    // Tag by the collection so any write to it makes this read fresh, plus any
+    // caller-supplied tags (related collections a populated read depends on).
+    tags: [...nextlyTags(collection), ...(options.tags ?? [])],
+    keyParts: [
+      "nextly",
+      "resolve-content",
+      // A caller-supplied scope so distinct readers (per-tenant/per-database)
+      // resolving the same collection + slug never share a cache entry.
+      options.cacheScope ?? "",
+      collection,
+      slugField,
+      slug,
+      locale ?? "",
+      // The key varies by every dimension that changes the read result.
+      status,
+      String(depth),
+      // When omitted, the read inherits the reader's default format (which may
+      // not be "json"), so key it as "inherit" — never as a concrete format — so
+      // an explicit-format call can't reuse an inherited-shape cache entry.
+      options.richTextFormat ?? "inherit",
+      // Only anonymous and trusted reads reach the cache (member reads are
+      // uncached above), so the access identity is one of these two.
+      overrideAccess ? "trusted" : "anon",
+    ],
+    // `unstable_cache` rejects `revalidate: 0` (needs `false` or `> 0`), so a
+    // non-positive value degrades to tag-only busting rather than failing.
+    revalidate:
+      typeof options.revalidate === "number" && options.revalidate > 0
+        ? options.revalidate
+        : false,
+  });
 }

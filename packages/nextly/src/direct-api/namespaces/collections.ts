@@ -66,8 +66,15 @@ export async function find<TSlug extends CollectionSlug>(
     sort: args.sort,
     richTextFormat: config.richTextFormat,
     overrideAccess: config.overrideAccess,
+    // Forward the full role set (not just the primary role) so a role-based
+    // read rule can match on any of the user's roles.
     user: config.user
-      ? { id: config.user.id, role: config.user.role }
+      ? {
+          id: config.user.id,
+          role: config.user.role,
+          roles: config.user.roles,
+          email: config.user.email,
+        }
       : undefined,
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
