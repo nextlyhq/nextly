@@ -51,10 +51,10 @@ describe("resolveContent (integration)", () => {
     ).toBeNull();
   });
 
-  it("skips status filtering when statusField is false (status-less collection)", async () => {
-    // No `status: true` — the collection defines its own ordinary `status`
-    // field. A blanket `status = published` filter would wrongly drop this row,
-    // so the caller opts out with `statusField: false`.
+  it("is a no-op status scope on a status-less collection (even with its own status field)", async () => {
+    // No `status: true` lifecycle — the collection defines its OWN ordinary
+    // `status` field. The default `status: "published"` scope is lifecycle-aware,
+    // so it does NOT filter this collection and the live row is returned.
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -74,9 +74,24 @@ describe("resolveContent (integration)", () => {
 
     const doc = await resolveContent("docs", "intro", {
       nextly: current.nextly,
-      statusField: false,
     });
     expect((doc as { title?: string } | null)?.title).toBe("Intro");
+  });
+
+  it("passes a published status scope so a localized draft cannot leak", async () => {
+    // The status scope is forwarded as the lifecycle-aware `status` param (not a
+    // where-clause), which the query service uses to constrain the companion
+    // `_status` too. Here we assert the published main row resolves; the
+    // per-locale companion enforcement itself is covered by the i18n suite.
+    current = await createTestNextly({ collections: [pages()] });
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "hello", title: "Hello", status: "published" },
+    });
+    const resolved = await resolveContent("pages", "hello", {
+      nextly: current.nextly,
+    });
+    expect((resolved as { title?: string } | null)?.title).toBe("Hello");
   });
 
   it("resolves duplicate published slugs deterministically (lowest id)", async () => {

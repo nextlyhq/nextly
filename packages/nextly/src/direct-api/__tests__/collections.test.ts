@@ -98,7 +98,8 @@ describe("Direct API - Collection Operations", () => {
 
       await nextly.find({
         collection: "posts",
-        where: { status: { equals: "published" } },
+        where: { title: { equals: "hi" } },
+        status: "published",
         limit: 5,
         page: 2,
         sort: "-createdAt",
@@ -109,7 +110,9 @@ describe("Direct API - Collection Operations", () => {
       expect(mocks.collectionsHandler.listEntries).toHaveBeenCalledWith(
         expect.objectContaining({
           collectionName: "posts",
-          where: { status: { equals: "published" } },
+          where: { title: { equals: "hi" } },
+          // The lifecycle-aware status scope is forwarded to the service.
+          status: "published",
           limit: 5,
           page: 2,
           sort: "-createdAt",

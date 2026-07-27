@@ -59,6 +59,8 @@ export async function find<TSlug extends CollectionSlug>(
     page: args.page,
     limit: args.limit,
     where: args.where,
+    // Lifecycle-aware publish scope (also constrains localized companion _status).
+    status: args.status,
     depth: config.depth,
     select: args.select,
     sort: args.sort,

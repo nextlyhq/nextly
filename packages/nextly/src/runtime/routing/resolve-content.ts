@@ -1,17 +1,19 @@
 /**
- * `resolveContent` — resolve a URL slug to a single PUBLISHED content entry,
- * cached with F1 so the page and its metadata share one read and go stale in
- * lockstep on a content write.
+ * `resolveContent` — resolve a URL slug to a single content entry, publish-state
+ * and access enforced, cached with F1 so the page and its metadata share one
+ * read and go stale in lockstep on a content write.
  *
- * A genuine miss returns `null` (the caller renders `notFound()`), while a
- * transient read error is RETHROWN rather than swallowed to `null` — so a DB
- * blip becomes a retryable error instead of a permanently-cached 404 (the exact
- * lesson from the F1 blog-template review).
+ * A genuine miss (or an access-denied entry) returns `null` (the caller renders
+ * `notFound()`), while a transient read error is RETHROWN rather than swallowed
+ * to `null` — so a DB blip becomes a retryable error instead of a
+ * permanently-cached 404 (the exact lesson from the F1 blog-template review).
  *
  * @module runtime/routing/resolve-content
  */
 import { getNextly } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
+import type { UserContext } from "../../direct-api/types/shared";
+import { NextlyError } from "../../errors/nextly-error";
 import { cachedFind } from "../cache/cached-find";
 import { nextlyTags } from "../cache/nextly-tags";
 
@@ -38,17 +40,18 @@ export interface ResolveContentOptions {
   /** The field holding the URL slug (default `"slug"`). */
   slugField?: string;
   /**
-   * The field holding the publish status (default `"status"`), matched against
-   * `"published"`. Pass `false` to skip status filtering entirely — required
-   * for status-less collections (no built-in draft/published lifecycle), which
-   * have no such column.
+   * Draft/Published lifecycle scope (default `"published"`). This is
+   * lifecycle-aware AND locale-aware: for a localized collection it also
+   * constrains the per-locale companion `_status`, so a draft translation under
+   * a published main row is not returned. On a status-less collection (no
+   * built-in lifecycle) it is a no-op — every row is live.
    */
-  statusField?: string | false;
+  status?: "published" | "draft" | "all";
   /** Relation population depth for rendering (default `1`). */
   depth?: number;
   /** Read a specific locale (localized collections). */
   locale?: string;
-  /** Rich-text output format for rich-text fields (default `"json"`). */
+  /** Rich-text output format for rich-text fields (default the reader's). */
   richTextFormat?: "json" | "html" | "both";
   /**
    * Extra cache tags merged with the collection's own tag. Add related
@@ -68,6 +71,18 @@ export interface ResolveContentOptions {
    * same collection + slug, so their cached reads never alias each other.
    */
   cacheScope?: string;
+  /**
+   * Whether to bypass the collection's read-access rules. Defaults to `false`,
+   * so a content route enforces STORED access policies: a rule-less (public)
+   * collection still renders, but one with a stored member-only/role-based read
+   * rule is hidden from an unauthenticated request (resolves to `null` →
+   * `notFound()`). Pass `true` for a fully trusted read. NOTE: inline
+   * `defineCollection({ access })` code rules are only evaluated when a `user`
+   * is supplied — for an anonymous read, only stored (admin/schema) rules apply.
+   */
+  overrideAccess?: boolean;
+  /** User identity to evaluate access rules against (with `overrideAccess: false`). */
+  user?: UserContext;
 }
 
 /**
@@ -87,44 +102,52 @@ export async function resolveContent(
 ): Promise<ContentEntry | null> {
   const nextly = options.nextly ?? getNextly();
   const slugField = options.slugField ?? "slug";
-  const statusField = options.statusField ?? "status";
+  const status = options.status ?? "published";
   const depth = options.depth ?? 1;
   const locale = options.locale;
+  const overrideAccess = options.overrideAccess ?? false;
+  const user = options.user;
 
   return cachedFind(
     async () => {
-      // Filter by `published` unless the caller opted out (`statusField: false`)
-      // for a status-less collection that has no such column.
-      const slugCondition = { [slugField]: { equals: slug } };
-      const where =
-        statusField === false
-          ? slugCondition
-          : {
-              and: [{ [statusField]: { equals: "published" } }, slugCondition],
-            };
-      const result = await nextly.find({
-        collection,
-        where,
-        limit: 1,
-        // A slug field is ordinary text and need not be unique; sort by the
-        // always-present unique `id` so duplicate-slug rows resolve to the same
-        // entry deterministically instead of an arbitrary one.
-        sort: "id",
-        depth,
-        ...(options.richTextFormat
-          ? { richTextFormat: options.richTextFormat }
-          : {}),
-        // The content locale drives the localized read + fallback.
-        ...(locale ? { locale } : {}),
-      });
-      return result.items[0] ?? null;
+      try {
+        const result = await nextly.find({
+          collection,
+          where: { [slugField]: { equals: slug } },
+          // Lifecycle-aware publish scope — drives the query service's status
+          // filter, so it also constrains a localized collection's companion
+          // `_status` (a draft translation never leaks). A no-op on status-less
+          // collections. The `where` clause no longer carries a status predicate.
+          status,
+          limit: 1,
+          // A slug field is ordinary text and need not be unique; sort by the
+          // always-present unique `id` so duplicate-slug rows resolve to the same
+          // entry deterministically instead of an arbitrary one.
+          sort: "id",
+          depth,
+          // Enforce the collection's read policy unless the caller opts out.
+          overrideAccess,
+          ...(user ? { user } : {}),
+          ...(options.richTextFormat
+            ? { richTextFormat: options.richTextFormat }
+            : {}),
+          // The content locale drives the localized read + fallback.
+          ...(locale ? { locale } : {}),
+        });
+        return result.items[0] ?? null;
+      } catch (error) {
+        // An access denial (403) means the read policy hides this entry from the
+        // caller — treat it as absent (→ notFound), never as a transient error.
+        // Any other error still rethrows (retryable, not a permanently-cached 404).
+        if (error instanceof NextlyError && error.statusCode === 403) {
+          return null;
+        }
+        throw error;
+      }
     },
     {
       // Tag by the collection so any write to it makes this read fresh, plus any
       // caller-supplied tags (related collections a populated read depends on).
-      // The key varies by every dimension that changes the read result — slug,
-      // locale, and the query shape (status field, depth, rich-text format) — so
-      // two callers that differ in any of them never share a cache entry.
       tags: [...nextlyTags(collection), ...(options.tags ?? [])],
       keyParts: [
         "nextly",
@@ -136,12 +159,18 @@ export async function resolveContent(
         slugField,
         slug,
         locale ?? "",
-        statusField === false ? "no-status" : statusField,
+        // The key varies by every dimension that changes the read result.
+        status,
         String(depth),
         // When omitted, the read inherits the reader's default format (which may
         // not be "json"), so key it as "inherit" — never as a concrete format —
         // so an explicit-format call can't reuse an inherited-shape cache entry.
         options.richTextFormat ?? "inherit",
+        // Access identity — a trusted read and an access-scoped read (and reads
+        // as different users) resolve to different entries, so never share a key.
+        overrideAccess
+          ? "trusted"
+          : `scoped:${user?.id ?? "anon"}:${user?.role ?? ""}`,
       ],
       // `unstable_cache` rejects `revalidate: 0` (needs `false` or `> 0`), so a
       // non-positive value degrades to tag-only busting rather than failing.
