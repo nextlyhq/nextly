@@ -94,7 +94,13 @@ seoPlugin({
 
 ### Exposing it to crawlers
 
-Plugin routes are always namespaced under `/api/plugins/<name>/`. Search engines scope a sitemap to URLs beneath its own path unless it is submitted through Search Console or referenced in `robots.txt`, so a sitemap at `/api/plugins/...` whose `<loc>` values live at `/<collection>/...` may be ignored. Expose it at the site root instead — for a Next.js app, add a rewrite:
+Plugin routes are namespaced under the mount point of Nextly's dynamic handler. In an app scaffolded by `create-nextly-app` that handler lives at `app/admin/api/[[...params]]/route.ts`, so this route is served at:
+
+```text
+/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
+```
+
+Search engines scope a sitemap to URLs beneath its own path unless it is submitted through Search Console or referenced in `robots.txt`, so a sitemap under `/admin/api/...` whose `<loc>` values live at `/<collection>/...` may be ignored. Expose it at the site root instead — for a Next.js app, add a rewrite (point `destination` at wherever your dynamic handler is mounted):
 
 ```ts
 // next.config.ts
@@ -103,7 +109,7 @@ export default {
     return [
       {
         source: "/sitemap.xml",
-        destination: "/api/plugins/@nextlyhq/plugin-seo/sitemap.xml",
+        destination: "/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml",
       },
     ];
   },
@@ -111,6 +117,8 @@ export default {
 ```
 
 Then reference `https://example.com/sitemap.xml` from `robots.txt` or submit it in Search Console. An integrated Next.js app can also read the data through the planned Next helpers to serve the canonical `/sitemap.xml` directly. A pure-headless frontend can proxy the route to its own root the same way.
+
+> **Cache or rate-limit the public route.** It is unauthenticated and regenerates the document per request (up to the 50,000-URL / 50 MB caps), and on the `/admin/api` mount Nextly's built-in rate limiter is skipped. Put it behind an edge/CDN cache (sitemaps are crawled infrequently) or a rate limiter at your proxy — or disable it with `sitemap: false` if you don't need it.
 
 ## License
 

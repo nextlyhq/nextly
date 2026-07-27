@@ -140,7 +140,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function resolveOnOrigin(path: string, baseOrigin: string): string | null {
   try {
     const resolved = new URL(path, baseOrigin);
-    return resolved.origin === baseOrigin ? resolved.href : null;
+    if (resolved.origin !== baseOrigin) return null;
+    // Never publish credentials a custom mapper embedded (origin excludes them).
+    if (resolved.username !== "" || resolved.password !== "") return null;
+    return resolved.href;
   } catch {
     return null;
   }
@@ -182,6 +185,9 @@ export const MAX_SITEMAP_URLS = 50_000;
  * first).
  */
 export const MAX_SITEMAP_BYTES = 50 * 1024 * 1024;
+
+/** The sitemap protocol limits a single `<loc>` to 2,048 characters. */
+export const MAX_LOC_LENGTH = 2048;
 
 /** The columns the default mapper reads — used to project the query. */
 const DEFAULT_SELECT: Record<string, boolean> = {
@@ -275,6 +281,14 @@ export async function buildSitemapUrls(
     options.maxBytes && options.maxBytes > 0
       ? Math.min(options.maxBytes, MAX_SITEMAP_BYTES)
       : MAX_SITEMAP_BYTES;
+  // Even an empty document is the wrapper, so a budget below it can never be
+  // met — reject it rather than emit an over-cap wrapper-only document.
+  if (maxBytes < WRAPPER_BYTES) {
+    throw new Error(
+      `sitemap: maxBytes (${maxBytes}) is smaller than the minimum ` +
+        `document size (${WRAPPER_BYTES} bytes).`
+    );
+  }
   const urls: SitemapUrl[] = [];
   // Running serialized size (the wrapper plus each `<url>` line and its join),
   // so the document is bounded by BOTH the URL count and the byte limit.
@@ -354,6 +368,9 @@ export async function buildSitemapUrls(
           }
           if (offOrigin) continue;
         }
+        // A `<loc>` over the protocol's 2,048-char limit is an invalid record —
+        // drop it rather than emit a non-compliant entry.
+        if (loc.length > MAX_LOC_LENGTH) continue;
         const entry: SitemapUrl = {
           loc,
           lastModified: toLastModified(row.updatedAt),

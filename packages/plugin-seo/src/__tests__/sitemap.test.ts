@@ -356,14 +356,61 @@ describe("buildSitemapUrls", () => {
   it("returns empty when even the first entry exceeds the byte cap", async () => {
     const services = stubServices({ posts: [[{ slug: "a" }]] });
 
+    // Budget holds the wrapper but not a single entry.
+    const emptyDoc = serializeSitemap([]);
+    const maxBytes = new TextEncoder().encode(emptyDoc).length + 5;
+
     const urls = await buildSitemapUrls(services, {
       collections: ["posts"],
       baseUrl: "https://x.com",
-      maxBytes: 10,
+      maxBytes,
     });
 
     // The hard cap wins over emitting a single oversized document.
     expect(urls).toEqual([]);
+  });
+
+  it("throws when maxBytes cannot hold the document wrapper", async () => {
+    const services = stubServices({ posts: [[{ slug: "a" }]] });
+
+    await expect(
+      buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "https://x.com",
+        maxBytes: 10,
+      })
+    ).rejects.toThrow(/minimum/i);
+  });
+
+  it("drops a location longer than the protocol limit", async () => {
+    const longSlug = "a".repeat(3000);
+    const services = stubServices({
+      posts: [[{ slug: longSlug }, { slug: "ok" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    // The 3,000-char loc exceeds 2,048 and is skipped; the short one remains.
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/ok"]);
+  });
+
+  it("drops a custom urlFor path that carries credentials", async () => {
+    const services = stubServices({
+      posts: [[{ slug: "a" }, { slug: "b" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      urlFor: entry =>
+        entry.slug === "a" ? "https://user:pass@x.com/a" : "/b",
+    });
+
+    // Same-origin but credential-bearing → dropped; the clean one remains.
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/b"]);
   });
 
   it("percent-encodes and origin-checks a custom urlFor path", async () => {
