@@ -106,7 +106,7 @@ export interface PrebuiltHookConfig<TConfig = unknown> {
    * Unique identifier for this hook.
    * Used to reference the hook in stored configurations.
    *
-   * @example 'auto-slug', 'audit-fields', 'webhook-notification'
+   * @example 'auto-slug', 'audit-fields', 'unique-validation'
    */
   id: string;
 
@@ -388,153 +388,6 @@ export const auditFields: PrebuiltHookConfig<AuditFieldsConfig> = {
 };
 
 // ============================================================
-// Webhook Notification Hook
-// ============================================================
-
-/**
- * Configuration schema for webhook notification hook.
- */
-const webhookNotificationConfigSchema = z.object({
-  /**
-   * The URL to send the webhook POST request to.
-   */
-  url: z.string().url().describe("Webhook URL"),
-
-  /**
-   * Whether to include the document data in the webhook payload.
-   * @default true
-   */
-  includeData: z
-    .boolean()
-    .default(true)
-    .describe("Include document data in payload"),
-
-  /**
-   * Which operations should trigger the webhook.
-   * @default ['create', 'update']
-   */
-  operations: z
-    .array(z.enum(["create", "update", "delete"]))
-    .default(["create", "update"])
-    .describe("Operations that trigger the webhook"),
-
-  /**
-   * Optional secret key for webhook signature verification.
-   * If provided, adds an X-Webhook-Signature header.
-   */
-  secret: z
-    .string()
-    .optional()
-    .describe("Secret key for signature verification"),
-
-  /**
-   * Custom headers to include in the webhook request.
-   */
-  headers: z
-    .record(z.string(), z.string())
-    .optional()
-    .describe("Custom headers for the request"),
-});
-
-/**
- * Inferred type for webhook notification configuration.
- */
-export type WebhookNotificationConfig = z.infer<
-  typeof webhookNotificationConfigSchema
->;
-
-/**
- * Send Webhook Hook
- *
- * Sends an HTTP POST notification to a URL when documents change.
- * Useful for integrating with external services, Zapier, IFTTT, etc.
- *
- * **Runs on:** afterChange (after create and update)
- *
- * **Error Handling:** Webhook failures are logged but do not block
- * the operation. The primary database operation always succeeds.
- *
- * @example
- * ```typescript
- * // Configuration in Admin UI:
- * {
- *   url: 'https://hooks.example.com/nextly',
- *   includeData: true,
- *   operations: ['create', 'update']
- * }
- *
- * // Webhook payload:
- * {
- *   collection: 'posts',
- *   operation: 'create',
- *   timestamp: '2025-01-01T12:00:00.000Z',
- *   data: { id: '123', title: 'My Post', ... }
- * }
- * ```
- */
-export const webhookNotification: PrebuiltHookConfig<WebhookNotificationConfig> =
-  {
-    id: "webhook-notification",
-    name: "Send Webhook",
-    description: "Send HTTP POST notification to a URL when documents change",
-    hookType: "afterChange",
-    category: "notification",
-    configSchema: webhookNotificationConfigSchema,
-    execute: async (config, context) => {
-      const { url, includeData, operations, secret, headers } = config;
-
-      // Check if this operation should trigger the webhook
-      if (
-        !operations.includes(
-          context.operation as "create" | "update" | "delete"
-        )
-      ) {
-        return;
-      }
-
-      // Build the webhook payload
-      const payload = {
-        collection: context.collection,
-        operation: context.operation,
-        timestamp: new Date().toISOString(),
-        data: includeData ? context.data : undefined,
-      };
-
-      // Build request headers
-      const requestHeaders: Record<string, string> = {
-        "Content-Type": "application/json",
-        ...headers,
-      };
-
-      // Add signature header if secret is provided
-      if (secret) {
-        // Simple HMAC-like signature (in production, use crypto.createHmac)
-        // For now, we use a basic approach that can be enhanced later
-        const payloadString = JSON.stringify(payload);
-        requestHeaders["X-Webhook-Signature"] = `sha256=${Buffer.from(
-          payloadString + secret
-        ).toString("base64")}`;
-      }
-
-      try {
-        await fetch(url, {
-          method: "POST",
-          headers: requestHeaders,
-          body: JSON.stringify(payload),
-        });
-      } catch (error) {
-        // Log error but don't throw - webhooks should not block operations
-        console.error(
-          `[Nextly] Webhook failed for ${context.collection}:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-
-      // afterChange hooks don't return data
-    },
-  };
-
-// ============================================================
 // Unique Validation Hook
 // ============================================================
 
@@ -670,7 +523,6 @@ export const uniqueValidation: PrebuiltHookConfig<UniqueValidationConfig> = {
 export const prebuiltHooks: PrebuiltHookConfig<any>[] = [
   autoSlug,
   auditFields,
-  webhookNotification,
   uniqueValidation,
 ];
 

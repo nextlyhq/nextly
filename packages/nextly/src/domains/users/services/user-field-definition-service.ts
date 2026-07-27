@@ -460,7 +460,7 @@ export class UserFieldDefinitionService extends BaseService {
    * - Upserts code fields with `source = 'code'`
    * - Deletes stale `source = 'code'` rows no longer in config
    * - Code fields get `sortOrder` based on array index (0, 1, 2...)
-   * - Called on startup (`nextly dev` / `nextly start`)
+   * - Called on startup (dev-server boot / `nextly db:sync`)
    * - Idempotent — safe to run on every startup
    *
    * @param codeFields - Fields from `defineConfig().users.fields`

@@ -52,6 +52,52 @@ describe("applyCache (passthrough without Next)", () => {
     expect(result).toEqual({ id: "x" });
     expect(reader).toHaveBeenCalledTimes(1);
   });
+
+  it("runs the reader UNCACHED when unstable_cache throws the missing-scope invariant", async () => {
+    // Outside a Next request/build scope `unstable_cache` throws this invariant;
+    // the read must still succeed uncached rather than surface a framework error.
+    const reader = vi.fn(async () => ({ id: "y" }));
+    const missingScope: UnstableCache = () => () => {
+      throw new Error("Invariant: incrementalCache missing in unstable_cache");
+    };
+    const result = await applyCache(missingScope, reader, {
+      tags: nextlyTags("posts"),
+      keyParts: ["posts", "detail"],
+    });
+    expect(result).toEqual({ id: "y" });
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows a genuine reader error rather than swallowing it", async () => {
+    const boom = new Error("db exploded");
+    const passthrough: UnstableCache = <T>(cb: () => Promise<T>) => cb;
+    await expect(
+      applyCache(
+        passthrough,
+        async () => {
+          throw boom;
+        },
+        { tags: nextlyTags("posts"), keyParts: ["posts", "detail"] }
+      )
+    ).rejects.toBe(boom);
+  });
+
+  it("propagates an unrelated error that merely mentions incrementalCache", async () => {
+    // A bare `incrementalCache` substring must NOT be mistaken for Next's
+    // missing-scope invariant, or a real failure would be retried and masked.
+    const boom = new Error("failed to warm the incrementalCache for posts");
+    const reader = vi.fn(async () => ({ id: "z" }));
+    const throwsUnrelated: UnstableCache = () => () => {
+      throw boom;
+    };
+    await expect(
+      applyCache(throwsUnrelated, reader, {
+        tags: nextlyTags("posts"),
+        keyParts: ["posts", "detail"],
+      })
+    ).rejects.toBe(boom);
+    expect(reader).not.toHaveBeenCalled();
+  });
 });
 
 describe("applyCache — key forwarding and per-caller isolation", () => {
