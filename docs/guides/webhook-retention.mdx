@@ -30,6 +30,7 @@ export default defineConfig({
       eventsMaxAgeMs: 30 * 24 * 60 * 60 * 1000, // webhook events — default 30 days
       auditEventsMaxAgeMs: 365 * 24 * 60 * 60 * 1000, // audit events — default 365 days
       deliveriesMaxAgeMs: 7 * 24 * 60 * 60 * 1000, // terminal deliveries — default 7 days
+      intervalMs: 60 * 60 * 1000, // min gap between AUTOMATIC passes — default 1 hour
       batchSize: 500, // rows per delete batch — default 500
       maxBatchesPerRun: 20, // batches per pass — default 20
     },
@@ -42,6 +43,7 @@ export default defineConfig({
 | `eventsMaxAgeMs` | 30 days | Age after which a fanned-out `webhook`-class event is prunable. `false` keeps events forever. |
 | `auditEventsMaxAgeMs` | 365 days | Age for `audit`-class events. `false` keeps them forever. See the note below. |
 | `deliveriesMaxAgeMs` | 7 days | Age after which a `delivered`/`failed` delivery row is prunable. `false` keeps them forever. |
+| `intervalMs` | 1 hour | Minimum gap between **automatic** retention passes (the opportunistic and drain-driven ones). Does not affect `nextly webhooks:prune`, which always runs a pass when invoked. |
 | `batchSize` | 500 | Rows deleted per batch (capped at 900). |
 | `maxBatchesPerRun` | 20 | Batches per pass, so one write never triggers an unbounded delete. |
 
