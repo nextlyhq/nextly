@@ -77,6 +77,19 @@ describe("createContentRoute (integration)", () => {
     expect(params).toContainEqual({ slug: ["about"] });
   });
 
+  it("returns no static params when the limit is non-positive", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    await seed(current.nextly);
+    // A `0` limit disables pre-rendering — every path renders on demand.
+    const params = await createContentRoute({
+      collections: ["pages"],
+      nextly: current.nextly,
+      render: (entry: ContentEntry) => ({ title: entry.title }),
+      staticParamsLimit: 0,
+    }).generateStaticParams();
+    expect(params).toEqual([]);
+  });
+
   it("renders a resolved entry via the render callback", async () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
@@ -84,6 +97,18 @@ describe("createContentRoute (integration)", () => {
     const rendered = await route(current.nextly).ContentPage({
       params: { slug: ["about"] },
     });
+    expect(rendered).toEqual({ title: "About" });
+  });
+
+  it("awaits an async render callback (no nested promise)", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    await seed(current.nextly);
+    // An async render must resolve to the awaited value, not a Promise of one.
+    const rendered = await createContentRoute({
+      collections: ["pages"],
+      nextly: current.nextly,
+      render: async (entry: ContentEntry) => ({ title: entry.title }),
+    }).ContentPage({ params: { slug: ["about"] } });
     expect(rendered).toEqual({ title: "About" });
   });
 

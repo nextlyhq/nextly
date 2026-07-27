@@ -3,21 +3,35 @@ import { describe, expect, it } from "vitest";
 import { nextlyRobots } from "../robots";
 
 describe("nextlyRobots", () => {
-  it("disallows /admin and /api and advertises the sitemap", () => {
+  it("disallows the /admin and /api roots on a path boundary and advertises the sitemap", () => {
     const robots = nextlyRobots({
       sitemap: "https://example.com/sitemap.xml",
     })();
     expect(robots).toEqual({
-      rules: { userAgent: "*", disallow: ["/admin", "/api"] },
+      rules: {
+        userAgent: "*",
+        disallow: ["/admin/", "/admin$", "/api/", "/api$"],
+      },
       sitemap: "https://example.com/sitemap.xml",
     });
   });
 
+  it("does not blanket-exclude a similarly-prefixed content path like /administration", () => {
+    const { rules } = nextlyRobots()();
+    const disallow = rules.disallow as string[];
+    // A raw `/admin` prefix would match `/administration`; the boundary forms
+    // (`/admin/`, `/admin$`) do not.
+    expect(disallow).not.toContain("/admin");
+    expect(disallow.some(rule => "/administration".startsWith(rule))).toBe(
+      false
+    );
+  });
+
   it("merges and dedupes extra disallow paths and keeps the defaults", () => {
-    const robots = nextlyRobots({ disallow: ["/api", "/drafts"] })();
+    const robots = nextlyRobots({ disallow: ["/api/", "/drafts"] })();
     expect(robots.rules).toEqual({
       userAgent: "*",
-      disallow: ["/admin", "/api", "/drafts"],
+      disallow: ["/admin/", "/admin$", "/api/", "/api$", "/drafts"],
     });
   });
 

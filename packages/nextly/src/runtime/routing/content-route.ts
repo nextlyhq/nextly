@@ -20,6 +20,7 @@ import type { Metadata } from "next";
 
 import { getNextly } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
+import { NextlyError } from "../../errors/nextly-error";
 
 import { isReservedPath } from "./reserved-paths";
 import { resolveContent, type ContentEntry } from "./resolve-content";
@@ -43,8 +44,11 @@ export interface ContentRouteConfig<TNode> {
    * a published entry whose slug matches the path wins.
    */
   collections: string[];
-  /** Render the resolved entry (your server component body). */
-  render: (entry: ContentEntry, context: ResolvedContext) => TNode;
+  /** Render the resolved entry (your server component body). May be async. */
+  render: (
+    entry: ContentEntry,
+    context: ResolvedContext
+  ) => TNode | Promise<TNode>;
   /** Optional per-entry metadata (e.g. via `buildMetadata`). */
   buildMetadata?: (
     entry: ContentEntry,
@@ -56,6 +60,13 @@ export interface ContentRouteConfig<TNode> {
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: Nextly;
+  /**
+   * Extra cache tags attached to every resolved read, so a write to a related
+   * collection (a populated author, category, media) can bust the page. The
+   * primary collection is always tagged; add the related collections' tags
+   * (e.g. `nextlyTags("authors")`) here when you render populated relations.
+   */
+  tags?: string[];
   /** Time-based revalidation seconds for the resolved read. */
   revalidate?: number | false;
   /**
@@ -93,9 +104,12 @@ function loadNotFound(): () => never {
   }
   if (!cachedNotFound) {
     // Outside a Next runtime there is no not-found boundary to trigger.
-    throw new Error(
-      "createContentRoute requires next/navigation (use it inside a Next.js app)"
-    );
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "createContentRoute requires next/navigation (use it inside a Next.js app)",
+      },
+    });
   }
   return cachedNotFound;
 }
@@ -126,6 +140,7 @@ export function createContentRoute<TNode>(
         nextly: config.nextly,
         slugField,
         depth,
+        tags: config.tags,
         revalidate: config.revalidate,
       });
       if (entry) return { entry, context: { collection, slug } };
@@ -134,6 +149,10 @@ export function createContentRoute<TNode>(
   }
 
   async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
+    // A non-positive limit disables pre-rendering entirely — every path then
+    // renders on demand via `dynamicParams`. Return before querying so a `0`
+    // limit yields zero params instead of one-per-collection.
+    if (staticParamsLimit <= 0) return [];
     const nextly = getInstance();
     const params: Array<{ slug: string[] }> = [];
     for (const collection of collections) {

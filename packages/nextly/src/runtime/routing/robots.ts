@@ -35,8 +35,19 @@ export function nextlyRobots(
   options: NextlyRobotsOptions = {}
 ): () => MetadataRoute.Robots {
   // Keep the admin panel and API out of the index; a caller can disallow more.
+  // Exclude the framework roots on a path boundary, not a raw prefix: the
+  // trailing-slash form (`/admin/`) covers the whole subtree on every crawler,
+  // and the `$`-anchored form (`/admin$`) pins the bare root on crawlers that
+  // support it — neither swallows similarly-prefixed content like
+  // `/administration`, which the router does serve.
   const disallow = [
-    ...new Set(["/admin", "/api", ...(options.disallow ?? [])]),
+    ...new Set([
+      "/admin/",
+      "/admin$",
+      "/api/",
+      "/api$",
+      ...(options.disallow ?? []),
+    ]),
   ];
   return () => ({
     rules: {

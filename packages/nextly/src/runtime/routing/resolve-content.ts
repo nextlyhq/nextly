@@ -37,6 +37,12 @@ export interface ResolveContentOptions {
   /** Rich-text output format for rich-text fields (default `"json"`). */
   richTextFormat?: "json" | "html" | "both";
   /**
+   * Extra cache tags merged with the collection's own tag. Add related
+   * collections' tags (e.g. `nextlyTags("authors")`) when a `depth > 0` read
+   * populates relations, so a write to one of those busts this read too.
+   */
+  tags?: string[];
+  /**
    * Time-based revalidation in seconds — a safety net on top of tag-based
    * busting. `false` (default) means the read only revalidates on a tag bust.
    */
@@ -85,11 +91,12 @@ export async function resolveContent(
       return result.items[0] ?? null;
     },
     {
-      // Tag by the collection so any write to it makes this read fresh. The key
-      // varies by every dimension that changes the read result — slug, locale,
-      // and the query shape (status field, depth, rich-text format) — so two
-      // callers that differ in any of them never share a cache entry.
-      tags: nextlyTags(collection),
+      // Tag by the collection so any write to it makes this read fresh, plus any
+      // caller-supplied tags (related collections a populated read depends on).
+      // The key varies by every dimension that changes the read result — slug,
+      // locale, and the query shape (status field, depth, rich-text format) — so
+      // two callers that differ in any of them never share a cache entry.
+      tags: [...nextlyTags(collection), ...(options.tags ?? [])],
       keyParts: [
         "nextly",
         "resolve-content",
