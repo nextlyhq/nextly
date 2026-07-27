@@ -34,7 +34,7 @@ A rule that returns no decision at all now denies, on collections as well as Sin
 
 Field-level read access is applied to a Single **after** the read is decided, not before. A field your rule inspects is no longer removed from the document the rule is shown, so a rule guarding a value the caller may not read decides on that value rather than on its absence.
 
-Ownership is decided once, against the stored row. An `owner-only` Single is no longer re-checked against the response object, which an `afterRead` hook or a field read rule is free to strip the owner identifier from — a transformation that could refuse the document to its actual owner.
+Ownership is always decided against the stored row, and against the row actually being returned. An `owner-only` Single is not judged on the response object, which an `afterRead` hook or a field read rule is free to strip the owner identifier from — a transformation that could refuse a document to its real owner. It is judged on the row read before your hooks and again on the row read after them, so a hook write or a concurrent owner change cannot hand back a document the caller no longer owns.
 
 A first read of a Single that has never been written is judged against the defaults it would create, so a rule that refuses those defaults no longer lets the read materialize the document (and its first version) before returning 403.
 
