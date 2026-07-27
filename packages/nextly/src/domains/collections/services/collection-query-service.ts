@@ -196,11 +196,12 @@ function describeUntranslatableConstraint(
     );
     if (!isOwnColumn && !isLocalized) return `unknown field "${field}"`;
 
-    // Shorthand equality: a primitive translates to `field = value`.
-    if (predicate === null || typeof predicate !== "object") {
-      if (predicate === undefined) return `field "${field}" has no value`;
-      continue;
-    }
+    // Shorthand equality: a primitive translates to `field = value`. `null` and
+    // `undefined` do not — translation skips both, dropping the member while its
+    // siblings stay and decide alone.
+    if (predicate === null) return `field "${field}" is null`;
+    if (predicate === undefined) return `field "${field}" has no value`;
+    if (typeof predicate !== "object") continue;
 
     const operators = Object.keys(predicate);
     if (operators.length === 0) return `field "${field}" has no operator`;
@@ -1030,6 +1031,13 @@ export class CollectionQueryService extends BaseService {
         // Explicitly against null: a reason can be any string, and an empty one
         // would read as success.
         if (untranslatable !== null) {
+          // Logged here rather than left on the error: the surrounding catch
+          // flattens this into a result envelope, so the reason would otherwise
+          // never reach operator logs and every refusal would look alike.
+          this.logger.warn("Refused an untranslatable access constraint", {
+            collection: params.collectionName,
+            reason: untranslatable,
+          });
           throw NextlyError.forbidden({
             logContext: {
               collection: params.collectionName,
@@ -1828,6 +1836,13 @@ export class CollectionQueryService extends BaseService {
         // Explicitly against null: a reason can be any string, and an empty one
         // would read as success.
         if (untranslatable !== null) {
+          // Logged here rather than left on the error: the surrounding catch
+          // flattens this into a result envelope, so the reason would otherwise
+          // never reach operator logs and every refusal would look alike.
+          this.logger.warn("Refused an untranslatable access constraint", {
+            collection: params.collectionName,
+            reason: untranslatable,
+          });
           throw NextlyError.forbidden({
             logContext: {
               collection: params.collectionName,

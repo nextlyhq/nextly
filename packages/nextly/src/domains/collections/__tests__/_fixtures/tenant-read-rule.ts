@@ -59,6 +59,9 @@ export default function tenantReadRule({
     // Shorthand equality: a primitive translates to `field = value`.
     case "shorthand":
       return { region: "eu" };
+    // A null shorthand value, which translation skips outright.
+    case "null-shorthand":
+      return { tenant: null, region: "eu" };
     // A logical group. Refused rather than approximated: a branch that
     // translates to nothing is dropped and its siblings decide alone.
     case "or-group":

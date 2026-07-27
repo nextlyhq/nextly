@@ -222,6 +222,7 @@ describe("stored read constraints are applied in full (integration)", () => {
     ["or-empty-branch", "a group whose branch translates to nothing"],
     ["empty-field-name", "an empty field name"],
     ["dotted-field", "a dotted path whose suffix translation discards"],
+    ["null-shorthand", "a null value that translation skips outright"],
   ])("refuses %s (%s)", async userId => {
     // Each of these translates to something NARROWER than the rule states, or
     // to a different predicate entirely. Refusing beats approximating: the
