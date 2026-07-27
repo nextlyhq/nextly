@@ -66,6 +66,49 @@ describe("seoPlugin", () => {
     expect(seoGroup(plugin).fields).toBe(custom);
   });
 
+  it("serves the sitemap route by default", () => {
+    const plugin = seoPlugin({ collections: ["pages"] });
+    expect(plugin.contributes?.routes?.[0]).toMatchObject({
+      method: "GET",
+      path: "/sitemap.xml",
+      public: true,
+    });
+  });
+
+  it("omits the sitemap route when sitemap is disabled", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    // No public enumeration route when the sitemap is turned off.
+    expect(plugin.contributes?.routes).toBeUndefined();
+    // The SEO fields are still contributed.
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
+  });
+
+  it("rejects a sitemap collection outside the configured collections", () => {
+    // A typo'd / non-extended slug would 500 the public route at request time;
+    // fail fast at construction instead.
+    expect(() =>
+      seoPlugin({ collections: ["pages"], sitemap: { collections: ["posts"] } })
+    ).toThrow(/subset/i);
+  });
+
+  it("rejects a baseUrl that is not an absolute http(s) URL", () => {
+    expect(() =>
+      seoPlugin({ collections: ["pages"], baseUrl: "example.com" })
+    ).toThrow(/absolute http/i);
+  });
+
+  it("does not validate baseUrl when the sitemap is disabled", () => {
+    // A disabled route never consumes baseUrl, so an env-specific/invalid value
+    // must not block boot.
+    expect(() =>
+      seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        baseUrl: "not-a-url",
+      })
+    ).not.toThrow();
+  });
+
   it("defaultSeoFields returns the inner seo fields", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",
