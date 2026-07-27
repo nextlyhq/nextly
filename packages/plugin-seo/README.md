@@ -56,10 +56,10 @@ seoPlugin({
 
 ## Sitemap
 
-The plugin serves a sitemap of your **published** entries — one `<url>` per entry across the named collections — at a public HTTP route:
+The plugin serves a sitemap of your **published** entries — one `<url>` per entry across the named collections — at a public HTTP route under Nextly's dynamic handler. In an app scaffolded by `create-nextly-app` (handler at `app/admin/api`), that is:
 
 ```text
-GET /api/plugins/@nextlyhq/plugin-seo/sitemap.xml
+GET /admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
 ```
 
 It reads live content, so a publish or an edit is reflected on the next request. Drafts, entries with `seo.noindex` set, and entries with no usable slug are left out. When an entry declares a same-host `seo.canonical` URL, the sitemap advertises that canonical URL instead of the generated one (a canonical on another host drops the entry, since a sitemap only lists URLs on its own host).

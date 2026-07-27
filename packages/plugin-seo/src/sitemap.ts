@@ -223,10 +223,19 @@ const WRAPPER_BYTES = utf8Bytes(XML_HEADER) + utf8Bytes(XML_FOOTER);
  */
 export function resolveBaseOrigin(baseUrl: string): string {
   const invalid = (): never => {
+    // Redact any credentials before surfacing the value — this runs at
+    // construction and the message can land in startup/deploy logs.
+    let shown: string;
+    try {
+      const u = new URL(baseUrl);
+      shown = `${u.protocol}//${u.host}${u.pathname}${u.search}${u.hash}`;
+    } catch {
+      shown = "<invalid>";
+    }
     throw new Error(
       `sitemap: baseUrl must be an absolute http(s) origin with no path, ` +
         `query, fragment, or credentials (put per-entry paths in urlFor), ` +
-        `got: ${baseUrl}`
+        `got: ${shown}`
     );
   };
   let url: URL;
@@ -277,10 +286,13 @@ export async function buildSitemapUrls(
   // it, and a canonical on a different origin is dropped rather than mixed in.
   // Rejects a non-origin/relative baseUrl up front so `<loc>` is never invalid.
   const baseOrigin = resolveBaseOrigin(options.baseUrl);
+  // Only `undefined` takes the default; a supplied value (including 0 or a
+  // negative) is honored so the wrapper guard below rejects an impossible cap
+  // rather than silently substituting the 50 MB default.
   const maxBytes =
-    options.maxBytes && options.maxBytes > 0
-      ? Math.min(options.maxBytes, MAX_SITEMAP_BYTES)
-      : MAX_SITEMAP_BYTES;
+    options.maxBytes === undefined
+      ? MAX_SITEMAP_BYTES
+      : Math.min(options.maxBytes, MAX_SITEMAP_BYTES);
   // Even an empty document is the wrapper, so a budget below it can never be
   // met — reject it rather than emit an over-cap wrapper-only document.
   if (maxBytes < WRAPPER_BYTES) {

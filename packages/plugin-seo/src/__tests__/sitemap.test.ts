@@ -6,6 +6,7 @@ import {
   escapeXml,
   generateSitemap,
   MAX_SITEMAP_URLS,
+  resolveBaseOrigin,
   serializeSitemap,
   type SitemapServices,
 } from "../sitemap";
@@ -373,13 +374,17 @@ describe("buildSitemapUrls", () => {
   it("throws when maxBytes cannot hold the document wrapper", async () => {
     const services = stubServices({ posts: [[{ slug: "a" }]] });
 
-    await expect(
-      buildSitemapUrls(services, {
-        collections: ["posts"],
-        baseUrl: "https://x.com",
-        maxBytes: 10,
-      })
-    ).rejects.toThrow(/minimum/i);
+    // A tiny, zero, or negative budget can't hold the wrapper — never silently
+    // fall back to the 50 MB default.
+    for (const maxBytes of [10, 0, -1]) {
+      await expect(
+        buildSitemapUrls(services, {
+          collections: ["posts"],
+          baseUrl: "https://x.com",
+          maxBytes,
+        })
+      ).rejects.toThrow(/minimum/i);
+    }
   });
 
   it("drops a location longer than the protocol limit", async () => {
@@ -545,6 +550,20 @@ describe("buildSitemapUrls", () => {
     });
 
     expect(urls[0].loc).toBe("https://x.com/posts/a");
+  });
+});
+
+describe("resolveBaseOrigin", () => {
+  it("redacts credentials from the error message", () => {
+    let message = "";
+    try {
+      resolveBaseOrigin("https://user:secret@x.com");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/origin/i);
+    expect(message).not.toContain("secret");
+    expect(message).not.toContain("user:");
   });
 });
 

@@ -97,6 +97,18 @@ describe("seoPlugin", () => {
     ).toThrow(/absolute http/i);
   });
 
+  it("does not validate baseUrl when the sitemap is disabled", () => {
+    // A disabled route never consumes baseUrl, so an env-specific/invalid value
+    // must not block boot.
+    expect(() =>
+      seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        baseUrl: "not-a-url",
+      })
+    ).not.toThrow();
+  });
+
   it("defaultSeoFields returns the inner seo fields", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",

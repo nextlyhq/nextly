@@ -94,13 +94,6 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     fields: options.fields ?? defaultSeoFields(),
   });
 
-  // A configured baseUrl must be an absolute http(s) ORIGIN — otherwise every
-  // `<loc>` is invalid (or doubles a base path). Validate at construction, using
-  // the same rule the generator applies, so a misconfig fails fast at boot.
-  if (options.baseUrl !== undefined) {
-    resolveBaseOrigin(options.baseUrl);
-  }
-
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
   // twice (a duplicate-field error), and would list the same URLs twice in the
   // sitemap.
@@ -111,6 +104,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // SEO collections). Kept separate from `targets` so a private collection can
   // carry SEO fields without being enumerated in the public sitemap.
   const sitemapEnabled = options.sitemap !== false;
+
+  // A configured baseUrl must be an absolute http(s) ORIGIN — otherwise every
+  // `<loc>` is invalid (or doubles a base path). Validate at construction (same
+  // rule the generator applies) so a misconfig fails fast — but only when the
+  // sitemap is enabled, since a disabled route never consumes baseUrl.
+  if (sitemapEnabled && options.baseUrl !== undefined) {
+    resolveBaseOrigin(options.baseUrl);
+  }
   const sitemapTargets =
     options.sitemap &&
     typeof options.sitemap === "object" &&
