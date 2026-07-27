@@ -7,15 +7,19 @@
  * comes back as a string, or with its nesting flattened, would break every
  * renderer downstream while every unit test still passed.
  *
- * The suite self-skips on dialects whose URL is unset, per the integration
- * convention; CI runs all three.
+ * That is the risk it was written for, and until now it did not cover it: the
+ * suite booted the harness with no dialect, which is in-memory SQLite, so the
+ * two dialects whose JSON handling differs were never exercised. It now runs
+ * once per dialect the machine can reach.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 
 import { blocks, defineCollection, defineSingle, text } from "../../config";
+import { describeEachDialect } from "../../plugins/__tests__/helpers/dialect-matrix";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
-import type { CollectionsHandler } from "../../services/collections-handler";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import type { CollectionsHandler } from "../../services/collections-handler";
+import type { TestDialect } from "../../plugins/test-nextly";
 
 let current: TestNextly | undefined;
 
@@ -64,8 +68,9 @@ function dataOf(result: unknown): Record<string, unknown> {
   return (data ?? {}) as Record<string, unknown>;
 }
 
-async function handlerFor(): Promise<CollectionsHandler> {
+async function handlerFor(dialect: TestDialect): Promise<CollectionsHandler> {
   current = await createTestNextly({
+    dialect,
     collections: [
       defineCollection({
         slug: "pages",
@@ -76,9 +81,9 @@ async function handlerFor(): Promise<CollectionsHandler> {
   return current.getService<CollectionsHandler>("collectionsHandler");
 }
 
-describe("blocks field storage (integration)", () => {
+describeEachDialect("blocks field storage", dialect => {
   it("round-trips a nested document unchanged", async () => {
-    const handler = await handlerFor();
+    const handler = await handlerFor(dialect);
 
     const created = await handler.createEntry(
       { collectionName: "pages", userId: "u1", overrideAccess: true },
@@ -97,7 +102,7 @@ describe("blocks field storage (integration)", () => {
   });
 
   it("reads the document back as an object, never a JSON string", async () => {
-    const handler = await handlerFor();
+    const handler = await handlerFor(dialect);
     const created = await handler.createEntry(
       { collectionName: "pages", userId: "u1", overrideAccess: true },
       { title: "Home", content: DOCUMENT }
@@ -118,7 +123,7 @@ describe("blocks field storage (integration)", () => {
   });
 
   it("updates a document in place", async () => {
-    const handler = await handlerFor();
+    const handler = await handlerFor(dialect);
     const created = await handler.createEntry(
       { collectionName: "pages", userId: "u1", overrideAccess: true },
       { title: "Home", content: DOCUMENT }
@@ -144,7 +149,7 @@ describe("blocks field storage (integration)", () => {
   });
 
   it("stores an absent document as null rather than inventing one", async () => {
-    const handler = await handlerFor();
+    const handler = await handlerFor(dialect);
     const created = await handler.createEntry(
       { collectionName: "pages", userId: "u1", overrideAccess: true },
       { title: "No content" }
@@ -162,6 +167,7 @@ describe("blocks field storage (integration)", () => {
     // Singles have their own JSON classifier and their own serialize/
     // deserialize pair, so a collection round-trip proves nothing about them.
     current = await createTestNextly({
+      dialect,
       singles: [
         defineSingle({
           slug: "homepage",
@@ -185,6 +191,7 @@ describe("blocks field storage (integration)", () => {
 
   it("refuses a document the field does not accept", async () => {
     current = await createTestNextly({
+      dialect,
       collections: [
         defineCollection({
           slug: "pages",
