@@ -200,7 +200,7 @@ function TemplatePreviewDialog({
             <DialogDescription>Subject: {previewSubject}</DialogDescription>
           )}
         </DialogHeader>
-        <div className="flex-1 overflow-auto border border-border rounded-none">
+        <div className="flex-1 overflow-auto border border-border rounded-md">
           {isLoading ? (
             <div className="flex items-center justify-center h-48">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -361,7 +361,7 @@ function EmailTemplateTable() {
         header: "Slug",
         hideOnMobile: true,
         cell: ({ row }) => (
-          <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
+          <code className="text-xs bg-muted px-1.5 py-0.5 rounded-sm font-mono">
             {row.slug}
           </code>
         ),
@@ -517,8 +517,8 @@ function EmailTemplateTable() {
       />
 
       {isLoading && templates.length === 0 ? (
-        <div className="rounded-none border border-border bg-card p-4">
-          <Skeleton className="h-50 w-full rounded-none" />
+        <div className="rounded-lg border border-border bg-card p-4">
+          <Skeleton className="h-50 w-full rounded-lg" />
         </div>
       ) : (
         <>

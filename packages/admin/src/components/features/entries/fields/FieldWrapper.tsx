@@ -167,7 +167,7 @@ export function FieldWrapper({
     !isLocalizedField &&
     fieldName != null ? (
       <span
-        className="inline-flex items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-muted-foreground"
+        className="inline-flex items-center gap-1 text-xs font-medium normal-case tracking-normal text-muted-foreground"
         title="Shared across languages — editing this field changes it for every language."
       >
         <Globe className="size-3" aria-hidden="true" />
@@ -227,7 +227,7 @@ export function FieldWrapper({
           <Label
             htmlFor={fieldId}
             className={cn(
-              "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-muted-foreground",
+              "flex items-center gap-2 text-xs font-bold tracking-[0.08em] text-muted-foreground",
               error && "text-destructive"
             )}
           >
@@ -281,7 +281,7 @@ export function FieldWrapper({
       <Label
         htmlFor={fieldId}
         className={cn(
-          "flex items-center gap-2 text-[11px] font-bold tracking-[0.08em] text-muted-foreground mb-1",
+          "flex items-center gap-2 text-xs font-bold tracking-[0.08em] text-muted-foreground mb-1",
           error && "text-destructive"
         )}
       >

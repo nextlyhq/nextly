@@ -93,7 +93,7 @@ export function LanguageStatusPills({
             aria-label={`${locale.label} — ${STATE_LABEL[state]}`}
             title={`${locale.label} — ${STATE_LABEL[state]}`}
             className={cn(
-              "px-2 py-0.5 text-[11px] font-bold tracking-[0.06em] uppercase rounded transition-shadow",
+              "px-2 py-0.5 text-xs font-bold tracking-[0.06em] uppercase rounded transition-shadow",
               PILL_CLASS[state],
               isActive && "ring-2 ring-primary/60 ring-offset-1"
             )}

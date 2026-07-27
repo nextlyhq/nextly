@@ -87,7 +87,7 @@ export function NotificationRow({ row }: NotificationRowProps): ReactElement {
           {expanded && row.errorMessage && (
             <pre
               data-testid="notification-row-error-detail"
-              className="mt-2 text-xs whitespace-pre-wrap break-words text-destructive bg-destructive/5 rounded-none p-2"
+              className="mt-2 text-xs whitespace-pre-wrap break-words text-destructive bg-destructive/5 rounded-md p-2"
             >
               {row.errorMessage}
             </pre>

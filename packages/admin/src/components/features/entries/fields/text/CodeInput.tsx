@@ -83,7 +83,7 @@ export interface CodeInputProps<
 function CodeEditorSkeleton({ minHeight }: { minHeight: number }) {
   return (
     <div
-      className="flex items-center justify-center bg-primary/5 rounded-none animate-pulse"
+      className="flex items-center justify-center bg-primary/5 rounded-md animate-pulse"
       style={{ minHeight: `${minHeight}px` }}
     >
       <span className="text-sm text-muted-foreground">Loading editor...</span>
@@ -201,15 +201,15 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-none  border border-border transition-colors",
-        invalid ? "border-destructive" : "border-border",
+        "relative rounded-md  border border-input transition-colors",
+        invalid ? "border-destructive" : "border-input",
         (disabled || readOnly) && "opacity-60",
         className
       )}
     >
       {/* Language indicator */}
       {language && language !== "plaintext" && (
-        <div className="absolute right-2 top-2 z-10 rounded-none bg-primary/5 px-2 py-0.5 text-xs font-medium text-muted-foreground">
+        <div className="absolute right-2 top-2 z-10 rounded-sm bg-primary/5 px-2 py-0.5 text-xs font-medium text-muted-foreground">
           {language.toUpperCase()}
         </div>
       )}

@@ -115,7 +115,7 @@ export function SelectOptionsEditor({
           <div
             role="group"
             aria-label="Radio option layout"
-            className="inline-flex divide-x divide-border overflow-hidden rounded-none border border-border"
+            className="inline-flex divide-x divide-border overflow-hidden rounded-md border border-border"
           >
             <button
               type="button"

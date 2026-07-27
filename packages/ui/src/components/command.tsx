@@ -38,7 +38,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * @design-spec
  * - Input height: 48px (h-12) - larger for prominence
  * - Item height: 36px (h-9) desktop, 44px (h-11) mobile for touch
- * - Border radius: 0px (rounded-none) for items
+ * - Border radius: `rounded-lg` for the panel, `rounded-sm` for items
  * - Max list height: 400px (max-h-[400px])
  * - Transition: 150ms per design system
  *
@@ -61,7 +61,7 @@ const Command = forwardRef<ElementRef<typeof CommandPrimitive>, CommandProps>(
     <CommandPrimitive
       ref={ref}
       className={cn(
-        "flex h-full w-full flex-col overflow-hidden rounded-none bg-background text-foreground",
+        "flex h-full w-full flex-col overflow-hidden rounded-lg bg-background text-foreground",
         className
       )}
       {...props}
@@ -83,6 +83,9 @@ const CommandDialogOverlay = forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
+      // A modal scrim: a black wash is the point, so it stays a literal
+      // rather than a surface token. Painting it from `background` would
+      // make it a white veil in light mode and near-invisible in dark.
       "fixed inset-0 z-[99] bg-black/80 backdrop-blur-sm",
       "data-[state=open]:animate-in data-[state=closed]:animate-out",
       "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
@@ -142,7 +145,7 @@ const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
             // Spacing
             "m-4 sm:m-0", // 16px margin on mobile, no margin on desktop
             // Visual
-            "overflow-hidden rounded-none  border border-border bg-background shadow-xl",
+            "overflow-hidden rounded-lg  border border-border bg-background shadow-xl",
             // Animation
             "duration-200",
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
@@ -318,7 +321,7 @@ const CommandItem = forwardRef<
       // Spacing
       "px-3 py-2.5",
       // Visual
-      "rounded-none text-base sm:text-sm outline-none",
+      "rounded-sm text-base sm:text-sm outline-none",
       // Transitions
       "transition-all duration-200 ease-(--ease-premium)",
       // Hover state - shared dashboard hover treatment
@@ -353,7 +356,7 @@ const CommandShortcut = forwardRef<HTMLSpanElement, CommandShortcutProps>(
           "text-xs font-mono",
           // Visual
           "text-muted-foreground bg-primary/5",
-          "border border-border rounded-none",
+          "border border-border rounded-md",
           // Spacing
           "px-1.5 py-0.5",
           className

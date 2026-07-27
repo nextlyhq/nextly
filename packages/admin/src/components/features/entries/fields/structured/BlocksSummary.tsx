@@ -72,7 +72,7 @@ export function BlocksSummary<TFieldValues extends FieldValues = FieldValues>({
 
   if (total === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-none border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
         <LayoutGrid className="size-4 shrink-0" aria-hidden="true" />
         <span>No blocks yet. Build this page in the page builder.</span>
       </div>
@@ -80,7 +80,7 @@ export function BlocksSummary<TFieldValues extends FieldValues = FieldValues>({
   }
 
   return (
-    <div className="rounded-none border border-border bg-muted/30 p-4">
+    <div className="rounded-lg border border-border bg-muted/30 p-4">
       <div className="flex items-center gap-2 text-sm text-foreground">
         <LayoutGrid className="size-4 shrink-0" aria-hidden="true" />
         <span>
@@ -91,7 +91,7 @@ export function BlocksSummary<TFieldValues extends FieldValues = FieldValues>({
         {[...counts.entries()].map(([type, count]) => (
           <li
             key={type}
-            className="rounded-none border border-border bg-background px-2 py-0.5 font-mono text-xs text-muted-foreground"
+            className="rounded-sm border border-border bg-background px-2 py-0.5 font-mono text-xs text-muted-foreground"
           >
             {type}
             {count > 1 ? ` ×${count}` : ""}

@@ -35,7 +35,16 @@
 
 /* Typography */
 @source inline("text-{xs,sm,base,lg,xl,2xl}");
+/* Weights resolve through the --font-weight-* namespace; the --font-* one these
+ * names read like belongs to families, where a weight would compile to
+ * `font-family: 600` and be dropped. */
 @source inline("font-{normal,medium,semibold,bold}");
+/* Emitting all three family utilities is also what publishes --font-sans /
+ * --font-serif / --font-mono as real custom properties: Tailwind only outputs a
+ * theme variable that something references, so an unused family would leave its
+ * token undeclared and a theme setting it would have nothing to affect. The
+ * weight utilities above carry the same load for --font-weight-*. */
+@source inline("font-{sans,serif,mono}");
 @source inline("leading-{none,tight,normal,relaxed}");
 @source inline("tracking-{tight,normal,wide}");
 @source inline("text-{left,center,right}");

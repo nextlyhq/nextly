@@ -33,7 +33,7 @@ export function PasswordStrengthIndicator({
       {/* Full-strength status borders across the strength tiers so the boundary is perceivable. */}
       <div
         className={cn(
-          "p-3 rounded-none  border border-border transition-colors duration-100",
+          "p-3 rounded-md  border border-border transition-colors duration-100",
           {
             "bg-destructive-500/5 border-destructive text-destructive-900 dark:text-destructive-200":
               strength.score <= 2,
@@ -50,7 +50,7 @@ export function PasswordStrengthIndicator({
               <span className="text-xs font-semibold uppercase tracking-wider">
                 Strength: {strength.label}
               </span>
-              <span className="text-[10px] font-mono opacity-60">
+              <span className="text-xs font-mono opacity-60">
                 {strength.score}/6
               </span>
             </div>

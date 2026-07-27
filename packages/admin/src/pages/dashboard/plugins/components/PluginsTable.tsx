@@ -70,7 +70,7 @@ export function PluginStatusPill({ enabled }: { enabled: boolean }) {
     >
       <span
         aria-hidden
-        className={`mr-1.5 inline-block h-1.5 w-1.5 ${
+        className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${
           enabled ? "bg-success" : "bg-muted-foreground/60"
         }`}
       />

@@ -200,13 +200,13 @@ function FieldCard({
           platforms this becomes a Radix Tooltip in a follow-up. */}
       <span
         title={`Width: ${widthPct}%. Configure in the field's Display tab.`}
-        className="text-[10px] border border-border rounded-sm px-1 py-0.5 text-muted-foreground"
+        className="text-xs border border-border rounded-sm px-1 py-0.5 text-muted-foreground"
       >
         {widthPct}%
       </span>
       {field.validation?.required && (
         // Full-strength status border so the boundary is perceivable.
-        <span className="text-[10px] text-destructive border border-destructive rounded-sm px-1">
+        <span className="text-xs text-destructive border border-destructive rounded-sm px-1">
           Required
         </span>
       )}

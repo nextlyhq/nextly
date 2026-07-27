@@ -535,7 +535,7 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
         {isLoading ? (
           <EntryTableSkeleton />
         ) : (
-          <div className="table-wrapper overflow-hidden rounded-none border border-border bg-card">
+          <div className="table-wrapper overflow-hidden rounded-md border border-border bg-card">
             <DataTableView<EntryRow>
               columns={columns}
               rows={entries}

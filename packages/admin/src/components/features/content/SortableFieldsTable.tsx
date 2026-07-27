@@ -141,7 +141,7 @@ export function SortableFieldsTable({
   };
 
   return (
-    <div className="border rounded-none">
+    <div className="border rounded-md">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

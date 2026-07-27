@@ -176,7 +176,11 @@ export function DynamicSingleNav({
                 aria-label={singlePinned ? "Unpin single" : "Pin single"}
                 aria-pressed={singlePinned}
                 title={singlePinned ? "Unpin single" : "Pin single"}
-                className={singlePinned ? "opacity-100 text-primary" : ""}
+                className={
+                  singlePinned
+                    ? "opacity-100 text-sidebar-accent-foreground"
+                    : ""
+                }
               >
                 <Bookmark
                   className={

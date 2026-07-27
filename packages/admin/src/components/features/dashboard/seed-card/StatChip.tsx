@@ -19,7 +19,7 @@ export function StatChip({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.15em] rounded-none",
+        "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold uppercase tracking-[0.15em] rounded-sm",
         // Warning chips use a dashed hairline + muted-foreground tone
         // instead of the previous amber flood. Subtle enough to scan
         // past at a glance, distinct enough to find the partial-success

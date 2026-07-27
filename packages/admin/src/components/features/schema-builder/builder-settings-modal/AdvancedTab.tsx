@@ -118,7 +118,7 @@ function SwitchRow({
           {badge && (
             // Why: neutral disabled-chip styling (was amber, which read as
             // alarming for a future-feature placeholder).
-            <span className="text-[10px] border border-border bg-muted text-muted-foreground rounded-sm px-1.5 py-0.5">
+            <span className="text-xs border border-border bg-muted text-muted-foreground rounded-sm px-1.5 py-0.5">
               {badge}
             </span>
           )}

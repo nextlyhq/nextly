@@ -232,7 +232,7 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("single")}
             className={`
-              flex items-center gap-3 p-4 rounded-none  border border-border transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-md  border border-border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "single"
                   ? "border-primary text-primary bg-primary/5"
@@ -245,11 +245,9 @@ export function ComponentFieldEditor({
             />
             <div className="flex flex-col items-start gap-0.5">
               <span className="text-sm font-semibold">Single</span>
-              <span
-                className={`text-xs ${currentMode === "single" ? "text-primary/70" : "text-muted-foreground"}`}
-              >
-                One type
-              </span>
+              {/* Helper text stays muted in both states; selection is carried by
+                  the card border, fill and title. */}
+              <span className="text-xs text-muted-foreground">One type</span>
             </div>
           </button>
           {/* Full-strength foreground on hover so the border state change is perceivable. */}
@@ -257,7 +255,7 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("multi")}
             className={`
-              flex items-center gap-3 p-4 rounded-none  border border-border transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-md  border border-border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "multi"
                   ? "border-primary text-primary bg-primary/5"
@@ -270,9 +268,9 @@ export function ComponentFieldEditor({
             />
             <div className="flex flex-col items-start gap-0.5">
               <span className="text-sm font-semibold">Dynamic Zone</span>
-              <span
-                className={`text-xs ${currentMode === "multi" ? "text-primary/70" : "text-muted-foreground"}`}
-              >
+              {/* Helper text stays muted in both states; selection is carried by
+                  the card border, fill and title. */}
+              <span className="text-xs text-muted-foreground">
                 Multiple types
               </span>
             </div>
@@ -312,7 +310,7 @@ export function ComponentFieldEditor({
                     <Icons.Puzzle className="h-3.5 w-3.5 text-muted-foreground" />
                     <span>{comp.label || comp.slug}</span>
                     {comp.admin?.category && (
-                      <Badge variant="outline" className="text-[10px] ml-1">
+                      <Badge variant="outline" className="text-xs ml-1">
                         {comp.admin.category}
                       </Badge>
                     )}
@@ -323,14 +321,14 @@ export function ComponentFieldEditor({
           </Select>
         ) : (
           // Multi-component selector (checkboxes)
-          <div className="space-y-2 max-h-48 overflow-y-auto rounded-none  border border-border p-2">
+          <div className="space-y-2 max-h-48 overflow-y-auto rounded-md  border border-border p-2">
             {availableComponents.map(comp => {
               const isSelected = components?.includes(comp.slug) || false;
               return (
                 <label
                   key={comp.slug}
                   className={`
-                    flex items-center gap-2 p-2 rounded-none cursor-pointer transition-colors
+                    flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors
                     ${isSelected ? "bg-primary/5" : "hover:bg-accent"}
                   `}
                 >
@@ -345,7 +343,7 @@ export function ComponentFieldEditor({
                     {comp.label || comp.slug}
                   </span>
                   {comp.admin?.category && (
-                    <Badge variant="outline" className="text-[10px]">
+                    <Badge variant="outline" className="text-xs">
                       {comp.admin.category}
                     </Badge>
                   )}

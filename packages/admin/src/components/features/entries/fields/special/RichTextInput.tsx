@@ -106,7 +106,7 @@ const editorTheme = {
     italic: "italic",
     underline: "underline",
     strikethrough: "line-through",
-    code: "bg-primary/5 px-1.5 py-0.5 rounded-none font-mono text-sm",
+    code: "bg-primary/5 px-1.5 py-0.5 rounded-md font-mono text-sm",
     // Its own token rather than a status one: a marker drawn over text is not
     // a warning, and it carries its own foreground so the text stays readable
     // when the page's own flips to white.
@@ -151,7 +151,7 @@ const editorTheme = {
   // Code blocks. The tokenizer names what each token is; these classes decide
   // how it looks, so the palette lives in the design tokens and both modes are
   // settled by CSS rather than stored with the content.
-  code: "block bg-code-bg text-code-fg p-4 rounded-none font-mono text-sm mb-2 overflow-x-auto",
+  code: "block bg-code-bg text-code-fg p-4 rounded-md font-mono text-sm mb-2 overflow-x-auto",
   codeHighlight: {
     atrule: "text-code-keyword",
     attr: "text-code-function",
@@ -374,7 +374,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-none  border border-border bg-background",
+        "relative rounded-md  border border-input bg-background",
         !isEditable && "bg-primary/5 cursor-not-allowed",
         className
       )}

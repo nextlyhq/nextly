@@ -11,8 +11,9 @@ export function NotFoundPage() {
   return (
     <PageContainer className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)]">
       {/* Container */}
-      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-none bg-card  border border-border">
-        {/* 404 Big number */}
+      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-lg bg-card  border border-border">
+        {/* 404 Big number: a decorative numeral, not type. The scale tops
+            out at 60px, so there is no step to map this onto. */}
         <div className="mb-2 select-none">
           <span className="text-[120px] font-black leading-none tracking-tight text-foreground">
             404
@@ -21,8 +22,8 @@ export function NotFoundPage() {
 
         {/* Neutral: a missing page is a state, not an outcome. This read as
             success — the same green the admin uses to say something worked. */}
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-medium bg-muted text-muted-foreground mb-6">
-          <span className="h-1.5 w-1.5 rounded-none bg-muted-foreground" />
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium bg-muted text-muted-foreground mb-6">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
           Page Not Found
         </div>
 
@@ -39,14 +40,14 @@ export function NotFoundPage() {
         <div className="flex items-center justify-center gap-4 w-full sm:w-auto">
           <Button
             variant="outline"
-            className="w-full sm:w-[140px] gap-2 rounded-none font-medium text-foreground border-border hover:bg-primary/5"
+            className="w-full sm:w-[140px] gap-2 rounded-md font-medium text-foreground border-border hover:bg-primary/5"
             onClick={() => window.history.back()}
           >
             <ArrowLeft className="h-4 w-4" />
             Go Back
           </Button>
           <Button
-            className="w-full sm:w-[140px] gap-2 rounded-none font-medium bg-primary hover:bg-primary/90 text-primary-foreground border-0"
+            className="w-full sm:w-[140px] gap-2 rounded-md font-medium bg-primary hover:bg-primary/90 text-primary-foreground border-0"
             onClick={() => navigateTo(ROUTES.DASHBOARD)}
           >
             <LayoutDashboard className="h-4 w-4" />

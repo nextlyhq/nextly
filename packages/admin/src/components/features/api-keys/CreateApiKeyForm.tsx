@@ -155,7 +155,7 @@ function ReadOnlyPreview({ permissions }: { permissions: string[] }) {
         {resourceNames.map(name => (
           <span
             key={name}
-            className="inline-flex items-center rounded-none border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground"
+            className="inline-flex items-center rounded-sm border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground"
           >
             {name}
           </span>
@@ -231,7 +231,7 @@ function RolePermissionsPreview({ roleId }: { roleId: string }) {
             {actions.map(action => (
               <span
                 key={action}
-                className="inline-flex items-center rounded-none border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground capitalize"
+                className="inline-flex items-center rounded-sm border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground capitalize"
               >
                 {action}
               </span>

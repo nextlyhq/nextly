@@ -5,7 +5,11 @@
  * The rule is: assert the pairings the design system actually renders, not the
  * cartesian product of every token against every other (which is noise). A
  * `text` pair is foreground text on a surface; a `ui` pair is a boundary or
- * indicator (border, focus ring) against its surface. Coverage spans the base
+ * indicator (border, focus ring) against its surface that is required to
+ * identify a component or its state, which is the scope WCAG 1.4.11 sets —
+ * decorative separators and container edges are excluded rather than asserted,
+ * since holding them to 3:1 makes the whole interface heavier than designed
+ * without making anything easier to identify. Coverage spans the base
  * `--nx-*` tokens, the `@theme` `--color-*` shades (evaluated through
  * `color-mix()`), and the intentional alpha-utility tints (`bg-primary/10`).
  * Exclusions are listed with a reason: a silent omission would read as
@@ -305,20 +309,13 @@ const INFO_ALERT: Pairing[] = ["--color-background", "--color-card"].map(
 );
 
 // Boundaries + focus (3:1). Alpha borders are composited over their surface.
+//
+// Scope: only boundaries WCAG 1.4.11 actually reaches — those required to
+// identify a user interface component or its state. A decorative container edge
+// or row divider is excluded below with the normative reasoning, so the tokens
+// listed here can be held to 3:1 without that floor leaking onto the whole
+// border scale.
 const BOUNDARIES: Pairing[] = [
-  {
-    fg: "--nx-border",
-    bg: "--nx-background",
-    kind: "ui",
-    label: "border on page",
-  },
-  { fg: "--nx-border", bg: "--nx-card", kind: "ui", label: "border on card" },
-  {
-    fg: "--nx-border",
-    bg: "--nx-popover",
-    kind: "ui",
-    label: "border on popover",
-  },
   {
     fg: "--nx-border-strong",
     bg: "--nx-background",
@@ -367,18 +364,6 @@ const BOUNDARIES: Pairing[] = [
     kind: "ui",
     label: "sidebar focus ring",
   },
-  {
-    fg: "--nx-table-border",
-    bg: "--nx-card",
-    kind: "ui",
-    label: "table border on card",
-  },
-  {
-    fg: "--nx-table-border",
-    bg: "--nx-background",
-    kind: "ui",
-    label: "table border on page",
-  },
 ];
 
 export const PAIRINGS: Pairing[] = [
@@ -407,6 +392,16 @@ export const EXCLUSIONS: Exclusion[] = [
     token: "--nx-border-subtle",
     reason:
       "A deliberately faint decorative divider (0.08 alpha). WCAG 1.4.11 exempts separators that are not required to identify or operate a component; holding it to 3:1 would defeat its purpose.",
+  },
+  {
+    token: "--nx-border on card / page / popover",
+    reason:
+      "The generic container edge: card and panel outlines, group boxes, the resting edge of a labelled control. 1.4.11 scopes its 3:1 minimum to visual information required to IDENTIFY components and states, and Understanding 1.4.11 adds that where a control has visible content (text or a sufficiently contrasting icon) which helps users identify its presence, an indication of the overall boundary is not required. Cards are identified by their own surface and heading, outline buttons by their label, so this edge carries no identifying information. It is excluded on every surface rather than only on card: it is one token painted by the same decorative role wherever it lands, and asserting any one surface would re-impose the 3:1 floor on all of them. Boundaries that DO identify a control (--nx-input, --nx-border-strong, the focus rings, --nx-sidebar-border) stay asserted above.",
+  },
+  {
+    token: "--nx-table-border on card / page",
+    reason:
+      "A row divider, the same 1.4.11 separator case as --nx-border-subtle: nothing about it is required to identify or operate the table, whose rows are identified by their content and spacing and whose header is identified by its labels. It also aliases --nx-border, so asserting it would reimpose the container-edge floor excluded above.",
   },
   {
     token: "alert thin container border (--color-*-200 on -50 / -900 on -950)",

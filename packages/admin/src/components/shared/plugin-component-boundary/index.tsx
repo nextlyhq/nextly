@@ -30,7 +30,7 @@ export function PluginComponentBoundary({
         fallback ?? (
           <div
             role="alert"
-            className="rounded-none border border-destructive-200 bg-destructive-50 p-3 text-sm dark:border-destructive-800 dark:bg-destructive-950"
+            className="rounded-md border border-destructive-200 bg-destructive-50 p-3 text-sm dark:border-destructive-800 dark:bg-destructive-950"
           >
             <p className="font-medium text-destructive-900 dark:text-destructive-100">
               This plugin component failed to load.

@@ -298,7 +298,7 @@ export default function EditUserPage(): ReactElement {
         </div>
 
         {/* Form skeleton */}
-        <Skeleton className={`${FORM_MIN_HEIGHT} w-full rounded-none`} />
+        <Skeleton className={`${FORM_MIN_HEIGHT} w-full rounded-md`} />
       </PageContainer>
     );
   }
@@ -392,7 +392,7 @@ export default function EditUserPage(): ReactElement {
         </div>
 
         {/* Form Card */}
-        <div className="bg-card  border border-border rounded-none p-6  ">
+        <div className="bg-card  border border-border rounded-lg p-6  ">
           {/* Avatar Section */}
           <div className="flex items-center gap-4 mb-8 pb-8  border-b border-border">
             <AvatarUploader

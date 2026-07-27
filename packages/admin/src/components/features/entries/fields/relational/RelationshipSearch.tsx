@@ -209,7 +209,7 @@ export function RelationshipSearch({
   return (
     <div
       className={cn(
-        "rounded-none  border border-border bg-card p-4   space-y-4",
+        "rounded-lg  border border-border bg-card p-4   space-y-4",
         className
       )}
     >
@@ -277,7 +277,7 @@ export function RelationshipSearch({
                 type="button"
                 onClick={() => handleSelect(item)}
                 className={cn(
-                  "w-full text-left p-2 rounded-none transition-colors hover-unified",
+                  "w-full text-left p-2 rounded-md transition-colors hover-unified",
                   "focus:bg-primary/5 focus:outline-none"
                 )}
               >

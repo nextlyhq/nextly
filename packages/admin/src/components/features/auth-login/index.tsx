@@ -267,7 +267,7 @@ export function Login() {
                   className="space-y-6"
                 >
                   {emailNotVerified && (
-                    <div className="flex items-start gap-3 rounded-none border border-warning bg-warning/10 p-4 mb-6">
+                    <div className="flex items-start gap-3 rounded-lg border border-warning bg-warning/10 p-4 mb-6">
                       <Mail className="h-5 w-5 text-warning mt-0.5 shrink-0" />
                       <div className="flex-1 text-sm">
                         <p className="font-medium text-foreground">
@@ -309,7 +309,7 @@ export function Login() {
                             spellCheck={false}
                             placeholder="Enter your email address…"
                             {...field}
-                            className="h-11 rounded-none border-input"
+                            className="h-11 rounded-md border-input"
                           />
                         </FormControl>
                         <FormMessage />
@@ -331,7 +331,7 @@ export function Login() {
                               autoComplete="current-password"
                               placeholder="Enter your password…"
                               {...field}
-                              className="pr-10 h-11 rounded-none border-input"
+                              className="pr-10 h-11 rounded-md border-input"
                             />
                           </FormControl>
                           <button
@@ -364,7 +364,7 @@ export function Login() {
                     size="md"
                     type="submit"
                     disabled={isLoading}
-                    className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
+                    className="w-full h-11 rounded-md shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
                   >
                     {isLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />

@@ -196,7 +196,7 @@ export function UserFormFields({
                 >
                   <label
                     htmlFor="sign-in-invite"
-                    className="flex items-start gap-3 rounded-none border border-border p-3 cursor-pointer"
+                    className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer"
                   >
                     <RadioGroupItem
                       value="invite"
@@ -218,7 +218,7 @@ export function UserFormFields({
                   </label>
                   <label
                     htmlFor="sign-in-password"
-                    className="flex items-start gap-3 rounded-none border border-border p-3 cursor-pointer"
+                    className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer"
                   >
                     <RadioGroupItem
                       value="password"
@@ -317,7 +317,7 @@ export function UserFormFields({
           <div className="space-y-3">
             {/* Active Account Checkbox */}
             {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
-            <div className="rounded-none  border border-border bg-primary/5 p-3 shadow-none">
+            <div className="rounded-md  border border-border bg-primary/5 p-3 shadow-none">
               <label className="flex items-start gap-3 cursor-pointer">
                 <Controller
                   control={control}
@@ -331,7 +331,9 @@ export function UserFormFields({
                   )}
                 />
                 <div>
-                  <div className="text-sm font-semibold text-primary">
+                  {/* A field label, so it takes the page ink rather than the
+                      action token. */}
+                  <div className="text-sm font-semibold text-foreground">
                     Active Account (Default: Yes)
                   </div>
                   {/* Muted foreground so this secondary text meets contrast; a faint primary alpha did not. */}

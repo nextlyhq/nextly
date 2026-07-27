@@ -174,7 +174,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
         name: "keyPrefix",
         header: "Key",
         cell: ({ row }) => (
-          <code className="rounded-none bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+          <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
             {row.keyPrefix}
             {"•".repeat(32)}
           </code>
@@ -333,8 +333,8 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       />
 
       {isLoading && data.length === 0 ? (
-        <div className="rounded-none border border-border bg-card p-4">
-          <Skeleton className="h-50 w-full rounded-none" />
+        <div className="rounded-lg border border-border bg-card p-4">
+          <Skeleton className="h-50 w-full rounded-lg" />
         </div>
       ) : (
         <>

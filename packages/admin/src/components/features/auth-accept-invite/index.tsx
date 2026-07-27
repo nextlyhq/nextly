@@ -225,7 +225,7 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
                           autoComplete="new-password"
                           placeholder="Create a strong password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-input"
+                          className="pr-10 h-11 rounded-md border-input"
                         />
                       </FormControl>
                       <button
@@ -264,7 +264,7 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
                           autoComplete="new-password"
                           placeholder="Confirm your password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-input"
+                          className="pr-10 h-11 rounded-md border-input"
                         />
                       </FormControl>
                       <button
@@ -298,7 +298,7 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
                 size="md"
                 type="submit"
                 disabled={isLoading}
-                className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
+                className="w-full h-11 rounded-md shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
               >
                 {isLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin ml-2" />

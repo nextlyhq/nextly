@@ -274,11 +274,7 @@
    * Perfect Fourth Scale (1.333 ratio) - WCAG 2.2 AA Compliant
    * ============================================ */
 
-  /* Font Families */
-  --font-sans: var(--font-inter), Inter, sans-serif;
-  --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+  /* Font Families live in the non-inline @theme block below. */
 
   /* Type Scale - Base Size: 16px (1rem) */
   --text-xs: 0.75rem;
@@ -301,16 +297,6 @@
   /* 48px */
   --text-6xl: 3.75rem;
   /* 60px */
-
-  /* Font Weights */
-  --font-normal: 400;
-  /* Body text, captions */
-  --font-medium: 500;
-  /* Subheadings, emphasis */
-  --font-semibold: 600;
-  /* Headings, buttons */
-  --font-bold: 700;
-  /* Strong emphasis (rarely used) */
 
   /* Line Heights (Leading) */
   --leading-none: 1;
@@ -393,8 +379,49 @@
 
   /* ============================================
    * BORDER RADIUS (Tailwind v4.1)
-   * Derived from the single --radius knob (shadcn pattern). With
-   * --radius: 0 (sharp-corner design) every step resolves to 0.
+   *
+   * Every step derives from the single --radius knob (shadcn pattern), so the
+   * whole admin re-rounds from one declaration and --radius: 0 collapses the
+   * scale back to square corners.
+   *
+   * That only holds if components pick a TIER BY ELEMENT CATEGORY instead of
+   * naming a length. A component that hardcodes a corner value — `rounded-none`
+   * as much as `rounded-[6px]` — pins itself at that value and silently opts
+   * out of the knob. The tiers, and what belongs in each:
+   *
+   *   rounded-lg (--radius-lg, the knob itself)
+   *     Containers: cards, dialogs, popovers, dropdown and select panels,
+   *     sheets, table wrappers, alerts, empty states, image frames.
+   *
+   *   rounded-md (--radius-md, one step tighter)
+   *     Controls: buttons, inputs, textareas, select triggers, checkboxes,
+   *     switches, and other things you click or type into. A control nested in
+   *     a container reads as inset when its corner is tighter than the surface
+   *     holding it.
+   *
+   *   rounded-sm (--radius-sm, tighter again)
+   *     Small controls and adornments: menu and list items, badges, chips,
+   *     tags, tabs, icon buttons, toolbar affordances — anything already inside
+   *     a control or a dense row.
+   *
+   *   rounded-xl / rounded-2xl
+   *     Reserved for surfaces that must read as clearly softer than a card;
+   *     nothing in the admin needs them today.
+   *
+   * Circles sit deliberately outside the scale: avatars, status dots, spinners
+   * and pills use `rounded-full`, which is 9999px and not a --radius step. They
+   * are round because of their shape, not because of the theme, so a retheme
+   * must not flatten them.
+   *
+   * A site that genuinely must stay square keeps `rounded-none` WITH an inline
+   * comment saying why — overlapped-border strips, full-bleed fills inside an
+   * already-rounded parent, underline tabs. Square with a stated reason is a
+   * decision; square without one is an element that was never wired to the knob.
+   *
+   * Corollary for containers: a rounded box whose child paints a background to
+   * its edge must either clip that child (`overflow-hidden`) or give the child
+   * a matching corner (`rounded-b-[inherit]` and friends). Otherwise the child's
+   * fill paints square across the parent's curve at any nonzero --radius.
    * ============================================ */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -404,17 +431,26 @@
 
   /* ============================================
    * BOX SHADOWS (Tailwind v4.1)
+   * The ramp's colour comes from --nx-shadow-color, mixed down to each step's
+   * alpha. `@theme inline` copies a declaration's value into the generated
+   * utility, so a literal rgba() would be frozen at build time while this
+   * var() stays live and re-resolves per mode / per scope at the element.
    * ============================================ */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 2px 0
+    color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-md:
-    0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    0 4px 6px -1px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 2px 4px -1px color-mix(in srgb, var(--nx-shadow-color) 6%, transparent);
   --shadow-lg:
-    0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    0 10px 15px -3px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 4px 6px -2px color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-xl:
-    0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    0 20px 25px -5px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent),
+    0 10px 10px -5px color-mix(in srgb, var(--nx-shadow-color) 4%, transparent);
 
   /* Custom Functional Shadows (Fixes build warnings from arbitrary values) */
-  --shadow-inner-subtle: 0 -4px 6px -1px rgba(0, 0, 0, 0.05);
+  --shadow-inner-subtle: 0 -4px 6px -1px
+    color-mix(in srgb, var(--nx-shadow-color) 5%, transparent);
   --shadow-glow-success: 0 0 10px
     color-mix(in srgb, var(--nx-success) 10%, transparent);
   --shadow-glow-primary: 0 0 15px
@@ -423,7 +459,8 @@
     color-mix(in srgb, var(--nx-primary) 40%, transparent);
   --shadow-soft-primary: 0 8px 30px
     color-mix(in srgb, var(--nx-primary) 6%, transparent);
-  --shadow-neo: 4px 4px 0px 0px rgba(0, 0, 0, 0.1);
+  --shadow-neo: 4px 4px 0px 0px
+    color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);
 
   /* ============================================
    * FLUID TYPOGRAPHY (Tailwind v4.1)
@@ -441,6 +478,42 @@
 
   /* Custom Transitions */
   --ease-premium: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ============================================
+ * FONT FAMILIES & WEIGHTS (Tailwind v4.1)
+ *
+ * Deliberately a non-inline `@theme`. `@theme inline` copies a declaration's
+ * value into whatever consumes it, which froze these stacks into
+ * `--default-font-family` / `--default-mono-font-family` and into the
+ * `font-mono` utility at build time, so the variables existed but nothing read
+ * them and re-declaring one on a scope changed nothing. A plain `@theme`
+ * emits each token as a real custom property and makes its consumers
+ * reference it with `var()`, so the base rule and the `font-*` utilities
+ * re-resolve wherever the token is redeclared. The weights sit here for the
+ * same reason, and to match the weights Tailwind ships (`--font-weight-black`
+ * and friends), which the `font-*` utilities also reach through `var()`.
+ *
+ * `--font-*` is the font-FAMILY namespace and `--font-weight-*` is the weight
+ * one, so a weight declared as `--font-bold` registers a family literally named
+ * "bold": `font-bold` then compiles to `font-family: 700`, which browsers drop,
+ * and it shadows the real weight utility rather than adding to it.
+ * ============================================ */
+@theme {
+  --font-sans: var(--font-inter), Inter, sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  /* Body text, captions */
+  --font-weight-normal: 400;
+  /* Subheadings, emphasis */
+  --font-weight-medium: 500;
+  /* Headings, buttons */
+  --font-weight-semibold: 600;
+  /* Strong emphasis (rarely used) */
+  --font-weight-bold: 700;
 }
 
 /* ============================================
@@ -686,17 +759,23 @@
   --nx-code-inserted: oklch(0.4478 0.1189 152.1);
 
   /* Element colors — 3-tier translucent border scale (monochrome).
-   * Was a single --nx-border at 5% black (~1.05:1, effectively invisible).
-   * subtle = decorative dividers/cards; default = tables/groups;
-   * strong = interactive control edges (inputs/checkbox) for prominence. */
+   * The first two tiers are decorative and are tuned by eye: subtle = faint
+   * dividers, default = the container edge on cards, groups, and tables
+   * (composites to a light grey on white, a hairline rather than a rule). The third
+   * is not decorative — strong marks the edge of a control that has no other
+   * boundary, so it is held to a contrast minimum instead. */
   --nx-border-subtle: oklch(0 0 0 / 0.08);
-  /* Alpha raised so the composited border clears WCAG 3:1 on the page (was 1.35:1). */
-  --nx-border: oklch(0 0 0 / 0.445);
+  --nx-border: oklch(0 0 0 / 0.14);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
   --nx-border-strong: oklch(0 0 0 / 0.502);
   /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
   --nx-input: oklch(0.6454 0.0116 286.11);
   --nx-ring: var(--nx-primary);
+
+  /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
+   * -neo). Each step mixes this down to its own alpha, so retinting every
+   * shadow at once is a single token change. */
+  --nx-shadow-color: oklch(0 0 0);
 
   /* Chart colors for data visualization */
   --nx-chart-1: var(--nx-primary);
@@ -845,16 +924,21 @@
 
   /* Element colors — 3-tier translucent border scale (white-alpha for dark).
    * Recomputed as white-over-dark alpha (not a flipped hex) so dividers read
-   * on the deep background without glowing. Was ~1.2:1 (too faint). */
+   * on the deep background without glowing. The decorative tiers carry the same
+   * alphas as light mode, which lands the container edge at a matched 1.41:1 on
+   * the page (1.38:1 light), so a hairline weighs the same in both modes. */
   --nx-border-subtle: oklch(1 0 0 / 0.08);
-  /* Alpha raised so the composited border clears WCAG 3:1 on the page (was 1.36:1). */
-  --nx-border: oklch(1 0 0 / 0.366);
+  --nx-border: oklch(1 0 0 / 0.14);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 3.00:1). */
   --nx-border-strong: oklch(1 0 0 / 0.418);
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
    * surface as well as the page and card (was 1.73:1 on a popover). */
   --nx-input: oklch(0.54 0.0128 285.92);
   --nx-ring: var(--nx-primary);
+
+  /* Black in dark mode too: the ramp reads as depth against the deep surfaces
+   * rather than as a glow, which a lightened shadow colour would produce. */
+  --nx-shadow-color: oklch(0 0 0);
 
   /* Chart colors for data visualization (same as light mode) */
   --nx-chart-1: var(--nx-primary);
@@ -870,8 +954,13 @@
   /* Sidebar specific colors - dark mode */
   --nx-sidebar-background: var(--nx-background);
   /* flat with the content surface; nav is separated by borders, not fill */
-  --nx-sidebar-foreground: oklch(0.9838 0.0035 247.86);
-  /* slate-50 */
+  /* Resting nav ink, dimmed off slate-50 so it sits a step below
+   * --nx-sidebar-accent-foreground the way the light pair does: the lightness
+   * gap here (0.164) is the same one light mode puts between slate-600 and
+   * slate-900, so an active row reads as emphasised by its ink and not only by
+   * its fill. Chroma and hue track the theme's other secondary ink
+   * (--nx-muted-foreground) so lightness alone carries the hierarchy. */
+  --nx-sidebar-foreground: oklch(0.82 0.0351 256.79);
   --nx-sidebar-primary: oklch(0.9838 0.0035 247.86);
   /* slate-50 */
   --nx-sidebar-primary-foreground: oklch(0.2079 0.0399 265.73);
