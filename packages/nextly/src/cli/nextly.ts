@@ -9,16 +9,18 @@
  * @remarks
  * This CLI uses Commander.js for command parsing and provides:
  * - Global options: --config, --verbose, --quiet, --cwd, --no-color
- * - Development commands: dev, build, init
+ * - Project commands: init, build, db:sync (alias: sync)
  * - Type generation: generate:types, generate:schema
- * - Migration commands: migrate, migrate:create, migrate:status, migrate:fresh
- *   (F11 PR 2: removed migrate:down, migrate:reset, migrate:refresh per Q4=A
- *   forward-only model. Rollback = write a new corrective migration.)
+ * - Migration commands: migrate, migrate:create, migrate:status,
+ *   migrate:check, migrate:down, migrate:resolve, migrate:fresh
+ *
+ * There is no `nextly dev` command: user apps run their own dev server
+ * (`next dev`), and schema changes apply in-process via the HMR listener.
  *
  * @example
  * ```bash
- * # Start development mode
- * npx nextly dev
+ * # Sync the database schema with nextly.config.ts
+ * npx nextly db:sync
  *
  * # Generate TypeScript types
  * npx nextly generate:types

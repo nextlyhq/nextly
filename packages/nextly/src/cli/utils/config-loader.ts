@@ -90,6 +90,10 @@ function applyFoldedToBase(
     // plugin that forces recording is not dropped back to the base value on a
     // reload. Always a resolved boolean on a sanitized config.
     webhookAuditEnabled: transformed.webhookAuditEnabled,
+    // Likewise carry a plugin's resolved retention policy: a plugin that tunes
+    // or disables `webhooks.retention` in setup() must not be reverted to the
+    // base value (which `webhooks:prune` and the runtime would otherwise use).
+    webhookRetention: transformed.webhookRetention,
   };
 }
 

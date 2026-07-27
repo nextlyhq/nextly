@@ -132,7 +132,9 @@ export function offsetPaginationToMeta(args: {
  *   400: NextlyError.validation (with publicData.errors[])
  *   403: NextlyError.forbidden
  *   404: NextlyError.notFound
- *   409: NextlyError.conflict
+ *   409: NextlyError.duplicate when the envelope's `code` says DUPLICATE
+ *        (unique-constraint violations), NextlyError.conflict otherwise
+ *        (optimistic-concurrency staleness)
  *   500 + everything else: NextlyError.internal
  *
  * The `data?: unknown` parameter accepts any service-result shape (the
@@ -148,6 +150,9 @@ export function unwrapServiceResult<T>(
   result: {
     success: boolean;
     statusCode?: number;
+    // Canonical NextlyError code carried by envelopes that originate from a
+    // NextlyError; disambiguates statuses shared by several codes (409).
+    code?: string;
     message?: string;
     data?: unknown;
     // Canonical {path, code} from collection results; legacy {field} from
@@ -168,7 +173,17 @@ export function unwrapServiceResult<T>(
   const ctx = { legacyMessage: result.message, ...logContext };
   if (status === 404) throw NextlyError.notFound({ logContext: ctx });
   if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
-  if (status === 409) throw NextlyError.conflict({ logContext: ctx });
+  if (status === 409) {
+    // 409 is shared by two distinct failures: a unique-constraint duplicate
+    // ("Resource already exists.") and an optimistic-concurrency conflict
+    // ("The resource has changed..."). Only the envelope's code can tell
+    // them apart; without one, staleness is the safer default because it
+    // tells the user to refresh rather than implying the write is invalid.
+    if (result.code === "DUPLICATE") {
+      throw NextlyError.duplicate({ logContext: ctx });
+    }
+    throw NextlyError.conflict({ logContext: ctx });
+  }
   if (status === 400) {
     // Per-field issues from the service survive into the wire envelope so
     // the admin can map them onto form fields; the generic single-issue

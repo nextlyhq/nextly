@@ -21,6 +21,12 @@
 //     `serial`/`bigserial`/`smallserial` collapse to their integer storage
 //     type (the sequence default is a separate, already-handled concern).
 //   - Normalise array notation: PG's `_text` and SQL `text[]` → `<base>[]`.
+//   - Collapse MySQL's `tinyint(1)` to the boolean token. MySQL has no
+//     separate boolean type: `BOOL` and `BOOLEAN` are synonyms for
+//     `TINYINT(1)`, and introspection reports all three identically. This one
+//     is matched BEFORE the length strip below, because the width is the
+//     whole signal — a plain `TINYINT` is a one-byte integer and must stay
+//     distinct from a boolean.
 //   - Anything unrecognised passes through (lowercased, length-stripped). A
 //     real type change (e.g. `varchar` → `text`) is therefore still caught.
 
@@ -77,6 +83,18 @@ const TYPE_ALIASES: Record<string, string> = {
  */
 export function normalizeType(type: string | undefined): string | undefined {
   if (type === undefined) return undefined;
+
+  const lowered = type.trim().toLowerCase();
+  // MySQL reports `BOOLEAN`, `BOOL`, and `TINYINT(1)` all as `tinyint(1)`,
+  // so the width has to be read before it is stripped. Whitespace around the
+  // width is insignificant and a hand-written `TINYINT ( 1 )` reaches the
+  // desired side as authored, so it is tolerated here — matching it exactly
+  // would leave that spelling to the strip below, which would reduce it to
+  // `tinyint` and report a type change against the very column it describes.
+  // Left signed-only on purpose: `tinyint(1) unsigned` is not what the
+  // boolean synonym produces, and treating it as one would hide a real
+  // difference.
+  if (/^tinyint\s*\(\s*1\s*\)$/.test(lowered)) return "bool";
 
   // Lowercase + strip every `(...)` length/precision modifier (and any
   // whitespace that preceded it), e.g. `varchar(255)` → `varchar`,

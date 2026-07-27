@@ -35,6 +35,20 @@ export interface ColumnSpec {
   // costs the nullability exemption the diff grants primary keys — never a
   // wrong op.
   primaryKey?: boolean;
+  // `true` when the live default is a `nextval()` over the sequence this
+  // column OWNS — what PostgreSQL materialises for a `serial` declaration.
+  // Recorded only when true, and only by PostgreSQL introspection: no other
+  // dialect has sequences in a default, and the desired side never spells the
+  // default at all.
+  //
+  // Ownership is the point. A column can hold a `nextval()` default over a
+  // sequence it does not own, either because someone pointed it at one
+  // deliberately or because a `serial` column was later repointed. Those are
+  // real defaults and the diff must keep reporting them; only the implicit
+  // one may be suppressed. Reading the shape of the expression cannot tell
+  // the two apart, which is why this is carried in the snapshot rather than
+  // re-derived in the diff.
+  ownedSequenceDefault?: boolean;
 }
 
 export interface IndexSpec {
