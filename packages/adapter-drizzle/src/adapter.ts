@@ -691,6 +691,29 @@ export abstract class DrizzleAdapter {
           query = query.offset(options.offset);
         }
 
+        // A lock request is only meaningful inside a transaction, on EVERY
+        // dialect. On the row-locking dialects the pooled connection autocommits
+        // the SELECT, releasing the lock the instant it returns; on SQLite the
+        // lock IS the transaction (BEGIN IMMEDIATE serializes writers), so a
+        // pooled call takes no lock at all. Either way a `forUpdate` without a
+        // transaction executor is silent false safety and reopens the TOCTOU
+        // window it was meant to close, so fail fast regardless of dialect.
+        if (options?.forUpdate && !executor) {
+          throw this.createDatabaseError(
+            "query",
+            "forUpdate requires a transaction executor: a lock request on the pooled connection takes no durable lock and cannot prevent a concurrent write.",
+            undefined
+          );
+        }
+
+        // Row-lock the selected rows for the rest of the transaction and read the
+        // latest committed values (not the transaction's snapshot). SQLite has no
+        // FOR UPDATE and needs none (BEGIN IMMEDIATE serializes its writers), so
+        // it is skipped there.
+        if (options?.forUpdate && this.dialect !== "sqlite") {
+          query = query.for("update");
+        }
+
         return (await query) as T[];
       } catch (error) {
         throw this.handleQueryError(error, "select", table);

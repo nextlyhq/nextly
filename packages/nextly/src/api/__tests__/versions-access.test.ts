@@ -91,6 +91,53 @@ describe("requireRouteVersionReadAccess", () => {
     );
   });
 
+  it("judges an API-key version read on the key's own scope", async () => {
+    // A version-history read runs the live-document read gate. For an API-key
+    // request it must carry the key's OWN scope, so a super-admin-owned key
+    // scoped for read does not skip the document's stored owner-only/custom read
+    // rule before its history is exposed.
+    requireRouteCollectionAccessSpy.mockResolvedValue({
+      userId: "key-owner",
+      permissions: ["read-posts"],
+      roles: ["editor"],
+      authMethod: "api-key",
+    });
+    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+
+    await requireRouteVersionReadAccess(
+      new Request("http://localhost/x"),
+      "collection",
+      "posts",
+      "entry-1"
+    );
+
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["read-posts"],
+        },
+      })
+    );
+  });
+
+  it("carries no scope for a session version read", async () => {
+    // A session caller has no stamped scope, so the read gate falls back to the
+    // owner/session RBAC path (undefined scope), not an empty api-key scope.
+    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+
+    await requireRouteVersionReadAccess(
+      new Request("http://localhost/x"),
+      "collection",
+      "posts",
+      "entry-1"
+    );
+
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ authenticatedScope: undefined })
+    );
+  });
+
   it("surfaces a server-side read failure instead of reporting not-found", async () => {
     // A throwing afterRead hook or a component load error yields success:false
     // with a 5xx. Collapsing that into 404 would disguise an outage as missing

@@ -13,6 +13,7 @@
 // ============================================================
 
 import type { FieldType } from "./base";
+import type { BlocksFieldConfig } from "./blocks";
 import type { CheckboxFieldConfig } from "./checkbox";
 import type { ChipsFieldConfig } from "./chips";
 import type { CodeFieldConfig } from "./code";
@@ -63,6 +64,7 @@ export * from "./group";
 
 // Component field types
 export * from "./component";
+export * from "./blocks";
 
 // Array-like field types
 export * from "./chips";
@@ -101,7 +103,9 @@ export type DataFieldConfig =
   | GroupFieldConfig
   | JSONFieldConfig
   | ComponentFieldConfig
-  | ChipsFieldConfig;
+  | ChipsFieldConfig
+  // A page built from blocks, stored as one document.
+  | BlocksFieldConfig;
 
 /**
  * Alias for FieldConfig — all fields store data in the database.
@@ -137,7 +141,9 @@ export type DataFieldType =
   | "group"
   | "json"
   | "component"
-  | "chips";
+  | "chips"
+  // A page built from blocks, stored as one JSON document.
+  | "blocks";
 
 /**
  * Array of all supported field types.
@@ -171,6 +177,8 @@ export const DATA_FIELD_TYPES: readonly DataFieldType[] = [
   "json",
   "component",
   "chips",
+  // A page built from blocks; storage is JSON, like the other structured types.
+  "blocks",
 ] as const;
 
 /**

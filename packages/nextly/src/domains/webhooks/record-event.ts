@@ -28,9 +28,18 @@ function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
     id: envelope.id,
     type: envelope.type,
     resource_kind: envelope.resource.kind,
-    // `collection` only exists on the entry resource variant.
+    // The denormalized scope column: an entry carries its collection slug; a
+    // single (or other slugged resource) carries its own slug so the delivery
+    // log identifies which resource changed. This is informational only — the
+    // endpoint `collections` filter matches on the PAYLOAD's `resource.collection`
+    // (undefined for a single), so a single slug here never widens a
+    // collection-scoped subscription.
     resource_collection:
-      "collection" in envelope.resource ? envelope.resource.collection : null,
+      "collection" in envelope.resource
+        ? envelope.resource.collection
+        : "slug" in envelope.resource
+          ? (envelope.resource.slug ?? null)
+          : null,
     resource_id: envelope.resource.id ?? null,
     // Serialize the payload here rather than passing the object through: the
     // transactional insert is a raw INSERT, and only some dialect drivers

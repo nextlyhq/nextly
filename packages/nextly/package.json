@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.39",
+  "version": "0.0.2-alpha.41",
   "description": "Nextly - Core functionality, database, services, and APIs",
   "license": "MIT",
   "type": "module",
@@ -248,6 +248,7 @@
     "@clack/prompts": "^1.1.0",
     "@inquirer/prompts": "^7.3.2",
     "@nextlyhq/adapter-drizzle": "workspace:*",
+    "@nextlyhq/blocks-engine": "workspace:*",
     "bcryptjs": "^3.0.2",
     "chokidar": "^5.0.0",
     "commander": "^14.0.2",

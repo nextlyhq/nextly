@@ -10,6 +10,7 @@
  * @module domains/webhooks/endpoint-registry
  */
 
+import { normalizeSecretEntries } from "./secret-entries";
 import type {
   FilterSpec,
   WebhookEndpoint,
@@ -70,9 +71,15 @@ function toEndpoint(row: Record<string, unknown>): WebhookEndpoint {
       : [],
     filter: normalizeFilter(row.filter),
     headers: (row.headers as Record<string, string> | null) ?? null,
-    secretHash: Array.isArray(row.secretHash)
-      ? (row.secretHash as string[])
-      : [],
+    // Normalized to the entry shape (tolerating the legacy bare-string form).
+    // Carried for completeness only; delivery signs from its own row read.
+    secretHash: normalizeSecretEntries(row.secretHash, {
+      prefix: (row.secretPrefix as string) ?? "",
+      createdAt:
+        row.createdAt instanceof Date
+          ? row.createdAt.toISOString()
+          : new Date(0).toISOString(),
+    }),
     secretPrefix: (row.secretPrefix as string) ?? "",
     fieldAllowlist: Array.isArray(row.fieldAllowlist)
       ? (row.fieldAllowlist as string[])

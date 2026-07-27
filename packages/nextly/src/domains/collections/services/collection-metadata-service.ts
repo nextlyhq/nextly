@@ -341,6 +341,8 @@ export class CollectionMetadataService extends BaseService {
     localized?: boolean;
     /** Whether every save is recorded as a restorable version. */
     versions?: boolean;
+    /** Whether writes bust cache tags. Default on; false opts out entirely. */
+    revalidate?: boolean;
     fields: FieldDefinition[];
     hooks?: Record<string, unknown>[];
     createdBy?: string;
@@ -683,6 +685,8 @@ export class CollectionMetadataService extends BaseService {
       localized?: boolean;
       /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
       versions?: boolean;
+      /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
+      revalidate?: boolean;
       fields?: FieldDefinition[];
       hooks?: Record<string, unknown>[];
     }

@@ -127,3 +127,26 @@ export {
   useUpdateApiKey,
   useRevokeApiKey,
 } from "./useApiKeys";
+
+// Webhook query and mutation hooks
+export {
+  webhookKeys, // Query key factory for stable caching
+  useWebhooks,
+  useWebhook,
+  useCreateWebhook,
+  useUpdateWebhook,
+  useDeleteWebhook,
+  useRotateSecret,
+  useExpireOldSecrets,
+  useRevealSecret,
+  useTestEndpoint,
+} from "./useWebhooks";
+
+// Webhook delivery-log query and mutation hooks
+export {
+  deliveryKeys, // Query key factory for stable caching
+  useDeliveries,
+  useDelivery,
+  useRedeliver,
+  useRunDrain,
+} from "./useDeliveries";

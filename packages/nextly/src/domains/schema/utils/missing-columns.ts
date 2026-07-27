@@ -127,6 +127,7 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
     case "repeater":
     case "group":
     case "chips":
+    case "blocks":
       columnType =
         dialect === "postgresql"
           ? "JSONB"

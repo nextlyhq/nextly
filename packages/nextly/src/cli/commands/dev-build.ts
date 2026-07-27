@@ -186,6 +186,9 @@ export async function syncSingles(
       status: single.status === true,
       localized: single.localized === true,
       versions: resolveVersionsConfig(single.versions, single.status),
+      // Forward the cache-revalidation config through db:sync too, so a
+      // code-first single's disable/tags reach dynamic_singles.revalidate.
+      revalidate: single.revalidate,
       configPath: `singles/${single.slug}.ts`,
     })
   );

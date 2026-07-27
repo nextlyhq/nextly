@@ -33,6 +33,7 @@ import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { FieldConfig } from "@nextly/collections";
 
+import type { RevalidateConfig } from "../../revalidation/types";
 import { users } from "../users/sqlite";
 // Normalized versioning config persisted on the registry `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
@@ -149,6 +150,15 @@ export const dynamicCollectionsSqlite = sqliteTable(
     versions: text("versions", {
       mode: "json",
     }).$type<ResolvedVersionsConfig>(),
+
+    /**
+     * Cache-revalidation config (`{ tags?, disable? }`), a JSON column like
+     * `versions` so `disable`/extra-`tags` reach the write path. Nullable when
+     * the collection sets no `revalidate` config.
+     */
+    revalidate: text("revalidate", {
+      mode: "json",
+    }).$type<RevalidateConfig>(),
 
     /**
      * Admin UI configuration options.

@@ -63,6 +63,10 @@ import "@nextlyhq/plugin-form-builder/admin";
 - **Form lifecycle states:** Draft, Published, Closed
 - **Optional integrations:** email notifications, webhook delivery on submission, spam protection (honeypot, rate limit, reCAPTCHA v3)
 
+### Submission privacy
+
+Submissions carry visitor-entered content plus `ipAddress` and `userAgent`, so the `form-submissions` collection sets `webhooks: false` — its writes are never recorded to the webhook outbox or delivered to endpoints subscribed to `entry.created` or `*`. Any collection or single can opt out the same way (`webhooks: false`, or `{ record: false }`); recording is on by default for everything else. To send submission webhooks deliberately, override the submissions collection with `webhooks: true`.
+
 ## Field types
 
 The plugin ships 13 field types. All are enabled by default; disable any by setting it to `false` in the `fields` option.

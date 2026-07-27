@@ -34,6 +34,191 @@ const VALID = {
   ],
 };
 
+describe("parseUiSchema — blocks fields", () => {
+  const withBlocks = (field: Record<string, unknown>) => ({
+    version: 1,
+    collections: [
+      {
+        slug: "pages",
+        fields: [{ name: "title", type: "text" }, field],
+      },
+    ],
+  });
+
+  it("accepts a blocks field and keeps its policy", () => {
+    // Zod strips undeclared keys, so an unparsed `blocks` option would persist
+    // a field accepting everything the submitted schema meant to exclude.
+    const r = parseUiSchema(
+      withBlocks({
+        name: "content",
+        type: "blocks",
+        blocks: { allow: ["core/*"], kinds: ["page"] },
+      })
+    );
+    expect(r.success).toBe(true);
+    const field = r.success
+      ? (r.data.collections[0].fields[1] as {
+          blocks?: { allow?: string[]; kinds?: string[] };
+        })
+      : undefined;
+    expect(field?.blocks?.allow).toEqual(["core/*"]);
+    expect(field?.blocks?.kinds).toEqual(["page"]);
+  });
+
+  it("accepts a blocks field with no policy", () => {
+    expect(
+      parseUiSchema(withBlocks({ name: "content", type: "blocks" })).success
+    ).toBe(true);
+  });
+
+  it("rejects a document kind that does not exist", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: ["nonsense"] },
+        })
+      ).success
+    ).toBe(false);
+  });
+
+  it("rejects an empty kinds list", () => {
+    // A field accepting no kind can hold no document, yet required-field
+    // seeding still has to synthesize one — so the row would carry a value
+    // this same field rejects.
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: [] },
+        })
+      ).success
+    ).toBe(false);
+  });
+
+  it("rejects a default that is an object but not a document", () => {
+    // The admin seeds a read-only control from this value, so a malformed
+    // default leaves something the user cannot correct on the form.
+    for (const bad of [
+      { foo: "bar" },
+      { formatVersion: "1", kind: "page", nodes: [] },
+      { formatVersion: 1, kind: "nonsense", nodes: [] },
+      { formatVersion: 1, kind: "page" },
+      { formatVersion: 1, kind: "page", nodes: {} },
+    ]) {
+      expect(
+        parseUiSchema(
+          withBlocks({ name: "content", type: "blocks", defaultValue: bad })
+        ).success,
+        JSON.stringify(bad)
+      ).toBe(false);
+    }
+  });
+
+  it("rejects a default whose nodes are malformed", () => {
+    // An envelope check alone would pass this, and the read-only control
+    // leaves the user no way to repair what it seeds.
+    for (const nodes of [[null], [42], [{ id: "" }], [{ type: "core/x" }]]) {
+      expect(
+        parseUiSchema(
+          withBlocks({
+            name: "content",
+            type: "blocks",
+            defaultValue: { formatVersion: 1, kind: "page", nodes },
+          })
+        ).success,
+        JSON.stringify(nodes)
+      ).toBe(false);
+    }
+  });
+
+  it("accepts a default whose nodes are well formed", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          defaultValue: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                type: "core/heading",
+                version: 1,
+                props: {},
+              },
+            ],
+          },
+        })
+      ).success
+    ).toBe(true);
+  });
+
+  it("rejects a default of a kind the field itself excludes", () => {
+    // The default is checked by the field's own validator, so a schema cannot
+    // declare a policy and a default that contradict each other.
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: ["template"] },
+          defaultValue: { formatVersion: 1, kind: "page", nodes: [] },
+        })
+      ).success
+    ).toBe(false);
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { kinds: ["template"] },
+          defaultValue: { formatVersion: 1, kind: "template", nodes: [] },
+        })
+      ).success
+    ).toBe(true);
+  });
+
+  it("rejects a default using a block the field does not allow", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          blocks: { allow: ["core/*"] },
+          defaultValue: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                type: "acme/pricing",
+                version: 1,
+                props: {},
+              },
+            ],
+          },
+        })
+      ).success
+    ).toBe(false);
+  });
+
+  it("accepts a document as a blocks default", () => {
+    expect(
+      parseUiSchema(
+        withBlocks({
+          name: "content",
+          type: "blocks",
+          defaultValue: { formatVersion: 1, kind: "page", nodes: [] },
+        })
+      ).success
+    ).toBe(true);
+  });
+});
+
 describe("parseUiSchema", () => {
   it("accepts a valid manifest", () => {
     const r = parseUiSchema(VALID);

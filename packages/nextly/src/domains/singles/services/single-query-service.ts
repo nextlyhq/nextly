@@ -20,6 +20,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import {
+  apiKeyWriteAllowed,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
@@ -34,11 +38,12 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import type {
+import type { CollectionAccessRules } from "../../../services/access";
+import {
   AccessControlService,
-  CollectionAccessRules,
+  isSuperAdminContext,
 } from "../../../services/access";
-import { isSuperAdminContext } from "../../../services/access";
+import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
@@ -65,7 +70,13 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
-import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
+import {
+  buildCompanionSchema,
+  companionTableExists,
+  splitLocalizedWrite,
+  upsertCompanionRow,
+} from "../../i18n/runtime/companion-io";
+import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -78,6 +89,7 @@ import type {
 
 import type { SingleRegistryService } from "./single-registry-service";
 import {
+  assertValidBlocksDefault,
   buildSingleErrorResult,
   collectAllMediaIds,
   deserializeJsonFields,
@@ -85,6 +97,23 @@ import {
   getDefaultValue,
   shouldTreatAsJson,
 } from "./single-utils";
+
+/**
+ * Reserved system identity field names every Single carries as columns (the
+ * `title`/`slug` auto-injected by `defineSingle`, seeded from label/slug). Their
+ * default seeding is handled specially so a same-named user field never strands
+ * the system column or receives a wrong-typed default.
+ */
+const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
+
+/**
+ * Column-descriptor kinds that store text, so the label/slug string seed for a
+ * reserved identity field is valid for them. Covers plain text (text/email/
+ * password/select/radio) and long text (textarea/richText/code), plus explicit
+ * varchar. Non-text kinds (number, json, fkSingle, ...) fall through to the
+ * field's own default instead, so a label string never lands in them.
+ */
+const IDENTITY_TEXT_COLUMN_KINDS = new Set(["text", "varchar", "longText"]);
 
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
@@ -153,6 +182,9 @@ export async function checkSingleAccess(params: {
   overrideAccess?: boolean;
   routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
+  // The caller's authenticated scope. A scoped API key is judged on its OWN
+  // stamped grants for the publish/unpublish transition, not the owner's RBAC.
+  authenticatedScope?: AuthenticatedScope;
   /** Evaluator for the Single's stored access rules. */
   accessControlService?: AccessControlService;
   /** The Single's stored access rules (from the registry metadata). */
@@ -162,6 +194,17 @@ export async function checkSingleAccess(params: {
    * compare ownership; without it they allow (deferring to the DB-level check).
    */
   document?: Record<string, unknown>;
+  /**
+   * Skip the stored-rule evaluation and return after only the RBAC/permission
+   * gate. The publish-transition pre-resolve sets this when the operation's
+   * stored rule is document-dependent (owner-only/custom), so that rule is NOT
+   * judged against the pre-transaction document here — it is re-evaluated against
+   * the row-locked document inside the write transaction instead (see
+   * `evaluateTransitionDocumentRule` on the mutation service). Non-dependent
+   * rules (public/authenticated/role-based) are fully decidable without the row,
+   * so callers leave this false and let them run here.
+   */
+  deferStoredRuleEval?: boolean;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -171,9 +214,11 @@ export async function checkSingleAccess(params: {
     overrideAccess,
     routeAuthorized,
     rbacAccessControlService,
+    authenticatedScope,
     accessControlService,
     accessRules,
     document,
+    deferStoredRuleEval,
     logger,
   } = params;
 
@@ -181,9 +226,13 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  // Super-admins bypass the stored rules on every transport, keyed on the
-  // authorized role set (never the account id).
-  if (isSuperAdminContext(user)) {
+  // Super-admins bypass the stored rules on every transport — EXCEPT via a
+  // scoped API key. The bypass belongs to the session path: a key is
+  // authoritative on its OWN stamped scope, never on the owner's roles, so a
+  // read/update-only key issued by an admin is not equivalent to their full
+  // account (mirrors canReadEntity). Otherwise a super-admin-owned, update-only
+  // key could publish.
+  if (authenticatedScope?.actorType !== "apiKey" && isSuperAdminContext(user)) {
     return null;
   }
 
@@ -191,8 +240,10 @@ export async function checkSingleAccess(params: {
   // single global document; public / authenticated / role-based / custom all
   // apply). This runs for both route-authorized and Direct API callers so a
   // caller holding the coarse `update-<single>` permission but failing a
-  // stored rule is still denied.
-  if (accessControlService && accessRules) {
+  // stored rule is still denied. Skipped when `deferStoredRuleEval` is set: the
+  // transition pre-resolve defers a document-dependent (owner-only/custom) rule
+  // to the under-lock re-check so it is not judged against a stale document.
+  if (accessControlService && accessRules && !deferStoredRuleEval) {
     // Owner-only with no loaded document: ownership cannot be evaluated (there
     // is nothing to compare against), and evaluateOwnerAccess would otherwise
     // ALLOW the write for lack of a document — letting a caller with only the
@@ -246,7 +297,54 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  if (!rbacAccessControlService || !user) {
+  // Secure-by-default publish gate (Option A): publishing/unpublishing changes a
+  // document's privileged published state, so an anonymous caller may do it ONLY
+  // when an explicit rule grants it. With no explicit publish/unpublish rule the
+  // operation would otherwise fall through to the rule-less public default below
+  // (`!user` → allow), letting an unauthenticated caller publish a
+  // publicly-writable Single. An explicit stored rule was evaluated above and
+  // allowed if we reach here, so a developer who deliberately opened publishing
+  // (e.g. a public `publish` rule) is respected; only the implicit default denies.
+  if (
+    !user &&
+    (operation === "publish" || operation === "unpublish") &&
+    !accessRules?.[operation]
+  ) {
+    return {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: ${operation} on single "${slug}" requires an authenticated user`,
+    };
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  // A scoped API key is authorized on its OWN stamped grants, not the key
+  // owner's: the route only checked `update` against the key's scope, so this
+  // publish/unpublish re-check must consult the key's own permission list AND
+  // the code-defined access rule against that scope. `apiKeyWriteAllowed`
+  // returns null for a non-API-key caller, falling through to the owner/session
+  // RBAC path below.
+  const scopeDecision = await apiKeyWriteAllowed(
+    authenticatedScope,
+    operation,
+    slug,
+    user,
+    rbacAccessControlService
+  );
+  if (scopeDecision !== null) {
+    return scopeDecision
+      ? null
+      : {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
+        };
+  }
+
+  if (!rbacAccessControlService) {
     return null;
   }
 
@@ -307,9 +405,71 @@ export class SingleQueryService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    accessControlService?: AccessControlService
   ) {
     super(adapter, logger);
+    // Evaluates the Single's stored access rules. Defaulted rather than
+    // required so every existing construction site keeps working, mirroring
+    // how the mutation service resolves the same dependency: without one the
+    // read gate would silently skip the stored rules it is handed.
+    this.accessControlService =
+      accessControlService ?? new AccessControlService();
+  }
+
+  /** Resolves stored `accessRules` for the read gate. */
+  private readonly accessControlService: AccessControlService;
+
+  /**
+   * Decide an `owner-only` read against the loaded row.
+   *
+   * `checkSingleAccess` runs before the row is fetched and fails an owner-only
+   * rule closed for lack of a document, so the rule is skipped there and
+   * settled here — the same split the mutation service uses for publish
+   * transitions.
+   *
+   * Ownership is compared directly rather than through the access service. For
+   * a read that service does not decide at all: it reports `allowed: true` for
+   * any authenticated caller and returns the predicate a LIST would have
+   * filtered by, which one document has no query to apply. Comparing the owner
+   * column here keeps the check to the one thing owner-only actually asserts,
+   * with no filter grammar to re-implement.
+   */
+  private evaluateOwnerOnlyRead(params: {
+    slug: string;
+    rule: { ownerField?: string } | undefined;
+    user?: UserContext;
+    document: Record<string, unknown> | null;
+  }): SingleResult | null {
+    const { slug, rule, user, document } = params;
+    const denied: SingleResult = {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: read on single "${slug}" is not permitted`,
+    };
+
+    // Ownership presupposes an identity.
+    if (!user?.id) return denied;
+
+    // No row means ownership cannot be established. Denying also stops
+    // auto-create from materializing an unowned document for a caller who may
+    // not be entitled to it — a write triggered by a read about to be refused.
+    if (!document) return denied;
+
+    // Singles default the owner column to camelCase `createdBy` while the row
+    // may carry the snake_case column the database stores, so both spellings of
+    // the same column are accepted rather than denying the real owner.
+    const ownerField = rule?.ownerField ?? GENERIC_DEFAULT_OWNER_FIELD;
+    const camel = ownerField.replace(/_([a-z])/g, (_m: string, c: string) =>
+      c.toUpperCase()
+    );
+    const snake = ownerField.replace(
+      /[A-Z]/g,
+      (c: string) => `_${c.toLowerCase()}`
+    );
+    const owner = document[ownerField] ?? document[camel] ?? document[snake];
+
+    return owner === user.id ? null : denied;
   }
 
   // ============================================================
@@ -340,22 +500,72 @@ export class SingleQueryService extends BaseService {
       }
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
-      // Stored read-rule enforcement is intentionally NOT wired here yet: the
-      // REST read handlers do not forward the authenticated user, so evaluating
-      // a `read: authenticated` / role-based rule would reject every REST caller
-      // as anonymous. It lands with read-path user forwarding in the follow-up
-      // read PR (hence no `accessRules` passed).
+      // The Single's stored read rule is evaluated here against the caller the
+      // route forwards. It is the same rule the admin configures and the same
+      // one the write paths already honor, so a `read: authenticated` or
+      // role-based rule now holds over HTTP instead of only inside the Direct
+      // API.
+      // An owner-only or custom read rule can only be judged against the row,
+      // and the row is not loaded yet. Defer those to the re-check below: the
+      // gate fails an owner-only rule closed when it has no document, which
+      // would deny every non-super-admin read of an owner-only Single.
+      const readRule = (singleMeta.accessRules as CollectionAccessRules)
+        ?.read as { type?: string } | undefined;
+      const isSuperAdminSession =
+        isSuperAdminContext(options.user) &&
+        options.authenticatedScope?.actorType !== "apiKey";
+      // Both kinds are skipped at the gate, which has no row to judge them
+      // against, but only owner-only is settled below. A `custom` function may
+      // return an arbitrary query constraint, and honouring that on one document
+      // means re-implementing the filter grammar a list read compiles in SQL —
+      // a second evaluator to drift from the first. Custom read rules on Singles
+      // are therefore left unenforced here rather than half-enforced.
+      const skipRuleAtGate =
+        !isSuperAdminSession &&
+        (readRule?.type === "owner-only" || readRule?.type === "custom");
+      const deferDocumentRule =
+        !isSuperAdminSession && readRule?.type === "owner-only";
+
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
+        accessRules: singleMeta.accessRules,
+        deferStoredRuleEval: skipRuleAtGate,
         user: options.user,
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        // Without this the gate has rules but nothing to evaluate them with, and
+        // silently skips them.
+        accessControlService: this.accessControlService,
+        // A scoped API key is judged on its OWN read grant, so a super-admin-owned
+        // key does not skip the read gate via the owner's roles.
+        authenticatedScope: options.authenticatedScope,
         logger: this.logger,
       });
       if (accessDenied) {
         return accessDenied;
+      }
+
+      // 1.6. Settle a deferred document rule BEFORE any read side effect. Hooks
+      // are user code and auto-create permanently materializes the document
+      // (with its first version and localized defaults), so a caller the rule
+      // denies must not reach either by issuing a read it is not allowed to
+      // make. The row is loaded here rather than at step 5 so the decision has
+      // something to judge; step 5 reuses it.
+      let loadedDoc: SingleDocument | null = null;
+      if (deferDocumentRule && !options.overrideAccess) {
+        loadedDoc = await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        );
+        const documentRuleDenied = this.evaluateOwnerOnlyRead({
+          slug,
+          rule: readRule as { ownerField?: string } | undefined,
+          user: options.user,
+          document: loadedDoc,
+        });
+        if (documentRuleDenied) return documentRuleDenied;
       }
 
       // 2. Build shared context for hooks (seed with caller-provided context)
@@ -389,10 +599,12 @@ export class SingleQueryService extends BaseService {
       }
 
       // 5. Fetch document from database
-      let doc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
+      let doc =
+        loadedDoc ??
+        (await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        ));
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -450,7 +662,12 @@ export class SingleQueryService extends BaseService {
       doc = await this.expandRelationshipFields(
         doc,
         singleMeta.fields,
-        options.depth
+        options.depth,
+        {
+          enforceFieldAccess: true,
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+        }
       );
 
       // 7.7. Populate component field data from comp_{slug} tables
@@ -466,6 +683,14 @@ export class SingleQueryService extends BaseService {
           // fields blank instead of showing default-language text.
           locale: options.locale,
           fallbackLocale: options.fallbackLocale,
+          // A component's relationship fields copy whole rows out of the target
+          // collection, which a Single's field list never describes — so the
+          // caller travels down to reach the related row's own rules.
+          access: {
+            enforceFieldAccess: true,
+            user: options.user as Record<string, unknown> | undefined,
+            overrideAccess: options.overrideAccess,
+          },
         })) as SingleDocument;
       }
 
@@ -667,10 +892,28 @@ export class SingleQueryService extends BaseService {
    * history; the mutation path does NOT, because its subsequent update records
    * the first version itself (opting in there would double-version a first edit).
    */
-  async createDefaultDocument(
-    singleMeta: DynamicSingleRecord,
-    options?: { captureInitialVersion?: boolean }
-  ): Promise<SingleDocument> {
+  /**
+   * Build the default document for a Single in memory, WITHOUT inserting it.
+   *
+   * Returns both the document (system columns + resolved field defaults) and the
+   * snake_cased row ready for an insert. The write path uses this to run its
+   * hook/validation/authorization pipeline against a would-be default before
+   * committing it, so a first write that is refused (for example a publish
+   * without the publish permission) never persists a row it would then have to
+   * delete — a delete that could clobber a concurrent writer's row.
+   */
+  buildDefaultDocument(singleMeta: DynamicSingleRecord): {
+    document: SingleDocument;
+    insertValues: Record<string, unknown>;
+    /**
+     * Default values for the single's TRANSLATABLE fields, keyed by field name
+     * (includes localized `title`/`slug`). These belong on the default-locale
+     * companion row, not the main table; the auto-create path persists them
+     * there so a localized field's default is not stranded as null until it is
+     * first written.
+     */
+    localizedDefaults: Record<string, unknown>;
+  } {
     const now = new Date();
     const id = crypto.randomUUID();
 
@@ -683,10 +926,19 @@ export class SingleQueryService extends BaseService {
       updated_at: now,
     };
 
+    // Surface the status column's DB default ("draft") on the in-memory default
+    // too. The write path runs first-update hooks against this document BEFORE
+    // the auto-create insert, so without this a hook branching on the initial
+    // draft state would see `undefined` where the persisted row (and the old
+    // insert-first path) has "draft". Only when the Single has a lifecycle.
+    if ((singleMeta as { status?: boolean }).status === true) {
+      defaults.status = "draft";
+    }
+
     // i18n: a localized single's main table omits translatable columns (they live in the
-    // companion `single_<slug>_locales`), so a required/defaulted translatable value must
-    // not be inserted here — it would target a column that only exists on the companion and
-    // fail the auto-create insert.
+    // companion `single_<slug>_locales`). Their defaults are still resolved here (onto the
+    // in-memory `document` and the returned `localizedDefaults`) but are kept OFF the main
+    // insert below — inserting one would target a column that only exists on the companion.
     const localizedNames = new Set(
       singleMeta.localized === true
         ? resolveLocalizedFieldNames(
@@ -698,38 +950,285 @@ export class SingleQueryService extends BaseService {
 
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
-      if (localizedNames.has(field.name)) continue;
 
+      // Resolve the field's default (explicit defaultValue, else a required
+      // field's type-default) once, regardless of whether it is localized — a
+      // localized field's default must reach the companion just the same.
       if ("defaultValue" in field && field.defaultValue !== undefined) {
-        if (shouldTreatAsJson(field)) {
-          defaults[field.name] =
-            typeof field.defaultValue === "object"
-              ? JSON.stringify(field.defaultValue)
-              : field.defaultValue;
-        } else {
-          defaults[field.name] = field.defaultValue;
+        // `defaultValue` may be a function `(data) => value`; evaluate it against
+        // the document built so far so the stored default is a real value, not a
+        // function object. A raw function would be bound as an SQL parameter for
+        // the companion/main upsert and fail or persist its stringified form —
+        // localized fields now flow through this block, so it must be resolved.
+        const resolved =
+          typeof field.defaultValue === "function"
+            ? field.defaultValue(defaults)
+            : field.defaultValue;
+        // A blocks default is checked here rather than only at config load,
+        // because a function default can only be resolved against real data.
+        // This row is inserted directly on first read, without going through
+        // the write path, so nothing downstream would catch a document the
+        // field's own policy rejects — and the admin control is read-only, so
+        // the stored value could not be corrected from the UI.
+        assertValidBlocksDefault(field, resolved, singleMeta.slug);
+        defaults[field.name] =
+          shouldTreatAsJson(field) && typeof resolved === "object"
+            ? JSON.stringify(resolved)
+            : resolved;
+        continue;
+      }
+
+      // `title`/`slug` are reserved system identity keys, pre-seeded above with
+      // the Single's label/slug string. That seed is valid ONLY for a text
+      // identity column — or a same-named field that emits no column of its own
+      // (a component named `title` does not suppress the system text column,
+      // which still needs the label). When a Single redefines `title`/`slug` as a
+      // NON-text column, the string seed is invalid regardless of whether the
+      // field is required: use its type default when required, otherwise drop the
+      // seed so it is never inserted/seeded into (e.g.) a numeric column.
+      if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+        const desc = getColumnDescriptor(
+          field as unknown as FieldDefinition,
+          this.adapter.dialect
+        );
+        if (!desc || IDENTITY_TEXT_COLUMN_KINDS.has(desc.kind)) {
+          continue; // keep the seeded label/slug for a text-storage column
         }
-      } else if ("required" in field && field.required) {
+        if ("required" in field && field.required) {
+          defaults[field.name] = getDefaultValue(field);
+        } else {
+          delete defaults[field.name];
+        }
+        continue;
+      }
+
+      if ("required" in field && field.required) {
         defaults[field.name] = getDefaultValue(field);
       }
     }
 
-    const snakeCaseDefaults = keysToSnakeCase(defaults) as Record<
+    // A field can be translatable/required yet emit NO storage column — a
+    // component or other layout-only ("skip") field type. Its default has nowhere
+    // to live: routing it to the main insert or the companion seed would target a
+    // column that does not exist and fail the auto-create upsert. Collect those
+    // field names so the split drops them from both buckets. System-seeded keys
+    // (id/title/slug/timestamps/status) are not user fields, so they are never in
+    // this set and always route to the main insert below.
+    const noColumnFieldNames = new Set<string>();
+    for (const field of singleMeta.fields) {
+      if (!("name" in field) || !field.name) continue;
+      // Reserved identity keys are backed by the system text column even when a
+      // same-named field emits none, so their seed must never be dropped here.
+      if (SINGLE_IDENTITY_FIELDS.has(field.name)) continue;
+      if (
+        getColumnDescriptor(
+          field as unknown as FieldDefinition,
+          this.adapter.dialect
+        ) == null
+      ) {
+        noColumnFieldNames.add(field.name);
+      }
+    }
+
+    // Split the resolved defaults: translatable ones (including localized
+    // title/slug) go to `localizedDefaults` for the companion; everything else
+    // is inserted on the main table. A localized column on the main insert would
+    // target a non-existent column and fail the auto-create.
+    const localizedDefaults: Record<string, unknown> = {};
+    const insertDefaults: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(defaults)) {
+      if (noColumnFieldNames.has(key)) continue;
+      if (localizedNames.has(key)) {
+        localizedDefaults[key] = value;
+      } else {
+        insertDefaults[key] = value;
+      }
+    }
+
+    const snakeCaseDefaults = keysToSnakeCase(insertDefaults) as Record<
       string,
       unknown
     >;
+
+    return {
+      document: defaults as SingleDocument,
+      insertValues: snakeCaseDefaults,
+      localizedDefaults,
+    };
+  }
+
+  /**
+   * The companion schema for a localized single's default seeding, or null when
+   * seeding does not apply (localization off, not localized, no translatable
+   * defaults, or no companion). Shared by the pre-transaction existence probe
+   * and the in-transaction write so both agree on the same table.
+   */
+  private companionForDefaultsSeed(
+    singleMeta: DynamicSingleRecord,
+    localizedDefaults: Record<string, unknown>
+  ) {
+    if (!this.localization || singleMeta.localized !== true) return null;
+    if (Object.keys(localizedDefaults).length === 0) return null;
+    return buildCompanionSchema({
+      slug: singleMeta.slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+  }
+
+  /**
+   * Whether the default-locale companion should be seeded AND its `_locales`
+   * table physically exists. MUST be called BEFORE the write transaction opens:
+   * it probes on the pooled connection, and on a `max: 1` pool a probe issued
+   * while the transaction holds the only connection would deadlock until the
+   * pool timeout and then be misread as "table missing". A missing table (for
+   * example dev-before-migrate) reads as false so the seed is skipped rather
+   * than throwing and rolling the main-row insert back.
+   */
+  async localizedDefaultsCompanionExists(
+    singleMeta: DynamicSingleRecord,
+    localizedDefaults: Record<string, unknown>
+  ): Promise<boolean> {
+    const companion = this.companionForDefaultsSeed(
+      singleMeta,
+      localizedDefaults
+    );
+    if (!companion) return false;
+    return companionTableExists(this.adapter, companion.companionTableName);
+  }
+
+  /**
+   * Seed a localized single's DEFAULT-locale companion row with its translatable
+   * field defaults on auto-create, so a localized field's default (including a
+   * localized `title`/`slug`) resolves to that default instead of null until it
+   * is first written. Runs on the caller's transaction (`tx.execute`) so the
+   * companion seed commits atomically with the main-row insert.
+   *
+   * `companionExists` MUST be resolved by the caller via
+   * `localizedDefaultsCompanionExists` BEFORE the transaction opens (see that
+   * method for why the probe cannot happen here). No-op when it is false or when
+   * seeding does not apply. The default-locale companion `_status` is seeded to
+   * the main row's status so the two agree from the start.
+   */
+  async seedLocalizedDefaultsCompanion(
+    tx: {
+      execute<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    },
+    singleMeta: DynamicSingleRecord,
+    parentId: string,
+    localizedDefaults: Record<string, unknown>,
+    status: string | undefined,
+    companionExists: boolean
+  ): Promise<void> {
+    if (!companionExists || !this.localization) return;
+    const companion = this.companionForDefaultsSeed(
+      singleMeta,
+      localizedDefaults
+    );
+    if (!companion) return;
+
+    const { companion: companionData } = splitLocalizedWrite(
+      localizedDefaults,
+      companion.localizedFields
+    );
+    const companionStatus = companion.hasStatus
+      ? (status ?? "draft")
+      : undefined;
+    const writeAdapter = {
+      dialect: this.adapter.dialect,
+      executeQuery: <T = unknown>(sql: string, params?: unknown[]) =>
+        tx.execute<T>(sql, params),
+    };
+    await upsertCompanionRow(
+      writeAdapter,
+      companion.companionTableName,
+      parentId,
+      this.localization.defaultLocale,
+      companionData,
+      companionStatus
+    );
+  }
+
+  async createDefaultDocument(
+    singleMeta: DynamicSingleRecord,
+    options?: { captureInitialVersion?: boolean }
+  ): Promise<SingleDocument> {
+    const {
+      insertValues: snakeCaseDefaults,
+      document,
+      localizedDefaults,
+    } = this.buildDefaultDocument(singleMeta);
+    const id = snakeCaseDefaults.id as string;
+    const status = (document as { status?: string }).status;
 
     const versionsConfig = singleMeta.versions;
     const shouldCapture =
       options?.captureInitialVersion === true &&
       versionsConfig?.enabled === true;
 
-    if (!shouldCapture) {
+    // A localized single needs its translatable defaults seeded onto the
+    // default-locale companion, which must commit atomically with the main
+    // insert — so this forces the transactional path even when versioning is off.
+    const needsCompanionSeed =
+      !!this.localization &&
+      singleMeta.localized === true &&
+      Object.keys(localizedDefaults).length > 0;
+    // Probe companion existence BEFORE opening the transaction (a probe issued
+    // while the tx holds a max:1-pool connection would deadlock); the seed calls
+    // below are gated on this rather than probing inside the transaction.
+    const companionExists = needsCompanionSeed
+      ? await this.localizedDefaultsCompanionExists(
+          singleMeta,
+          localizedDefaults
+        )
+      : false;
+    // The seed only persists the localized defaults when the companion `_locales`
+    // table physically exists; when it does not (dev-before-migrate) the seed
+    // no-ops. The initial version snapshot must therefore record those defaults
+    // ONLY when the seed actually ran — otherwise v1 carries translations that
+    // were never persisted or visible, and restoring it resurrects phantom
+    // defaults. Both the snapshot overlay and its default-locale tag are gated on
+    // this, so a version tagged to the default locale always matches real content.
+    const seedApplied = needsCompanionSeed && companionExists;
+    const seedLocale = seedApplied
+      ? (this.localization?.defaultLocale ?? null)
+      : null;
+
+    if (!shouldCapture && !needsCompanionSeed) {
       const inserted = await this.adapter.insert<SingleDocument>(
         singleMeta.tableName,
         snakeCaseDefaults,
         { returning: "*" }
       );
+      this.logger.debug("Created default Single document", {
+        slug: singleMeta.slug,
+        id,
+      });
+      return inserted;
+    }
+
+    // Non-versioned but localized: insert the main row and seed the companion in
+    // one transaction, so a failed companion seed rolls the insert back rather
+    // than leaving a main row without its localized defaults.
+    if (!shouldCapture) {
+      const inserted = await this.adapter.transaction(async tx => {
+        const row = await tx.insert<SingleDocument>(
+          singleMeta.tableName,
+          snakeCaseDefaults,
+          { returning: "*" }
+        );
+        await this.seedLocalizedDefaultsCompanion(
+          tx,
+          singleMeta,
+          id,
+          localizedDefaults,
+          status,
+          companionExists
+        );
+        return row;
+      });
       this.logger.debug("Created default Single document", {
         slug: singleMeta.slug,
         id,
@@ -756,6 +1255,19 @@ export class SingleQueryService extends BaseService {
         const parentRow = convertTimestampsToCamelCase({
           ...(row as Record<string, unknown>),
         });
+        // Overlay the seeded localized defaults (keyed by field name) onto the
+        // snapshot so v1 carries the default locale's content, mirroring how a
+        // normal localized write overlays its companion values before capturing.
+        // Without this, restoring v1 could not bring back the seeded defaults
+        // (including a localized title/slug), since they live on the companion.
+        // Gated on `seedApplied`: when the companion table does not yet exist the
+        // seed no-ops, so overlaying here would record defaults that were never
+        // persisted.
+        if (seedApplied) {
+          for (const [name, value] of Object.entries(localizedDefaults)) {
+            parentRow[name] = value;
+          }
+        }
         stripPasswordFieldValues(parentRow, singleMeta.fields);
         stripSystemOwnerField(parentRow);
         for (const field of singleMeta.fields) {
@@ -779,12 +1291,21 @@ export class SingleQueryService extends BaseService {
           // System-materialized default: no authoring user.
           parts: { parentRow, components: {} },
           createdBy: null,
-          // Left unlabelled: this snapshot is the main row alone, and a
-          // localized Single keeps its translatable values in the companion, so
-          // it holds no locale's content to claim.
-          locale: null,
+          // Tagged with the default locale when the snapshot carries seeded
+          // translatable defaults; null for a non-localized single (main row only).
+          locale: seedLocale,
           maxPerDoc: versionsConfig.maxPerDoc,
         });
+        // Seed the default-locale companion with the localized defaults in the
+        // same transaction as the insert and version snapshot.
+        await this.seedLocalizedDefaultsCompanion(
+          tx,
+          singleMeta,
+          id,
+          localizedDefaults,
+          status,
+          companionExists
+        );
         return row;
       })
     );
@@ -844,7 +1365,18 @@ export class SingleQueryService extends BaseService {
   async expandRelationshipFields(
     doc: SingleDocument,
     fields: FieldConfig[],
-    depth?: number
+    depth?: number,
+    // The caller a related row's own field rules are evaluated against, and
+    // whether to evaluate them at all. Expansion copies whole related rows into
+    // this document, and a Single's field list never describes a related
+    // collection's fields. Enforcement is opt-in because a caller that has not
+    // supplied a user is indistinguishable from an anonymous one here, and
+    // enforcing for the former strips protected fields from everybody.
+    access: {
+      enforceFieldAccess?: boolean;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    } = {}
   ): Promise<SingleDocument> {
     const relationshipService = this.resolveRelationshipService();
     if (!relationshipService) {
@@ -870,7 +1402,15 @@ export class SingleQueryService extends BaseService {
         doc,
         "", // Singles don't belong to a collection
         fields as unknown as FieldDefinition[],
-        { depth: depth ?? 2 }
+        {
+          depth: depth ?? 2,
+          // Set by the read path, which forwards a real caller. The mutation
+          // path does not, so its response keeps the fields it already returned
+          // rather than having them stripped as if nobody were asking.
+          enforceFieldAccess: access.enforceFieldAccess,
+          user: access.user as Record<string, unknown> | undefined,
+          overrideAccess: access.overrideAccess,
+        }
       );
       return expandedDoc as SingleDocument;
     } catch (error) {

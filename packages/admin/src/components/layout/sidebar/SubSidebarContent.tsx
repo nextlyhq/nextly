@@ -15,6 +15,7 @@ import {
   FileText,
   Database,
   Image,
+  Webhook,
 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
@@ -40,6 +41,7 @@ interface SubSidebarContentProps {
   isActive: (href?: string, exact?: boolean) => boolean;
   hasPermission: (permission: string) => boolean;
   canAccessApiKeys: boolean;
+  canAccessWebhooks: boolean;
   // Plugin collections for standalone sections
   pluginCollectionsForSection: ApiCollection[];
   // Branding
@@ -58,6 +60,7 @@ export function SubSidebarContent({
   isActive,
   hasPermission,
   canAccessApiKeys,
+  canAccessWebhooks,
   pluginCollectionsForSection,
 }: SubSidebarContentProps) {
   if (selectedMain === "media") {
@@ -240,7 +243,9 @@ export function SubSidebarContent({
       <div className="space-y-8 px-4 py-6">
         {/* System Settings Group */}
         <div className="space-y-1">
-          {(hasPermission("manage-settings") || canAccessApiKeys) && (
+          {(hasPermission("manage-settings") ||
+            canAccessApiKeys ||
+            canAccessWebhooks) && (
             <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
               System Settings
             </p>
@@ -270,6 +275,20 @@ export function SubSidebarContent({
                   <Link href={ROUTES.SETTINGS_API_KEYS}>
                     <Key className="h-4 w-4" />
                     <span>API Keys</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            )}
+            {canAccessWebhooks && (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={isActive(ROUTES.SETTINGS_WEBHOOKS)}
+                  className="justify-start px-3"
+                >
+                  <Link href={ROUTES.SETTINGS_WEBHOOKS}>
+                    <Webhook className="h-4 w-4" />
+                    <span>Webhooks</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

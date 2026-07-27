@@ -9,7 +9,10 @@
  * @since 1.0.0
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
+import type { RevalidationIntent } from "../../revalidation/types";
 
 /**
  * User context for Single operations.
@@ -85,6 +88,13 @@ export interface GetSingleOptions {
   routeAuthorized?: boolean;
 
   /**
+   * The caller's authenticated scope. A scoped API key is judged on its OWN
+   * read grant rather than the key owner's permissions, so a super-admin-owned
+   * key does not skip a stored read rule.
+   */
+  authenticatedScope?: AuthenticatedScope;
+
+  /**
    * Draft/Published filter override. Only effective when single.status === true.
    * - 'published' (default for public/untrusted callers): only return the
    *   document when its status is 'published'; otherwise return 404 (so a
@@ -119,6 +129,14 @@ export interface UpdateSingleOptions {
   user?: UserContext;
 
   /**
+   * Who performed the write, for webhook/audit attribution. The transport
+   * boundary resolves it (distinguishing a signed-in user from an API key
+   * acting on their behalf); when absent the recorder falls back to `user`.
+   * Parity with the collection write path's actor.
+   */
+  actor?: RequestActor;
+
+  /**
    * When true, bypass all RBAC access control checks.
    * @default true (when called via Direct API)
    */
@@ -133,6 +151,19 @@ export interface UpdateSingleOptions {
 
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
+
+  /**
+   * The caller's authenticated scope. For a scoped API-key REST write, the
+   * publish/unpublish transition gate judges the key's OWN grants rather than
+   * the key owner's RBAC.
+   */
+  authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs). Set by
+   * callers that own their cache strategy — a CLI, seed, or bulk-import write.
+   */
+  disableRevalidate?: boolean;
 }
 
 /**
@@ -167,4 +198,34 @@ export interface SingleResult<T = SingleDocument> {
 
   /** Error details (on failure) */
   errors?: Array<{ field?: string; message: string }>;
+
+  /**
+   * Whether this write appended a durable outbox event, independent of
+   * `success`. The update records the event inside its transaction, then runs
+   * post-commit steps (afterChange/afterUpdate hooks, response expansion): if
+   * one of those throws, the write is already committed but `success` is
+   * reported `false`. Post-write side effects (the webhook fast-drain and
+   * retention pass) key off this flag, not `success`, so a committed-but-
+   * hook-failed write still gets its immediate delivery while a write that
+   * recorded nothing (validation/access failure) does not. Mirrors
+   * `CollectionServiceResult.eventRecorded`.
+   */
+  eventRecorded?: boolean;
+  /**
+   * The cache tags this write invalidates (`nextly:single:{slug}` plus any
+   * configured extra tags), flushed post-commit through the registered
+   * revalidator. Absent when the write recorded nothing or revalidation is
+   * disabled for the single.
+   */
+  revalidationIntent?: RevalidationIntent;
+  /**
+   * Whether this update committed a content write to the database — true once the
+   * row is written (even a write that opts out of BOTH recording and
+   * revalidation, and even one whose post-commit hook then throws), false for a
+   * rejected request or a no-op. The write-path retention pass keys off this so
+   * it runs for every durable write yet skips one that changed nothing, without
+   * conflating `success` (a no-op reports success) with a committed write.
+   * Mirrors `CollectionServiceResult.committed`.
+   */
+  committed?: boolean;
 }

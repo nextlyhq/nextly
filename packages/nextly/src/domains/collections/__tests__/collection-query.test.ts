@@ -460,6 +460,53 @@ describe("CollectionEntryService — Query Contracts", () => {
       );
     });
 
+    it("should count under the same caller and route attestation the rows were listed under", async () => {
+      selectData.rows = [];
+      const countSpy = vi.spyOn(
+        CollectionQueryService.prototype,
+        "countEntries"
+      );
+      const user = { id: "user-1", roles: ["editor"] };
+
+      await service.listEntries({
+        collectionName: "posts",
+        user,
+        routeAuthorized: true,
+      });
+
+      // A count evaluated for a different caller than the rows would report a
+      // total the caller cannot page through.
+      expect(countSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ user, routeAuthorized: true })
+      );
+    });
+
+    it("should count under the same API-key scope the rows were listed under", async () => {
+      selectData.rows = [];
+      const countSpy = vi.spyOn(
+        CollectionQueryService.prototype,
+        "countEntries"
+      );
+      const authenticatedScope = {
+        actorType: "apiKey" as const,
+        permissions: ["read-posts"],
+      };
+
+      await service.listEntries({
+        collectionName: "posts",
+        // A super-admin owns the key. The scope is what keeps the owner-only
+        // predicate in place, so a count taken without it takes the account's
+        // bypass and reports the unscoped total beside filtered rows.
+        user: { id: "user-1", roles: ["super-admin"] },
+        routeAuthorized: true,
+        authenticatedScope,
+      });
+
+      expect(countSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ authenticatedScope })
+      );
+    });
+
     // ── Depth / Relationship expansion ──────────────────────────────────
 
     it("should pass depth parameter to relationship expansion", async () => {
@@ -474,6 +521,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         mockRelationshipService.batchExpandRelationships
       ).toHaveBeenCalledWith(expect.any(Array), "posts", expect.any(Array), {
         depth: 0,
+        // Expansion copies whole related rows in, so it also carries the caller
+        // its related rows are redacted for.
+        enforceFieldAccess: true,
+        user: undefined,
+        overrideAccess: undefined,
       });
     });
 
@@ -488,6 +540,9 @@ describe("CollectionEntryService — Query Contracts", () => {
         mockRelationshipService.batchExpandRelationships
       ).toHaveBeenCalledWith(expect.any(Array), "posts", expect.any(Array), {
         depth: undefined,
+        enforceFieldAccess: true,
+        user: undefined,
+        overrideAccess: undefined,
       });
     });
 

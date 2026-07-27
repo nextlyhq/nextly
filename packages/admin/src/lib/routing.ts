@@ -19,7 +19,7 @@ export interface RouteResult {
   params: Record<string, string | string[]>;
   searchParams: Record<string, string | string[] | undefined>;
   routeType?: "public" | "private";
-  requiredPermission?: string;
+  requiredPermission?: string | string[];
   /** Route is part of the schema builder, which is disabled in production. */
   requiresBuilder?: boolean;
   /** Set when the route resolves to a plugin-contributed page (D21). */
@@ -94,7 +94,7 @@ function matchDynamicRoute(pathname: string): {
   component: React.ComponentType<PageProps>;
   params: Params;
   routeType?: "public" | "private";
-  requiredPermission?: string;
+  requiredPermission?: string | string[];
   requiresBuilder?: boolean;
   pattern: string;
 } | null {

@@ -238,6 +238,12 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
     definition.fields = field.fields.map(convertToFieldDefinition);
   }
 
+  // A blocks field's policy. Rebuilding a field without it would silently
+  // widen it back to accepting every registered block.
+  if (field.blocks !== undefined) {
+    definition.blocks = field.blocks;
+  }
+
   // Options (select, radio)
   if (field.options && field.options.length > 0) {
     definition.options = field.options.map(opt => ({
@@ -398,6 +404,9 @@ export function convertToBuilderField(
     component: field.component,
     components: field.components ? [...field.components] : undefined,
     repeatable: field.repeatable,
+    // A blocks field's policy. Loading it is what makes writing it back
+    // meaningful: without this the outbound branch always sees undefined.
+    blocks: field.blocks,
   };
 
   // Nested fields

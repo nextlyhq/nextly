@@ -59,6 +59,14 @@ import { resolveCollectionTableName } from "../domains/schema/utils/resolve-tabl
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import {
+  pruneRemovedCodeFirstRecording,
+  setWebhookRecording,
+  type WebhookRecordingScope,
+} from "../domains/webhooks/recording-policy";
+import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
+import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
+import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { ComponentSchemaService } from "../services/components/component-schema-service";
@@ -101,6 +109,10 @@ type CollectionDef = {
   localized?: boolean;
   /** Content-versioning option; persisted (resolved) to dynamic_collections.versions. */
   versions?: boolean | VersionsConfig;
+  /** Webhook recording opt-out; resolved into the process-level recording policy. */
+  webhooks?: boolean | { record?: boolean };
+  /** Cache-revalidation config; persisted to dynamic_collections.revalidate. */
+  revalidate?: RevalidateConfig;
 };
 
 type SingleDef = {
@@ -115,6 +127,10 @@ type SingleDef = {
   localized?: boolean;
   /** Content-versioning option; persisted (resolved) to dynamic_singles.versions. */
   versions?: boolean | VersionsConfig;
+  /** Webhook recording opt-out; resolved into the process-level recording policy. */
+  webhooks?: boolean | { record?: boolean };
+  /** Cache-revalidation config; persisted to dynamic_singles.revalidate. */
+  revalidate?: RevalidateConfig;
 };
 
 type ComponentDef = {
@@ -218,6 +234,9 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
       // reload and desyncing the registry from the companion table.
       localized: c.localized === true,
       versions: resolveVersionsConfig(c.versions, c.status),
+      // Forward the cache-revalidation config verbatim (no resolver — the
+      // authored `{ tags?, disable? }` shape is persisted as-is).
+      revalidate: c.revalidate,
     }));
 }
 
@@ -244,6 +263,36 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
         status: s.status === true,
         localized: s.localized === true,
         versions: resolveVersionsConfig(s.versions, s.status),
+        // Forward the cache-revalidation config verbatim (no resolver).
+        revalidate: s.revalidate,
+      };
+    });
+}
+
+// Normalize code-first components to the registry sync shape. Shared by the DDL
+// path and the metadata-only path so a component's metadata (e.g. a `hidden`
+// field flag, which drives webhook payload stripping) stays in step either way.
+function buildComponentSyncPayload(components: ComponentDef[]) {
+  return components
+    .filter((c): c is ComponentDef & { slug: string } => !!c.slug)
+    .map(c => {
+      const labelStr =
+        typeof c.label === "string"
+          ? c.label
+          : (c.label?.singular ??
+            c.slug
+              .split(/[-_]/)
+              .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+              .join(" "));
+      return {
+        slug: c.slug,
+        label: labelStr,
+        fields: c.fields ?? [],
+        description: c.description,
+        admin: c.admin,
+        // i18n: forward the localized master switch — otherwise the reload flips
+        // a localized component's flag OFF every HMR/boot.
+        localized: (c as { localized?: boolean }).localized === true,
       };
     });
 }
@@ -253,11 +302,23 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
 // `if (!hasChanges) return` would otherwise skip persistence until a restart.
 // The registry syncs change-detect internally and no-op when nothing changed;
 // this runs only when nextly.config.ts changes (not on every HMR tick).
+// Returns per-scope success. The caller republishes each scope's recording
+// policy only when that scope's sync succeeded, so a failed sync never leaves a
+// new recording decision active while the mutation services still read the old
+// field tree (which drives sensitive-field stripping) — and one scope's failure
+// does not block the other's committed decisions.
 async function syncCodeFirstMetadataOnly(
   resolve: ServiceResolver,
-  newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] },
+  newConfig: {
+    collections?: CollectionDef[];
+    singles?: SingleDef[];
+    components?: ComponentDef[];
+  },
   logger?: LoggerLike
-): Promise<void> {
+): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
+  let collections = true;
+  let singles = true;
+  let components = true;
   try {
     const registry = (await resolve(
       "collectionRegistryService"
@@ -265,6 +326,7 @@ async function syncCodeFirstMetadataOnly(
     const payload = buildCollectionSyncPayload(newConfig.collections ?? []);
     if (payload.length > 0) await registry.syncCodeFirstCollections(payload);
   } catch (err) {
+    collections = false;
     logger?.warn(
       `[Nextly HMR] metadata-only collection sync failed: ${
         err instanceof Error ? err.message : String(err)
@@ -278,12 +340,135 @@ async function syncCodeFirstMetadataOnly(
     const payload = buildSingleSyncPayload(newConfig.singles ?? []);
     if (payload.length > 0) await singleReg.syncCodeFirstSingles(payload);
   } catch (err) {
+    singles = false;
     logger?.warn(
       `[Nextly HMR] metadata-only single sync failed: ${
         err instanceof Error ? err.message : String(err)
       }`
     );
   }
+  // A component's metadata (e.g. a `hidden` field flag) can change with no
+  // schema diff and drives webhook payload stripping, so sync it here too — the
+  // caller gates the recording policy on this before activating a new decision.
+  try {
+    const compReg = (await resolve(
+      "componentRegistryService"
+    )) as ComponentRegistrySurface;
+    const payload = buildComponentSyncPayload(newConfig.components ?? []);
+    if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
+  } catch (err) {
+    components = false;
+    logger?.warn(
+      `[Nextly HMR] metadata-only component sync failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  return { collections, singles, components };
+}
+
+/**
+ * Publish one scope's recording decisions from the reloaded config. The two
+ * directions have asymmetric safety, so they are gated differently:
+ *
+ * - Opt-OUTS (`record: false`) are applied UNCONDITIONALLY, even when this
+ *   scope's metadata sync failed or was deferred. Turning recording OFF builds
+ *   no payload and reads no field tree, so a just-loaded privacy opt-out is safe
+ *   to honor immediately — and MUST be, or a reload that flips `webhooks` to
+ *   `false` while an unrelated diff is deferred would keep leaking events.
+ * - Opt-INS (`record: true`, including a removed slug reverting to the default)
+ *   DO read the field tree when a payload is later expanded, so they are applied
+ *   ONLY when `synced` is true. Otherwise expansion would strip against a stale
+ *   component/field tree and could emit a value that is now hidden. Pruning a
+ *   removed code-first slug reverts it to the recording default, so it is an
+ *   opt-in and waits on `synced` too. Plugin-sourced decisions are never pruned.
+ */
+function publishScopeRecording(
+  scope: WebhookRecordingScope,
+  entities: Array<{
+    slug?: string;
+    webhooks?: CollectionDef["webhooks"];
+  }>,
+  pluginSlugs: Set<string>,
+  synced: boolean
+): void {
+  // Provenance comes from the plugin contribution list, not `admin.isPlugin`:
+  // a plugin's opt-out must be tagged `plugin` so the prune below never removes
+  // it, even when the plugin never sets that presentation flag.
+  const sourceOf = (slug: string): "code" | "plugin" =>
+    pluginSlugs.has(slug) ? "plugin" : "code";
+
+  // Opt-outs first, always: safe regardless of sync state (recording is off).
+  for (const e of entities) {
+    if (!e.slug) continue;
+    if (resolveWebhookRecording(e.webhooks).record === false) {
+      setWebhookRecording(scope, e.slug, false, sourceOf(e.slug));
+    }
+  }
+
+  // Opt-ins and removed-slug pruning only once the field tree is in step.
+  if (!synced) return;
+  const present = new Set<string>();
+  for (const e of entities) {
+    if (e.slug) present.add(e.slug);
+  }
+  pruneRemovedCodeFirstRecording(scope, present);
+  for (const e of entities) {
+    if (!e.slug) continue;
+    if (resolveWebhookRecording(e.webhooks).record === true) {
+      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug));
+    }
+  }
+}
+
+/**
+ * Republish the webhook recording policy from the reloaded config, so a live
+ * `webhooks` opt-out/opt-in takes effect without a restart.
+ *
+ * Called at two points, by design, with different `scopes`:
+ *   - BEFORE introspection with both scopes `false` — publishes only the
+ *     privacy-critical OPT-OUTS (which need no field tree) so they take effect
+ *     even if a later step of this reload (introspection, an unsafe diff, the
+ *     apply) aborts. Opt-INs are suppressed by the false flags.
+ *   - AFTER each scope's metadata sync succeeds with that scope `true` — adds
+ *     the OPT-INS (and removed-slug pruning), which DO read the field tree, so a
+ *     reload whose schema apply fails never leaves a recording opt-in ahead of
+ *     the still-old runtime field tree.
+ *
+ * Per-scope on purpose: `scopes` names the entity kinds whose metadata sync
+ * actually succeeded, so a PARTIAL reload (collections synced, singles/component
+ * failed) still activates the committed collections' opt-ins instead of holding
+ * them hostage to an unrelated failure. Opt-OUTS ignore the gate entirely (see
+ * {@link publishScopeRecording}), which is what makes the pre-sync call safe.
+ */
+function republishRecordingPolicies(
+  newConfig: {
+    collections?: CollectionDef[];
+    singles?: SingleDef[];
+    plugins?: unknown[];
+  },
+  scopes: { collections: boolean; singles: boolean }
+): void {
+  const pluginCollections = collectPluginContributedSlugs(
+    newConfig.plugins,
+    "collections"
+  );
+  const pluginSingles = collectPluginContributedSlugs(
+    newConfig.plugins,
+    "singles"
+  );
+  publishScopeRecording(
+    "collection",
+    newConfig.collections ?? [],
+    pluginCollections,
+    scopes.collections
+  );
+  publishScopeRecording(
+    "single",
+    newConfig.singles ?? [],
+    pluginSingles,
+    scopes.singles
+  );
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -468,8 +653,28 @@ export async function reloadNextlyConfig(opts?: {
     targets.length === 0 &&
     singleTargets.length === 0 &&
     componentTargets.length === 0
-  )
+  ) {
+    // Nothing managed remains, but a reload that removed the LAST code-first
+    // collection/single still has to reconcile the recording policy before
+    // bailing: the removed entity's DB table can stay writable, so a lingering
+    // `webhooks: false` opt-out would silently suppress its events until
+    // restart. Prune both code-first namespaces against the now-empty config
+    // (present sets are empty, so every code-sourced opt-out is dropped;
+    // plugin decisions are preserved). No metadata to sync here, so this is the
+    // only reconciliation the empty-target path needs.
+    republishRecordingPolicies(newConfig, { collections: true, singles: true });
     return;
+  }
+
+  // Apply recording OPT-OUTS now, before introspection and the schema apply.
+  // Turning recording off builds no payload and reads no field tree, so an
+  // opt-out is always safe to honor immediately — and every path from here can
+  // still bail early (introspection throwing, an unsafe diff deferring, the
+  // apply failing), each of which consumes the reload event. Publishing opt-outs
+  // up front means a reload that sets `webhooks: false` stops recording even when
+  // one of those later steps aborts; opt-INs (and pruning) still wait for a
+  // successful field-tree sync, applied by the per-scope republishes below.
+  republishRecordingPolicies(newConfig, { collections: false, singles: false });
 
   // Extracted once so the same list is passed to introspectLiveSnapshot
   // AND registered in the live-snapshot cache for the pipeline to reuse.
@@ -692,7 +897,37 @@ export async function reloadNextlyConfig(opts?: {
     // threw, syncing would persist `fields` that disagree with the physical
     // table, so skip and let a later clean reload / restart reconcile.
     if (!deferredSchemaChange) {
-      await syncCodeFirstMetadataOnly(resolve, newConfig, logger);
+      const synced = await syncCodeFirstMetadataOnly(
+        resolve,
+        newConfig,
+        logger
+      );
+      // Publish each scope's (possibly toggled) recording policy ONLY when that
+      // scope's metadata sync succeeded — a `webhooks` change surfaces as no
+      // schema diff, so this is the path a live opt-out/opt-in toggle flows
+      // through, but a failed field-tree sync must not activate the new opt-IN
+      // while the mutation services still strip against the old fields. A
+      // referenced component's field tree drives webhook payload stripping, so
+      // also hold BOTH scopes' opt-ins back until the component sync succeeds:
+      // otherwise a reload that both enables recording and hides a component
+      // field would expand payloads against the stale component tree and leak
+      // PII. Opt-OUTs ignore this gate (see publishScopeRecording).
+      republishRecordingPolicies(newConfig, {
+        collections: synced.collections && synced.components,
+        singles: synced.singles && synced.components,
+      });
+    } else {
+      // A real schema change was deferred (unsafe / needs review) or a diff
+      // threw, so the field metadata must NOT be synced — the physical table
+      // disagrees. A recording OPT-OUT is still safe to honor now (recording
+      // turns off, no payload is built against any field tree), and skipping it
+      // would keep a newly opted-out entity's events flowing to the outbox until
+      // a later clean reload or restart. Reconcile with both scopes unsynced so
+      // opt-outs apply immediately while opt-ins stay gated on a good sync.
+      republishRecordingPolicies(newConfig, {
+        collections: false,
+        singles: false,
+      });
     }
     return;
   }
@@ -832,6 +1067,15 @@ export async function reloadNextlyConfig(opts?: {
   });
 
   if (applyResult.success) {
+    // Publish each scope's recording policy only AFTER its field-tree metadata
+    // sync succeeds (see the assignment after the syncs below): the DDL applied,
+    // but if a sync then fails, activating the new decision while the mutation
+    // services still read stale fields would record/suppress events against the
+    // wrong stripping config. Tracked per scope so a partial failure (e.g.
+    // singles fail) does not block the committed scope's decisions.
+    let collectionSynced = true;
+    let singleSynced = true;
+    let componentSynced = true;
     // Sync dynamic_collections metadata so the fields JSON reflects the
     // new config. The pipeline above only applies DDL to dc_<slug>; without
     // this call, admin-UI queries still read the old field list until the
@@ -862,6 +1106,7 @@ export async function reloadNextlyConfig(opts?: {
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
       // or HMR cycle will retry via registerServices.
+      collectionSynced = false;
     }
 
     // Mirror the same metadata sync for singles — keeps dynamic_singles.fields
@@ -893,6 +1138,7 @@ export async function reloadNextlyConfig(opts?: {
       }
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above.
+      singleSynced = false;
     }
 
     // Sync dynamic_components metadata — keeps dynamic_components.fields
@@ -901,34 +1147,27 @@ export async function reloadNextlyConfig(opts?: {
       const compReg = (await resolve(
         "componentRegistryService"
       )) as ComponentRegistrySurface;
-      const codeFirstComponentConfigs = (newConfig.components ?? [])
-        .filter((c): c is ComponentDef & { slug: string } => !!c.slug)
-        .map(c => {
-          const labelStr =
-            typeof c.label === "string"
-              ? c.label
-              : (c.label?.singular ??
-                c.slug
-                  .split(/[-_]/)
-                  .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" "));
-          return {
-            slug: c.slug,
-            label: labelStr,
-            fields: c.fields ?? [],
-            description: c.description,
-            admin: c.admin,
-            // i18n: forward the localized master switch — otherwise the reload flips a
-            // localized component's flag OFF every HMR/boot.
-            localized: (c as { localized?: boolean }).localized === true,
-          };
-        });
+      const codeFirstComponentConfigs = buildComponentSyncPayload(
+        newConfig.components ?? []
+      );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
       }
     } catch {
       // Non-fatal: same reasoning as collection/single metadata sync above.
+      componentSynced = false;
     }
+
+    // Activate each scope's recording policy once its OWN field tree AND the
+    // shared component field tree are in step — never before. Webhook payload
+    // stripping resolves sensitive fields through the component registry too
+    // (webhookFieldTree / expandComponentFields), so a failed component sync
+    // holds both scopes' new decisions back; but a singles-only sync failure no
+    // longer blocks the committed collections' decisions (and vice versa).
+    republishRecordingPolicies(newConfig, {
+      collections: collectionSynced && componentSynced,
+      singles: singleSynced && componentSynced,
+    });
 
     // Pre-compute fresh Drizzle table objects for all affected collections,
     // singles, and components. Synchronous (schema generation, no DB I/O).
@@ -1097,6 +1336,19 @@ export async function reloadNextlyConfig(opts?: {
 
   if (!applyResult.success) {
     const code = applyResult.error.code;
+
+    // The DDL apply failed (needs-TTY confirmation, an executor error, ...), so
+    // the field-tree syncs and the recording republish under `if (success)` were
+    // skipped. Existing tables and services stay writable, though, so a recording
+    // OPT-OUT loaded this cycle must still take effect — recording off builds no
+    // payload, so the un-synced field tree is irrelevant, and leaving the old
+    // record-enabled decision active would keep leaking the newly private
+    // entity's events. Reconcile with both scopes unsynced: opt-outs apply now,
+    // opt-ins stay gated on a later clean apply (mirrors the deferred path above).
+    republishRecordingPolicies(newConfig, {
+      collections: false,
+      singles: false,
+    });
 
     if (code === "CONFIRMATION_REQUIRED_NO_TTY") {
       // Boot-time + HMR runs in a request-handler context where the

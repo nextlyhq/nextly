@@ -478,3 +478,82 @@ describe("dispatchSingles, actions (respondAction)", () => {
     expect(body).not.toHaveProperty("item");
   });
 });
+
+// A Single's stored read rule can only be evaluated against a caller, so the
+// read handler has to hand one over. Without it the service falls back to the
+// rule-less default and the read setting an admin configured does nothing over
+// HTTP, while the same rule already holds on the write paths and in the Direct
+// API.
+describe("dispatchSingles getSingleDocument — read access forwarding", () => {
+  const okResult = {
+    success: true,
+    statusCode: 200,
+    data: { id: "doc1", title: "Welcome" },
+  };
+
+  /** The reserved params the route handler stamps once it has authenticated. */
+  const authedParams = {
+    slug: "site",
+    _authenticatedUserId: "u1",
+    _authenticatedUserName: "Ada",
+    _authenticatedUserEmail: "ada@example.com",
+    _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
+  };
+
+  it("passes the authenticated user and attests route authorization", async () => {
+    const entry = makeEntry({ get: vi.fn().mockResolvedValue(okResult) });
+    wireDi(makeRegistry(), entry);
+
+    await dispatchSingles("getSingleDocument", { ...authedParams }, undefined);
+
+    const options = entry.get.mock.calls[0][1];
+    expect(options.user).toEqual({
+      id: "u1",
+      name: "Ada",
+      email: "ada@example.com",
+      roles: ["editor", "author"],
+      // Rules and field callbacks written against a single-role model read
+      // `user.role`; without it an authorized caller would have fields stripped.
+      role: "editor",
+    });
+    // The route ran the coarse RBAC gate already; the stored rule still runs.
+    expect(options.routeAuthorized).toBe(true);
+  });
+
+  it("sends no user for an anonymous caller", async () => {
+    const entry = makeEntry({ get: vi.fn().mockResolvedValue(okResult) });
+    wireDi(makeRegistry(), entry);
+
+    await dispatchSingles("getSingleDocument", { slug: "site" }, undefined);
+
+    const options = entry.get.mock.calls[0][1];
+    // An absent user must never be mistaken for a trusted one, and nothing
+    // attests authorization on its behalf.
+    expect(options.user).toBeUndefined();
+    expect(options.routeAuthorized).toBe(false);
+  });
+
+  it("forwards the API-key scope so a scoped key is judged on its own grant", async () => {
+    const entry = makeEntry({ get: vi.fn().mockResolvedValue(okResult) });
+    wireDi(makeRegistry(), entry);
+
+    await dispatchSingles(
+      "getSingleDocument",
+      {
+        ...authedParams,
+        _authenticatedActorType: "apiKey",
+        _authenticatedActorId: "key-1",
+        _authenticatedPermissions: JSON.stringify(["singles:read"]),
+      },
+      undefined
+    );
+
+    const options = entry.get.mock.calls[0][1];
+    // Without this a super-admin-owned key would take the owner's session
+    // bypass and read past its own scope.
+    expect(options.authenticatedScope).toEqual({
+      actorType: "apiKey",
+      permissions: ["singles:read"],
+    });
+  });
+});

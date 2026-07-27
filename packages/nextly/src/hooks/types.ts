@@ -232,6 +232,19 @@ export interface HookContext<T = any> {
      */
     nextly?: Nextly;
   };
+
+  /**
+   * Transaction-bound Drizzle executor for the write this hook participates in.
+   *
+   * Present only when the hook runs inside a caller-owned transaction (the
+   * transactional bulk / entry write paths). A hook that reads the database (for
+   * example the built-in sanitization hook, which loads field metadata) must use
+   * it so the read runs on the transaction's own connection instead of taking a
+   * second pooled one, which can stall against a small pool while the caller's
+   * transaction holds the only connection. Undefined outside a transaction, where
+   * the pooled connection is correct.
+   */
+  executor?: unknown;
 }
 
 /**
@@ -446,6 +459,16 @@ export interface BeforeOperationContext<T = any> {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- shared context is a general-purpose key-value store
   context: Record<string, any>;
+
+  /**
+   * Transaction-bound Drizzle executor for the write this hook participates in.
+   *
+   * Present only when the operation runs inside a caller-owned transaction; a
+   * `beforeOperation` hook that reads the database must use it so the read stays
+   * on the transaction's own connection instead of taking a second pooled one.
+   * See {@link HookContext.executor}. Undefined outside a transaction.
+   */
+  executor?: unknown;
 }
 
 /**

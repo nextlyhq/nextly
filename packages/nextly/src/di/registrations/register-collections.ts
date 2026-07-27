@@ -24,6 +24,7 @@ import { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
+import type { CacheRevalidator } from "../../revalidation/types";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
@@ -63,42 +64,50 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     // Runtime schema generation: UI-created collections work without
     // pre-compiled TypeScript schemas.
     fileManager.setAdapter(adapter);
-    fileManager.setMetadataFetcher(async (collectionName: string) => {
-      try {
-        const result = await adapter.selectOne<{
-          fields: string;
-          tableName: string;
-          status: boolean | number | null;
-          localized: boolean | number | null;
-        }>("dynamic_collections", {
-          where: {
-            and: [{ column: "slug", op: "=", value: collectionName }],
-          },
-        });
+    fileManager.setMetadataFetcher(
+      async (collectionName: string, executor?: unknown) => {
+        try {
+          // Runs on the caller's transaction connection when supplied so an
+          // uncached runtime-schema load inside a transaction stays on it.
+          const result = await adapter.selectOne<{
+            fields: string;
+            tableName: string;
+            status: boolean | number | null;
+            localized: boolean | number | null;
+          }>(
+            "dynamic_collections",
+            {
+              where: {
+                and: [{ column: "slug", op: "=", value: collectionName }],
+              },
+            },
+            executor
+          );
 
-        if (result) {
-          const fields =
-            typeof result.fields === "string"
-              ? JSON.parse(result.fields)
-              : result.fields;
-          return {
-            fields,
-            tableName: result.tableName,
-            // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
-            status: result.status === true || result.status === 1,
-            // i18n M4: forward the localized flag so loadCompanionSchema can
-            // build the companion table for localized reads.
-            localized: result.localized === true || result.localized === 1,
-          };
+          if (result) {
+            const fields =
+              typeof result.fields === "string"
+                ? JSON.parse(result.fields)
+                : result.fields;
+            return {
+              fields,
+              tableName: result.tableName,
+              // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
+              status: result.status === true || result.status === 1,
+              // i18n M4: forward the localized flag so loadCompanionSchema can
+              // build the companion table for localized reads.
+              localized: result.localized === true || result.localized === 1,
+            };
+          }
+        } catch (error) {
+          console.error(
+            "[registerCollectionServices] Failed to fetch collection metadata:",
+            error
+          );
         }
-      } catch (error) {
-        console.error(
-          "[registerCollectionServices] Failed to fetch collection metadata:",
-          error
-        );
+        return null;
       }
-      return null;
-    });
+    );
 
     const dynamicCollectionService = new DynamicCollectionService(
       adapter,
@@ -177,7 +186,16 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       // services). Absent only when webhooks were never registered.
       container.has("webhookFastDrainScheduler")
         ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
-        : undefined
+        : undefined,
+      // Cache revalidator that flushes each write's revalidation intents
+      // post-commit. Resolved lazily at flush time (not captured here) because
+      // this service is constructed during boot, before a Next cache adapter
+      // registers — an eager capture would memoize the no-op and ignore the
+      // real adapter that registers later, at request time.
+      () =>
+        container.has("cacheRevalidator")
+          ? container.get<CacheRevalidator>("cacheRevalidator")
+          : undefined
     );
 
     return new CollectionService(

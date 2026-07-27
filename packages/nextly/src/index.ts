@@ -380,6 +380,44 @@ export {
   getFieldType as getPluginFieldType,
 } from "./domains/schema/field-types/field-type-registry";
 
+// The stored page-builder document. Re-exported so an app can name the value a
+// blocks field holds without depending on the engine package directly, and so
+// generated types resolve against the dependency it already has.
+export type {
+  BlockDocument,
+  BlockNode,
+  DocumentKind,
+} from "@nextlyhq/blocks-engine";
+
+// Block props on the field system — a block's prop declarations become
+// ordinary field configs, so block values validate through the same pass
+// entries do instead of a parallel rule set.
+export {
+  blockPropsToFieldConfigs,
+  validateBlockPropValues,
+  type BlockPropDeclaration,
+  type BlockPropsSource,
+} from "./collections/fields/block-props";
+
+// The block-prop surface: which field types a block prop may declare, and
+// which data fields may be bound into one. Both derive from the prop's type,
+// never from a per-block opt-in.
+export {
+  BLOCK_FIELD_TYPES,
+  BLOCK_FIELD_TYPE_CATALOG,
+  BINDABLE_KINDS,
+  FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+  isBlockFieldType,
+  isBindablePropType,
+  bindingKindOf,
+  canBindFieldToProp,
+  type BlockFieldCatalogType,
+  type BindingEndpoint,
+  type BindingValueKind,
+  type FieldStoragePrimitive,
+} from "./collections/fields/catalog";
+
 // Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
 export type {
   ServiceOpts,

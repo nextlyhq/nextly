@@ -14,8 +14,13 @@ import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 
 interface PermissionGuardProps {
-  /** Permission slug required to access this route (e.g., "read-users", "manage-settings") */
-  requiredPermission: string;
+  /**
+   * Permission required to access this route. A single slug (e.g. "read-users"),
+   * or a list of slugs treated as any-of — holding any one grants access. The
+   * list form models a backend umbrella permission (e.g. "update-webhooks"
+   * satisfying read/create/delete) without duplicating a route per slug.
+   */
+  requiredPermission: string | string[];
   children: React.ReactNode;
 }
 
@@ -36,7 +41,9 @@ export function PermissionGuard({
   const { hasPermission, isLoading: permissionsLoading } =
     useCurrentUserPermissions();
   const [isForceLoading, setIsForceLoading] = useState(false);
-  const hasAccess = hasPermission(requiredPermission);
+  const hasAccess = Array.isArray(requiredPermission)
+    ? requiredPermission.some(hasPermission)
+    : hasPermission(requiredPermission);
 
   useEffect(() => {
     if (typeof window !== "undefined") {

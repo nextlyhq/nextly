@@ -28,6 +28,7 @@ import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
+import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
@@ -194,6 +195,15 @@ export const PATCH = withErrorHandler(
     // column holds; off writes null. Mirrors the collection detail route.
     if (body.versions !== undefined) {
       updateData.versions = resolveBuilderVersions(body.versions === true);
+    }
+
+    // Cache-revalidation toggle, normalized to the resolved config the write
+    // path reads; on writes null, off writes the disable config. Mirrors the
+    // collection detail route.
+    if (body.revalidate !== undefined) {
+      updateData.revalidate = resolveBuilderRevalidate(
+        body.revalidate === true
+      );
     }
 
     if (body.accessRules !== undefined) {

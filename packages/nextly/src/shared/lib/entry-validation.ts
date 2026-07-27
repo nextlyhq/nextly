@@ -25,6 +25,8 @@
  */
 import safeRegex from "safe-regex2";
 
+import type { DocumentKind } from "../../collections/fields/types/blocks";
+import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
 import type { ValidationPublicData } from "../../errors/public-data";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
@@ -501,6 +503,23 @@ async function validateFieldValue(
           issues
         );
       }
+      break;
+    }
+
+    case "blocks": {
+      // The document format has one validator and it lives in the engine; this
+      // case adapts it rather than restating any of its rules.
+      const options = field as {
+        blocks?: { allow?: string[]; kinds?: DocumentKind[] };
+      };
+      issues.push(
+        ...validateBlocksValue(
+          value,
+          path,
+          label ?? "This field",
+          options.blocks ?? {}
+        )
+      );
       break;
     }
 

@@ -110,6 +110,19 @@ describe("getColumnDescriptor: number storage", () => {
     expect(normalizeType("decimal(10,2)")).toBe("numeric");
   });
 
+  it("stores a blocks document in one JSON column on every dialect", () => {
+    // A page document is a tree with slots, styles, and bindings; shredding it
+    // across tables would make a reorder a migration.
+    for (const dialect of DIALECTS) {
+      const descriptor = getColumnDescriptor(
+        { name: "content", type: "blocks" },
+        dialect
+      );
+      expect(descriptor?.kind, dialect).toBe("json");
+      expect(descriptor?.name, dialect).toBe("content");
+    }
+  });
+
   it("stores a hasMany number as JSON, not a scalar numeric column", () => {
     // The write path stringifies a hasMany number to a JSON array, so a scalar
     // integer/decimal column would reject it. hasMany wins over dbType.

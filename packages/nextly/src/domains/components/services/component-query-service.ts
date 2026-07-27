@@ -9,6 +9,7 @@ import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  isMissingCompanionTableError,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
@@ -31,6 +32,16 @@ import {
 /**
  * Parameters for populating component data on a single parent entry.
  */
+/**
+ * The caller context a component's related rows are judged against, mirroring
+ * the relationship service's own options so it can be forwarded unchanged.
+ */
+export interface ComponentReadAccess {
+  enforceFieldAccess?: boolean;
+  user?: Record<string, unknown>;
+  overrideAccess?: boolean;
+}
+
 export interface PopulateComponentDataParams {
   /** The entry to populate with component data */
   entry: Record<string, unknown>;
@@ -79,6 +90,29 @@ export interface PopulateComponentDataParams {
    * written in it. Omitted for ordinary reads (pooled connection).
    */
   executor?: unknown;
+  /**
+   * When true, a component read failure propagates instead of being caught and
+   * replaced with a default (`null`/`[]`). Callers whose result feeds a durable
+   * write — a webhook payload or version snapshot assembled inside the write
+   * transaction — set this so a real read failure rolls the write back rather
+   * than shipping a payload with silently-missing component data.
+   */
+  strict?: boolean;
+  /**
+   * The caller a related row reached THROUGH this component is redacted for.
+   *
+   * Component population expands the component's own relationship fields, which
+   * copy whole rows out of the target collection. Neither the parent entity's
+   * field registry nor the component's describes that collection's fields, so
+   * without the caller here a field the target collection protects is returned
+   * inside the populated component to anyone who reads the parent.
+   *
+   * Enforcement is opt-in for the reason established in the relationship
+   * service: a caller that supplies no context is indistinguishable from an
+   * anonymous one, and enforcing for the former strips fields from everybody.
+   * The read paths opt in; write-side callers assembling payloads do not.
+   */
+  access?: ComponentReadAccess;
 }
 
 /**
@@ -95,6 +129,8 @@ export interface PopulateComponentDataManyParams {
   locale?: string;
   /** i18n: per-request fallback control (see PopulateComponentDataParams.fallbackLocale). */
   fallbackLocale?: string | false;
+  /** See PopulateComponentDataParams.access. */
+  access?: ComponentReadAccess;
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
@@ -137,7 +173,10 @@ export class ComponentQueryService extends BaseService {
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    // Propagate a real companion read failure (durable webhook/version reads)
+    // instead of swallowing it and leaving translatable fields unresolved.
+    strict = false
   ): Promise<void> {
     if (
       !this.localization ||
@@ -196,6 +235,7 @@ export class ComponentQueryService extends BaseService {
       rows: dataArray,
       localeChain,
       idKey: "id",
+      strict,
     });
     this.decodeJsonLocalizedValues(
       meta,
@@ -299,6 +339,8 @@ export class ComponentQueryService extends BaseService {
       locale,
       fallbackLocale,
       executor,
+      strict = false,
+      access = {},
     } = params;
     const entryId = entry.id as string;
     if (!entryId) return entry;
@@ -324,7 +366,9 @@ export class ComponentQueryService extends BaseService {
             currentDepth,
             locale,
             fallbackLocale,
-            executor
+            executor,
+            strict,
+            access
           );
         } else if (field.component) {
           if (field.repeatable) {
@@ -337,7 +381,9 @@ export class ComponentQueryService extends BaseService {
               currentDepth,
               locale,
               fallbackLocale,
-              executor
+              executor,
+              strict,
+              access
             );
           } else {
             result[fieldName] = await this.populateSingleField(
@@ -349,11 +395,16 @@ export class ComponentQueryService extends BaseService {
               currentDepth,
               locale,
               fallbackLocale,
-              executor
+              executor,
+              strict,
+              access
             );
           }
         }
       } catch (error) {
+        // In strict mode a read failure must roll the write back rather than
+        // ship a payload with silently-missing component data.
+        if (strict) throw error;
         this.logger.debug("Could not populate component field", {
           fieldName,
           error: error instanceof Error ? error.message : String(error),
@@ -380,6 +431,7 @@ export class ComponentQueryService extends BaseService {
       select,
       locale,
       fallbackLocale,
+      access = {},
     } = params;
     if (entries.length === 0) return entries;
 
@@ -412,7 +464,8 @@ export class ComponentQueryService extends BaseService {
             depth,
             currentDepth,
             locale,
-            fallbackLocale
+            fallbackLocale,
+            access
           );
           fieldDataMaps.set(field.name, dataMap);
         } else if (field.component) {
@@ -425,7 +478,8 @@ export class ComponentQueryService extends BaseService {
               depth,
               currentDepth,
               locale,
-              fallbackLocale
+              fallbackLocale,
+              access
             );
             fieldDataMaps.set(field.name, dataMap);
           } else {
@@ -437,7 +491,8 @@ export class ComponentQueryService extends BaseService {
               depth,
               currentDepth,
               locale,
-              fallbackLocale
+              fallbackLocale,
+              access
             );
             fieldDataMaps.set(field.name, dataMap);
           }
@@ -478,7 +533,9 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    strict = false,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -490,7 +547,8 @@ export class ComponentQueryService extends BaseService {
       parentId,
       parentTable,
       fieldName,
-      executor
+      executor,
+      strict
     );
 
     if (rows.length === 0) return null;
@@ -502,14 +560,16 @@ export class ComponentQueryService extends BaseService {
       [data],
       locale,
       fallbackLocale,
-      executor
+      executor,
+      strict
     );
     data = await this.expandComponentRelationships(
       data,
       componentSlug,
       componentFields,
       depth,
-      currentDepth + 1
+      currentDepth + 1,
+      access
     );
 
     return data;
@@ -524,7 +584,9 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    strict = false,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -536,7 +598,8 @@ export class ComponentQueryService extends BaseService {
       parentId,
       parentTable,
       fieldName,
-      executor
+      executor,
+      strict
     );
 
     let dataArray = rows.map(row =>
@@ -549,7 +612,8 @@ export class ComponentQueryService extends BaseService {
       dataArray,
       locale,
       fallbackLocale,
-      executor
+      executor,
+      strict
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -557,7 +621,8 @@ export class ComponentQueryService extends BaseService {
       componentSlug,
       componentFields,
       depth,
-      currentDepth + 1
+      currentDepth + 1,
+      access
     );
 
     return dataArray;
@@ -572,7 +637,9 @@ export class ComponentQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    executor?: unknown
+    executor?: unknown,
+    strict = false,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>[]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
@@ -589,12 +656,16 @@ export class ComponentQueryService extends BaseService {
           parentId,
           parentTable,
           fieldName,
-          executor
+          executor,
+          strict
         );
         for (const row of rows) {
           allRows.push({ row, fields: meta.fields, slug });
         }
       } catch (error) {
+        // In strict mode surface the failure so a durable payload is not built
+        // from a partial dynamic-zone read.
+        if (strict) throw error;
         this.logger.debug("Could not load component for populate", {
           slug,
           error: error instanceof Error ? error.message : String(error),
@@ -616,14 +687,16 @@ export class ComponentQueryService extends BaseService {
         [data],
         locale,
         fallbackLocale,
-        executor
+        executor,
+        strict
       );
       data = await this.expandComponentRelationships(
         data,
         slug,
         fields,
         depth,
-        currentDepth + 1
+        currentDepth + 1,
+        access
       );
       results.push(data);
     }
@@ -639,7 +712,8 @@ export class ComponentQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false
+    fallbackLocale?: string | false,
+    access: ComponentReadAccess = {}
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -679,7 +753,8 @@ export class ComponentQueryService extends BaseService {
           componentSlug,
           componentFields,
           depth,
-          currentDepth + 1
+          currentDepth + 1,
+          access
         )
       );
     }
@@ -694,7 +769,8 @@ export class ComponentQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false
+    fallbackLocale?: string | false,
+    access: ComponentReadAccess = {}
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -731,7 +807,8 @@ export class ComponentQueryService extends BaseService {
             componentSlug,
             componentFields,
             depth,
-            currentDepth + 1
+            currentDepth + 1,
+            access
           )
         );
     }
@@ -746,7 +823,8 @@ export class ComponentQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false
+    fallbackLocale?: string | false,
+    access: ComponentReadAccess = {}
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
 
@@ -804,7 +882,8 @@ export class ComponentQueryService extends BaseService {
           slug,
           fields,
           depth,
-          currentDepth + 1
+          currentDepth + 1,
+          access
         );
         expandedItems.push(data);
       }
@@ -824,7 +903,11 @@ export class ComponentQueryService extends BaseService {
     // transaction's connection (read-your-writes, #226), so a version snapshot
     // captured inside the write transaction sees the components just written in
     // it. Omitted for ordinary reads, which use the pooled connection.
-    executor?: unknown
+    executor?: unknown,
+    // When true, only a MISSING component table is tolerated; any other read
+    // failure propagates so a durable webhook/version payload is not built from
+    // a component silently read as empty.
+    strict = false
   ): Promise<ComponentRow[]> {
     try {
       return await this.adapter.select<ComponentRow>(
@@ -840,6 +923,12 @@ export class ComponentQueryService extends BaseService {
         executor
       );
     } catch (error) {
+      // The comp_* table may not exist yet (a component before its migration
+      // runs) — tolerate that and read as empty. In strict mode a real failure
+      // (transient/permission/schema) instead propagates.
+      if (strict && !isMissingCompanionTableError(error)) {
+        throw error;
+      }
       this.logger.debug("Could not query component table", {
         tableName,
         error: error instanceof Error ? error.message : String(error),
@@ -957,7 +1046,8 @@ export class ComponentQueryService extends BaseService {
     componentSlug: string,
     componentFields: FieldConfig[],
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>> {
     if (!this.relationshipService) {
       return componentData;
@@ -978,7 +1068,15 @@ export class ComponentQueryService extends BaseService {
         componentData,
         `comp:${componentSlug}`,
         fields,
-        { depth, currentDepth }
+        {
+          depth,
+          currentDepth,
+          // The related row belongs to another collection, so it is judged by
+          // that collection's field rules for this caller.
+          enforceFieldAccess: access.enforceFieldAccess,
+          user: access.user,
+          overrideAccess: access.overrideAccess,
+        }
       );
 
       return expanded;
@@ -996,7 +1094,8 @@ export class ComponentQueryService extends BaseService {
     componentSlug: string,
     componentFields: FieldConfig[],
     depth: number,
-    currentDepth: number
+    currentDepth: number,
+    access: ComponentReadAccess = {}
   ): Promise<Record<string, unknown>[]> {
     if (!this.relationshipService || depth === 0 || currentDepth >= depth) {
       return componentDataArray;
@@ -1009,7 +1108,8 @@ export class ComponentQueryService extends BaseService {
           componentSlug,
           componentFields,
           depth,
-          currentDepth
+          currentDepth,
+          access
         )
       )
     );

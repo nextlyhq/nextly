@@ -50,6 +50,7 @@ import { DateInput } from "./selection/DateInput";
 import { MultiSelectInput } from "./selection/MultiSelectInput";
 import { RadioInput } from "./selection/RadioInput";
 import { SelectInput } from "./selection/SelectInput";
+import { BlocksSummary } from "./structured/BlocksSummary";
 import { ComponentInput } from "./structured/ComponentInput";
 import { GroupInput } from "./structured/GroupInput";
 import { JsonInput } from "./structured/JsonInput";
@@ -518,6 +519,11 @@ export function FieldRenderer({
             field={field as JSONFieldConfig}
           />
         );
+
+      case "blocks":
+        // Read-only on the form: a page is edited in the builder, so the form
+        // reports what the field holds rather than offering a second editor.
+        return <BlocksSummary {...commonProps} name={fieldPath} />;
 
       // =========================================
       // Unknown Type

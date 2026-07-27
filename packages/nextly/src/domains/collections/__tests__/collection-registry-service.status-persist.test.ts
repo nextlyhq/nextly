@@ -44,18 +44,12 @@ function createCtx() {
       supportsReturning: true,
     })),
     selectOne,
-    insert: vi.fn(
-      async (table: string, row: Record<string, unknown>) => {
-        insertCalls.push({ table, row });
-        return row;
-      }
-    ),
+    insert: vi.fn(async (table: string, row: Record<string, unknown>) => {
+      insertCalls.push({ table, row });
+      return row;
+    }),
     update: vi.fn(
-      async (
-        table: string,
-        data: Record<string, unknown>,
-        where: unknown
-      ) => {
+      async (table: string, data: Record<string, unknown>, where: unknown) => {
         updateCalls.push({ table, data, where });
         // Return the merged row so the caller's deserializer doesn't blow up.
         return [{ ...data, slug: "posts" }];
@@ -155,12 +149,10 @@ describe("CollectionRegistryService.updateCollection — status persistence", ()
    * but a record for dynamic-collections existence.
    */
   function mockExisting(row: Record<string, unknown>) {
-    ctx.adapter.selectOne.mockImplementation(
-      async (table: string) => {
-        if (table === "dynamic_collections") return row;
-        return null;
-      }
-    );
+    ctx.adapter.selectOne.mockImplementation(async (table: string) => {
+      if (table === "dynamic_collections") return row;
+      return null;
+    });
   }
 
   it("writes status when caller sends status: true", async () => {
@@ -249,7 +241,9 @@ describe("CollectionRegistryService.deserializeRecord — status normalisation",
     // Why: deserializeRecord is `protected`; cast through a structural type
     // so the test reaches it without exposing a public surface no caller needs.
     type Internal = {
-      deserializeRecord: (r: Record<string, unknown>) => Record<string, unknown>;
+      deserializeRecord: (
+        r: Record<string, unknown>
+      ) => Record<string, unknown>;
     };
     return (ctx.service as unknown as Internal).deserializeRecord(record);
   }
@@ -289,5 +283,78 @@ describe("CollectionRegistryService.deserializeRecord — status normalisation",
   it("returns status: false for legacy rows without the column", () => {
     const result = deserialize(baseRow());
     expect(result.status).toBe(false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// revalidate persistence (F1 PR 2.5) — the write path reads this back to
+// honor `disable` / extra `tags`, and code-first sync must be able to CLEAR it
+// when the config removes it (send null, not undefined).
+// ────────────────────────────────────────────────────────────────────────
+
+describe("CollectionRegistryService — revalidate persistence", () => {
+  let ctx: ReturnType<typeof createCtx>;
+
+  beforeEach(() => {
+    ctx = createCtx();
+  });
+
+  function mockExisting(row: Record<string, unknown>) {
+    ctx.adapter.selectOne.mockImplementation(async (table: string) => {
+      if (table === "dynamic_collections") return row;
+      return null;
+    });
+  }
+
+  function existingRow(): Record<string, unknown> {
+    return {
+      id: "1",
+      slug: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      table_name: "dc_posts",
+      fields: "[]",
+      source: "ui",
+      locked: 0,
+      status: 0,
+      schema_hash: "h",
+      schema_version: 1,
+      migration_status: "applied",
+      created_at: "2026-01-01",
+      updated_at: "2026-01-01",
+    };
+  }
+
+  it("writes revalidate JSON on registerCollection", async () => {
+    await ctx.service.registerCollection({
+      slug: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      tableName: "dc_posts",
+      fields: [],
+      source: "ui",
+      schemaHash: "h",
+      revalidate: { disable: true },
+    });
+
+    expect(ctx.insertCalls[0].row.revalidate).toBe(
+      JSON.stringify({ disable: true })
+    );
+  });
+
+  it("clears revalidate (writes null) when updateCollection is sent null", async () => {
+    mockExisting(existingRow());
+
+    // The clear-on-removal path: code-first sync sends `revalidate: null` (not
+    // undefined) when the config drops `revalidate`.
+    await ctx.service.updateCollection("posts", { revalidate: null });
+
+    expect(ctx.updateCalls[0].data.revalidate).toBe(null);
+  });
+
+  it("omits revalidate from the update when the caller omits it", async () => {
+    mockExisting(existingRow());
+
+    await ctx.service.updateCollection("posts", { description: "new desc" });
+
+    expect("revalidate" in ctx.updateCalls[0].data).toBe(false);
   });
 });

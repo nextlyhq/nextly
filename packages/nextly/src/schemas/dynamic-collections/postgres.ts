@@ -42,6 +42,7 @@ import {
 
 import type { FieldConfig } from "@nextly/collections";
 
+import type { RevalidateConfig } from "../../revalidation/types";
 import { users } from "../users/postgres";
 // Normalized versioning config persisted on the registry `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
@@ -158,6 +159,13 @@ export const dynamicCollectionsPg = pgTable(
      * re-migration.
      */
     versions: jsonb("versions").$type<ResolvedVersionsConfig>(),
+
+    /**
+     * Cache-revalidation config (`{ tags?, disable? }`), a JSON column like
+     * `versions` so `disable`/extra-`tags` reach the write path. Nullable when
+     * the collection sets no `revalidate` config.
+     */
+    revalidate: jsonb("revalidate").$type<RevalidateConfig>(),
 
     /**
      * Admin UI configuration options.

@@ -20,6 +20,7 @@
 
 import { z } from "zod";
 
+import { WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS } from "../../domains/webhooks/secret-entries";
 import {
   REDACTED_HEADER_VALUE,
   WEBHOOK_EVENT_TYPES,
@@ -168,5 +169,22 @@ export const UpdateWebhookSchema = z
     message: "Provide at least one field to update.",
   });
 
+/**
+ * Rotating a signing secret. `overlapSeconds` is how long the rotated-away
+ * secret stays valid so a receiver can switch over: 0 retires it immediately,
+ * omitting it uses the service default, and the ceiling stops an old key being
+ * kept alive indefinitely. The body is optional, so a plain rotate with no body
+ * takes the default overlap.
+ */
+export const RotateWebhookSchema = z.object({
+  overlapSeconds: z
+    .number()
+    .int("Overlap must be a whole number of seconds.")
+    .min(0, "Overlap cannot be negative.")
+    .max(WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS, "Overlap window is too long.")
+    .optional(),
+});
+
 export type CreateWebhookInput = z.infer<typeof CreateWebhookSchema>;
 export type UpdateWebhookInput = z.infer<typeof UpdateWebhookSchema>;
+export type RotateWebhookInput = z.infer<typeof RotateWebhookSchema>;

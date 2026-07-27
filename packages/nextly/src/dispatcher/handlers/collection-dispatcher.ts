@@ -72,8 +72,12 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
-import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import {
+  readAuthenticatedActor,
+  readAuthenticatedScope,
+} from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -166,6 +170,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
         user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
       });
@@ -209,6 +214,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
         user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
@@ -953,8 +959,23 @@ const COLLECTIONS_METHODS: Record<
           ? p.status
           : "all";
 
+      // Forward the caller so the service evaluates the collection's stored
+      // read rules for them: role-based rules, and owner-only scoping folded
+      // into the SQL predicate. Without a user the service can only apply the
+      // rule-less default, so an admin-configured "owner-only read" silently
+      // returned every row over HTTP. `routeAuthorized` attests that the route
+      // already ran the coarse RBAC gate, so only that re-check is skipped:
+      // stored rules still run (mirrors the write paths and singles).
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.listEntries({
         collectionName: p.collectionName,
+        user,
+        routeAuthorized: !!user,
+        // A scoped API key is judged on its own read grant rather than on the
+        // permissions of the user that owns it, so a super-admin-owned key
+        // cannot read past its scope by inheriting the session bypass.
+        authenticatedScope: readAuthenticatedScope(p),
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
           rawLimit !== undefined ? parseInt(String(rawLimit), 10) : undefined,
@@ -999,8 +1020,19 @@ const COLLECTIONS_METHODS: Record<
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
           : "all";
+      // The same caller context listEntries forwards. A count that ignored the
+      // read rules while the list obeyed them would report totals for rows the
+      // caller cannot see, which both leaks how much data exists and breaks
+      // pagination in the UI.
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.countEntries({
         collectionName: p.collectionName,
+        user,
+        routeAuthorized: !!user,
+        // Same scope judgement as listEntries: a count that ignored the key's
+        // own grant would disclose how many rows exist beyond it.
+        authenticatedScope: readAuthenticatedScope(p),
         search: p.search,
         where: parseWhereParam(p.where),
         status,
@@ -1041,6 +1073,9 @@ const COLLECTIONS_METHODS: Record<
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
           routeAuthorized: true,
+          // The route authorized only `create` against an API key's scope; a
+          // create-as-published publish gate judges the key's own grants.
+          authenticatedScope: readAuthenticatedScope(p),
         },
         body as Record<string, unknown>
       );
@@ -1063,9 +1098,20 @@ const COLLECTIONS_METHODS: Record<
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
           : "all";
+      // Same caller context as listEntries. Fetching one document by id is the
+      // path where a missing user matters most: without it an owner-only rule
+      // could not deny a direct read of someone else's entry.
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.getEntry({
         collectionName: p.collectionName,
         entryId: p.entryId,
+        user,
+        routeAuthorized: !!user,
+        // A scoped API key is judged on its own read grant rather than on the
+        // permissions of the user that owns it, matching listEntries, countEntries
+        // and the publish gate.
+        authenticatedScope: readAuthenticatedScope(p),
         depth:
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
@@ -1116,6 +1162,9 @@ const COLLECTIONS_METHODS: Record<
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
           routeAuthorized: true,
+          // The route authorized only `update` against an API key's scope; the
+          // service-side publish/unpublish gate judges the key's own grants.
+          authenticatedScope: readAuthenticatedScope(p),
         },
         body as Record<string, unknown>
       );
@@ -1152,6 +1201,9 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // The route authorized this POST as `update`; the publish check judges a
+        // scoped API key's own `publish-<slug>` grant.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -1189,6 +1241,10 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // The route authorized `delete` against the key's scope; carry the scope
+        // so a super-admin-owned key's delete is judged on the key's OWN grant
+        // and does not skip stored owner/role delete rules.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -1231,6 +1287,9 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // Carry the key's scope so each per-id delete is judged on the key's OWN
+        // grant, not the key owner's super-admin roles.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message
@@ -1279,6 +1338,10 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // The route authorized `update` against the key's scope, never
+        // publish/unpublish — carry the scope so each per-id transition is
+        // judged on the key's OWN grants.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const message =
         result.failures.length === 0
@@ -1342,6 +1405,10 @@ const COLLECTIONS_METHODS: Record<
           // so the handler skips only that redundant re-check (stored rules +
           // field-level write access still run). Never inferred from userId.
           routeAuthorized: true,
+          // The route authorized `update` against the key's scope, never
+          // publish/unpublish — carry the scope so the collection-level gate and
+          // each per-row transition are judged on the key's OWN grants.
+          authenticatedScope: readAuthenticatedScope(p),
         },
         { limit: b.limit }
       );
@@ -1383,6 +1450,9 @@ const COLLECTIONS_METHODS: Record<
         // the handler skips only that redundant re-check (stored rules +
         // field-level write access still run). Never inferred from userId.
         routeAuthorized: true,
+        // A duplicate is a create; carry the scope so a create-as-published is
+        // judged on the key's OWN publish grant, never the key owner's.
+        authenticatedScope: readAuthenticatedScope(p),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

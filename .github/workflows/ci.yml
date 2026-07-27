@@ -70,14 +70,16 @@ jobs:
       # coverage, the #5782 cascade regression, RQB v2 conversions, and the
       # relations registry.
       - name: Drizzle v1 safety suites (unit)
-        # Build the concrete adapters first: this step runs a raw vitest
-        # BEFORE the Build step below, but nextly's database/factory.ts
-        # dynamically imports @nextlyhq/adapter-{postgres,mysql,sqlite}, so
-        # vite fails to resolve their (unbuilt) entry and 4 suites error at
-        # collection with "Failed to resolve entry for package". turbo builds
-        # their shared adapter-drizzle dependency in the same command.
+        # Build nextly's workspace dependencies first: this step runs a raw
+        # vitest BEFORE the Build step below, so any package nextly imports
+        # must already have a dist or vite fails to resolve its entry and the
+        # suites error at collection with "Failed to resolve entry for
+        # package". database/factory.ts dynamically imports
+        # @nextlyhq/adapter-{postgres,mysql,sqlite}, and the schema services
+        # import @nextlyhq/blocks-engine for the blocks field type. turbo
+        # builds their shared dependencies in the same command.
         run: |
-          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
+          pnpm turbo build --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/blocks-engine
           pnpm --filter nextly exec vitest run \
             src/database/__tests__/drizzle-kit-lazy.test.ts \
             src/database/__tests__/drizzle-kit-api-contract.test.ts \
@@ -136,8 +138,10 @@ jobs:
       - name: Test
         run: >-
           pnpm turbo test
+          --filter=@nextlyhq/blocks-engine
           --filter=@nextlyhq/plugin-page-builder
           --filter=@nextlyhq/plugin-form-builder
+          --filter=@nextlyhq/plugin-seo
           --filter=@nextlyhq/plugin-sdk
           --filter=@nextlyhq/ui
           --filter=@nextlyhq/adapter-drizzle
