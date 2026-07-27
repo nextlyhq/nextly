@@ -1558,6 +1558,15 @@ export class CollectionMutationService extends BaseService {
 
       // Use modified data if returned by beforeOperation
       const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
+      // Declared defaults are filled before any hook runs, so a collection
+      // hook deriving one field from another sees the value the entry will
+      // hold rather than undefined, and a hook that removes a defaulted field
+      // is not overridden by a later pass re-adding it. Everything after this
+      // point — generation, write access, validation, the insert — works from
+      // complete data. Generation still fills only the identity fields left
+      // unresolved, and running ahead of write access matches generation, so a
+      // field the caller may not create is not reintroduced.
+      applyFieldDefaults(currentData, fields);
 
       // Execute beforeCreate hooks (code-registered)
       // Hooks run before validation and can modify the incoming data
@@ -1611,15 +1620,6 @@ export class CollectionMutationService extends BaseService {
       // without a manual slug. Running before write access means a field the
       // caller may not create is not reintroduced; the uniqueness check uses
       // the shared connection (a plain, non-transactional create).
-      // Declared defaults are filled first so everything downstream sees the
-      // values the entry will actually hold: generation then fills only the
-      // identity fields still unresolved, a field-level access predicate reads
-      // final values rather than undefined, and a required field carrying a
-      // default is satisfied by the time validation runs. Placed before write
-      // access for the same reason generation is — a field the caller may not
-      // create must not be reintroduced here.
-      applyFieldDefaults(finalData, fields);
-
       const isSlugTaken = (slug: string) =>
         this.checkFieldUniqueness(params.collectionName, "slug", slug);
       await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
@@ -4942,6 +4942,15 @@ export class CollectionMutationService extends BaseService {
 
       // Use modified data if returned by beforeOperation
       const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
+      // Declared defaults are filled before any hook runs, so a collection
+      // hook deriving one field from another sees the value the entry will
+      // hold rather than undefined, and a hook that removes a defaulted field
+      // is not overridden by a later pass re-adding it. Everything after this
+      // point — generation, write access, validation, the insert — works from
+      // complete data. Generation still fills only the identity fields left
+      // unresolved, and running ahead of write access matches generation, so a
+      // field the caller may not create is not reintroduced.
+      applyFieldDefaults(currentData, fields);
 
       // Execute beforeCreate hooks (code-registered)
       const beforeContext = this.hookService.buildHookContext({
@@ -4997,15 +5006,6 @@ export class CollectionMutationService extends BaseService {
       // validation (see createEntry). The uniqueness check runs on the
       // transaction so same-title creates within one uncommitted tx still
       // dedupe — the tx sees its own pending rows.
-      // Declared defaults are filled first so everything downstream sees the
-      // values the entry will actually hold: generation then fills only the
-      // identity fields still unresolved, a field-level access predicate reads
-      // final values rather than undefined, and a required field carrying a
-      // default is satisfied by the time validation runs. Placed before write
-      // access for the same reason generation is — a field the caller may not
-      // create must not be reintroduced here.
-      applyFieldDefaults(finalData, fields);
-
       const isSlugTaken = async (slug: string) => {
         const existing = await tx.selectOne<Record<string, unknown>>(
           tableName,
@@ -6161,6 +6161,15 @@ export class CollectionMutationService extends BaseService {
             string,
             unknown
           >) ?? body;
+        // Declared defaults are filled before any hook runs, so a collection
+        // hook deriving one field from another sees the value the entry will
+        // hold rather than undefined, and a hook that removes a defaulted field
+        // is not overridden by a later pass re-adding it. Everything after this
+        // point — generation, write access, validation, the insert — works from
+        // complete data. Generation still fills only the identity fields left
+        // unresolved, and running ahead of write access matches generation, so a
+        // field the caller may not create is not reintroduced.
+        applyFieldDefaults(currentData, fields);
 
         // Execute beforeCreate hooks (code-registered)
         const beforeContext = this.hookService.buildHookContext({
@@ -6219,15 +6228,6 @@ export class CollectionMutationService extends BaseService {
       // entry that omits slug/title must still receive them. The uniqueness
       // check runs on the transaction so entries created earlier in the same
       // bulk batch are seen.
-      // Declared defaults are filled first so everything downstream sees the
-      // values the entry will actually hold: generation then fills only the
-      // identity fields still unresolved, a field-level access predicate reads
-      // final values rather than undefined, and a required field carrying a
-      // default is satisfied by the time validation runs. Placed before write
-      // access for the same reason generation is — a field the caller may not
-      // create must not be reintroduced here.
-      applyFieldDefaults(finalData, fields);
-
       const isSlugTaken = async (slug: string) => {
         const existing = await tx.selectOne<Record<string, unknown>>(
           tableName,

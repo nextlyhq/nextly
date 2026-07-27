@@ -62,10 +62,11 @@ export function applyFieldDefaults(
     if (declared !== undefined && data[field.name] === undefined) {
       // Resolved against the data built so far, so a default may read the
       // values the caller did supply, and earlier defaults in this same pass.
-      data[field.name] =
+      data[field.name] = cloneDefault(
         typeof declared === "function"
           ? (declared as (d: Record<string, unknown>) => unknown)(data)
-          : declared;
+          : declared
+      );
     }
 
     if (!field.fields) continue;
@@ -78,6 +79,28 @@ export function applyFieldDefaults(
     } else if (field.type === "repeater") {
       fillRepeaterRows(data[field.name], field.fields);
     }
+  }
+}
+
+/**
+ * A private copy of a structured default.
+ *
+ * The declared value lives on the field definition, which outlives every write
+ * that reads it, and the same definition fills every repeater row and every
+ * entry created from that collection. Assigning it directly would hand all of
+ * them one shared object, so a later mutation — a field hook normalizing a
+ * row, say — would reach into unrelated rows, entries already written from the
+ * same config, and the definition itself.
+ */
+function cloneDefault(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  try {
+    return structuredClone(value);
+  } catch {
+    // Only values that cannot be stored at all fail to clone, and those are
+    // rejected by validation with a message about the value rather than about
+    // the copy that could not be made.
+    return value;
   }
 }
 

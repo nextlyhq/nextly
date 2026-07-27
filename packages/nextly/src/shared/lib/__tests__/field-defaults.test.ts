@@ -60,6 +60,54 @@ describe("applyFieldDefaults", () => {
     expect(data).toEqual({});
   });
 
+  describe("structured defaults are private to each entry", () => {
+    it("gives each repeater row its own copy", () => {
+      // The declared value lives on the field definition, which outlives the
+      // write, so a shared reference would let one row's later mutation reach
+      // the others.
+      const declared = { tags: ["a"] };
+      const data: Record<string, unknown> = { rows: [{}, {}] };
+      applyFieldDefaults(data, [
+        field({
+          name: "rows",
+          type: "repeater",
+          fields: [
+            field({ name: "meta", type: "json", defaultValue: declared }),
+          ],
+        }),
+      ]);
+      const rows = data.rows as { meta: { tags: string[] } }[];
+      expect(rows[0].meta).toEqual({ tags: ["a"] });
+      expect(rows[0].meta).not.toBe(rows[1].meta);
+
+      (rows[0].meta.tags as string[]).push("b");
+      expect(rows[1].meta.tags).toEqual(["a"]);
+    });
+
+    it("never hands out the declared object itself", () => {
+      // Mutating it would corrupt the definition for every later entry.
+      const declared = { a: 1 };
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({ name: "settings", type: "json", defaultValue: declared }),
+      ]);
+      expect(data.settings).toEqual({ a: 1 });
+      expect(data.settings).not.toBe(declared);
+
+      (data.settings as { a: number }).a = 99;
+      expect(declared.a).toBe(1);
+    });
+
+    it("passes primitives through unchanged", () => {
+      const data: Record<string, unknown> = {};
+      applyFieldDefaults(data, [
+        field({ name: "a", type: "text", defaultValue: "x" }),
+        field({ name: "b", type: "number", defaultValue: 1 }),
+      ]);
+      expect(data).toEqual({ a: "x", b: 1 });
+    });
+  });
+
   describe("layout containers", () => {
     it("fills children of an unnamed container against the parent", () => {
       const data: Record<string, unknown> = {};

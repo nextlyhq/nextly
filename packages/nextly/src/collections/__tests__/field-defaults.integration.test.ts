@@ -25,6 +25,7 @@ import {
   repeater,
   text,
 } from "../../config";
+import { registerHook, unregisterHook } from "../../hooks";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
 
@@ -157,6 +158,26 @@ describe("field defaults on a collection create (integration)", () => {
       subtitle: null,
     });
     expect(data.subtitle).toBeNull();
+  });
+
+  it("shows a defaulted value to a collection hook", async () => {
+    // Collection beforeValidate/beforeChange map to the beforeCreate registry,
+    // which runs ahead of validation — a hook deriving one field from a
+    // defaulted sibling must not see undefined.
+    const seen: unknown[] = [];
+    const probe = (ctx: { data: unknown }): unknown => {
+      seen.push((ctx.data as Record<string, unknown>).subtitle);
+      return ctx.data;
+    };
+    // Registered after boot: creating the instance resets the hook registry.
+    const handler = await handlerFor();
+    registerHook("beforeCreate", "pages", probe);
+    try {
+      await createAndRead(handler, { title: "Home" });
+      expect(seen).toEqual(["from-default"]);
+    } finally {
+      unregisterHook("beforeCreate", "pages", probe);
+    }
   });
 
   it("leaves an omitted field alone on update", async () => {
