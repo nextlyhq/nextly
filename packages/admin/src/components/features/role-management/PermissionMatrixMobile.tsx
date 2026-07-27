@@ -244,7 +244,10 @@ export function PermissionMatrixMobile({
             value={contentType.id}
             className="border rounded-lg"
           >
-            <div className="flex items-center px-4 py-4 hover:bg-accent/50">
+            {/* The hover tint runs the full width at the item's top edge, so it
+             * takes the item's own radius rather than painting square across
+             * the curve. */}
+            <div className="flex items-center px-4 py-4 hover:bg-accent/50 rounded-t-[inherit]">
               {/* Checkbox - separate from accordion trigger to avoid nested buttons */}
               <div
                 className="flex items-center gap-3 flex-1"
