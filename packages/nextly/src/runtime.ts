@@ -53,3 +53,22 @@ export {
   type MetadataEntry,
   type SeoMetaInput,
 } from "./runtime/seo";
+
+// Content routing + sitemap/robots delivery. `next`/`react` are type-only and
+// `next/navigation` resolves lazily, so importing these never forces them.
+export {
+  resolveContent,
+  isReservedPath,
+  createContentRoute,
+  nextlySitemap,
+  nextlyRobots,
+  type ContentEntry,
+  type ResolveContentOptions,
+  type ContentRoute,
+  type ContentRouteArgs,
+  type ContentRouteConfig,
+  type ResolvedContext,
+  type NextlySitemapEntry,
+  type NextlySitemapOptions,
+  type NextlyRobotsOptions,
+} from "./runtime/routing";
