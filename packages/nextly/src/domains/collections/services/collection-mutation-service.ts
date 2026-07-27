@@ -284,8 +284,6 @@ export interface TransitionAuthorization {
   } | null;
 }
 
-/** Whether a string is already the stored JSON representation of a value. */
-
 export class CollectionMutationService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -775,17 +773,6 @@ export class CollectionMutationService extends BaseService {
    * already-parsed values pass through; a parse failure keeps the raw string.
    * Never mutates the input.
    */
-  /**
-   * Stringify JSON-backed values so a raw insert never hands the driver a live
-   * object.
-   *
-   * Each dialect does something different with one: mysql2 expands an object
-   * into assignment syntax and an array into a value list, and node-postgres
-   * encodes an array as a PostgreSQL array literal rather than JSON. Only
-   * SQLite happens to stringify, which is why a suite running there alone
-   * cannot show the difference.
-   */
-
   private deserializeJsonFieldsForSnapshot(
     row: Record<string, unknown>,
     fields: FieldDefinition[]
