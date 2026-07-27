@@ -137,6 +137,73 @@ describe("applyFieldDefaults", () => {
     });
   });
 
+  describe("the caller's payload is never mutated", () => {
+    it("does not write child defaults into a supplied group", () => {
+      const supplied = { title: "given" };
+      const data: Record<string, unknown> = { seo: supplied };
+      applyFieldDefaults(data, [
+        field({
+          name: "seo",
+          type: "group",
+          fields: [
+            field({ name: "title", type: "text", defaultValue: "dt" }),
+            field({ name: "desc", type: "text", defaultValue: "dd" }),
+          ],
+        }),
+      ]);
+      expect(data.seo).toEqual({ title: "given", desc: "dd" });
+      // The object the caller handed in is unchanged.
+      expect(supplied).toEqual({ title: "given" });
+      expect(data.seo).not.toBe(supplied);
+    });
+
+    it("does not write child defaults into supplied repeater rows", () => {
+      const row = { label: "given" };
+      const bare: Record<string, unknown> = {};
+      const data: Record<string, unknown> = { rows: [row, bare] };
+      applyFieldDefaults(data, [
+        field({
+          name: "rows",
+          type: "repeater",
+          fields: [
+            field({ name: "label", type: "text", defaultValue: "dl" }),
+            field({ name: "note", type: "text", defaultValue: "dn" }),
+          ],
+        }),
+      ]);
+      expect(data.rows).toEqual([
+        { label: "given", note: "dn" },
+        { label: "dl", note: "dn" },
+      ]);
+      expect(row).toEqual({ label: "given" });
+      expect(bare).toEqual({});
+    });
+
+    it("reaches a nested group without mutating it", () => {
+      const inner = {};
+      const outer = { inner };
+      const data: Record<string, unknown> = { outer };
+      applyFieldDefaults(data, [
+        field({
+          name: "outer",
+          type: "group",
+          fields: [
+            field({
+              name: "inner",
+              type: "group",
+              fields: [
+                field({ name: "deep", type: "text", defaultValue: "dv" }),
+              ],
+            }),
+          ],
+        }),
+      ]);
+      expect(data.outer).toEqual({ inner: { deep: "dv" } });
+      expect(inner).toEqual({});
+      expect(outer).toEqual({ inner: {} });
+    });
+  });
+
   describe("layout containers", () => {
     it("fills children of an unnamed container against the parent", () => {
       const data: Record<string, unknown> = {};

@@ -656,20 +656,40 @@ export class CollectionMutationService extends BaseService {
     // waits forever rather than failing.
     executor?: { execute: (query: unknown) => Promise<unknown> }
   ): Promise<boolean> {
-    const q =
-      this.adapter.dialect === "mysql"
-        ? `\`${companionTableName}\``
-        : `"${companionTableName}"`;
-    try {
-      if (executor) {
-        await executor.execute(sql.raw(`SELECT 1 FROM ${q} LIMIT 0`));
-      } else {
+    if (!executor) {
+      const q =
+        this.adapter.dialect === "mysql"
+          ? `\`${companionTableName}\``
+          : `"${companionTableName}"`;
+      try {
         await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
+        return true;
+      } catch {
+        return false;
       }
-      return true;
-    } catch {
-      return false;
     }
+
+    // Inside a transaction the question has to be asked WITHOUT touching the
+    // table, because selecting from one that does not exist is an error, and
+    // PostgreSQL marks the whole transaction aborted the moment a statement
+    // fails — every later statement then fails too, however the error was
+    // caught. Reading the catalog succeeds either way and answers the same
+    // question.
+    const query =
+      this.adapter.dialect === "sqlite"
+        ? sql`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ${companionTableName} LIMIT 1`
+        : this.adapter.dialect === "mysql"
+          ? sql`SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ${companionTableName} LIMIT 1`
+          : sql`SELECT 1 FROM information_schema.tables WHERE table_name = ${companionTableName} AND table_schema = ANY (current_schemas(false)) LIMIT 1`;
+
+    const result = (await executor.execute(query)) as
+      | { rows?: unknown[] }
+      | unknown[]
+      | undefined;
+    // Each driver reports rows differently: an array, or an object carrying
+    // one. Both are read rather than picking a shape per dialect.
+    const rows = Array.isArray(result) ? result : (result?.rows ?? []);
+    return rows.length > 0;
   }
 
   /**

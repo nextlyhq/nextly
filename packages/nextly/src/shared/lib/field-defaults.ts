@@ -85,7 +85,7 @@ export function applyFieldDefaults(
     if (field.type === "group") {
       fillGroup(data, field.name, field.fields);
     } else if (field.type === "repeater") {
-      fillRepeaterRows(data[field.name], field.fields);
+      fillRepeaterRows(data, field.name, field.fields);
     }
   }
 }
@@ -128,7 +128,13 @@ function fillGroup(
     ? data[name]
     : undefined;
   if (isPlainObject(existing)) {
-    applyFieldDefaults(existing, fields);
+    // Filled through a copy: the container came from the caller, and writing
+    // child defaults straight into it would mutate the object they passed in.
+    // A shallow copy per level is enough, because each level down copies again
+    // before it writes.
+    const filled = { ...existing };
+    applyFieldDefaults(filled, fields);
+    data[name] = filled;
     return;
   }
   // A group the caller set to null was cleared deliberately, exactly as for a
@@ -148,13 +154,23 @@ function fillGroup(
  * fabricate content.
  */
 function fillRepeaterRows(
-  value: unknown,
+  data: Record<string, unknown>,
+  name: string,
   fields: readonly ValidatableField[]
 ): void {
+  const value = data[name];
   if (!Array.isArray(value)) return;
-  for (const row of value) {
-    if (isPlainObject(row)) applyFieldDefaults(row, fields);
-  }
+  // Rows are the caller's objects, so each one that gains a default is filled
+  // through a copy and the list is rebuilt from the results.
+  let changed = false;
+  const rows = value.map(row => {
+    if (!isPlainObject(row)) return row;
+    const filled = { ...row };
+    applyFieldDefaults(filled, fields);
+    changed = true;
+    return filled;
+  });
+  if (changed) data[name] = rows;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
