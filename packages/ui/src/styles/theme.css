@@ -696,12 +696,13 @@
   --nx-code-inserted: oklch(0.4478 0.1189 152.1);
 
   /* Element colors — 3-tier translucent border scale (monochrome).
-   * Was a single --nx-border at 5% black (~1.05:1, effectively invisible).
-   * subtle = decorative dividers/cards; default = tables/groups;
-   * strong = interactive control edges (inputs/checkbox) for prominence. */
+   * The first two tiers are decorative and are tuned by eye: subtle = faint
+   * dividers, default = the container edge on cards, groups, and tables
+   * (composites to #dbdbdb on white, a hairline rather than a rule). The third
+   * is not decorative — strong marks the edge of a control that has no other
+   * boundary, so it is held to a contrast minimum instead. */
   --nx-border-subtle: oklch(0 0 0 / 0.08);
-  /* Alpha raised so the composited border clears WCAG 3:1 on the page (was 1.35:1). */
-  --nx-border: oklch(0 0 0 / 0.445);
+  --nx-border: oklch(0 0 0 / 0.14);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
   --nx-border-strong: oklch(0 0 0 / 0.502);
   /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
@@ -860,10 +861,11 @@
 
   /* Element colors — 3-tier translucent border scale (white-alpha for dark).
    * Recomputed as white-over-dark alpha (not a flipped hex) so dividers read
-   * on the deep background without glowing. Was ~1.2:1 (too faint). */
+   * on the deep background without glowing. The decorative tiers carry the same
+   * alphas as light mode, which lands the container edge at a matched 1.41:1 on
+   * the page (1.38:1 light), so a hairline weighs the same in both modes. */
   --nx-border-subtle: oklch(1 0 0 / 0.08);
-  /* Alpha raised so the composited border clears WCAG 3:1 on the page (was 1.36:1). */
-  --nx-border: oklch(1 0 0 / 0.366);
+  --nx-border: oklch(1 0 0 / 0.14);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 3.00:1). */
   --nx-border-strong: oklch(1 0 0 / 0.418);
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
