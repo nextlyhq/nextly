@@ -23,6 +23,7 @@ vi.mock("../init", () => ({
 vi.mock("../di", () => ({
   container: {
     get: vi.fn(),
+    has: vi.fn().mockReturnValue(false),
   },
 }));
 
@@ -34,7 +35,9 @@ import {
   deleteWebhook,
   getWebhookById,
   listWebhooks,
+  redeliverWebhookDelivery,
   revealWebhookSecret,
+  testWebhookEndpoint,
   updateWebhook,
 } from "./webhooks";
 
@@ -361,5 +364,102 @@ describe("revealWebhookSecret", () => {
 
     expect(res.status).toBe(403);
     expect(revealSecrets).not.toHaveBeenCalled();
+  });
+});
+
+/** Route each container.get to a named service impl. */
+const withServices = (map: Record<string, unknown>): void => {
+  (container.get as ReturnType<typeof vi.fn>).mockImplementation(
+    (key: string) => map[key]
+  );
+};
+
+describe("testWebhookEndpoint", () => {
+  it("sends a test and returns the probe result via respondAction", async () => {
+    asSession();
+    const testEndpoint = vi.fn().mockResolvedValue({
+      delivered: true,
+      statusCode: 200,
+      latencyMs: 42,
+    });
+    withService({ testEndpoint });
+
+    const res = await testWebhookEndpoint(
+      new Request("http://x/api/webhooks/wh_1/test", { method: "POST" }),
+      "wh_1"
+    );
+
+    expect(res.status).toBe(200);
+    expect(testEndpoint).toHaveBeenCalledWith("wh_1");
+    const json = (await res.json()) as {
+      message: string;
+      delivered: boolean;
+      statusCode: number;
+    };
+    expect(json.message).toBe("Test event sent.");
+    expect(json.delivered).toBe(true);
+    expect(json.statusCode).toBe(200);
+  });
+
+  it("rejects an API key (session-only) without testing", async () => {
+    asApiKey();
+    const testEndpoint = vi.fn();
+    withService({ testEndpoint });
+
+    const res = await testWebhookEndpoint(
+      new Request("http://x/api/webhooks/wh_1/test", { method: "POST" }),
+      "wh_1"
+    );
+
+    expect(res.status).toBe(403);
+    expect(testEndpoint).not.toHaveBeenCalled();
+  });
+});
+
+describe("redeliverWebhookDelivery", () => {
+  it("re-arms then returns the delivery via respondMutation", async () => {
+    asSession();
+    const redeliverDelivery = vi.fn().mockResolvedValue(undefined);
+    const getDelivery = vi
+      .fn()
+      .mockResolvedValue({ id: "del_1", status: "pending", attemptCount: 0 });
+    withServices({
+      webhookEndpointService: { redeliverDelivery },
+      webhookDeliveryQueryService: { getDelivery },
+    });
+
+    const res = await redeliverWebhookDelivery(
+      new Request("http://x/api/webhooks/wh_1/deliveries/del_1/redeliver", {
+        method: "POST",
+      }),
+      "wh_1",
+      "del_1"
+    );
+
+    expect(res.status).toBe(200);
+    expect(redeliverDelivery).toHaveBeenCalledWith("wh_1", "del_1");
+    const json = (await res.json()) as {
+      message: string;
+      item: { id: string; status: string };
+    };
+    expect(json.message).toBe("Redelivery queued.");
+    expect(json.item).toMatchObject({ id: "del_1", status: "pending" });
+  });
+
+  it("rejects an API key (session-only) without re-arming", async () => {
+    asApiKey();
+    const redeliverDelivery = vi.fn();
+    withServices({ webhookEndpointService: { redeliverDelivery } });
+
+    const res = await redeliverWebhookDelivery(
+      new Request("http://x/api/webhooks/wh_1/deliveries/del_1/redeliver", {
+        method: "POST",
+      }),
+      "wh_1",
+      "del_1"
+    );
+
+    expect(res.status).toBe(403);
+    expect(redeliverDelivery).not.toHaveBeenCalled();
   });
 });

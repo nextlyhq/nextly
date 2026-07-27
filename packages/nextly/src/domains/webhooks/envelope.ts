@@ -168,6 +168,8 @@ export interface BuildEnvelopeInput {
    * occurrence of that key at any depth, including unrelated siblings.
    */
   sensitiveFields?: readonly string[];
+  /** Status delta for a lifecycle event; copied verbatim onto the envelope. */
+  statusChange?: { from: string | null; to: string };
 }
 
 /**
@@ -198,6 +200,10 @@ export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
   // payload stays clean (no `site: undefined` / `actor: null`).
   if (input.site !== undefined) envelope.site = input.site;
   if (input.actor != null) envelope.actor = input.actor;
+  // Only lifecycle events pass this; keep it off every other envelope.
+  if (input.statusChange !== undefined) {
+    envelope.statusChange = input.statusChange;
+  }
 
   return envelope;
 }

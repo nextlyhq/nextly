@@ -4,9 +4,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
+import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
@@ -14,6 +16,7 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
@@ -100,41 +103,49 @@ export class CollectionsHandler {
     // Set up the adapter and metadata fetcher for runtime schema generation
     // This allows UI-created collections to work without pre-compiled TypeScript schemas
     this.fileManager.setAdapter(adapter);
-    this.fileManager.setMetadataFetcher(async (collectionName: string) => {
-      try {
-        const result = await adapter.selectOne<{
-          fields: string;
-          tableName: string;
-          status: boolean | number | null;
-          localized: boolean | number | null;
-        }>("dynamic_collections", {
-          where: {
-            and: [{ column: "slug", op: "=", value: collectionName }],
-          },
-        });
+    this.fileManager.setMetadataFetcher(
+      async (collectionName: string, executor?: unknown) => {
+        try {
+          // Runs on the caller's transaction connection when supplied so an
+          // uncached runtime-schema load inside a transaction stays on it.
+          const result = await adapter.selectOne<{
+            fields: string;
+            tableName: string;
+            status: boolean | number | null;
+            localized: boolean | number | null;
+          }>(
+            "dynamic_collections",
+            {
+              where: {
+                and: [{ column: "slug", op: "=", value: collectionName }],
+              },
+            },
+            executor
+          );
 
-        if (result) {
-          const fields =
-            typeof result.fields === "string"
-              ? JSON.parse(result.fields)
-              : result.fields;
-          return {
-            fields,
-            tableName: result.tableName,
-            // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
-            status: result.status === true || result.status === 1,
-            // i18n M4: forward the localized flag so loadCompanionSchema builds the companion.
-            localized: result.localized === true || result.localized === 1,
-          };
+          if (result) {
+            const fields =
+              typeof result.fields === "string"
+                ? JSON.parse(result.fields)
+                : result.fields;
+            return {
+              fields,
+              tableName: result.tableName,
+              // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
+              status: result.status === true || result.status === 1,
+              // i18n M4: forward the localized flag so loadCompanionSchema builds the companion.
+              localized: result.localized === true || result.localized === 1,
+            };
+          }
+        } catch (error) {
+          console.error(
+            "[CollectionsHandler] Failed to fetch collection metadata:",
+            error
+          );
         }
-      } catch (error) {
-        console.error(
-          "[CollectionsHandler] Failed to fetch collection metadata:",
-          error
-        );
+        return null;
       }
-      return null;
-    });
+    );
 
     this.relationshipService = new CollectionRelationshipService(
       adapter,
@@ -162,10 +173,27 @@ export class CollectionsHandler {
       ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
       : undefined;
 
+    // Resolved lazily at flush time (not captured here) so a Next cache adapter
+    // registered after this handler was constructed at boot is still honored.
+    const resolveCacheRevalidator = () =>
+      container.has("cacheRevalidator")
+        ? container.get<CacheRevalidator>("cacheRevalidator")
+        : undefined;
+
     // Late-inject relationshipService if componentDataService was created before it was available
     if (componentDataService) {
       componentDataService.setRelationshipService(this.relationshipService);
     }
+
+    // The RBAC service the write gates evaluate `update`/`publish`/`unpublish`
+    // against. Without it `checkCollectionAccess` has no permission store, so a
+    // missing stored rule defaults to public — which for the publish gate means
+    // an authenticated caller who cleared the route's `update` check could
+    // publish without `publish-<slug>`. Resolved from the container (guarded so
+    // a minimal boot without RBAC still constructs).
+    const rbacAccessControlService = container.has("rbacAccessControlService")
+      ? container.get<RBACAccessControlService>("rbacAccessControlService")
+      : undefined;
 
     this.entryService = new CollectionEntryService(
       adapter,
@@ -176,10 +204,11 @@ export class CollectionsHandler {
       hookRegistry,
       accessControlService,
       componentDataService,
-      undefined,
+      rbacAccessControlService,
       this.localization,
       retentionRunner,
-      fastDrainScheduler
+      fastDrainScheduler,
+      resolveCacheRevalidator
     );
   }
 
@@ -212,6 +241,8 @@ export class CollectionsHandler {
     entryId: string;
     user?: UserContext;
     routeAuthorized?: boolean;
+    /** API-key scope; judges the update gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.entryService.canUpdateEntry(params);
   }
@@ -306,6 +337,8 @@ export class CollectionsHandler {
     status?: boolean;
     /** i18n: whether the collection is localized (translatable fields + companion table). */
     localized?: boolean;
+    /** Whether writes bust cache tags. Default on; false opts the collection out. */
+    revalidate?: boolean;
     fields: FieldDefinition[];
     createdBy?: string;
   }) {
@@ -387,6 +420,8 @@ export class CollectionsHandler {
       sidebarGroup?: string;
       useAsTitle?: string;
       hidden?: boolean;
+      /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
+      revalidate?: boolean;
       fields?: FieldDefinition[];
     }
   ) {
@@ -437,6 +472,20 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * The route already ran the coarse RBAC gate, so skip only that redundant
+     * re-check while the stored read rules (owner-only scoping, role-based,
+     * custom) still run. The query service folds an owner-only rule into the SQL
+     * predicate rather than filtering rows afterwards, so pagination and totals
+     * stay correct.
+     */
+    routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its own
+     * read grant rather than on the permissions of the user that owns it, so a
+     * super-admin-owned key stays bound by a stored owner-only read rule.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
      * pass 'all' to see drafts too. Forwarded to query service as-is.
@@ -485,6 +534,13 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST create the
+       * publish transition gate (create-as-published) judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
+      /** Skip cache revalidation for this write (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     body: Record<string, unknown>
   ) {
@@ -493,6 +549,10 @@ export class CollectionsHandler {
         ...this.resolveUserParam(params),
         locale: params.locale,
         actor: params.actor,
+        // Named explicitly (like updateEntry) so the API-key scope survives the
+        // field-by-field rebuild rather than only via resolveUserParam's rest.
+        authenticatedScope: params.authenticatedScope,
+        disableRevalidate: params.disableRevalidate,
       },
       body,
       params.depth
@@ -543,6 +603,12 @@ export class CollectionsHandler {
      * other document-level rules in force.
      */
     routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * read grant, so a super-admin-owned key does not skip the collection's
+     * stored owner-only/custom read rule.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.getEntry(params);
   }
@@ -561,6 +627,19 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * The route already ran the coarse RBAC gate, so skip only that redundant
+     * re-check while the stored read rules (owner-only scoping, role-based,
+     * custom) still run. Forwarded to the query service, which counts under the
+     * same constraint listEntries filters by, so a total can never describe rows
+     * the caller may not read.
+     */
+    routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope, mirroring listEntries so a scoped key's
+     * count matches the rows it can list.
+     */
+    authenticatedScope?: AuthenticatedScope;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Same semantics as listEntries.
@@ -613,6 +692,13 @@ export class CollectionsHandler {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The caller's authenticated scope. For a scoped API-key REST write, the
+       * publish/unpublish transition gate judges the key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
+      /** Skip cache revalidation for this write (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     body: Record<string, unknown>
   ) {
@@ -621,12 +707,16 @@ export class CollectionsHandler {
         ...this.resolveUserParam(params),
         locale: params.locale,
         actor: params.actor,
+        disableRevalidate: params.disableRevalidate,
         // Named explicitly rather than left to the spread above, because this
         // facade rebuilds the params object field by field: anything not named
         // here survives only by passing through `resolveUserParam`'s rest, and
         // a silently dropped lineage marker would leave a restore
         // indistinguishable from an ordinary edit.
         sourceVersionNo: params.sourceVersionNo,
+        // The API-key scope gates the publish transition; naming it explicitly
+        // (like sourceVersionNo) keeps it from being silently dropped.
+        authenticatedScope: params.authenticatedScope,
       },
       body,
       params.depth
@@ -654,6 +744,8 @@ export class CollectionsHandler {
      * re-check. Never inferred from a userId.
      */
     routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional publish check. */
+    authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
@@ -685,8 +777,21 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * delete grant, so the session super-admin bypass does not apply to it.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this delete (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
-    return this.entryService.deleteEntry(this.resolveUserParam(params));
+    return this.entryService.deleteEntry({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
+    });
   }
 
   /**
@@ -718,8 +823,21 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /**
+     * The caller's authenticated scope. Each per-id delete is judged on a scoped
+     * API key's OWN delete grant, not the key owner's.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this bulk delete (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
-    return this.entryService.bulkDeleteEntries(this.resolveUserParam(params));
+    return this.entryService.bulkDeleteEntries({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
+    });
   }
 
   /**
@@ -752,8 +870,21 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. For a scoped API-key bulk update each
+     * per-id publish/unpublish transition is judged on the key's OWN grants.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
-    return this.entryService.bulkUpdateEntries(this.resolveUserParam(params));
+    return this.entryService.bulkUpdateEntries({
+      ...this.resolveUserParam(params),
+      // Named explicitly (like updateEntry) so the API-key scope survives the
+      // field-by-field rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
+    });
   }
 
   /**
@@ -783,6 +914,13 @@ export class CollectionsHandler {
       context?: Record<string, unknown>;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. Judges the collection-level gate and
+       * each per-row transition on a scoped API key's OWN grants.
+       */
+      authenticatedScope?: AuthenticatedScope;
+      /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     options?: { limit?: number }
   ) {
@@ -790,7 +928,13 @@ export class CollectionsHandler {
     // bulkUpdateEntries so the query-based bulk update honors access control
     // and redaction instead of running as an anonymous caller.
     return this.entryService.bulkUpdateByQuery(
-      this.resolveUserParam(params),
+      {
+        ...this.resolveUserParam(params),
+        // Named explicitly so the API-key scope survives the field-by-field
+        // rebuild rather than only via resolveUserParam's rest.
+        authenticatedScope: params.authenticatedScope,
+        disableRevalidate: params.disableRevalidate,
+      },
       options
     );
   }
@@ -810,6 +954,11 @@ export class CollectionsHandler {
       user?: UserContext;
       /** Who performed the delete, recorded on each entry's outbox event. */
       actor?: RequestActor;
+      /**
+       * The caller's authenticated scope. A scoped API key is judged on its own
+       * delete grant for the owner-predicate enumeration and each per-row delete.
+       */
+      authenticatedScope?: AuthenticatedScope;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /**
@@ -820,6 +969,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** Skip cache revalidation for this bulk delete (the outbox drain still runs). */
+      disableRevalidate?: boolean;
     },
     options?: { limit?: number }
   ) {
@@ -859,8 +1010,21 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /**
+     * The caller's authenticated scope. A duplicate is a create, so a scoped
+     * API key copying a published source is judged on the key's OWN grant.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this duplicate (the outbox drain still runs). */
+    disableRevalidate?: boolean;
   }) {
-    return this.entryService.duplicateEntry(this.resolveUserParam(params));
+    return this.entryService.duplicateEntry({
+      ...this.resolveUserParam(params),
+      // Named explicitly so the API-key scope survives the field-by-field
+      // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
+    });
   }
 
   /**

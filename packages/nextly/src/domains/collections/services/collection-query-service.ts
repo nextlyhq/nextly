@@ -36,6 +36,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -621,6 +622,13 @@ export class CollectionQueryService extends BaseService {
      */
     routeAuthorized?: boolean;
     /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * read grant, so a super-admin-owned key stays bound by a `read: owner-only`
+     * rule instead of inheriting the owner's session bypass. Undefined for
+     * session/system callers. Mirrors getEntry.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /**
      * Draft/Published filter override. Only takes effect when the collection
      * has Draft/Published enabled (collection.status === true).
      * - 'published' (default for public callers): only published rows
@@ -659,7 +667,10 @@ export class CollectionQueryService extends BaseService {
         undefined,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own read grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -744,7 +755,11 @@ export class CollectionQueryService extends BaseService {
         await this.accessService.getAccessQueryConstraint(
           params.collectionName,
           accessUser,
-          params.overrideAccess
+          params.overrideAccess,
+          // Scope the owner filter too: without this a super-admin-owned scoped
+          // key takes the session bypass and reads past its own grant, the
+          // predicate having been lifted before it ever reached SQL.
+          params.authenticatedScope
         );
 
       // Apply access constraint if present
@@ -1039,6 +1054,12 @@ export class CollectionQueryService extends BaseService {
             // denied here and totalDocs silently falls back to 0 — breaking the
             // bulk-by-query limit guard and pagination.
             routeAuthorized: params.routeAuthorized,
+            // The scope has to travel with it for the same reason. The rows
+            // above are filtered by the key's own grant, so a count taken
+            // without the scope takes the owner's super-admin bypass instead
+            // and reports the unscoped total beside correctly filtered rows —
+            // disclosing how many rows exist outside the grant.
+            authenticatedScope: params.authenticatedScope,
           }),
         ]);
 
@@ -1101,7 +1122,15 @@ export class CollectionQueryService extends BaseService {
           entries,
           params.collectionName,
           fields,
-          { depth: params.depth }
+          {
+            depth: params.depth,
+            // Expansion spreads whole related rows into these entries, and this
+            // collection's field rules say nothing about another collection's
+            // fields — so the caller has to reach the related row's own rules.
+            enforceFieldAccess: true,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          }
         );
 
       // Batch-populate component field data from comp_{slug} tables
@@ -1122,6 +1151,15 @@ export class CollectionQueryService extends BaseService {
             // untranslated embedded field blank instead of showing default text.
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
+            // A component's relationship fields copy whole rows out of the
+            // target collection, which this collection's field rules say nothing
+            // about — so the caller travels down to reach the related row's own
+            // rules, exactly as it does for direct relationships.
+            access: {
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+            },
           });
       }
 
@@ -1403,6 +1441,11 @@ export class CollectionQueryService extends BaseService {
      */
     routeAuthorized?: boolean;
     /**
+     * The caller's authenticated scope, mirroring listEntries so a scoped key
+     * counts exactly the rows it can list.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    /**
      * Draft/Published filter override (only effective when collection.status === true).
      * See listEntries for full semantics.
      */
@@ -1438,7 +1481,10 @@ export class CollectionQueryService extends BaseService {
         undefined,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // Same scope judgement as listEntries, so a count cannot describe rows
+        // the key itself is not allowed to list.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -1469,7 +1515,10 @@ export class CollectionQueryService extends BaseService {
         await this.accessService.getAccessQueryConstraint(
           params.collectionName,
           accessUser,
-          params.overrideAccess
+          params.overrideAccess,
+          // Scoped the same way as listEntries, so the total matches the rows a
+          // scoped key can actually page through.
+          params.authenticatedScope
         );
 
       // Apply access constraint if present
@@ -1749,6 +1798,13 @@ export class CollectionQueryService extends BaseService {
      * creator's. Owner-only and other document-level rules still apply.
      */
     routeAuthorized?: boolean;
+    /**
+     * The caller's authenticated scope. A scoped API key is judged on its OWN
+     * read grant here, so a super-admin-owned key cannot read a row its scope
+     * excludes (used by duplicate, which reads the source before creating a
+     * copy). Undefined for session/system callers.
+     */
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1761,7 +1817,10 @@ export class CollectionQueryService extends BaseService {
         params.entryId,
         undefined,
         params.overrideAccess,
-        params.routeAuthorized
+        params.routeAuthorized,
+        // A scoped API key is judged on its own read grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        params.authenticatedScope
       );
       if (accessDenied) {
         return accessDenied;
@@ -1810,7 +1869,10 @@ export class CollectionQueryService extends BaseService {
         params.collectionName,
         "read",
         accessUser,
-        params.overrideAccess
+        params.overrideAccess,
+        // Scope the owner filter too: a super-admin-owned key must still be
+        // bound by a `read: owner-only` rule, not treated as a session admin.
+        params.authenticatedScope
       );
 
       // Same 404-not-403 reasoning applies to Draft/Published — a public
@@ -1903,7 +1965,14 @@ export class CollectionQueryService extends BaseService {
         entry,
         params.collectionName,
         fields,
-        { depth: params.depth }
+        {
+          depth: params.depth,
+          // Same reasoning as the list path: a related row is redacted by its
+          // own collection's field rules, for this caller.
+          enforceFieldAccess: true,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+        }
       );
 
       // Populate component field data from comp_{slug} tables
@@ -1922,6 +1991,13 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
+          // Same reasoning as the list path: a related row reached through a
+          // component is judged by its own collection's field rules.
+          access: {
+            enforceFieldAccess: true,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          },
         });
       }
 

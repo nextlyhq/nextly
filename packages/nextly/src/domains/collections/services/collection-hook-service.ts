@@ -36,6 +36,10 @@ export interface QueryDatabaseParams {
   value: unknown;
   caseInsensitive?: boolean;
   excludeId?: string;
+  // Transaction-bound executor so a stored hook's uniqueness read (the built-in
+  // unique-validation hook) runs on the caller's transaction connection instead
+  // of the pool when the write is inside a transaction; defaults to the pool.
+  executor?: unknown;
 }
 
 export class CollectionHookService {
@@ -92,7 +96,11 @@ export class CollectionHookService {
     data: unknown,
     queryDatabase: (params: QueryDatabaseParams) => Promise<boolean>,
     user?: UserContext,
-    sharedContext: Record<string, unknown> = {}
+    sharedContext: Record<string, unknown> = {},
+    // Transaction-bound executor forwarded onto the context when the hook runs
+    // inside a caller-owned transaction, so DB-reading hooks stay on the
+    // transaction's connection (see HookContext.executor). Omitted otherwise.
+    executor?: unknown
   ): PrebuiltHookContext {
     return {
       collection: collectionName,
@@ -100,6 +108,7 @@ export class CollectionHookService {
       data,
       user: user ? { id: user.id, email: user.email } : undefined,
       context: sharedContext,
+      executor,
       req: {
         nextly: this.resolveNextlyForHooks() as NextlyDirectAPI | undefined,
       },
@@ -110,6 +119,9 @@ export class CollectionHookService {
           value: params.value,
           caseInsensitive: params.caseInsensitive || false,
           excludeId: params.excludeId,
+          // Forward the context's transaction executor so the uniqueness read
+          // stays on the caller's transaction connection inside a transaction.
+          executor,
         });
       },
     };

@@ -36,6 +36,7 @@ import {
   index as sqliteIndex,
 } from "drizzle-orm/sqlite-core";
 
+import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import {
   isTextField,
   isTextareaField,
@@ -53,6 +54,7 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
+  isBlocksField,
   isComponentField,
   isDataField,
 } from "../../../collections/fields/guards";
@@ -67,6 +69,7 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
+import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -341,10 +344,18 @@ export class ComponentSchemaService {
 
       // When adding NOT NULL columns to existing tables, provide a sensible default.
       let defaultVal = "";
-      if ("defaultValue" in field && field.defaultValue !== undefined) {
+      // A function default produces a different value per row, which a single
+      // DDL constant cannot express. Backfilling existing rows still needs
+      // something, so a required column falls back to its type default rather
+      // than trying to serialize the function itself.
+      const hasConstantDefault =
+        "defaultValue" in field &&
+        field.defaultValue !== undefined &&
+        typeof field.defaultValue !== "function";
+      if (hasConstantDefault) {
         defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, field.type)}`;
       } else if ("required" in field && field.required) {
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type)}`;
+        defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
       }
 
       statements.push(
@@ -638,7 +649,8 @@ export class ComponentSchemaService {
           if (
             f.type === "json" ||
             f.type === "repeater" ||
-            f.type === "group"
+            f.type === "group" ||
+            f.type === "blocks"
           ) {
             modifiers.push(`.default(${JSON.stringify(defaultValue)})`);
           } else if (typeof defaultValue === "string") {
@@ -793,7 +805,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
     }
-    if (isJSONField(field)) {
+    if (isJSONField(field) || isBlocksField(field)) {
       return types.json;
     }
 
@@ -839,7 +851,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return pgText(colName);
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
     }
 
@@ -891,7 +908,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return mysqlVarchar(colName, { length: 36 });
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
     }
 
@@ -938,7 +960,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return sqliteText(colName);
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
     }
 
@@ -998,7 +1025,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return `text('${colName}')`;
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return `jsonb('${colName}')`;
     }
     return `text('${colName}')`;
@@ -1039,7 +1071,12 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return `varchar('${colName}', { length: 36 })`;
     }
-    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+    if (
+      isRepeaterField(field) ||
+      isGroupField(field) ||
+      isJSONField(field) ||
+      isBlocksField(field)
+    ) {
       return `json('${colName}')`;
     }
     return `varchar('${colName}', { length: 255 })`;
@@ -1140,7 +1177,8 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (
           isRepeaterField(field) ||
           isGroupField(field) ||
-          isJSONField(field)
+          isJSONField(field) ||
+          isBlocksField(field)
         ) {
           imports.add("json");
         }
@@ -1169,7 +1207,8 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (
           isRepeaterField(field) ||
           isGroupField(field) ||
-          isJSONField(field)
+          isJSONField(field) ||
+          isBlocksField(field)
         ) {
           imports.add("jsonb");
         }
@@ -1286,7 +1325,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
   }
 
   // Used when adding NOT NULL columns to existing tables.
-  private getDefaultValueForType(type: string): string {
+  private getDefaultValueForType(type: string, field?: FieldConfig): string {
     switch (type) {
       case "text":
       case "textarea":
@@ -1297,6 +1336,13 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       case "select":
       case "radio":
         return "''";
+      case "blocks":
+        return quoteJsonSqlDefault(
+          emptyBlockDocumentJson(
+            field && isBlocksField(field) ? field.blocks?.kinds : undefined
+          ),
+          this.dialect
+        );
       case "number":
         return "0";
       case "checkbox":
@@ -1309,7 +1355,9 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       case "json":
       case "repeater":
       case "group":
-        return "'{}'";
+        // These share the blocks column type, so they share its restriction on
+        // how a default may be written.
+        return quoteJsonSqlDefault("{}", this.dialect);
       case "relationship":
       case "upload":
         return "NULL";
@@ -1335,8 +1383,16 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       if (this.dialect === "sqlite") return value ? "1" : "0";
       return value ? "TRUE" : "FALSE";
     }
-    if (type === "json" || type === "repeater" || type === "group") {
-      return `'${typeof value === "string" ? value : JSON.stringify(value)}'`;
+    if (
+      type === "json" ||
+      type === "repeater" ||
+      type === "group" ||
+      type === "blocks"
+    ) {
+      return quoteJsonSqlDefault(
+        typeof value === "string" ? value : JSON.stringify(value),
+        this.dialect
+      );
     }
     if (type === "date") {
       if (this.dialect === "sqlite" && typeof value === "string") {

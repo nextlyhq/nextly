@@ -45,6 +45,7 @@ function buildCapabilities(
       canViewRoles: true,
       canViewMedia: true,
       canViewSettings: true,
+      canViewWebhooks: true,
       collections: new Proxy(
         {},
         {
@@ -113,6 +114,10 @@ function buildCapabilities(
       permSet.has("delete-api-keys") ||
       permSet.has("manage-email-providers") ||
       permSet.has("manage-email-templates"),
+    canViewWebhooks:
+      permSet.has("read-webhooks") ||
+      permSet.has("update-webhooks") ||
+      permSet.has("create-webhooks"),
     collections,
     canManageUsers: permSet.has("create-users") || permSet.has("update-users"),
     canManageRoles: permSet.has("create-roles") || permSet.has("update-roles"),
@@ -131,6 +136,7 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
   canViewRoles: false,
   canViewMedia: false,
   canViewSettings: false,
+  canViewWebhooks: false,
   collections: {},
   canManageUsers: false,
   canManageRoles: false,

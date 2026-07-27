@@ -109,6 +109,8 @@ describe("reloadNextlyConfig", () => {
       fields?: unknown[];
       source?: string;
     }>;
+    /** Force the metadata-only collection sync to reject, so its scope is unsynced. */
+    failCollectionMetaSync?: boolean;
   }) {
     const withAdapter = opts?.withAdapter ?? true;
     const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
@@ -129,7 +131,9 @@ describe("reloadNextlyConfig", () => {
           }
         : undefined,
       collectionRegistryService: {
-        syncCodeFirstCollections: vi.fn().mockResolvedValue({}),
+        syncCodeFirstCollections: opts?.failCollectionMetaSync
+          ? vi.fn().mockRejectedValue(new Error("meta sync failed"))
+          : vi.fn().mockResolvedValue({}),
         // Mirrors CollectionRegistryService.getAllCollections — the DB-backed
         // list of every registered collection (code + UI). Defaults to empty.
         getAllCollections: vi
@@ -996,6 +1000,150 @@ describe("reloadNextlyConfig", () => {
       await reloadNextlyConfig({ resolver: buildResolver() });
 
       expect(pipelineApplySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("webhook recording policy reconciliation", () => {
+    it("prunes a removed code-first opt-out when the config empties out", async () => {
+      const {
+        setWebhookRecording,
+        isWebhookRecordingEnabled,
+        resetWebhookRecordingPolicy,
+      } = await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // A code-first Single/collection previously opted OUT of recording. It is
+      // then deleted from the config, so this reload sees zero managed targets
+      // and takes the empty-target early return.
+      setWebhookRecording("collection", "leads", false, "code");
+      setWebhookRecording("single", "settings", false, "code");
+      // A plugin opt-out must survive the code-first reconcile untouched.
+      setWebhookRecording("collection", "form-submissions", false, "plugin");
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [], singles: [], components: [] },
+      });
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The removed code-first entities revert to the default (record)...
+      expect(isWebhookRecordingEnabled("collection", "leads")).toBe(true);
+      expect(isWebhookRecordingEnabled("single", "settings")).toBe(true);
+      // ...while the plugin opt-out is preserved.
+      expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
+        false
+      );
+      resetWebhookRecordingPolicy();
+    });
+
+    it("applies a new opt-out even when the metadata sync fails, but gates opt-ins", async () => {
+      const {
+        setWebhookRecording,
+        isWebhookRecordingEnabled,
+        resetWebhookRecordingPolicy,
+      } = await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // `posts` carries a stale opt-out from a previous decision; the reload now
+      // wants it to record again (an opt-IN). `leads` is newly set to
+      // `webhooks: false` (an opt-OUT). Both diffs are zero-op, so the reload
+      // takes the metadata-only path — where the collection sync then FAILS,
+      // leaving that scope unsynced.
+      setWebhookRecording("collection", "posts", false, "code");
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            { slug: "posts", tableName: "dc_posts" },
+            { slug: "leads", tableName: "dc_leads", webhooks: false },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          { name: "dc_posts", columns: SQLITE_RESERVED },
+          { name: "dc_leads", columns: SQLITE_RESERVED },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({
+        resolver: buildResolver({ failCollectionMetaSync: true }),
+      });
+
+      // The opt-OUT applies despite the failed sync — recording off builds no
+      // payload, so the stale field tree is irrelevant, and holding it back would
+      // keep leaking the newly private collection's events.
+      expect(isWebhookRecordingEnabled("collection", "leads")).toBe(false);
+      // The opt-IN is gated: `posts` keeps its stale opt-out until a clean sync,
+      // so payload expansion never runs against a field tree that failed to sync.
+      expect(isWebhookRecordingEnabled("collection", "posts")).toBe(false);
+      resetWebhookRecordingPolicy();
+    });
+
+    it("keeps a plugin-contributed opt-out through a code-first reconcile, without admin.isPlugin", async () => {
+      const { isWebhookRecordingEnabled, resetWebhookRecordingPolicy } =
+        await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // A plugin contributes an opted-out collection via `contributes.collections`
+      // and does NOT set the optional `admin.isPlugin` presentation flag. The
+      // folded reload config lists it (loadConfig folds contributions) AND the
+      // plugin list, so provenance is derived from the contribution — not the
+      // flag — and the prune must never touch it.
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "audit",
+              contributes: { collections: [{ slug: "audit-log" }] },
+            },
+          ],
+          collections: [
+            { slug: "posts", tableName: "dc_posts" },
+            { slug: "audit-log", tableName: "dc_audit_log", webhooks: false },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          { name: "dc_posts", columns: SQLITE_RESERVED },
+          { name: "dc_audit_log", columns: SQLITE_RESERVED },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The plugin's opt-out is honored and survives the reconcile...
+      expect(isWebhookRecordingEnabled("collection", "audit-log")).toBe(false);
+      // ...while the plain code collection records by default.
+      expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
+      resetWebhookRecordingPolicy();
+    });
+
+    it("applies a new opt-out even when live introspection throws", async () => {
+      const { isWebhookRecordingEnabled, resetWebhookRecordingPolicy } =
+        await import("../../domains/webhooks/recording-policy");
+      resetWebhookRecordingPolicy();
+      // A live reload sets a nonempty collection to `webhooks: false`, but the
+      // batched `introspectLiveSnapshot` throws (a transient DB blip). The reload
+      // event is already consumed, so if the opt-out were published only after a
+      // successful sync it would never take effect until a restart. Opt-outs are
+      // published BEFORE introspection, so this one stops recording immediately.
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            { slug: "leads", tableName: "dc_leads", webhooks: false },
+          ],
+        },
+      });
+      introspectSpy.mockRejectedValue(new Error("connection reset"));
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // Introspection failed, so no schema was applied...
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+      // ...but the opt-out took effect anyway.
+      expect(isWebhookRecordingEnabled("collection", "leads")).toBe(false);
+      resetWebhookRecordingPolicy();
     });
   });
 });

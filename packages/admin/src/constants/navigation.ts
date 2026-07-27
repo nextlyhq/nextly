@@ -10,6 +10,7 @@ import {
   Shield,
   SlidersHorizontal,
   Users,
+  Webhook,
   type LucideIcon,
 } from "../components/icons";
 
@@ -69,8 +70,12 @@ export interface NavigationItem {
   subItems?: NavigationSubItem[];
   /** Sub-group label for grouped sections (e.g., "system" for System Settings) */
   subGroup?: string;
-  /** Permission slug required to view this item. Items without this are always visible. */
-  requiredPermission?: string;
+  /**
+   * Permission required to view this item. A single slug, or a list treated as
+   * any-of (holding any one shows the item — models an umbrella permission).
+   * Items without this are always visible.
+   */
+  requiredPermission?: string | string[];
 }
 
 /**
@@ -150,6 +155,16 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     category: "settings",
     subGroup: "system",
     requiredPermission: "update-api-keys",
+  },
+  {
+    title: "Webhooks",
+    href: ROUTES.SETTINGS_WEBHOOKS,
+    icon: Webhook,
+    category: "settings",
+    subGroup: "system",
+    // Any webhook grant reveals the item and the list route accepts them all —
+    // read/update view the list, create reaches the create form from there.
+    requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
   },
   {
     title: "Email Providers",

@@ -65,6 +65,7 @@ import type { SingleRegistryService } from "../../domains/singles/services/singl
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
+import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -76,8 +77,12 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
-import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import {
+  readAuthenticatedActor,
+  readAuthenticatedScope,
+} from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -345,6 +350,7 @@ export const SINGLE_VERSION_METHODS: Record<
         slug,
         entryId,
         user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
       });
@@ -378,6 +384,7 @@ export const SINGLE_VERSION_METHODS: Record<
         slug,
         entryId,
         user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
@@ -506,6 +513,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             localized?: boolean;
             // Version history opt-in; persists to dynamic_singles.versions.
             versions?: boolean;
+            // Cache-revalidation opt-out; persists to dynamic_singles.revalidate.
+            revalidate?: boolean;
           }
         | undefined;
 
@@ -663,6 +672,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // created with the switch on is written unversioned and the switch
         // reads as off the moment the editor loads.
         versions: resolveBuilderVersions(b.versions),
+        // Cache-revalidation opt-out from the create payload (null = standard
+        // tags, { disable: true } = off), so the write path reads it back.
+        revalidate: resolveBuilderRevalidate(b.revalidate),
         schemaHash,
         migrationStatus,
       });
@@ -718,7 +730,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
           : "all";
+      // Forward the caller so the service can evaluate the Single's stored read
+      // rules for them. Without it those rules cannot run at all: a rule that
+      // asks who is reading has no one to judge, so the admin's read setting
+      // silently did nothing over HTTP. `routeAuthorized` attests the route
+      // already ran the coarse RBAC gate, so only that re-check is skipped.
+      const user = readAuthenticatedUser(p);
+
       const result = await svc.entry.get(slug, {
+        user,
+        routeAuthorized: !!user,
+        // A scoped API key is judged on its own read grant rather than on the
+        // permissions of the account that issued it.
+        authenticatedScope: readAuthenticatedScope(p),
         depth: toNumber(p.depth),
         // `?locale=` selects the content language; `?fallback-locale=none`
         // disables fallback so an untranslated field reads empty (admin editor relies on
@@ -786,11 +810,18 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         {
           locale: p.locale,
           user,
+          // Who performed the write, recorded on the outbox event: an API-key
+          // caller attributes to the key itself rather than the user that owns
+          // it. Mirrors the collection update handler.
+          actor: readAuthenticatedActor(p),
           // Route auth already ran the RBAC gate; `routeAuthorized` skips only
           // that re-check while field-level write access + response redaction
           // still run for this user (overrideAccess stays false).
           overrideAccess: false,
           routeAuthorized: !!user,
+          // The route authorized only `update` against an API key's scope; the
+          // service-side publish/unpublish gate judges the key's own grants.
+          authenticatedScope: readAuthenticatedScope(p),
         }
       );
       const doc = unwrapServiceResult(result, { slug });
@@ -940,6 +971,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Version history toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.versions.
             versions?: boolean;
+            // Cache-revalidation toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.revalidate.
+            revalidate?: boolean;
           }
         | undefined;
 
@@ -973,6 +1007,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // stop the toggle from turning versioning off on a Draft/Published single.
       if (b.versions !== undefined) {
         updateData.versions = resolveBuilderVersions(b.versions);
+      }
+      // Cache-revalidation toggle, normalized to the resolved config the write
+      // path reads; on writes null (standard tags), off writes the disable config.
+      if (b.revalidate !== undefined) {
+        updateData.revalidate = resolveBuilderRevalidate(b.revalidate);
       }
       const wasLocalized = existing.localized === true;
       const isLocalized =

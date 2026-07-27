@@ -654,6 +654,9 @@ export class CollectionSyncService extends BaseService {
       status: config.status === true,
       localized: config.localized === true,
       versions: resolveVersionsConfig(config.versions, config.status),
+      // Forward the cache-revalidation config verbatim (no resolver — the
+      // authored `{ tags?, disable? }` shape is persisted as-is).
+      revalidate: config.revalidate,
       admin: config.admin
         ? {
             group: config.admin.group,

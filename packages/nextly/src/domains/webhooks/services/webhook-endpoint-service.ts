@@ -46,22 +46,41 @@ import {
   ExternalUrlError,
   validateExternalUrl,
 } from "../../../utils/validate-external-url";
+import type { DeliverTransport } from "../deliver";
 import type { WebhookEndpointRegistry } from "../endpoint-registry";
+import { decryptWebhookSecret, generateWebhookSecret } from "../secret";
 import {
-  decryptWebhookSecret,
-  encryptWebhookSecret,
-  generateWebhookSecret,
-  webhookSecretPrefix,
-} from "../secret";
+  liveSecretEntries,
+  newSecretEntry,
+  normalizeSecretEntries,
+  WEBHOOK_ROTATION_DEFAULT_OVERLAP_SECONDS,
+  WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS,
+  type StoredSecretEntry,
+} from "../secret-entries";
+import { runEndpointProbe, type WebhookTestResult } from "../test-endpoint";
 import { REDACTED_HEADER_VALUE } from "../types";
 import type { WebhookEventSubscription } from "../types";
 
 /**
+ * A signing secret described without revealing it: the display prefix and its
+ * lifecycle. `isPrimary` marks the secret new deliveries are prefixed by;
+ * `expiresAt` is when an overlapping (rotated-away) secret stops signing, or
+ * null for the primary. Safe to return on an ordinary read — it carries no key
+ * material, only what the admin needs to show a rotation's state.
+ */
+export interface WebhookSecretInfo {
+  prefix: string;
+  isPrimary: boolean;
+  createdAt: Date;
+  expiresAt: Date | null;
+}
+
+/**
  * An endpoint as any caller after creation sees it.
  *
- * Carries `secretPrefix` but never the secret or its ciphertext: reading the
- * secret is a separate, separately-authorisable act, so it must not ride along
- * on an ordinary list or fetch.
+ * Carries `secretPrefix` and the `secrets` lifecycle summary but never a secret
+ * or its ciphertext: reading a secret is a separate, separately-authorisable
+ * act, so it must not ride along on an ordinary list or fetch.
  */
 export interface WebhookEndpointSummary {
   id: string;
@@ -70,7 +89,10 @@ export interface WebhookEndpointSummary {
   enabled: boolean;
   eventTypes: WebhookEventSubscription[];
   headers: Record<string, string> | null;
+  /** Prefix of the current primary signing secret. */
   secretPrefix: string;
+  /** Every active signing secret's non-sensitive lifecycle, primary first. */
+  secrets: WebhookSecretInfo[];
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -96,6 +118,14 @@ export interface UpdateWebhookEndpointInput {
   eventTypes?: WebhookEventSubscription[];
   enabled?: boolean;
   headers?: Record<string, string> | null;
+}
+
+export interface RotateWebhookSecretInput {
+  /**
+   * How long the secret being rotated away stays valid, in seconds. 0 retires
+   * it immediately; the default (when omitted) is the standard overlap window.
+   */
+  overlapSeconds?: number;
 }
 
 type WebhooksTable =
@@ -256,8 +286,26 @@ export class WebhookEndpointService extends BaseService {
     }
   }
 
+  /**
+   * The row's signing secrets that are still live at `now`, primary first,
+   * tolerating both the current entry form and the legacy bare-string form.
+   * Shared by the summary (metadata only) and the reveal/test paths (which
+   * decrypt), so expired overlap secrets are never surfaced or signed with.
+   */
+  private liveSecretEntries(
+    row: { secretHash: unknown; secretPrefix: string; createdAt: Date },
+    now: Date = new Date()
+  ): StoredSecretEntry[] {
+    const entries = normalizeSecretEntries(row.secretHash, {
+      prefix: row.secretPrefix,
+      createdAt: row.createdAt.toISOString(),
+    });
+    return liveSecretEntries(entries, now);
+  }
+
   /** Narrow a stored row to what a caller may see. */
   private toSummary(row: WebhookRow): WebhookEndpointSummary {
+    const secrets = this.liveSecretEntries(row);
     return {
       id: row.id,
       name: row.name,
@@ -270,7 +318,15 @@ export class WebhookEndpointService extends BaseService {
       // values are not, because delivery sends them verbatim and they are
       // routinely a credential for the receiver.
       headers: redactHeaderValues(row.headers),
-      secretPrefix: row.secretPrefix,
+      // Derived from the live primary rather than the stored column so the two
+      // never drift; falls back to the column for a row with no live secret.
+      secretPrefix: secrets[0]?.prefix ?? row.secretPrefix,
+      secrets: secrets.map(entry => ({
+        prefix: entry.prefix,
+        isPrimary: entry.expiresAt === null,
+        createdAt: new Date(entry.createdAt),
+        expiresAt: entry.expiresAt ? new Date(entry.expiresAt) : null,
+      })),
       createdBy: row.createdBy,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -292,6 +348,9 @@ export class WebhookEndpointService extends BaseService {
 
     const secret = generateWebhookSecret();
     const now = new Date();
+    // A single primary entry (never-expiring). List-shaped from the first write,
+    // so a rotation appends an overlapping secret rather than migrating a shape.
+    const entry = newSecretEntry(secret, now);
     const row = {
       id: crypto.randomUUID(),
       name: input.name,
@@ -300,10 +359,8 @@ export class WebhookEndpointService extends BaseService {
       eventTypes: input.eventTypes,
       filter: null,
       headers: input.headers ?? null,
-      // List-shaped from the first write, so adding a second active secret
-      // during a rotation is an append rather than a migration.
-      secretHash: [encryptWebhookSecret(secret)],
-      secretPrefix: webhookSecretPrefix(secret),
+      secretHash: [entry],
+      secretPrefix: entry.prefix,
       fieldAllowlist: null,
       createdBy,
       createdAt: now,
@@ -528,8 +585,348 @@ export class WebhookEndpointService extends BaseService {
     const row = rows[0];
     if (!row) throw this.notFound(id);
 
-    const stored = Array.isArray(row.secretHash) ? row.secretHash : [];
-    return stored.map(value => decryptWebhookSecret(String(value)));
+    // Only live secrets are revealed: an expired overlap secret no longer signs
+    // anything, so returning it would just be a stale key to reconcile against.
+    return this.liveSecretEntries(row).map(entry =>
+      decryptWebhookSecret(entry.ciphertext)
+    );
+  }
+
+  /**
+   * Validate a requested overlap window, defaulting when omitted. Enforced in
+   * the service (not only the route) so a Direct-API caller cannot store an
+   * out-of-range window that would keep an old key alive indefinitely.
+   */
+  private resolveOverlapSeconds(value: number | undefined): number {
+    if (value === undefined) return WEBHOOK_ROTATION_DEFAULT_OVERLAP_SECONDS;
+    if (
+      !Number.isInteger(value) ||
+      value < 0 ||
+      value > WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "overlapSeconds",
+            code: "out_of_range",
+            message: `Overlap must be a whole number of seconds between 0 and ${WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS}.`,
+          },
+        ],
+        logContext: { reason: "webhook-overlap-out-of-range", value },
+      });
+    }
+    return value;
+  }
+
+  /**
+   * Read the endpoint's secrets under a `FOR UPDATE` row lock, let `mutate`
+   * compute the next entry list, and write it back in the same transaction.
+   *
+   * The lock serializes concurrent secret writes: a second rotation blocks until
+   * the first commits, then reads the updated row, so it can never overwrite the
+   * first's freshly-issued primary from a stale snapshot. The retired-row check
+   * runs inside the lock as well, so a rotation or expiry cannot write a secret
+   * back onto an endpoint a concurrent `deleteEndpoint` just soft-deleted and
+   * cleared. `secret_prefix` follows the new primary (the first entry). A missing
+   * or retired row throws not-found.
+   */
+  private async withLockedSecrets<T>(
+    id: string,
+    mutate: (
+      row: { secretHash: unknown; secretPrefix: string; createdAt: Date },
+      now: Date
+    ) => { entries: StoredSecretEntry[]; result: T }
+  ): Promise<T> {
+    const outcome = await this.query(() =>
+      this.adapter.transaction(async tx => {
+        const rows = await tx.select<{
+          secretHash: unknown;
+          secretPrefix: string;
+          createdAt: Date;
+          deletedAt: Date | null;
+        }>("nextly_webhooks", {
+          where: { and: [{ column: "id", op: "=", value: id }] },
+          limit: 1,
+          forUpdate: true,
+        });
+        const row = rows[0];
+        if (!row || row.deletedAt != null) return null;
+
+        const now = new Date();
+        const { entries, result } = mutate(row, now);
+        await tx.update(
+          "nextly_webhooks",
+          {
+            secret_hash: entries,
+            secret_prefix: entries[0]?.prefix ?? row.secretPrefix,
+            updated_at: now,
+          },
+          { and: [{ column: "id", op: "=", value: id }] }
+        );
+        return { result };
+      })
+    );
+    if (outcome === null) throw this.notFound(id);
+    return outcome.result;
+  }
+
+  /**
+   * Rotate the signing secret, keeping the previous one valid for an overlap
+   * window so a receiver can switch over without dropping a delivery.
+   *
+   * A fresh secret becomes the primary that new deliveries are prefixed by. The
+   * previous primary is stamped `expiresAt = now + overlapSeconds` and stays
+   * live (and signed with, via the Standard Webhooks multi-signature header)
+   * until then; `overlapSeconds = 0` retires it at once. At most one overlapping
+   * secret is kept — rotating again while one is still overlapping retires the
+   * older one — so a delivery never carries more than two signatures, and
+   * already-expired entries are pruned. The read-modify-write runs under a row
+   * lock, so concurrent rotations serialize rather than lose a secret. The new
+   * secret is returned once.
+   */
+  async rotateSecret(
+    id: string,
+    input: RotateWebhookSecretInput = {}
+  ): Promise<CreatedWebhookEndpoint> {
+    const overlapSeconds = this.resolveOverlapSeconds(input.overlapSeconds);
+
+    const secret = await this.withLockedSecrets(id, (row, now) => {
+      const fresh = generateWebhookSecret();
+      const primary = newSecretEntry(fresh, now);
+
+      // Only the outgoing primary earns an overlap window. Any other live entry
+      // is already an overlap from an earlier rotation; a new rotation
+      // supersedes it, so it is dropped rather than accumulated — bounding the
+      // signature header at two.
+      const previousPrimary = this.liveSecretEntries(row, now).find(
+        entry => entry.expiresAt === null
+      );
+      const entries: StoredSecretEntry[] = [primary];
+      if (previousPrimary && overlapSeconds > 0) {
+        entries.push({
+          ...previousPrimary,
+          expiresAt: new Date(
+            now.getTime() + overlapSeconds * 1000
+          ).toISOString(),
+        });
+      }
+      return { entries, result: fresh };
+    });
+
+    // The delivery path reads secrets from its own row, but the cached registry
+    // still lists this endpoint; invalidate so nothing serves a stale copy.
+    this.registry?.invalidate();
+
+    const updated = await this.getEndpoint(id);
+    if (!updated) throw this.notFound(id);
+    return { endpoint: updated, secret };
+  }
+
+  /**
+   * Retire every overlapping secret immediately, leaving only the primary. The
+   * deliberate way to cut a rotation's overlap short once the receiver has
+   * switched. Runs under the same row lock, so it cannot race a rotation or a
+   * delete. A no-op (beyond a timestamp touch) when there is nothing to expire.
+   */
+  async expireOldSecrets(id: string): Promise<WebhookEndpointSummary> {
+    await this.withLockedSecrets(id, (row, now) => {
+      const primaryOnly = this.liveSecretEntries(row, now).filter(
+        entry => entry.expiresAt === null
+      );
+      return { entries: primaryOnly, result: undefined };
+    });
+    this.registry?.invalidate();
+
+    const updated = await this.getEndpoint(id);
+    if (!updated) throw this.notFound(id);
+    return updated;
+  }
+
+  /**
+   * Send a signed synthetic `webhook.ping` to the endpoint and report whether it
+   * was reachable and accepted. A pure connectivity probe: it reads the endpoint
+   * RAW (real headers + secrets, unlike the read-redacted summary) and posts
+   * out-of-band, writing nothing to the outbox or the delivery queue. Works on a
+   * disabled endpoint too, so an operator can verify a receiver before enabling
+   * it. `transport` is injectable so tests drive outcomes without real network.
+   */
+  async testEndpoint(
+    id: string,
+    options?: {
+      transport?: DeliverTransport;
+      pingId?: string;
+      now?: () => Date;
+    }
+  ): Promise<WebhookTestResult> {
+    const rows = await this.query(
+      async () =>
+        (await this.db
+          .select()
+          .from(this.table)
+          .where(and(eq(this.table.id, id), isNull(this.table.deletedAt)))
+          .limit(1)) as WebhookRow[]
+    );
+    const row = rows[0];
+    if (!row) throw this.notFound(id);
+
+    const secrets = this.liveSecretEntries(row).map(entry =>
+      decryptWebhookSecret(entry.ciphertext)
+    );
+    if (secrets.length === 0) {
+      // A delivery must be signed; without a secret there is nothing to sign.
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This endpoint has no active signing secret to sign a test event.",
+        logContext: { entity: "webhook-endpoint", id },
+      });
+    }
+
+    const headers =
+      row.headers && typeof row.headers === "object"
+        ? (row.headers as Record<string, string>)
+        : null;
+
+    return runEndpointProbe({
+      webhookId: id,
+      url: row.url,
+      headers,
+      secrets,
+      pingId: options?.pingId ?? crypto.randomUUID(),
+      transport: options?.transport,
+      now: options?.now,
+    });
+  }
+
+  /**
+   * Re-arm a past delivery for another attempt. Scoped by `(webhookId,
+   * deliveryId)` so a delivery can only be re-sent through the endpoint that
+   * owns it.
+   *
+   * The unique `(webhook_id, event_id)` index forbids a second delivery row for
+   * the same event, so this UPDATES the existing row back to a due state rather
+   * than inserting: `pending`, `next_attempt_at = now`, lock cleared, and the
+   * attempt budget reset — while the capped `attempts[]` history is left intact
+   * so the prior failures stay visible. The delivery id (the Standard-Webhooks
+   * `webhook-id`) is reused, so a receiver that already processed it dedupes.
+   * The caller triggers the drain; the row is now claimable.
+   *
+   * Guards, resolved in this order: 404 if the delivery is unknown or belongs to
+   * another endpoint (a mistyped or never-created `webhookId` yields no scoped
+   * row and so is a not-found, never mistaken for a deleted endpoint); 409 if the
+   * delivery is still in flight (a drain worker holds an unexpired lease); 409 if
+   * the endpoint has been deleted or is disabled (delivering to it would fail).
+   *
+   * All of it runs in one transaction under a `FOR UPDATE` lock on the delivery
+   * row (a no-op on SQLite, whose transactions already serialize writers). The
+   * lock is the write's own lock, so a drain worker that would claim the delivery
+   * blocks until this commits, and a worker already holding an unexpired lease is
+   * seen and refused rather than revoked. Reading the row before writing is also
+   * how the outcome is known, so success is reported only when the row was armed.
+   *
+   * The endpoint's state is read inside the same transaction rather than through
+   * `getEndpoint` beforehand: `getEndpoint` cannot tell a soft-deleted endpoint
+   * from one that never existed (both read back as null), which would report a
+   * bogus id as a deleted-endpoint conflict instead of a not-found. Because a
+   * delivery row outlives its endpoint's soft-delete (the tombstone only cancels
+   * queued rows), confirming the delivery first and then inspecting the endpoint
+   * row's `deleted_at`/`enabled` distinguishes the three cases cleanly.
+   */
+  async redeliverDelivery(
+    webhookId: string,
+    deliveryId: string
+  ): Promise<void> {
+    const outcome = await this.query(() =>
+      this.adapter.transaction(async tx => {
+        const rows = await tx.select<{ lockedUntil: Date | null }>(
+          "nextly_webhook_deliveries",
+          {
+            where: {
+              and: [
+                { column: "id", op: "=", value: deliveryId },
+                { column: "webhookId", op: "=", value: webhookId },
+              ],
+            },
+            limit: 1,
+            forUpdate: true,
+          }
+        );
+        const delivery = rows[0];
+        if (!delivery) return "not-found" as const;
+
+        const leaseHeld =
+          delivery.lockedUntil != null &&
+          delivery.lockedUntil.getTime() > Date.now();
+        if (leaseHeld) return "in-flight" as const;
+
+        // The delivery exists, so its endpoint row does too (a hard delete
+        // cascades the delivery away). A tombstone (`deleted_at`) or a cleared
+        // `enabled` flag means the re-attempt would fail permanently.
+        const endpoints = await tx.select<{
+          enabled: boolean | number;
+          deletedAt: Date | null;
+        }>("nextly_webhooks", {
+          where: { and: [{ column: "id", op: "=", value: webhookId }] },
+          limit: 1,
+        });
+        const endpoint = endpoints[0];
+        if (!endpoint || endpoint.deletedAt != null) {
+          return "endpoint-deleted" as const;
+        }
+        // Truthiness, not a strict compare: SQLite stores the flag as 0/1.
+        if (!endpoint.enabled) return "endpoint-disabled" as const;
+
+        const now = new Date();
+        await tx.update(
+          "nextly_webhook_deliveries",
+          {
+            status: "pending",
+            next_attempt_at: now,
+            attempt_count: 0,
+            locked_by: null,
+            locked_until: null,
+            updated_at: now,
+          },
+          {
+            and: [
+              { column: "id", op: "=", value: deliveryId },
+              { column: "webhookId", op: "=", value: webhookId },
+            ],
+          }
+        );
+        return "rearmed" as const;
+      })
+    );
+
+    if (outcome === "not-found") {
+      throw NextlyError.notFound({
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+    if (outcome === "in-flight") {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This delivery is currently being sent; try again once it settles.",
+        logContext: { entity: "webhook-delivery", webhookId, deliveryId },
+      });
+    }
+    if (outcome === "endpoint-deleted") {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This endpoint has been deleted; its deliveries cannot be re-sent.",
+        logContext: { entity: "webhook-endpoint", id: webhookId },
+      });
+    }
+    if (outcome === "endpoint-disabled") {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This endpoint is disabled; enable it before re-sending deliveries.",
+        logContext: { entity: "webhook-endpoint", id: webhookId },
+      });
+    }
   }
 
   private notFound(id: string): NextlyError {

@@ -43,6 +43,87 @@ file by hand under `.changeset/` following an existing one.
   the Version PR suddenly lists ancient entries, check for resurrected
   `.changeset/*.md` files and delete them in a cleanup PR.
 - The npm `latest` dist-tag for the unscoped packages is managed manually
-  after publishes; a publish alone does not move it.
+  after publishes; a publish alone does not move it. Only move it once a
+  release is verified complete: promoting a partial train points a bare
+  `npm install` at a version whose siblings never shipped.
 - If the Version PR looks wrong, fix the inputs (changeset files on main);
   never edit the Version PR's generated diff by hand.
+
+## A publish is not atomic
+
+`changeset publish` pushes packages one at a time. When one fails, the rest
+are already live and cannot be unpublished, so a release can end up split
+across versions. Two guards exist:
+
+- `pnpm release:preflight` runs first inside `release:publish`. It refuses to
+  start when a package has incomplete publish metadata, when the versions are
+  not in lockstep, or when a package name has never been published (see
+  bootstrapping below). It costs one registry lookup per package and saves a
+  ten-minute build that could only end in a half-release.
+- `pnpm release:verify` runs after publishing and compares the registry to the
+  workspace. The consolidated tag and GitHub Release are created only when it
+  passes, so git and npm cannot disagree about what shipped.
+
+Run either by hand at any time; both are read-only.
+
+## Recovering a partial release
+
+Publishing is resumable: `changeset publish` skips versions the registry
+already has, so a re-run only attempts the missing packages.
+
+1. `pnpm release:verify` to list exactly which packages are missing and why.
+2. Fix the cause per package (metadata, npm access, trusted publisher).
+3. Land a commit on `main` that adds no new changeset. In prerelease mode the
+   `.changeset/*.md` files stay on disk after versioning, but the ones already
+   recorded in `pre.json.changesets` do not count as pending, so the action takes
+   the publish path and retries the current version. Adding a changeset instead
+   opens a Version PR and moves the train to the next version.
+4. Do not bump the version to "get a clean run": that abandons the partial
+   version permanently, leaving a hole where some packages exist at a version
+   and their siblings never do.
+
+Finalization (the consolidated tag and GitHub Release) is gated on the registry
+being complete, not on whether a particular run published something, so a
+recovery run still creates the tag for a release whose packages were published
+earlier.
+
+## Bootstrapping a brand-new package
+
+A trusted publisher is configured per package on npmjs.com, and it can only be
+attached to a package that exists. A new package therefore cannot publish
+through the normal OIDC flow on its first release, which surfaces as a `404
+… could not be found or you do not have permission to access it`.
+
+For each new package name, in order:
+
+1. Confirm the manifest carries `license`, `repository.directory`,
+   `engines.node`, and `publishConfig.access: "public"`. A scoped package
+   without `access: "public"` is published as restricted and fails.
+2. Claim the name with a placeholder that contains no code:
+
+   ```sh
+   npm login
+   node scripts/release/bootstrap-package.mjs @nextlyhq/<name>            # shows the plan
+   node scripts/release/bootstrap-package.mjs @nextlyhq/<name> --publish  # claims 0.0.0
+   ```
+
+   The helper refuses to run against a name that already exists, and publishes
+   only a `package.json` and a README. Real versions are always published by
+   CI. (`nextly` itself was claimed this way with a `0.0.1` stub.)
+
+3. Add the package's Trusted Publisher entry at
+   `https://www.npmjs.com/package/<name>/access`: repository `nextlyhq/nextly`,
+   workflow `release.yml`, environment `Production`. The environment name must
+   match the release workflow's `environment:` exactly, or publishing fails
+   with the same 404.
+4. Re-run the release so the package rejoins the train.
+
+There is no CI-only path for step 2, and no override for it: OIDC cannot perform
+a package's first publish, and giving CI a long-lived npm token just to claim a
+name would replace short-lived trusted publishing with a standing credential.
+The helper refuses to publish when `CI` is set for that reason. Preflight blocks
+the whole release until the name exists, which is deliberate: the alternative is
+publishing the rest of the train and stranding this package.
+
+Adding a package to the `fixed[]` group without completing the steps above is
+what makes the _next_ release fail.

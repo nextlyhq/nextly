@@ -31,3 +31,16 @@ export {
   getCollectionsHandler,
   getCollectionsService,
 } from "./routeHandler";
+
+// F1 cache revalidation — the Next adapter + read-side tagging helpers. Safe to
+// import here: this subpath is already Next-coupled. The write-side adapter
+// resolves `next/cache` lazily, so importing these never forces `next` at load.
+export {
+  NextCacheRevalidator,
+  registerNextCacheRevalidator,
+  nextlyTags,
+  nextlySingleTags,
+  cachedFind,
+  type NextCacheModule,
+  type CachedFindOptions,
+} from "./runtime/cache";

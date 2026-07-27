@@ -48,6 +48,9 @@
 // PR 4 migration: replaced ServiceError throws + mapLegacy/mapSimple helpers
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
+import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
+import type { WebhookRetentionRunner } from "../../../domains/webhooks/retention-runner";
 import { NextlyError } from "../../../errors";
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
@@ -187,8 +190,39 @@ export class MediaService {
      * `config.security.uploads.svgCsp` (default `true`).
      */
     private readonly svgCsp: boolean = true,
-    private readonly logger: Logger = consoleLogger
+    private readonly logger: Logger = consoleLogger,
+    /**
+     * Prunes the outbox after a media write appends an event. The media write
+     * path records events through this service, so it carries its own runner
+     * (the webhook handler's is not on this path), mirroring collections.
+     */
+    private readonly retentionRunner?: WebhookRetentionRunner,
+    /**
+     * Shared post-response drain fast path. A media write commits its outbox
+     * row inside the DB transaction; `offer()` then schedules the immediate
+     * drain so subscribers are notified without waiting for the periodic
+     * scheduled drain. Absent only when webhooks were never registered.
+     */
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
   ) {}
+
+  // A short prune pass on the write path: enough to keep the outbox from
+  // growing unbounded without turning a media write into a long maintenance
+  // job. Mirrors the collection write path.
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
+  /**
+   * The post-write side effects, run after a media write that appended an
+   * outbox event. The drain fast path goes first so the post-response
+   * `after()` callback is scheduled promptly (it adds no latency); the
+   * retention pass follows. Both absorb their own failures (`maybeRun` never
+   * throws, `offer` only registers the callback), so this never turns a
+   * committed media write into an error. Mirrors the collection write path.
+   */
+  private async afterWrite(): Promise<void> {
+    this.fastDrainScheduler?.offer();
+    await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
+  }
 
   /**
    * Get the storage adapter (supports both direct reference and getter function)
@@ -251,7 +285,10 @@ export class MediaService {
    */
   async upload(
     input: UploadMediaInput,
-    context: RequestContext
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event so an upload
+    // attributes to the real session or API key rather than only the uploader.
+    actor?: RequestActor
   ): Promise<MediaFile> {
     // Ensure storage is configured before upload
     this.ensureStorageConfigured();
@@ -311,18 +348,35 @@ export class MediaService {
     }
     const validated = validation.value;
 
-    const result = await this.legacyMediaService.uploadMedia({
-      file: validated.buffer,
-      filename: validated.filename,
-      mimeType: validated.mimeType,
-      // Use validated buffer length so the DB row matches what's actually
-      // in storage (SVG sanitization can shrink the byte count).
-      size: validated.buffer.length,
-      // Nullable: CLI seeds and system imports run without a user.
-      uploadedBy: context.user?.id ?? null,
-      contentDisposition:
-        validated.isSvg && this.svgCsp ? "attachment" : undefined,
-    });
+    // Validate the target folder BEFORE persisting the file so a bad folderId
+    // fails fast (throws NOT_FOUND) instead of leaving an orphaned upload, and
+    // so the folder can be written on the initial insert below rather than via a
+    // separate post-upload move.
+    if (input.folderId) {
+      await this.findFolderById(input.folderId, context);
+    }
+
+    const result = await this.legacyMediaService.uploadMedia(
+      {
+        file: validated.buffer,
+        filename: validated.filename,
+        mimeType: validated.mimeType,
+        // Use validated buffer length so the DB row matches what's actually
+        // in storage (SVG sanitization can shrink the byte count).
+        size: validated.buffer.length,
+        // Nullable: CLI seeds and system imports run without a user.
+        uploadedBy: context.user?.id ?? null,
+        // Persist the target folder on the initial insert so the committed row
+        // and its `media.uploaded` event reflect the final folder atomically,
+        // rather than recording folderId:null and moving the row afterward
+        // (which left subscribers seeing the wrong folder and no move event).
+        // The legacy insert normalizes a missing folder to null itself.
+        folderId: input.folderId ?? undefined,
+        contentDisposition:
+          validated.isSvg && this.svgCsp ? "attachment" : undefined,
+      },
+      actor
+    );
 
     if (!result.success || !result.data) {
       this.logger.warn("Media upload failed", {
@@ -331,11 +385,6 @@ export class MediaService {
         statusCode: result.statusCode,
       });
       throw this.mapLegacyErrorToNextlyError(result);
-    }
-
-    // Move to folder if specified
-    if (input.folderId) {
-      await this.moveToFolder(result.data.id, input.folderId, context);
     }
 
     this.logger.info("Media file uploaded", {
@@ -347,6 +396,9 @@ export class MediaService {
       mediaId: result.data.id,
       filename: result.data.filename,
     });
+
+    // The upload committed a media.uploaded outbox row; drain and prune it.
+    await this.afterWrite();
 
     return this.mapToMediaFile(result.data);
   }
@@ -436,18 +488,40 @@ export class MediaService {
   async update(
     mediaId: string,
     input: UpdateMediaInput,
-    _context: RequestContext
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event.
+    actor?: RequestActor
   ): Promise<MediaFile> {
     this.logger.debug("Updating media file", { mediaId, input });
 
     // Sanitize metadata fields before storage (defense-in-depth)
     sanitizeMediaInput(input);
 
-    const result = await this.legacyMediaService.updateMedia(mediaId, {
-      altText: input.altText ?? undefined,
-      caption: input.caption ?? undefined,
-      tags: input.tags,
-    });
+    // Attribute the write to the transport actor when present, otherwise to the
+    // request-context user. A Direct-API call (nextly.media.update({ user }))
+    // carries the user but no transport actor, so without this fallback its
+    // event would record as `system`. Plain-HTTP callers already pass a
+    // resolved `actor`, so this leaves them unchanged.
+    const resolvedActor = actorForWrite(actor, context.user);
+
+    // A metadata update may also move the item (folderId in the patch). Validate
+    // the target folder up front (throws NOT_FOUND) and forward it, so the move
+    // actually happens and is captured in the media.updated event rather than
+    // silently dropped. `null` moves to root and needs no validation.
+    if (input.folderId) {
+      await this.findFolderById(input.folderId, context);
+    }
+
+    const result = await this.legacyMediaService.updateMedia(
+      mediaId,
+      {
+        altText: input.altText ?? undefined,
+        caption: input.caption ?? undefined,
+        tags: input.tags,
+        ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
+      },
+      resolvedActor
+    );
 
     if (!result.success || !result.data) {
       if (result.statusCode === 404) {
@@ -461,6 +535,9 @@ export class MediaService {
 
     this.logger.info("Media file updated", { mediaId });
 
+    // The update committed a media.updated outbox row; drain and prune it.
+    await this.afterWrite();
+
     return this.mapToMediaFile(result.data);
   }
 
@@ -471,10 +548,24 @@ export class MediaService {
    * @param context - Request context
    * @throws NextlyError if deletion fails.
    */
-  async delete(mediaId: string, _context: RequestContext): Promise<void> {
+  async delete(
+    mediaId: string,
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event.
+    actor?: RequestActor
+  ): Promise<void> {
     this.logger.debug("Deleting media file", { mediaId });
 
-    const result = await this.legacyMediaService.deleteMedia(mediaId);
+    // Attribute the write to the transport actor when present, otherwise to the
+    // request-context user, so a Direct-API delete (which carries the user but
+    // no transport actor) is not recorded as `system`. Plain-HTTP callers pass
+    // a resolved `actor` and are unaffected.
+    const resolvedActor = actorForWrite(actor, context.user);
+
+    const result = await this.legacyMediaService.deleteMedia(
+      mediaId,
+      resolvedActor
+    );
 
     if (!result.success) {
       if (result.statusCode === 404) {
@@ -489,6 +580,9 @@ export class MediaService {
     this.logger.info("Media file deleted", { mediaId });
 
     emitMediaEvent("deleted", { mediaId });
+
+    // The delete committed a media.deleted outbox row; drain and prune it.
+    await this.afterWrite();
   }
 
   /**
@@ -505,7 +599,10 @@ export class MediaService {
    */
   async bulkUpload(
     inputs: UploadMediaInput[],
-    context: RequestContext
+    context: RequestContext,
+    // Forwarded to each per-item upload so every fan-out event attributes to
+    // the same transport-resolved caller.
+    actor?: RequestActor
   ): Promise<BulkUploadOperationResult<MediaFile>> {
     this.logger.debug("Bulk uploading media files", { count: inputs.length });
 
@@ -527,7 +624,7 @@ export class MediaService {
     const outcomes = await Promise.allSettled(
       inputs.map(async (input, i): Promise<UploadOutcome> => {
         try {
-          const file = await this.upload(input, context);
+          const file = await this.upload(input, context, actor);
           return { kind: "success", file };
         } catch (error) {
           // NextlyError thrown from below the boundary preserves canonical
@@ -608,7 +705,10 @@ export class MediaService {
    */
   async bulkDelete(
     mediaIds: string[],
-    context: RequestContext
+    context: RequestContext,
+    // Forwarded to each per-item delete so every fan-out event attributes to
+    // the same transport-resolved caller.
+    actor?: RequestActor
   ): Promise<BulkOperationResult<{ id: string }>> {
     this.logger.debug("Bulk deleting media files", { count: mediaIds.length });
 
@@ -624,7 +724,7 @@ export class MediaService {
     const outcomes = await Promise.allSettled(
       mediaIds.map(async (mediaId): Promise<DeleteOutcome> => {
         try {
-          await this.delete(mediaId, context);
+          await this.delete(mediaId, context, actor);
           return { kind: "success", id: mediaId };
         } catch (error) {
           if (NextlyError.is(error)) {
@@ -695,32 +795,44 @@ export class MediaService {
   async moveToFolder(
     mediaId: string,
     folderId: string | null,
-    _context: RequestContext
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event.
+    actor?: RequestActor
   ): Promise<void> {
     this.logger.debug("Moving media to folder", { mediaId, folderId });
 
-    const result = await this.legacyFolderService.moveMediaToFolder(
+    // Validate the target folder up front (throws NOT_FOUND) so a bad folder
+    // fails before the write, preserving the prior move path's 404 behavior.
+    if (folderId) {
+      await this.findFolderById(folderId, context);
+    }
+
+    // Route the move through the update path so the folder change is captured
+    // as a media.updated outbox event — a bare folder write recorded nothing,
+    // leaving subscribers unaware of moves. Attribute it to the transport actor
+    // when present, otherwise the request-context user.
+    const resolvedActor = actorForWrite(actor, context.user);
+    const result = await this.legacyMediaService.updateMedia(
       mediaId,
-      folderId
+      { folderId },
+      resolvedActor
     );
 
     if (!result.success) {
       if (result.statusCode === 404) {
         // Driver text moves into logContext per §13.8 — only generic "Not found."
-        // hits the wire. The legacyMessage is kept operator-side for diagnostics.
+        // hits the wire.
         throw NextlyError.notFound({
-          logContext: {
-            entity: "media",
-            mediaId,
-            folderId,
-            legacyMessage: result.message,
-          },
+          logContext: { entity: "media", mediaId, folderId },
         });
       }
-      throw this.mapSimpleErrorToNextlyError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Media moved to folder", { mediaId, folderId });
+
+    // The update committed a media.updated outbox row; drain and prune it.
+    await this.afterWrite();
   }
 
   /**

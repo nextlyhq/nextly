@@ -5,6 +5,8 @@
  * used across all split services (access, hook, query, mutation, bulk).
  */
 
+import type { RevalidationIntent } from "../../../revalidation/types";
+
 /**
  * Service result type for legacy format compatibility.
  * Used by collection services for consistent response structure.
@@ -40,6 +42,23 @@ export interface CollectionServiceResult<T = unknown> {
    * a write that recorded nothing (validation/access failure) does not.
    */
   eventRecorded?: boolean;
+  /**
+   * The cache tags/paths this write invalidates, computed at the write where the
+   * slug/previous-slug/locale are in scope and flushed post-commit (alongside the
+   * webhook fast-drain) through the registered {@link CacheRevalidator}. Absent
+   * when the write recorded nothing or revalidation is disabled for the target.
+   */
+  revalidationIntent?: RevalidationIntent;
+  /**
+   * Whether this operation committed a content write to the database — true for a
+   * create/update/delete that reached and committed its transaction (even one
+   * that opted out of BOTH recording and revalidation, and even one whose
+   * post-commit hook then threw), false for a rejected request (validation /
+   * access / not-found). The write-path retention pass keys off this so it runs
+   * for every durable write yet skips a request that changed nothing, without
+   * conflating `success` (a no-op reports success) with a committed write.
+   */
+  committed?: boolean;
 }
 
 /**
@@ -115,6 +134,12 @@ export interface BulkOperationResult<T = { id: string }> {
    * this so those events still get the immediate drain.
    */
   eventRecorded?: boolean;
+  /**
+   * The cache-revalidation intents of every committed item in the batch,
+   * aggregated so the post-commit flush busts all their tags at once. Absent
+   * when nothing was recorded or revalidation is disabled for the target.
+   */
+  revalidationIntents?: RevalidationIntent[];
 }
 
 /**
@@ -141,6 +166,12 @@ export interface BatchOperationResult {
    * yet owes deliveries. Set only after the shared transaction commits.
    */
   eventRecorded?: boolean;
+  /**
+   * The cache-revalidation intents of every committed item in the batch,
+   * aggregated so the post-commit flush busts all their tags at once. Absent
+   * when nothing was recorded or revalidation is disabled for the target.
+   */
+  revalidationIntents?: RevalidationIntent[];
 }
 
 /**

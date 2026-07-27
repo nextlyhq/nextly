@@ -6,7 +6,10 @@
  * @module plugins/admin-meta
  */
 
-import type { FieldTypeCategory } from "../collections/fields/catalog";
+import type {
+  FieldStoragePrimitive,
+  FieldTypeCategory,
+} from "../collections/fields/catalog";
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
@@ -110,6 +113,7 @@ export interface PluginAdminMeta {
   fieldTypes?: Array<{
     type: string;
     component: string;
+    storage: FieldStoragePrimitive;
     layout?: "takeover";
     label?: string;
     description?: string;
@@ -241,6 +245,11 @@ export function buildPluginAdminMeta(
       meta.fieldTypes = fieldTypes.map(ft => ({
         type: ft.type,
         component: ft.component,
+        // The storage primitive travels to the browser because binding
+        // compatibility is decided from it: a plugin type is not in the
+        // built-in union, so a picker cannot tell what its values look like
+        // without it.
+        storage: ft.storage,
         ...(ft.layout ? { layout: ft.layout } : {}),
         ...(ft.label ? { label: ft.label } : {}),
         ...(ft.description ? { description: ft.description } : {}),

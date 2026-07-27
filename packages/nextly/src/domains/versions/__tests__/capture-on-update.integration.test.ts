@@ -21,6 +21,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { HookContext } from "../../../hooks/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
@@ -109,6 +110,205 @@ describe("version capture on update (integration)", () => {
     const latest = rows[rows.length - 1];
     expect(latest.scopeKind).toBe("single");
     expect((latest.snapshot as { title?: string }).title).toBe("hello");
+  });
+
+  it("keeps a seeded localized default in v1 when the first update omits it (single auto-create)", async () => {
+    // First-write auto-create of a localized, versioned Single seeds the
+    // default-locale companion with the localized field defaults. When that
+    // first update touches only another field, the seeded default is still
+    // committed to the companion, so v1 must carry it — otherwise restoring v1
+    // silently drops content that was actually persisted.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // The first update auto-creates the Single and touches ONLY `tagline`; the
+    // defaulted `siteName` is never in the patch, only in the auto-create seed.
+    await singles.update(
+      "preferences",
+      { tagline: "hi" },
+      { overrideAccess: true, locale: "en" }
+    );
+
+    const rows = await versions(current, "preferences");
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    const v1 = rows[0];
+    const snapshot = v1.snapshot as { siteName?: string; tagline?: string };
+    // The seeded default survives into v1 alongside the written field.
+    expect(snapshot.siteName).toBe("My Site");
+    expect(snapshot.tagline).toBe("hi");
+    // v1 belongs to the default locale it carries content for.
+    expect(v1.locale).toBe("en");
+  });
+
+  it("tags v1 with the default locale when a shared-only first update seeds localized defaults", async () => {
+    // The first update touches only a SHARED field, so no localized field is
+    // written and `companionData` is empty. Without forcing the tag, the capture
+    // locale would be null, and a restore treats a null-locale snapshot of a
+    // localized document as shared-only and drops the seeded translations — the
+    // very defaults the overlay preserved. The snapshot must be tagged the
+    // default locale.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "region", localized: false }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    await singles.update(
+      "preferences",
+      { region: "us" },
+      { overrideAccess: true, locale: "en" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const v1 = rows[0];
+    const snapshot = v1.snapshot as { siteName?: string; region?: string };
+    expect(snapshot.siteName).toBe("My Site");
+    expect(v1.locale).toBe("en");
+  });
+
+  it("does not copy default-locale seeds into a non-default-locale first update snapshot", async () => {
+    // The seed persists localized defaults to the DEFAULT-locale companion only.
+    // A first write at a NON-default locale must not overlay them, or restoring
+    // that snapshot would materialize the defaults as real translations in the
+    // wrong locale.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // First update auto-creates at "de" and touches only `tagline`.
+    await singles.update(
+      "preferences",
+      { tagline: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const v1 = rows[0];
+    const snapshot = v1.snapshot as { siteName?: string; tagline?: string };
+    // The written non-default translation is captured...
+    expect(snapshot.tagline).toBe("hallo");
+    // ...but the default-locale seed is NOT leaked into the "de" snapshot.
+    expect(snapshot.siteName).toBeUndefined();
+    expect(v1.locale).toBe("de");
+  });
+
+  it("does not overlay defaults when a first update adopts a concurrently-inserted row", async () => {
+    // Race: this update enters with autoCreated=true (nothing existed at the
+    // pre-transaction read), but a concurrent first write inserts the row WITH a
+    // real translation before the transaction opens. The transaction then adopts
+    // that row instead of inserting, so it never seeds the defaults — overlaying
+    // them would let a restore overwrite the real translation with a schema
+    // default. A beforeUpdate hook stands in for the concurrent writer: it runs
+    // after autoCreated is resolved but before the transaction.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({
+              name: "siteName",
+              localized: true,
+              defaultValue: "My Site",
+            }),
+            text({ name: "region", localized: false }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    let raced = false;
+    current.hooks.register(
+      "beforeUpdate",
+      "*",
+      async (context: HookContext<Record<string, unknown>>) => {
+        if (!raced) {
+          raced = true;
+          // The concurrent writer persists the row with a REAL siteName.
+          await singles.update(
+            "preferences",
+            { siteName: "Real Name" },
+            { overrideAccess: true, locale: "en" }
+          );
+        }
+        return context.data;
+      }
+    );
+
+    // This outer first write touches only the shared `region`; it adopts the row
+    // the concurrent writer just inserted.
+    const outer = await singles.update(
+      "preferences",
+      { region: "us" },
+      { overrideAccess: true, locale: "en" }
+    );
+    // The adopting write itself must succeed and be captured, otherwise the
+    // assertions below would pass against the inner hook's write alone and never
+    // exercise the adopter branch this test targets.
+    expect(outer.success).toBe(true);
+
+    const rows = await versions(current, "preferences");
+    const last = rows[rows.length - 1];
+    const snapshot = last.snapshot as { siteName?: string; region?: string };
+    // The latest snapshot is the outer (adopting) write, proving we captured it.
+    expect(snapshot.region).toBe("us");
+    // ...and it did NOT overlay the schema default over the concurrently-written
+    // real translation.
+    expect(snapshot.siteName).not.toBe("My Site");
   });
 
   it("preserves an omitted component subtree in a scalar-only update snapshot", async () => {

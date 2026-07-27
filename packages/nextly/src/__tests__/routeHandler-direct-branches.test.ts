@@ -128,9 +128,11 @@ import {
   createJsonErrorResponse,
 } from "../auth/middleware";
 import { container } from "../di/container";
+import { readAuthenticatedUser } from "../dispatcher/helpers/authenticated-user";
 import {
   _handleAdminMetaRequestForTest,
   _handleAdminMetaSidebarGroupsForTest,
+  _needsResolvedRolesForTest,
   _setAuthenticatedRouteParamsForTest,
 } from "../routeHandler";
 import { resolveRoleSlugs } from "../services/lib/permissions";
@@ -439,5 +441,96 @@ describe("setAuthenticatedRouteParams", () => {
 
     expect(routeParams._authenticatedUserId).toBeUndefined();
     expect(routeParams._authenticatedUserRoles).toBeUndefined();
+  });
+});
+
+/**
+ * The role-resolution decision, tested apart from the stamping it drives.
+ *
+ * The suite above supplies `needsRoles` directly, so it can only prove that
+ * stamping honors the flag — never that a given request computes it correctly.
+ * Any service or method whose access check reads roles has to be listed in the
+ * decision, and a method missing from it fails silently: roles are simply absent
+ * downstream, and a role-based rule then denies a caller who should be allowed.
+ */
+describe("needsResolvedRoles", () => {
+  const resolveRoleSlugsMock = vi.mocked(resolveRoleSlugs);
+  const sessionUser = {
+    userId: "u1",
+    roles: ["role-id-1"],
+    permissions: [],
+    authMethod: "session" as const,
+  };
+
+  it("resolves roles for the entry reads that evaluate stored read rules", () => {
+    // These forward the caller into the query service, which evaluates the
+    // collection's stored read rules (role-based matching and the super-admin
+    // bypass) against the forwarded role set.
+    for (const method of ["listEntries", "getEntry", "countEntries"]) {
+      expect(_needsResolvedRolesForTest("collections", method, "GET")).toBe(
+        true
+      );
+    }
+  });
+
+  it("resolves roles for the Single document read", () => {
+    // Singles evaluate their stored read rule against the caller too, so a
+    // role-based rule needs the resolved slugs the same way entry reads do.
+    expect(
+      _needsResolvedRolesForTest("singles", "getSingleDocument", "GET")
+    ).toBe(true);
+  });
+
+  it("resolves roles for version reads", () => {
+    for (const method of [
+      "listEntryVersions",
+      "getEntryVersion",
+      "listSingleVersions",
+      "getSingleVersion",
+    ]) {
+      const service = method.includes("Single") ? "singles" : "collections";
+      expect(_needsResolvedRolesForTest(service, method, "GET")).toBe(true);
+    }
+  });
+
+  it("resolves roles for collection and single mutations", () => {
+    expect(
+      _needsResolvedRolesForTest("collections", "createEntry", "POST")
+    ).toBe(true);
+    expect(
+      _needsResolvedRolesForTest("collections", "deleteEntry", "DELETE")
+    ).toBe(true);
+    expect(_needsResolvedRolesForTest("singles", "updateSingle", "PATCH")).toBe(
+      true
+    );
+  });
+
+  it("skips the lookup for reads that consume no roles", () => {
+    // A permissions query on every one of these would be paid for nothing.
+    expect(_needsResolvedRolesForTest("media", "listMedia", "GET")).toBe(false);
+    expect(_needsResolvedRolesForTest("singles", "getSingle", "GET")).toBe(
+      false
+    );
+    expect(_needsResolvedRolesForTest("users", "listUsers", "GET")).toBe(false);
+    // A collection preflight carries no access decision of its own.
+    expect(
+      _needsResolvedRolesForTest("collections", "listMeta", "OPTIONS")
+    ).toBe(false);
+  });
+
+  it("carries the caller's roles all the way to the dispatcher for an entry read", async () => {
+    // The full chain the entry reads depend on: decide, stamp, then decode.
+    // Asserting only the first or last link lets a break in the middle pass.
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
+    const routeParams: Record<string, string> = { collectionName: "posts" };
+
+    await _setAuthenticatedRouteParamsForTest(
+      routeParams,
+      sessionUser,
+      _needsResolvedRolesForTest("collections", "listEntries", "GET")
+    );
+
+    const user = readAuthenticatedUser(routeParams);
+    expect(user).toMatchObject({ id: "u1", roles: ["editor"], role: "editor" });
   });
 });

@@ -1,4 +1,8 @@
-import type { FieldSurface, FieldTypeCategory } from "nextly/field-catalog";
+import type {
+  FieldStoragePrimitive,
+  FieldSurface,
+  FieldTypeCategory,
+} from "nextly/field-catalog";
 
 export interface ResolvedBrandingColors {
   primary?: string;
@@ -126,6 +130,8 @@ export interface PluginMetadata {
   fieldTypes?: Array<{
     type: string;
     component: string;
+    /** The primitive this type persists as; decides binding compatibility. */
+    storage: FieldStoragePrimitive;
     layout?: "takeover";
     label?: string;
     description?: string;

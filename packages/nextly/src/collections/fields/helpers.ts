@@ -50,6 +50,7 @@ import type {
   // Structured field types
   RepeaterFieldConfig,
   GroupFieldConfig,
+  BlocksFieldConfig,
   JSONFieldConfig,
   // Component field types
   ComponentFieldConfig,
@@ -605,6 +606,24 @@ export const group = (
  * })
  * ```
  */
+/**
+ * Creates a blocks field configuration.
+ *
+ * Holds one page-builder document. The block types it accepts are whichever
+ * are registered for the app, optionally narrowed by `blocks.allow`.
+ *
+ * @example
+ * ```typescript
+ * blocks({ name: 'content', blocks: { allow: ['core/*'] } })
+ * ```
+ */
+export const blocks = (
+  config: Omit<BlocksFieldConfig, "type">
+): BlocksFieldConfig => ({
+  ...config,
+  type: "blocks",
+});
+
 export const json = (
   config: Omit<JSONFieldConfig, "type">
 ): JSONFieldConfig => ({

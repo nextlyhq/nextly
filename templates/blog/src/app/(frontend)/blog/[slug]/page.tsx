@@ -43,13 +43,17 @@ import {
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
 
+// Pre-render every published post at build time. Freshness afterward is
+// tag-based: the post query helpers tag their reads (src/lib/queries), so
+// publishing, editing, or deleting a post busts the tag and this page
+// regenerates on the next request — no time-based `revalidate`. A rename
+// busts the collection tag too, so the old slug's page 404s once it moves.
 export async function generateStaticParams() {
   const slugs = await getAllPostSlugs();
   return slugs.map(slug => ({ slug }));
 }
 
-/** Revalidate each post page every 60 seconds (ISR). */
-export const revalidate = 60;
+// Slugs published after the last build render on first request.
 export const dynamicParams = true;
 
 export async function generateMetadata({

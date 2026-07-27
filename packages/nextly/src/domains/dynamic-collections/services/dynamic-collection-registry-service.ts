@@ -2,6 +2,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, asc, desc, count } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
+import type { RevalidateConfig } from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
@@ -35,6 +36,12 @@ export interface CollectionMetadata {
    * the `dynamic_collections.versions` JSON column.
    */
   versions?: ResolvedVersionsConfig | null;
+  /**
+   * Cache-revalidation config, or null when the collection sets none. Backed by
+   * the `dynamic_collections.revalidate` JSON column; the write path reads it to
+   * honor `disable` and merge extra `tags`.
+   */
+  revalidate?: RevalidateConfig | null;
   admin?: {
     group?: string;
     icon?: string;
@@ -186,6 +193,8 @@ export class DynamicCollectionRegistryService extends BaseService {
       // Resolved versioning config (or null when unversioned). Stored as JSON
       // the same way `admin` is; Drizzle serializes the object per dialect.
       versions: metadata.versions ?? null,
+      // Cache-revalidation config (or null). Stored as JSON like `versions`.
+      revalidate: metadata.revalidate ?? null,
       configPath: metadata.configPath,
       schemaHash: metadata.schemaHash,
       schemaVersion: metadata.schemaVersion ?? 1,
@@ -337,8 +346,14 @@ export class DynamicCollectionRegistryService extends BaseService {
     };
   }
 
-  async getCollection(slug: string): Promise<unknown> {
-    const result = await this.db
+  async getCollection(slug: string, executor?: unknown): Promise<unknown> {
+    // Run on the caller's transaction executor when supplied so this metadata
+    // read does not take a second pooled connection from inside the caller's
+    // transaction (which can stall against a small pool); falls back to the
+    // pooled connection otherwise. The transaction-bound Drizzle instance is the
+    // same query-builder shape as `this.db`.
+    const db = executor ?? this.db;
+    const result = await db
       .select()
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, slug))

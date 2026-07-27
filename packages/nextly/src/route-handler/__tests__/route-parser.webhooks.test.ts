@@ -86,6 +86,39 @@ describe("webhook routes", () => {
     ).toEqual({});
   });
 
+  it("parses a secret rotation", () => {
+    expect(
+      parseRestRoute(["webhooks", "wh_1", "secret", "rotate"], "POST")
+    ).toMatchObject({
+      service: "webhooks",
+      method: "rotateWebhookSecret",
+      routeParams: { webhookId: "wh_1" },
+    });
+  });
+
+  it("parses expiring the old secret", () => {
+    expect(
+      parseRestRoute(["webhooks", "wh_1", "secret", "expire-old"], "POST")
+    ).toMatchObject({
+      service: "webhooks",
+      method: "expireWebhookOldSecrets",
+      routeParams: { webhookId: "wh_1" },
+    });
+  });
+
+  it("routes rotate and expire-old only under POST", () => {
+    // Both mint or retire key material, so a non-POST (including a CSRF-driven
+    // top-level GET navigation) must not reach them.
+    for (const method of ["GET", "PATCH", "DELETE"]) {
+      expect(
+        parseRestRoute(["webhooks", "wh_1", "secret", "rotate"], method)
+      ).toEqual({});
+      expect(
+        parseRestRoute(["webhooks", "wh_1", "secret", "expire-old"], method)
+      ).toEqual({});
+    }
+  });
+
   it("does not match a path nested deeper than an endpoint", () => {
     expect(parseRestRoute(["webhooks", "wh_1", "a", "b"], "GET")).toEqual({});
   });
@@ -164,5 +197,52 @@ describe("webhook routes", () => {
 
   it("does not route an unsupported method on the collection", () => {
     expect(parseRestRoute(["webhooks"], "DELETE")).toEqual({});
+  });
+
+  it("parses the endpoint test-ping on POST", () => {
+    expect(parseRestRoute(["webhooks", "wh_1", "test"], "POST")).toMatchObject({
+      service: "webhooks",
+      method: "testWebhookEndpoint",
+      routeParams: { webhookId: "wh_1" },
+    });
+  });
+
+  it("does not route a non-POST method to test-ping", () => {
+    for (const method of ["GET", "PATCH", "DELETE"] as const) {
+      expect(parseRestRoute(["webhooks", "wh_1", "test"], method)).toEqual({});
+    }
+  });
+
+  it("parses a delivery redeliver on POST", () => {
+    expect(
+      parseRestRoute(
+        ["webhooks", "wh_1", "deliveries", "del_1", "redeliver"],
+        "POST"
+      )
+    ).toMatchObject({
+      service: "webhooks",
+      method: "redeliverWebhookDelivery",
+      routeParams: { webhookId: "wh_1", deliveryId: "del_1" },
+    });
+  });
+
+  it("does not route a non-POST method to redeliver", () => {
+    for (const method of ["GET", "PATCH", "DELETE"] as const) {
+      expect(
+        parseRestRoute(
+          ["webhooks", "wh_1", "deliveries", "del_1", "redeliver"],
+          method
+        )
+      ).toEqual({});
+    }
+  });
+
+  it("does not match an unknown action under a delivery", () => {
+    expect(
+      parseRestRoute(
+        ["webhooks", "wh_1", "deliveries", "del_1", "bogus"],
+        "POST"
+      )
+    ).toEqual({});
   });
 });

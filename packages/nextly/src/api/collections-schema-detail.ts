@@ -33,6 +33,7 @@ import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
 } from "../plugins/admin-views";
+import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import { getHandlerConfig } from "../route-handler/auth-handler";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
@@ -213,6 +214,14 @@ export const PATCH = withErrorHandler(
     // collection.
     if (body.versions !== undefined) {
       updateData.versions = resolveBuilderVersions(body.versions === true);
+    }
+
+    // Cache-revalidation toggle, normalized to the resolved config the write
+    // path reads; on writes null (standard tags), off writes the disable config.
+    if (body.revalidate !== undefined) {
+      updateData.revalidate = resolveBuilderRevalidate(
+        body.revalidate === true
+      );
     }
 
     // Admin fields: support both nested admin object and flat top-level

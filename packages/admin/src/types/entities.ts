@@ -306,6 +306,14 @@ export interface ApiSingle {
    */
   versions?: { enabled?: boolean } | null;
 
+  /**
+   * Resolved cache-revalidation config, or null/absent when revalidation is on
+   * with no override. The server normalizes the Schema Builder's on/off into
+   * this shape (off → `{ disable: true }`), so reads carry the object while
+   * writes send a boolean — see `UpdateSinglePayload`.
+   */
+  revalidate?: { disable?: boolean; tags?: string[] } | null;
+
   /** Current migration status */
   migrationStatus?: SingleMigrationStatus;
 
@@ -319,12 +327,16 @@ export interface ApiSingle {
 /**
  * What a Single schema update may send.
  *
- * Most keys mirror the read shape, but `versions` does not: the Schema Builder
- * offers on/off and the server resolves that into the config `ApiSingle`
- * carries back.
+ * Most keys mirror the read shape, but `versions` and `revalidate` do not: the
+ * Schema Builder offers on/off and the server resolves each into the config
+ * `ApiSingle` carries back.
  */
-export type UpdateSinglePayload = Omit<Partial<ApiSingle>, "versions"> & {
+export type UpdateSinglePayload = Omit<
+  Partial<ApiSingle>,
+  "versions" | "revalidate"
+> & {
   versions?: boolean;
+  revalidate?: boolean;
 };
 
 // ==================== COMPONENT TYPES ====================

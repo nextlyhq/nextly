@@ -38,12 +38,14 @@ jobs:
       # locates the bug.
       fail-fast: false
       matrix:
-        dialect: [postgres, mysql, sqlite]
+        dialect: [postgres, mysql]
 
-    # Both databases boot for every leg: GitHub cannot attach a `services:`
-    # entry conditionally per matrix value, and an idle container costs
-    # nothing. Each leg only connects to the one its dialect needs; sqlite
-    # runs in-process against a throwaway file.
+    # Both databases boot for both legs: GitHub cannot attach a `services:`
+    # entry conditionally per matrix value, so the postgres leg also starts
+    # mysql and vice versa. Each leg connects only to the one its dialect
+    # needs. sqlite is a separate job below precisely because it needs
+    # neither, and starting containers for it made an unrelated registry
+    # outage able to fail a leg with no database dependency.
     services:
       postgres:
         image: postgres:17
@@ -133,8 +135,47 @@ jobs:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
 
+  # sqlite runs in-process against a throwaway file, so this job declares no
+  # `services:` at all. Keeping it out of the matrix above means it never pulls
+  # the postgres/mysql images it would not connect to, which removes its only
+  # external network dependency: a container-registry outage can no longer fail
+  # a leg that needs no database. The job name matches the old matrix leg so the
+  # check keeps its identity.
+  integration-sqlite:
+    name: Integration (sqlite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Cache Turbo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Builds all three adapters for the same reason the database job does:
+      # nextly's database/factory.ts references them as optional peers, and
+      # turbo's `^build` does not traverse peerDependencies.
       - name: Run integration tests (sqlite)
-        if: matrix.dialect == 'sqlite'
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite
           pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly

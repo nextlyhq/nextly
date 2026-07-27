@@ -5,8 +5,10 @@
  * toggles. Falls back to sensible defaults if the single hasn't been
  * populated yet.
  *
- * Cached via React's `cache()` so multiple components on the same
- * request share a single DB fetch.
+ * Wrapped in React's `cache()` so multiple components on the same request
+ * share a single DB fetch, and in `cachedFind` so the result persists
+ * across requests until an edit to the homepage single busts
+ * `nextlySingleTags("homepage")`.
  */
 
 import { cache } from "react";
@@ -14,6 +16,7 @@ import { cache } from "react";
 // Pass nextlyConfig (loaded via the -config path alias) so
 // getNextly() bootstraps with this project's collections list.
 import { getNextly } from "nextly";
+import { cachedFind, nextlySingleTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
 
 export interface Homepage {
@@ -46,27 +49,34 @@ const DEFAULTS: Homepage = {
 
 export const getHomepage = cache(async (): Promise<Homepage> => {
   try {
-    const nextly = await getNextly({ config: nextlyConfig });
-    const hp = await nextly.findSingle({ slug: "homepage", depth: 0 });
-    if (!hp) return DEFAULTS;
-    return {
-      heroTitle: (hp.heroTitle as string) || DEFAULTS.heroTitle,
-      heroSubtitle: (hp.heroSubtitle as string) || DEFAULTS.heroSubtitle,
-      showFeaturedPost: hp.showFeaturedPost !== false,
-      featuredSectionTitle:
-        (hp.featuredSectionTitle as string) || DEFAULTS.featuredSectionTitle,
-      showLatestPosts: hp.showLatestPosts !== false,
-      latestSectionTitle:
-        (hp.latestSectionTitle as string) || DEFAULTS.latestSectionTitle,
-      latestPostsCount:
-        (hp.latestPostsCount as number) || DEFAULTS.latestPostsCount,
-      showCategoryStrip: hp.showCategoryStrip !== false,
-      showNewsletterCta: hp.showNewsletterCta !== false,
-      newsletterHeading:
-        (hp.newsletterHeading as string) || DEFAULTS.newsletterHeading,
-      newsletterSubheading:
-        (hp.newsletterSubheading as string) || DEFAULTS.newsletterSubheading,
-    };
+    return await cachedFind(
+      async () => {
+        const nextly = await getNextly({ config: nextlyConfig });
+        const hp = await nextly.findSingle({ slug: "homepage", depth: 0 });
+        if (!hp) return DEFAULTS;
+        return {
+          heroTitle: (hp.heroTitle as string) || DEFAULTS.heroTitle,
+          heroSubtitle: (hp.heroSubtitle as string) || DEFAULTS.heroSubtitle,
+          showFeaturedPost: hp.showFeaturedPost !== false,
+          featuredSectionTitle:
+            (hp.featuredSectionTitle as string) ||
+            DEFAULTS.featuredSectionTitle,
+          showLatestPosts: hp.showLatestPosts !== false,
+          latestSectionTitle:
+            (hp.latestSectionTitle as string) || DEFAULTS.latestSectionTitle,
+          latestPostsCount:
+            (hp.latestPostsCount as number) || DEFAULTS.latestPostsCount,
+          showCategoryStrip: hp.showCategoryStrip !== false,
+          showNewsletterCta: hp.showNewsletterCta !== false,
+          newsletterHeading:
+            (hp.newsletterHeading as string) || DEFAULTS.newsletterHeading,
+          newsletterSubheading:
+            (hp.newsletterSubheading as string) ||
+            DEFAULTS.newsletterSubheading,
+        };
+      },
+      { tags: nextlySingleTags("homepage"), keyParts: ["single", "homepage"] }
+    );
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
       console.warn(
