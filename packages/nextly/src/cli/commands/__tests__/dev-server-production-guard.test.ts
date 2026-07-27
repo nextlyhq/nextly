@@ -130,5 +130,11 @@ describe("performAutoSync production guard", () => {
         `\`nextly ${name}\` is not a registered command`
       ).toContain(name);
     }
+
+    // The guidance must survive a literal copy-paste into a shell: a bare
+    // angle-bracket placeholder like `--name=<name>` is parsed as
+    // redirection, so placeholders must be wrapped in double quotes
+    // (`--name="<migration-name>"`), which makes the brackets literal.
+    expect(output).not.toMatch(/(?<!")<[^>]*>(?!")/);
   });
 });
