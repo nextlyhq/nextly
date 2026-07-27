@@ -43,6 +43,7 @@ import {
   AccessControlService,
   isSuperAdminContext,
 } from "../../../services/access";
+import { describeUntranslatableConstraint } from "../../../services/access/constraint-shape";
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
@@ -59,6 +60,10 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import {
+  buildWhereClause,
+  type WhereFilter,
+} from "../../collections/query/query-operators";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   populateCompanionFields,
@@ -421,6 +426,83 @@ export class SingleQueryService extends BaseService {
   private readonly accessControlService: AccessControlService;
 
   /**
+   * Decide a `custom` read rule against the stored document.
+   *
+   * The rule's function answers with a boolean or with a query constraint. A
+   * constraint is the predicate a list read would fold into SQL, and a Single
+   * has no list to fold it into — so it is handed to the database as the filter
+   * on a single-row fetch instead. Selecting nothing means the row does not
+   * satisfy the rule.
+   *
+   * The constraint's shape is checked first, because the translator drops what
+   * it cannot handle: a partly translated constraint would select under a weaker
+   * predicate than the rule states.
+   *
+   * Returns the denial to propagate, or the row the constraint selected so the
+   * caller reuses it rather than re-reading.
+   */
+  private async evaluateCustomRead(params: {
+    slug: string;
+    singleMeta: { tableName: string; fields?: FieldConfig[] };
+    accessRules: CollectionAccessRules | undefined;
+    user?: UserContext;
+  }): Promise<{ denied?: SingleResult; document?: SingleDocument | null }> {
+    const { slug, singleMeta, accessRules, user } = params;
+    const denied: SingleResult = {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: read on single "${slug}" is not permitted`,
+    };
+    if (!accessRules) return {};
+
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      "read",
+      {
+        user: user
+          ? {
+              id: user.id,
+              role: user.role,
+              roles: user.roles,
+              email: user.email,
+            }
+          : undefined,
+      }
+    );
+    if (!result.allowed) {
+      return {
+        denied: { ...denied, message: result.reason ?? denied.message },
+      };
+    }
+    // A boolean answer decides on the caller alone; there is nothing to filter.
+    if (result.query === undefined || result.query === null) return {};
+
+    const constraint = result.query;
+    const fieldNames = new Set(
+      (singleMeta.fields ?? []).map(f => (f as { name?: string }).name ?? "")
+    );
+    const untranslatable = describeUntranslatableConstraint(constraint, name =>
+      fieldNames.has(name)
+    );
+    if (untranslatable !== null) {
+      this.logger.warn("Refused an untranslatable access constraint", {
+        single: slug,
+        reason: untranslatable,
+      });
+      return { denied };
+    }
+
+    const document = await this.adapter.selectOne<SingleDocument>(
+      singleMeta.tableName,
+      { where: buildWhereClause(constraint as WhereFilter) }
+    );
+    // No row satisfies the rule. Denying also stops auto-create from
+    // materializing a document the constraint excludes.
+    if (!document) return { denied };
+    return { document };
+  }
+
+  /**
    * Decide an `owner-only` read against the loaded row.
    *
    * `checkSingleAccess` runs before the row is fetched and fails an owner-only
@@ -515,16 +597,16 @@ export class SingleQueryService extends BaseService {
         isSuperAdminContext(options.user) &&
         options.authenticatedScope?.actorType !== "apiKey";
       // Both kinds are skipped at the gate, which has no row to judge them
-      // against, but only owner-only is settled below. A `custom` function may
-      // return an arbitrary query constraint, and honouring that on one document
-      // means re-implementing the filter grammar a list read compiles in SQL —
-      // a second evaluator to drift from the first. Custom read rules on Singles
-      // are therefore left unenforced here rather than half-enforced.
+      // against, and each is settled below against the loaded document: an
+      // owner-only rule by comparing the owner column, a custom rule by handing
+      // its constraint to the database as a filter.
       const skipRuleAtGate =
         !isSuperAdminSession &&
         (readRule?.type === "owner-only" || readRule?.type === "custom");
       const deferDocumentRule =
         !isSuperAdminSession && readRule?.type === "owner-only";
+      const deferCustomRule =
+        !isSuperAdminSession && readRule?.type === "custom";
 
       const accessDenied = await checkSingleAccess({
         slug,
@@ -566,6 +648,23 @@ export class SingleQueryService extends BaseService {
           document: loadedDoc,
         });
         if (documentRuleDenied) return documentRuleDenied;
+      }
+
+      // 1.7. Settle a custom rule the same way, and before the same side
+      // effects. A custom function may answer with a boolean or with a query
+      // constraint; a constraint is applied BY THE DATABASE rather than compared
+      // here, so the predicate a list read would compile is the one that decides
+      // — there is no second evaluator to drift from it — and the row it selects
+      // is the materialized row, not a prediction about it.
+      if (deferCustomRule && !options.overrideAccess) {
+        const customDenied = await this.evaluateCustomRead({
+          slug,
+          singleMeta,
+          accessRules: singleMeta.accessRules,
+          user: options.user,
+        });
+        if (customDenied.denied) return customDenied.denied;
+        loadedDoc = customDenied.document ?? loadedDoc;
       }
 
       // 2. Build shared context for hooks (seed with caller-provided context)

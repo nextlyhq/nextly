@@ -248,16 +248,15 @@ describe("SingleQueryService.get — owner-only reads (real evaluator)", () => {
 });
 
 /**
- * Custom read rules are deliberately NOT enforced on Singles yet.
+ * Custom read rules are consulted on Singles.
  *
- * A custom function may return an arbitrary query constraint, which a list read
- * compiles into SQL. Honouring that against one document means re-implementing
- * the filter grammar, and a second evaluator drifts from the first — the
- * divergence being a security bug rather than a missing feature. Until the
- * constraint can be applied by the database, a custom read rule is left as it
- * behaves today rather than half-enforced.
+ * A custom function may answer with a boolean or with a query constraint; the
+ * constraint is applied BY THE DATABASE as the filter on a single-row fetch, so
+ * the predicate a list read compiles is the one that decides. End-to-end
+ * behaviour is covered by `custom-read-constraint.integration.test.ts`, which
+ * needs a real schema; this pins that the rule is reached at all.
  */
-describe("SingleQueryService.get — custom read rules are not enforced yet", () => {
+describe("SingleQueryService.get — custom read rules are consulted", () => {
   function createCustomRuleService(row: Record<string, unknown> | null) {
     const registry = createMockSingleRegistry();
     registry.registerSingle("site-settings", {
@@ -282,7 +281,7 @@ describe("SingleQueryService.get — custom read rules are not enforced yet", ()
     return { service, evaluateAccess };
   }
 
-  it("reads through without consulting the rule", async () => {
+  it("consults the rule rather than reading through", async () => {
     const { service, evaluateAccess } = createCustomRuleService({
       id: "doc1",
       siteName: "Nextly",
@@ -293,10 +292,10 @@ describe("SingleQueryService.get — custom read rules are not enforced yet", ()
       routeAuthorized: true,
     });
 
-    // Unchanged from before read rules were wired: the rule is not evaluated,
-    // so it can neither admit nor deny, and nothing is half-applied.
-    expect(result.success).toBe(true);
-    expect(evaluateAccess).not.toHaveBeenCalled();
+    // The rule decides. A stub returning no verdict denies, which is the safe
+    // direction; what matters here is that it was asked.
+    expect(evaluateAccess).toHaveBeenCalled();
+    void result;
   });
 });
 
