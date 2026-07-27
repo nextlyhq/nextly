@@ -44,3 +44,12 @@ export {
   type NextCacheModule,
   type CachedFindOptions,
 } from "./runtime/cache";
+
+// SEO bridge — map the plugin's `seo` field group to a Next `Metadata` object.
+// The `next` import is type-only, so this never forces `next` at load.
+export {
+  buildMetadata,
+  type BuildMetadataOptions,
+  type MetadataEntry,
+  type SeoMetaInput,
+} from "./runtime/seo";
