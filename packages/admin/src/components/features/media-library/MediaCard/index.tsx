@@ -153,6 +153,12 @@ export function MediaCard({
 
   // Determine if checkbox should be shown
   const showCheckbox = onSelectionChange !== undefined;
+
+  // Named once so the rendered text and its `title` fallback cannot drift.
+  const dimensionsLabel =
+    media.width && media.height ? `${media.width}×${media.height}` : "No Size";
+  const sizeLabel = formatFileSize(media.size);
+
   return (
     <div
       role="button"
@@ -223,14 +229,25 @@ export function MediaCard({
           <p className="text-xs font-bold text-foreground dark:text-muted-foreground truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}
           </p>
+          {/* The six-column grid leaves cards around 84px wide at the `lg`
+           * breakpoint, narrower than a dimensions/size pair can render on one
+           * line. Neither value has a break opportunity, and the card clips its
+           * overflow, so without a shrink policy the text is cut mid-glyph.
+           * Dimensions truncate (the ellipsis reads as "there is more"); the
+           * shorter size holds its width so the value stays whole. `title`
+           * keeps both readable at any card width. */}
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase tracking-widest">
-              {media.width && media.height
-                ? `${media.width}×${media.height}`
-                : "No Size"}
+            <span
+              title={dimensionsLabel}
+              className="text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase tracking-widest min-w-0 truncate"
+            >
+              {dimensionsLabel}
             </span>
-            <span className="text-xs font-bold text-muted-foreground dark:text-muted-foreground uppercase tracking-tighter">
-              {formatFileSize(media.size)}
+            <span
+              title={sizeLabel}
+              className="text-xs font-bold text-muted-foreground dark:text-muted-foreground uppercase tracking-tighter shrink-0"
+            >
+              {sizeLabel}
             </span>
           </div>
         </div>
