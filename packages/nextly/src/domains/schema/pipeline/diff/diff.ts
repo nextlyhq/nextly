@@ -44,6 +44,13 @@ import type {
   TableSpec,
 } from "./types";
 
+/**
+ * PostgreSQL's rendering of the default a `serial` column carries implicitly.
+ * Matched rather than normalised because the two sides are not two spellings
+ * of one value: the desired side has no default at all.
+ */
+const SEQUENCE_DEFAULT = /^nextval\(/i;
+
 export function diffSnapshots(
   prev: NextlySchemaSnapshot,
   cur: NextlySchemaSnapshot
@@ -201,7 +208,23 @@ function diffColumns(
       // `'draft'`. See ./normalize-default.ts for the bounded set of
       // equivalences. The emitted op carries the original, un-normalised
       // values so downstream tooling sees what's actually stored.
-      if (normalizeDefault(prevC.default) !== normalizeDefault(curC.default)) {
+      // The column type is passed so a boolean default compares by meaning:
+      // MySQL stores booleans as tinyint(1) and reports 1/0 where the schema
+      // authored true/false.
+      //
+      // A serial column is the other asymmetry: its sequence default belongs
+      // to the type, so the desired side declares no default while PostgreSQL
+      // reports the materialised `nextval('<table>_id_seq'::regclass)`. Read
+      // literally that is a default being removed on every reconcile.
+      const prevIsSequenceDefault = SEQUENCE_DEFAULT.test(prevC.default ?? "");
+      const sequenceDefaultUnchanged =
+        prevIsSequenceDefault && curC.default === undefined;
+
+      if (
+        !sequenceDefaultUnchanged &&
+        normalizeDefault(prevC.default, prevC.type) !==
+          normalizeDefault(curC.default, curC.type)
+      ) {
         defaultChanges.push({
           type: "change_column_default",
           tableName,

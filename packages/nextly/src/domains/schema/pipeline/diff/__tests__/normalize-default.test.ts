@@ -233,9 +233,62 @@ describe("normalizeDefault — passthrough behaviour", () => {
     expect(normalizeDefault("some_unknown_expr(1,2)")).toBe(
       "some_unknown_expr(1,2)"
     );
-    // Keywords now normalise to lower case, because the dialects report them
-    // back in whatever case they choose. Non-keyword expressions still pass
-    // through untouched, which is what this case is really guarding.
-    expect(normalizeDefault("CURRENT_TIMESTAMP")).toBe("current_timestamp");
+    // Keywords normalise to lower case, because the dialects report them back
+    // in whatever case they choose. Non-keyword expressions still pass through
+    // untouched, which is what this case is really guarding.
+    expect(normalizeDefault("MyFunc()")).toBe("MyFunc()");
+  });
+});
+
+/**
+ * MySQL reports defaults for the schema this project itself writes in forms
+ * the desired side never spells that way, which made the core reconciler emit
+ * a default change for every timestamp and boolean column — so `nextly
+ * migrate` applied once and then refused to run again against its own output.
+ */
+describe("normalizeDefault — MySQL equivalences", () => {
+  it("treats current_timestamp and now() as the same default", () => {
+    expect(normalizeDefault("CURRENT_TIMESTAMP")).toBe(
+      normalizeDefault("now()")
+    );
+    expect(normalizeDefault("current_timestamp")).toBe("now()");
+  });
+
+  it("carries a precision argument across the collapse", () => {
+    // A DATETIME(3) column authored `CURRENT_TIMESTAMP(3)` reads back from
+    // MySQL as `now(3)`.
+    expect(normalizeDefault("CURRENT_TIMESTAMP(3)")).toBe(
+      normalizeDefault("now(3)")
+    );
+    // Precision is part of the value, so it is not discarded: a column
+    // defaulting to whole seconds is not the same as one keeping millis.
+    expect(normalizeDefault("current_timestamp(3)")).not.toBe(
+      normalizeDefault("now()")
+    );
+  });
+
+  it("reads 1 and 0 as booleans on a boolean column", () => {
+    // MySQL booleans ARE tinyint(1), so a boolean default comes back as 1/0
+    // where the schema authored true/false.
+    expect(normalizeDefault("1", "tinyint(1)")).toBe(
+      normalizeDefault("true", "boolean")
+    );
+    expect(normalizeDefault("0", "tinyint(1)")).toBe(
+      normalizeDefault("false", "boolean")
+    );
+  });
+
+  it("does not read 1 as a boolean on an integer column", () => {
+    // The whole point of passing the type: on an int column `1` is the
+    // number, and collapsing it would hide a real default change.
+    expect(normalizeDefault("1", "int")).not.toBe(
+      normalizeDefault("true", "boolean")
+    );
+    expect(normalizeDefault("1", "int")).toBe("1");
+  });
+
+  it("still normalises a boolean default when no type is supplied", () => {
+    // Without a type the literal is left alone rather than guessed at.
+    expect(normalizeDefault("1")).toBe("1");
   });
 });
