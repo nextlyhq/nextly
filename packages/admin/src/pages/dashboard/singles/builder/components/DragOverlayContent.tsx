@@ -87,14 +87,14 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
             {field.label || field.name || "Unnamed Field"}
           </span>
           {isRequired && (
-            <span className="text-[10px] px-2 py-0 bg-destructive-50 text-destructive-600 font-normal rounded-sm  border border-border border-destructive-200">
+            <span className="text-xs px-2 py-0 bg-destructive-50 text-destructive-600 font-normal rounded-sm  border border-border border-destructive-200">
               Required
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>{field.name || "unnamed"}</span>
-          <span className="text-[10px]">•</span>
+          <span className="text-xs">•</span>
           <span className="capitalize">{field.type}</span>
         </div>
       </div>

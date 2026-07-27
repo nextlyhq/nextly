@@ -76,7 +76,7 @@ export function SubSidebarContent({
           onChange={onCollectionSearchChange}
         />
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Collections
           </p>
           <SidebarMenu>
@@ -99,7 +99,7 @@ export function SubSidebarContent({
           onChange={onSingleSearchChange}
         />
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Singles
           </p>
           <SidebarMenu>
@@ -119,7 +119,7 @@ export function SubSidebarContent({
           onChange={onPluginSearchChange}
         />
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Install Plugins
           </p>
           <SidebarMenu>
@@ -134,7 +134,7 @@ export function SubSidebarContent({
     return (
       <div className="space-y-6 px-4 py-6">
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             {standaloneLabel}
           </p>
           <SidebarMenu>
@@ -182,7 +182,7 @@ export function SubSidebarContent({
           {(hasPermission("read-users") ||
             hasPermission("manage-settings") ||
             hasPermission("read-roles")) && (
-            <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
               User Management
             </p>
           )}
@@ -246,7 +246,7 @@ export function SubSidebarContent({
           {(hasPermission("manage-settings") ||
             canAccessApiKeys ||
             canAccessWebhooks) && (
-            <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
               System Settings
             </p>
           )}
@@ -314,7 +314,7 @@ export function SubSidebarContent({
         <div className="space-y-1">
           {(hasPermission("manage-email-providers") ||
             hasPermission("manage-email-templates")) && (
-            <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
               Email Configuration
             </p>
           )}
@@ -358,7 +358,7 @@ export function SubSidebarContent({
     return (
       <div className="space-y-6 px-4 py-6">
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Content Builders
           </p>
           <SidebarMenu>

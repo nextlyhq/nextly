@@ -164,7 +164,7 @@ function ImageSizesContent({
           <div className="flex items-center gap-2">
             <span className="font-medium">{size.name}</span>
             {size.isDefault && (
-              <Badge variant="default" className="h-4 px-1 text-[10px]">
+              <Badge variant="default" className="h-4 px-1 text-xs">
                 Config
               </Badge>
             )}

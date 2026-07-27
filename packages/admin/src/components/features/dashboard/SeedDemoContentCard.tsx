@@ -83,7 +83,7 @@ export function SeedDemoContentCard() {
                 : undefined
             }
           />
-          <h2 className="text-[22px] font-black tracking-tight text-foreground flex items-center gap-3">
+          <h2 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-3">
             {(eyebrowState === "success" ||
               eyebrowState === "success-partial") && (
               <Check
@@ -118,7 +118,7 @@ export function SeedDemoContentCard() {
           <>
             <p className="text-sm text-muted-foreground leading-relaxed max-w-xl">
               This project uses the{" "}
-              <span className="inline-flex items-center px-2 py-0.5 mx-0.5 text-[9px] font-bold uppercase tracking-[0.15em] rounded-md bg-primary/[0.04] border border-primary/[0.08] text-foreground align-baseline">
+              <span className="inline-flex items-center px-2 py-0.5 mx-0.5 text-xs font-bold uppercase tracking-[0.15em] rounded-md bg-primary/[0.04] border border-primary/[0.08] text-foreground align-baseline">
                 {status.template.label} template
               </span>{" "}
               — load sample posts, authors, categories, and a homepage to
@@ -136,7 +136,7 @@ export function SeedDemoContentCard() {
               <button
                 type="button"
                 onClick={skip}
-                className="text-[11px] font-semibold tracking-[0.04em] text-muted-foreground underline underline-offset-4 decoration-1 decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
+                className="text-xs font-semibold tracking-[0.04em] text-muted-foreground underline underline-offset-4 decoration-1 decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
               >
                 Skip — I&rsquo;ll add my own content
               </button>
@@ -214,11 +214,11 @@ export function SeedDemoContentCard() {
 
             {status.result.warnings.length > 0 && (
               <details className="text-sm text-muted-foreground max-w-xl group/warnings">
-                <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors">
+                <summary className="cursor-pointer text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors">
                   View {status.result.warnings.length} warning
                   {status.result.warnings.length === 1 ? "" : "s"} →
                 </summary>
-                <ul className="mt-3 font-mono text-[11px] text-muted-foreground space-y-1 pl-4 border-l border-border">
+                <ul className="mt-3 font-mono text-xs text-muted-foreground space-y-1 pl-4 border-l border-border">
                   {status.result.warnings.map((w, i) => (
                     <li key={i}>{w}</li>
                   ))}
@@ -249,8 +249,8 @@ export function SeedDemoContentCard() {
         {status.kind === "error" && (
           <>
             {/* Full-strength destructive border and label text so the error is readable and its boundary perceivable. */}
-            <div className="font-mono text-[12px] text-foreground bg-primary/[0.02] border border-destructive px-4 py-3 rounded-md">
-              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-destructive mb-1">
+            <div className="font-mono text-xs text-foreground bg-primary/[0.02] border border-destructive px-4 py-3 rounded-md">
+              <div className="text-xs font-black uppercase tracking-[0.2em] text-destructive mb-1">
                 Error
               </div>
               {status.message}
@@ -267,7 +267,7 @@ export function SeedDemoContentCard() {
               <button
                 type="button"
                 onClick={skip}
-                className="text-[11px] font-semibold tracking-[0.04em] text-muted-foreground underline underline-offset-4 decoration-1 decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
+                className="text-xs font-semibold tracking-[0.04em] text-muted-foreground underline underline-offset-4 decoration-1 decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
               >
                 Skip — I&rsquo;ll add my own content
               </button>

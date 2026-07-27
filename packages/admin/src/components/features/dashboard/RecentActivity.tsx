@@ -78,7 +78,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
       </div>
 
       <div className="flex-1 min-w-0 space-y-1">
-        <p className="text-[13px] text-foreground/80 leading-snug">
+        <p className="text-sm text-foreground/80 leading-snug">
           <span className="font-bold text-foreground tracking-tight">
             {activity.user.name}
           </span>{" "}
@@ -90,7 +90,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
               <span className="font-bold text-foreground tracking-tight underline decoration-primary/20 underline-offset-4">
                 {activity.entryTitle}
               </span>{" "}
-              <span className="text-muted-foreground font-bold uppercase text-[9px] tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-md">
+              <span className="text-muted-foreground font-bold uppercase text-xs tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-md">
                 {activity.collectionLabel}
               </span>
             </>
@@ -101,7 +101,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
           )}
         </p>
 
-        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
           <Clock className="w-3 h-3 opacity-60" />
           <time dateTime={activity.timestamp}>{activity.relativeTime}</time>
         </div>
@@ -109,7 +109,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
 
       <Badge
         className={cn(
-          "uppercase text-[9px] px-2.5 py-0.5 rounded-sm font-black tracking-[0.15em] border-none shadow-none transition-all duration-500 group-hover/item:scale-105",
+          "uppercase text-xs px-2.5 py-0.5 rounded-sm font-black tracking-[0.15em] border-none shadow-none transition-all duration-500 group-hover/item:scale-105",
           getBadgeStyle(activity.type)
         )}
       >
@@ -128,7 +128,7 @@ const EmptyState: React.FC = () => (
       <p className="text-sm font-bold text-foreground tracking-tight">
         Activity log is currently silent
       </p>
-      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-widest">
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
         Actions will appear here as you work
       </p>
     </div>
@@ -144,14 +144,14 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
     <Card className="border-border bg-card/40 backdrop-blur-md rounded-lg overflow-hidden transition-all duration-500 hover:border-border">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border">
         <div className="space-y-1">
-          <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground">
+          <CardTitle className="text-xs font-black uppercase tracking-[0.25em] text-muted-foreground">
             System Event Log
           </CardTitle>
           <div className="h-1 w-8 bg-primary/20 rounded-sm" />
         </div>
         <Link
           href={ROUTES.DASHBOARD}
-          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
+          className="text-xs font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
         >
           Detailed Log <ChevronRight className="h-3 w-3" />
         </Link>
@@ -160,7 +160,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-20 gap-4">
             <Spinner size="md" className="text-primary/40" />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground animate-pulse">
+            <span className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground animate-pulse">
               Syncing events...
             </span>
           </div>
@@ -169,7 +169,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
         {error && (
           <div className="flex items-center gap-3 py-12 justify-center text-sm text-destructive bg-destructive/5 rounded-md mx-3 mb-3">
             <AlertCircle className="h-4 w-4" />
-            <span className="font-bold uppercase tracking-wider text-[11px]">
+            <span className="font-bold uppercase tracking-wider text-xs">
               Failed to fetch activity stream
             </span>
           </div>
@@ -187,7 +187,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
                   ))}
                 </div>
                 <div className="mt-6 pt-4  border-t border-border text-center">
-                  <button className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground hover-unified transition-all duration-500 py-3 px-8 rounded-md hover-unified">
+                  <button className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground hover-unified transition-all duration-500 py-3 px-8 rounded-md hover-unified">
                     Sync Previous Events
                   </button>
                 </div>

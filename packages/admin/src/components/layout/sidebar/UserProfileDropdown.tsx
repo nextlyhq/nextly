@@ -70,7 +70,7 @@ export function UserProfileDropdown({
               if (!user?.id) return;
               navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
             }}
-            className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
+            className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <UserIcon className="h-4 w-4 transition-colors" />
             <span>My Account</span>
@@ -79,7 +79,7 @@ export function UserProfileDropdown({
           {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             onClick={onLogout}
-            className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row text-muted-foreground"
+            className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <LogOut className="h-4 w-4 transition-colors" />
             <span>Sign out</span>

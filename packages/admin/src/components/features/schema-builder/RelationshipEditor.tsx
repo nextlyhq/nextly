@@ -295,7 +295,7 @@ export function RelationshipEditor({
                             {collection.label}
                           </div>
                           {collection.label !== collection.slug && (
-                            <div className="text-[10px] text-muted-foreground truncate">
+                            <div className="text-xs text-muted-foreground truncate">
                               {collection.slug}
                             </div>
                           )}
@@ -487,7 +487,7 @@ export function RelationshipEditor({
                 className="h-8 text-sm"
               />
             </div>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               e.g., status = published
             </p>
           </div>

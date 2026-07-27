@@ -99,7 +99,7 @@ export function SortableHookCard({
             <span className="text-sm font-medium truncate">
               {hookConfig.name}
             </span>
-            <Badge variant="outline" className="text-[10px] shrink-0">
+            <Badge variant="outline" className="text-xs shrink-0">
               {HOOK_TYPE_LABELS[hookConfig.hookType] || hookConfig.hookType}
             </Badge>
           </div>

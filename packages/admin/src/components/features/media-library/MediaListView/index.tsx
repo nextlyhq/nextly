@@ -164,7 +164,7 @@ export function MediaListView({
         cell: ({ row: item }) => (
           <Badge
             variant="default"
-            className="rounded-sm border border-border bg-muted px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-tight text-foreground"
+            className="rounded-sm border border-border bg-muted px-2.5 py-0.5 text-xs font-semibold uppercase tracking-tight text-foreground"
           >
             {getMediaType(item.mimeType)}
           </Badge>

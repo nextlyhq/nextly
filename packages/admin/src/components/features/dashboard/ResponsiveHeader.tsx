@@ -95,13 +95,13 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                   navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
                   setActiveMenu(null);
                 }}
-                className="group flex w-full items-center gap-3 rounded-sm px-3 py-2.5 text-[13px] font-medium transition-colors cursor-pointer hover-subtle-row"
+                className="group flex w-full items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer hover-subtle-row"
               >
                 <UserIcon className="h-4 w-4 text-muted-foreground group-hover-subtle-row transition-colors" />
                 <span>My Account</span>
               </DropdownMenuItem>
 
-              <DropdownMenuItem className="group flex w-full items-center p-0 rounded-sm text-[13px] font-medium transition-colors admin-dropdown-item hover-subtle-row">
+              <DropdownMenuItem className="group flex w-full items-center p-0 rounded-sm text-sm font-medium transition-colors admin-dropdown-item hover-subtle-row">
                 <a
                   href="https://nextlyhq.com/docs"
                   target="_blank"
@@ -118,7 +118,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                   onClick={() => {
                     void logout();
                   }}
-                  className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row"
+                  className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors hover-subtle-row"
                 >
                   <LogOut className="h-4 w-4 transform transition-transform group-hover-subtle-row group-hover:-translate-x-0.5" />
                   <span>Sign out</span>

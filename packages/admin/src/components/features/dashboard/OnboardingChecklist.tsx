@@ -27,7 +27,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
         </div>
         <span
           className={cn(
-            "text-[13px] font-bold tracking-tight transition-all duration-500",
+            "text-sm font-bold tracking-tight transition-all duration-500",
             step.isComplete
               ? "text-muted-foreground line-through"
               : "text-foreground/80 group-hover-unified"
@@ -39,7 +39,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
       {!step.isComplete && (
         <Link
           href={step.href}
-          className="text-[9px] font-black uppercase tracking-[0.2em] text-primary hover:text-primary-foreground hover:bg-primary px-3 py-1.5 rounded-md ring-1 ring-primary/20 hover:ring-primary transition-all duration-500 transform active:scale-95"
+          className="text-xs font-black uppercase tracking-[0.2em] text-primary hover:text-primary-foreground hover:bg-primary px-3 py-1.5 rounded-md ring-1 ring-primary/20 hover:ring-primary transition-all duration-500 transform active:scale-95"
         >
           Execute &rarr;
         </Link>
@@ -74,14 +74,14 @@ export const OnboardingChecklist: React.FC = () => {
           <div className="space-y-1">
             {/* Card ink, not the action token: this eyebrow is a title, and
                 the card's color signal is the progress bar above it. */}
-            <CardTitle className="text-[10px] font-black uppercase tracking-[0.3em] text-foreground">
+            <CardTitle className="text-xs font-black uppercase tracking-[0.3em] text-foreground">
               Launch Sequence
             </CardTitle>
             <div className="flex items-center gap-2">
-              <span className="text-[14px] font-black text-foreground tracking-tighter">
+              <span className="text-sm font-black text-foreground tracking-tighter">
                 {progress.completedCount} of {progress.totalCount}
               </span>
-              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-sm">
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-sm">
                 {Math.round(completionPct)}%
               </span>
             </div>
@@ -102,7 +102,7 @@ export const OnboardingChecklist: React.FC = () => {
             <StepRow key={step.id} step={step} />
           ))}
         </div>
-        <p className="text-[9px] text-center text-muted-foreground font-black uppercase tracking-[0.25em] mt-6 px-4">
+        <p className="text-xs text-center text-muted-foreground font-black uppercase tracking-[0.25em] mt-6 px-4">
           Complete initial configuration to unlock full analysis
         </p>
       </CardContent>

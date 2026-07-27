@@ -132,7 +132,7 @@ export function FieldTypePicker<T extends string>({
               >
                 {entry.label}
               </span>
-              <span className="line-clamp-1 text-[12px] leading-normal text-muted-foreground">
+              <span className="line-clamp-1 text-xs leading-normal text-muted-foreground">
                 {entry.hint}
               </span>
             </div>

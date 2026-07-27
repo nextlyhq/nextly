@@ -90,7 +90,7 @@ export function DocumentPanel({
 
   return (
     <div className="px-5 py-4 border-b border-border">
-      <p className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground mb-3">
+      <p className="text-xs font-bold tracking-[0.1em] uppercase text-muted-foreground mb-3">
         Document
       </p>
       <dl className="space-y-3">
@@ -119,7 +119,7 @@ function TranslationsRow({
   if (!translations) return null;
   return (
     <div className="mt-4 pt-4 border-t border-border">
-      <p className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground mb-2">
+      <p className="text-xs font-bold tracking-[0.1em] uppercase text-muted-foreground mb-2">
         Languages
       </p>
       <LanguageStatusPills
@@ -175,7 +175,7 @@ function StatusRow({ state }: { state: PillState }) {
         <span
           data-pill-state={state}
           className={cn(
-            "px-2 py-0.5 text-[11px] font-bold tracking-[0.08em] uppercase rounded",
+            "px-2 py-0.5 text-xs font-bold tracking-[0.08em] uppercase rounded",
             PILL_CLASS[state]
           )}
         >

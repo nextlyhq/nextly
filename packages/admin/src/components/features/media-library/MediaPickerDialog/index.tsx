@@ -746,7 +746,7 @@ export function MediaPickerDialog({
                           className="h-7 text-xs"
                         />
                         {createFolderError && (
-                          <div className="text-[11px] text-destructive">
+                          <div className="text-xs text-destructive">
                             {createFolderError.message ||
                               "Failed to create folder"}
                           </div>
@@ -784,7 +784,7 @@ export function MediaPickerDialog({
                         <FolderPlus className="h-3.5 w-3.5" />
                         <span>New folder</span>
                         {activeFolderId && (
-                          <span className="ml-auto text-[10px] text-muted-foreground">
+                          <span className="ml-auto text-xs text-muted-foreground">
                             inside current
                           </span>
                         )}

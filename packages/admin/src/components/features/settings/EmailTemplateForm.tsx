@@ -486,7 +486,7 @@ function PreviewPane({
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Preview
         </span>
-        <span className="rounded-sm border border-input px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+        <span className="rounded-sm border border-input px-2 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
           {format === "text" ? "Plain text" : "HTML"}
         </span>
         <div className="ml-auto flex items-center gap-2">

@@ -639,7 +639,7 @@ export function APIPlayground({
                 <span className="flex items-baseline gap-2">
                   <span
                     className={cn(
-                      "shrink-0 font-mono text-[10px] font-semibold",
+                      "shrink-0 font-mono text-xs font-semibold",
                       METHOD_TONE[currentAction.method]
                     )}
                   >
@@ -662,7 +662,7 @@ export function APIPlayground({
                   <div className="flex items-baseline gap-2">
                     <span
                       className={cn(
-                        "w-12 shrink-0 font-mono text-[10px] font-semibold",
+                        "w-12 shrink-0 font-mono text-xs font-semibold",
                         METHOD_TONE[a.method]
                       )}
                     >

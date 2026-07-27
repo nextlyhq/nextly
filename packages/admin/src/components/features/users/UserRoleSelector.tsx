@@ -276,7 +276,7 @@ export function UserRoleSelector({
                                 {isSystem && (
                                   <Badge
                                     variant="default"
-                                    className="h-4 px-1.5 text-[10px] leading-none shrink-0"
+                                    className="h-4 px-1.5 text-xs leading-none shrink-0"
                                   >
                                     System
                                   </Badge>

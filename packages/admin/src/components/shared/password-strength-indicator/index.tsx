@@ -50,7 +50,7 @@ export function PasswordStrengthIndicator({
               <span className="text-xs font-semibold uppercase tracking-wider">
                 Strength: {strength.label}
               </span>
-              <span className="text-[10px] font-mono opacity-60">
+              <span className="text-xs font-mono opacity-60">
                 {strength.score}/6
               </span>
             </div>

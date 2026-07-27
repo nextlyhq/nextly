@@ -36,15 +36,15 @@ function StatusItem({
             } as React.CSSProperties
           }
         />
-        <span className="text-[12px] font-bold text-muted-foreground group-hover/item:text-foreground transition-colors tracking-tight">
+        <span className="text-xs font-bold text-muted-foreground group-hover/item:text-foreground transition-colors tracking-tight">
           {label}
         </span>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-[13px] font-black tabular-nums text-foreground/80">
+        <span className="text-sm font-black tabular-nums text-foreground/80">
           {count}
         </span>
-        <span className="text-[10px] font-black text-muted-foreground bg-primary/5 px-2 py-0.5 rounded-sm  border border-border min-w-[36px] text-center">
+        <span className="text-xs font-black text-muted-foreground bg-primary/5 px-2 py-0.5 rounded-sm  border border-border min-w-[36px] text-center">
           {percentage}%
         </span>
       </div>
@@ -88,7 +88,7 @@ export const ContentStatusWidget: React.FC = () => {
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground">
+          <CardTitle className="text-xs font-black uppercase tracking-[0.25em] text-muted-foreground">
             Lifecycle Overview
           </CardTitle>
           <div className="h-1 w-6 bg-primary/30 rounded-sm" />
@@ -98,7 +98,7 @@ export const ContentStatusWidget: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-md">
+          <div className="flex items-center gap-3 py-10 text-xs font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-md">
             <AlertCircle className="h-4 w-4" />
             <span>Health synchronization failed</span>
           </div>
@@ -113,7 +113,7 @@ export const ContentStatusWidget: React.FC = () => {
               </p>
               <Link
                 href={ROUTES.BUILDER_COLLECTIONS}
-                className="text-[11px] font-black uppercase tracking-[0.2em] text-primary hover:underline group flex items-center justify-center gap-2"
+                className="text-xs font-black uppercase tracking-[0.2em] text-primary hover:underline group flex items-center justify-center gap-2"
               >
                 Launch Initial Entry{" "}
                 <ChevronRight className="h-3 w-3 group-hover:translate-x-1 transition-transform" />
@@ -133,7 +133,7 @@ export const ContentStatusWidget: React.FC = () => {
                 <span className="text-3xl font-black text-foreground tracking-tighter tabular-nums leading-none">
                   {total}
                 </span>
-                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mt-1">
+                <span className="text-xs font-black uppercase tracking-widest text-muted-foreground mt-1">
                   Total
                 </span>
               </div>
@@ -153,7 +153,7 @@ export const ContentStatusWidget: React.FC = () => {
                 color="var(--nx-chart-4)"
               />
             </div>
-            <p className="text-[9px] text-center text-muted-foreground font-black uppercase tracking-[0.2em] opacity-80 px-4">
+            <p className="text-xs text-center text-muted-foreground font-black uppercase tracking-[0.2em] opacity-80 px-4">
               Consolidated health status across production clusters
             </p>
           </div>

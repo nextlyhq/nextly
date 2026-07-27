@@ -124,7 +124,7 @@ export function ResponseViewer({
           <TabsTrigger value="headers" className="text-xs">
             Headers
             {headerEntries.length > 0 && (
-              <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
+              <span className="ml-1.5 font-mono text-xs text-muted-foreground">
                 {headerEntries.length}
               </span>
             )}

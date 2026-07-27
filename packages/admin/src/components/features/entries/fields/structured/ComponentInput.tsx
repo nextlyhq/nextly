@@ -316,7 +316,7 @@ function SingleComponentNonRepeatable({
         >
           {/* Accordion label and its disclosure chevron are content, so they
               take the page ink; the primary tint stays on the header fill. */}
-          <span className="text-[11px] font-bold tracking-[0.08em] uppercase text-foreground">
+          <span className="text-xs font-bold tracking-[0.08em] uppercase text-foreground">
             {label}
           </span>
           <ChevronDown

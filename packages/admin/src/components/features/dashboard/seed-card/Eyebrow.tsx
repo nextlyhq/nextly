@@ -67,14 +67,14 @@ export function Eyebrow({
     <div className="flex items-center gap-3">
       <span
         className={cn(
-          "text-[10px] font-black uppercase tracking-[0.3em]",
+          "text-xs font-black uppercase tracking-[0.3em]",
           c.toneClass
         )}
       >
         {c.primary}
       </span>
       {sub ? (
-        <span className="text-[9px] font-black uppercase tracking-[0.25em] text-muted-foreground">
+        <span className="text-xs font-black uppercase tracking-[0.25em] text-muted-foreground">
           {sub}
         </span>
       ) : null}

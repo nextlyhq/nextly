@@ -56,7 +56,7 @@ function StatusPill({ status }: { status: string }) {
   return (
     <span
       className={cn(
-        "px-1.5 py-0.5 text-[10px] font-bold tracking-[0.1em] uppercase rounded shrink-0",
+        "px-1.5 py-0.5 text-xs font-bold tracking-[0.1em] uppercase rounded shrink-0",
         // Why: Mobeen's request — neutral admin palette, not saturated. Use
         // muted bg + foreground/muted-foreground to blend with the rest of
         // the chrome instead of standing out as candy-colour AI styling.
@@ -161,10 +161,7 @@ function SlugInlineEditor({
         </button>
       </div>
       {errorMsg && (
-        <span
-          className="text-[10px] text-destructive-600 shrink-0"
-          role="alert"
-        >
+        <span className="text-xs text-destructive-600 shrink-0" role="alert">
           {errorMsg}
         </span>
       )}

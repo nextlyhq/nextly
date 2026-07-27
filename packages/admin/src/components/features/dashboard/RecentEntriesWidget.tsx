@@ -25,7 +25,7 @@ function getStatusBadge(status: RecentEntry["status"]) {
     return (
       <Badge
         variant="warning"
-        className="bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100 border-warning text-[10px] uppercase tracking-wider font-bold"
+        className="bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100 border-warning text-xs uppercase tracking-wider font-bold"
       >
         Draft
       </Badge>
@@ -35,7 +35,7 @@ function getStatusBadge(status: RecentEntry["status"]) {
     return (
       <Badge
         variant="success"
-        className="bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100 border-success text-[10px] uppercase tracking-wider font-bold"
+        className="bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100 border-success text-xs uppercase tracking-wider font-bold"
       >
         Published
       </Badge>
@@ -65,15 +65,15 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
         </div>
 
         <div className="min-w-0 flex-1 relative z-10">
-          <p className="text-[14px] font-bold text-foreground tracking-[-0.01em] truncate group-hover-unified transition-colors duration-300">
+          <p className="text-sm font-bold text-foreground tracking-[-0.01em] truncate group-hover-unified transition-colors duration-300">
             {truncateTitle(entry.title)}
           </p>
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.15em]">
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-[0.15em]">
               {entry.collectionLabel}
             </span>
             <span className="h-0.5 w-0.5 rounded-sm bg-border" />
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.15em]">
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-[0.15em]">
               {formatRelativeTime(entry.updatedAt)}
             </span>
           </div>
@@ -122,14 +122,14 @@ export const RecentEntriesWidget: React.FC = () => {
         className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground">
+          <CardTitle className="text-xs font-black uppercase tracking-[0.25em] text-muted-foreground">
             Recent Editorial Activity
           </CardTitle>
           <div className="h-1 w-8 bg-primary/20 rounded-sm" />
         </div>
         <Link
           href={ROUTES.BUILDER_COLLECTIONS}
-          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
+          className="text-xs font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
         >
           Explore All <ChevronRight className="h-3 w-3" />
         </Link>
@@ -140,7 +140,7 @@ export const RecentEntriesWidget: React.FC = () => {
         ) : error ? (
           <div className="flex items-center gap-2 py-12 justify-center text-sm text-destructive bg-destructive/5 rounded-md mx-3 mb-3">
             <AlertCircle className="h-4 w-4" />
-            <span className="font-bold uppercase tracking-wider text-[11px]">
+            <span className="font-bold uppercase tracking-wider text-xs">
               Failed to load recent activity stream
             </span>
           </div>
@@ -155,7 +155,7 @@ export const RecentEntriesWidget: React.FC = () => {
               </p>
               <Link
                 href={ROUTES.BUILDER_COLLECTIONS}
-                className="text-[11px] font-black uppercase tracking-widest text-primary hover:underline mt-2 inline-block"
+                className="text-xs font-black uppercase tracking-widest text-primary hover:underline mt-2 inline-block"
               >
                 Create your first Entry
               </Link>

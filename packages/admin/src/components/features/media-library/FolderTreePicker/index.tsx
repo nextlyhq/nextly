@@ -158,7 +158,7 @@ export function FolderTreePicker({
           <div className="flex-1">
             <div
               className={cn(
-                "font-medium tracking-tight text-[13px]",
+                "font-medium tracking-tight text-sm",
                 compact && "text-xs"
               )}
             >

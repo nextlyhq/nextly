@@ -247,9 +247,7 @@ export function ComponentFieldEditor({
               <span className="text-sm font-semibold">Single</span>
               {/* Helper text stays muted in both states; selection is carried by
                   the card border, fill and title. */}
-              <span className="text-xs text-muted-foreground">
-                One type
-              </span>
+              <span className="text-xs text-muted-foreground">One type</span>
             </div>
           </button>
           {/* Full-strength foreground on hover so the border state change is perceivable. */}
@@ -312,7 +310,7 @@ export function ComponentFieldEditor({
                     <Icons.Puzzle className="h-3.5 w-3.5 text-muted-foreground" />
                     <span>{comp.label || comp.slug}</span>
                     {comp.admin?.category && (
-                      <Badge variant="outline" className="text-[10px] ml-1">
+                      <Badge variant="outline" className="text-xs ml-1">
                         {comp.admin.category}
                       </Badge>
                     )}
@@ -345,7 +343,7 @@ export function ComponentFieldEditor({
                     {comp.label || comp.slug}
                   </span>
                   {comp.admin?.category && (
-                    <Badge variant="outline" className="text-[10px]">
+                    <Badge variant="outline" className="text-xs">
                       {comp.admin.category}
                     </Badge>
                   )}

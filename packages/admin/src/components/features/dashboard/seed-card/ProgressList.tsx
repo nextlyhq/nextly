@@ -21,7 +21,7 @@ const PHASES = [
 
 export function ProgressList() {
   return (
-    <ul className="font-mono text-[12px] text-muted-foreground space-y-1.5 max-w-xl">
+    <ul className="font-mono text-xs text-muted-foreground space-y-1.5 max-w-xl">
       {PHASES.map((phase, i) => (
         <li
           key={phase}

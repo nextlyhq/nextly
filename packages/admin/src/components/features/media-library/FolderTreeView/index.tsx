@@ -83,7 +83,7 @@ export function FolderTreeView({
     <div className={cn("flex flex-col h-full pt-1 pb-6", className)}>
       {/* Sidebar Heading */}
       <div className="flex items-center justify-between px-3 mb-2">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3">
+        <span className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3">
           Folders
         </span>
         <Button
@@ -253,7 +253,7 @@ function FolderTreeItem({
           {itemCount > 0 && (
             <span
               className={cn(
-                "shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-[9px] font-bold tabular-nums transition-all duration-200",
+                "shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-xs font-bold tabular-nums transition-all duration-200",
                 isActive
                   ? "bg-primary/20 text-primary"
                   : "bg-primary/5 text-muted-foreground group-hover:bg-primary/5 group-hover:text-primary"
@@ -317,7 +317,7 @@ function FolderTreeItem({
       {isExpanded && (
         <div className="animate-in slide-in-from-top-1 duration-200">
           {!subfolders ? (
-            <div className="py-2 pl-12 text-[10px] text-muted-foreground italic">
+            <div className="py-2 pl-12 text-xs text-muted-foreground italic">
               Loading subfolders...
             </div>
           ) : subfolders.length > 0 ? (
@@ -339,7 +339,7 @@ function FolderTreeItem({
               />
             ))
           ) : (
-            <div className="py-2 pl-12 text-[10px] text-muted-foreground italic">
+            <div className="py-2 pl-12 text-xs text-muted-foreground italic">
               No subfolders
             </div>
           )}

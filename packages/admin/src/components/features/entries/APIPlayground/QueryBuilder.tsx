@@ -425,7 +425,7 @@ export function QueryBuilder({
                     onClick={() => toggleSelected(name)}
                     title={fieldLabel(name, fields)}
                     className={cn(
-                      "cursor-pointer border px-2 py-1 font-mono text-[11px] transition-colors",
+                      "cursor-pointer border px-2 py-1 font-mono text-xs transition-colors",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       on
                         ? "border-primary bg-primary text-primary-foreground"

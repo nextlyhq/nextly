@@ -465,7 +465,7 @@ export function FieldOptionsEditor({
       )}
 
       {options.length > 0 && (
-        <div className="flex items-center gap-2 px-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
           <div className="w-6" />
           <div className="flex-1">Label (displayed)</div>
           <div className="flex-1">Value (stored)</div>
@@ -499,11 +499,11 @@ export function FieldOptionsEditor({
               <TabsContent value="csv" className="mt-3 space-y-3">
                 <p className="text-xs text-muted-foreground">
                   One line per option.{" "}
-                  <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px]">
+                  <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs">
                     Label,value
                   </code>{" "}
                   or just{" "}
-                  <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px]">
+                  <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs">
                     Label
                   </code>{" "}
                   (value auto-generated).
@@ -523,7 +523,7 @@ export function FieldOptionsEditor({
               <TabsContent value="json" className="mt-3 space-y-3">
                 <p className="text-xs text-muted-foreground">
                   Array of{" "}
-                  <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px]">
+                  <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs">
                     {`{label, value}`}
                   </code>{" "}
                   objects, or array of strings (value auto-generated).

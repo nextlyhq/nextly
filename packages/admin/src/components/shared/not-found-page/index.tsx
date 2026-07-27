@@ -12,7 +12,8 @@ export function NotFoundPage() {
     <PageContainer className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)]">
       {/* Container */}
       <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-lg bg-card  border border-border">
-        {/* 404 Big number */}
+        {/* 404 Big number: a decorative numeral, not type. The scale tops
+            out at 60px, so there is no step to map this onto. */}
         <div className="mb-2 select-none">
           <span className="text-[120px] font-black leading-none tracking-tight text-foreground">
             404

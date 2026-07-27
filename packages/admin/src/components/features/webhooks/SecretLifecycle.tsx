@@ -56,7 +56,7 @@ export const SecretLifecycle: React.FC<SecretLifecycleProps> = ({
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[11px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">
+        <p className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground">
           Signing secrets
         </p>
         {hasOverlap && canManage && (

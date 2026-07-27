@@ -56,7 +56,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                 <p className="text-2xl font-bold tracking-[-0.03em] text-muted-foreground leading-none group-hover:text-foreground transition-colors">
                   {typeof value === "number" ? value.toLocaleString() : value}
                 </p>
-                <span className="block text-[11px] font-semibold tracking-tight text-muted-foreground truncate group-hover:text-foreground transition-colors pt-1">
+                <span className="block text-xs font-semibold tracking-tight text-muted-foreground truncate group-hover:text-foreground transition-colors pt-1">
                   {title}
                 </span>
               </div>
@@ -76,7 +76,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                     {typeof value === "number" ? value.toLocaleString() : value}
                   </p>
                   <div className="flex items-center gap-2.5 pt-2">
-                    <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground group-hover:text-foreground transition-colors">
+                    <span className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground group-hover:text-foreground transition-colors">
                       {title}
                     </span>
                   </div>
@@ -95,7 +95,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                     {change !== undefined && (
                       <div
                         className={cn(
-                          "flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-bold uppercase tracking-wider ring-1 transition-all duration-500",
+                          "flex items-center gap-1 px-2 py-0.5 rounded-sm text-xs font-bold uppercase tracking-wider ring-1 transition-all duration-500",
                           trend === "up"
                             ? "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100 ring-success-500/20 group-hover:bg-success-500/10"
                             : "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100 ring-destructive-500/20 group-hover:bg-destructive-500/10"
@@ -113,7 +113,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                       </div>
                     )}
                     {footer && (
-                      <span className="text-[11px] font-semibold text-muted-foreground truncate opacity-60 group-hover:opacity-100 transition-opacity">
+                      <span className="text-xs font-semibold text-muted-foreground truncate opacity-60 group-hover:opacity-100 transition-opacity">
                         {footer}
                       </span>
                     )}

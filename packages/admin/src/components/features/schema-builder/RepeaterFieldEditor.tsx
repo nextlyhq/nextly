@@ -158,7 +158,7 @@ export function RepeaterFieldEditor({
             same surfaces the entry-form renderer will use. */}
         {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
         <div className="rounded border border-dashed border-border bg-primary/[0.02] p-2.5 space-y-1">
-          <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
+          <p className="text-xs font-bold tracking-[0.08em] uppercase text-muted-foreground">
             Preview
           </p>
           <p className="text-xs text-foreground/80">
@@ -216,7 +216,7 @@ export function RepeaterFieldEditor({
             label will look like with the current selection. */}
         {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
         <div className="rounded border border-dashed border-border bg-primary/[0.02] p-2.5 space-y-1">
-          <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
+          <p className="text-xs font-bold tracking-[0.08em] uppercase text-muted-foreground">
             Preview when rows are collapsed
           </p>
           {(rowLabelField

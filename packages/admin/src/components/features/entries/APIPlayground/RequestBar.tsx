@@ -128,13 +128,13 @@ export function RequestBar({
           <>
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             Cancel
-            <kbd className="font-mono text-[10px] opacity-60">Esc</kbd>
+            <kbd className="font-mono text-xs opacity-60">Esc</kbd>
           </>
         ) : (
           <>
             <Play className="h-3.5 w-3.5" />
             Send
-            <kbd className="font-mono text-[10px] opacity-60">⌘↵</kbd>
+            <kbd className="font-mono text-xs opacity-60">⌘↵</kbd>
           </>
         )}
       </Button>
