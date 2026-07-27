@@ -44,8 +44,8 @@ import {
   isSuperAdminContext,
 } from "../../../services/access";
 import {
-  DIALECT_DEPENDENT_OPERATORS,
   describeUntranslatableConstraint,
+  rewriteCaseInsensitiveOperators,
 } from "../../../services/access/constraint-shape";
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
@@ -511,13 +511,7 @@ export class SingleQueryService extends BaseService {
     const columns = new Set(Object.keys(document));
     const untranslatable = describeUntranslatableConstraint(
       result.query,
-      name => columns.has(name),
-      undefined,
-      // This path hands the clause straight to the adapter, bypassing the
-      // dialect-aware ILIKE-to-LIKE rewrite the collection query builder
-      // applies, so a case-insensitive operator would emit ILIKE on engines
-      // that reject it.
-      DIALECT_DEPENDENT_OPERATORS
+      name => columns.has(name)
     );
     if (untranslatable !== null) {
       this.logger.warn("Refused an untranslatable access constraint", {
@@ -531,7 +525,15 @@ export class SingleQueryService extends BaseService {
     // predicate a list read would compile.
     const permitted = await this.adapter.selectOne<SingleDocument>(
       singleMeta.tableName,
-      { where: buildWhereClause(result.query as WhereFilter) }
+      {
+        // The adapter emits ILIKE unconditionally, so the same rewrite the
+        // collection query builder applies happens here before handing the
+        // clause over.
+        where: rewriteCaseInsensitiveOperators(
+          buildWhereClause(result.query as WhereFilter),
+          this.adapter.dialect
+        ),
+      }
     );
     if (!permitted) return { denied };
 

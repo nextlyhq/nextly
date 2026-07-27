@@ -154,10 +154,11 @@ describe("Single custom read rules (integration)", () => {
     expect(result.success).toBe(true);
   });
 
-  it("refuses an operator whose SQL depends on the dialect", async () => {
-    // This path hands the clause straight to the adapter, skipping the
-    // ILIKE-to-LIKE rewrite the collection query builder applies, so emitting it
-    // would fail on engines that reject ILIKE rather than allow or deny.
+  it("applies a case-insensitive operator on engines that reject ILIKE", async () => {
+    // The adapter emits ILIKE unconditionally, so the clause is rewritten to
+    // LIKE for engines that do not accept it — the same rewrite the collection
+    // query builder applies. On SQLite this would otherwise be a database error
+    // rather than an allow or a deny.
     const entry = await bootWithCustomRule();
 
     const result = await entry.get("branding", {
@@ -165,8 +166,8 @@ describe("Single custom read rules (integration)", () => {
       routeAuthorized: true,
     });
 
-    expect(result.success).toBe(false);
-    expect(result.statusCode).toBe(403);
+    // `contains: "acm"` matches the stored tenant "acme".
+    expect(result.success).toBe(true);
   });
 
   it("gives the rule the read's locale", async () => {
