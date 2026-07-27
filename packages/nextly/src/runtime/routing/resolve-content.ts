@@ -206,11 +206,15 @@ export async function resolveContent(
     // default safety window (an explicit `revalidate` wins; `false` opts out), so
     // a tightened policy self-heals within it rather than serving stale-public
     // content until the next content write. A trusted read doesn't depend on the
-    // policy, so it stays tag-only. `unstable_cache` rejects `0`, so a
-    // non-positive value degrades to tag-only.
+    // policy, so it stays tag-only. Any EXPLICIT `revalidate` wins — a positive
+    // number is used as-is; `false` or a non-positive number opts out to
+    // tag-only (`unstable_cache` rejects `0`). Only when the caller passes
+    // nothing does an enforced anonymous read fall back to the safety window.
     revalidate:
-      typeof options.revalidate === "number" && options.revalidate > 0
-        ? options.revalidate
+      typeof options.revalidate === "number"
+        ? options.revalidate > 0
+          ? options.revalidate
+          : false
         : options.revalidate === false || overrideAccess
           ? false
           : ENFORCED_READ_REVALIDATE_SECONDS,
