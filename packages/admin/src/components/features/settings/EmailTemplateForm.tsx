@@ -404,7 +404,11 @@ function Segmented<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="inline-flex items-center rounded-md border border-input">
+    // The end segments paint their active fill to the outline's edge, so at a
+    // nonzero --radius that fill would square off across the rounded corners.
+    // Clipping to the rounded box keeps the fill inside the outline at every
+    // radius, and is inert at --radius: 0.
+    <div className="inline-flex items-center overflow-hidden rounded-md border border-input">
       {options.map(o => (
         <button
           key={o.value}

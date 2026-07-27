@@ -241,7 +241,10 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "transition-shadow",
+        // The collapsible header tints itself edge to edge, so without clipping
+        // that fill paints square across the card's rounded top corners at any
+        // nonzero --radius. Matches the other structured-field cards.
+        "overflow-hidden transition-shadow",
         isDragging && "opacity-50 ring-2 ring-primary shadow-lg z-10"
       )}
     >
