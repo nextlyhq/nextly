@@ -49,6 +49,9 @@ export function TableSearch({
   return (
     <div className="relative w-full max-w-lg">
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      {/* The edge uses border-input (a visible 3:1 boundary) rather than the
+          decorative border-border: an empty field has nothing else to identify
+          it. Matches Input, Textarea, Checkbox and RadioGroup. */}
       <input
         ref={inputRef}
         type="text"
@@ -56,7 +59,7 @@ export function TableSearch({
         value={value}
         onChange={e => onChange(e.target.value)}
         aria-busy={isLoading}
-        className="h-10 w-full rounded-md  border border-border bg-background pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 transition-all"
+        className="h-10 w-full rounded-md  border border-input bg-background pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 transition-all"
       />
       {(value || isLoading) && (
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
