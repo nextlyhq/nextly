@@ -176,9 +176,10 @@ export class SingleRegistryService extends BaseRegistryService<
    * `defaultValue` is a function, which is dropped when field metadata is
    * JSON-serialized to `dynamic_singles.fields`, so the default resolution on a
    * first-read auto-create reads defaults from here instead of the serialized
-   * (function-less) registry row. Undefined for UI-created Singles.
+   * (function-less) registry row. Undefined for UI-created Singles, and refreshed
+   * on config reload (HMR) via {@link setCodeFirstSingles}.
    */
-  private readonly codeFirstSingles?: SingleConfig[];
+  private codeFirstSingles?: SingleConfig[];
 
   constructor(
     adapter: DrizzleAdapter,
@@ -186,6 +187,15 @@ export class SingleRegistryService extends BaseRegistryService<
     codeFirstSingles?: SingleConfig[]
   ) {
     super(adapter, logger);
+    this.codeFirstSingles = codeFirstSingles;
+  }
+
+  /**
+   * Replace the live code-first config snapshot. Called after a config reload
+   * (HMR) syncs Single metadata, so a newly added Single or a changed function
+   * default resolves against the current config rather than the boot-time one.
+   */
+  setCodeFirstSingles(codeFirstSingles: SingleConfig[]): void {
     this.codeFirstSingles = codeFirstSingles;
   }
 

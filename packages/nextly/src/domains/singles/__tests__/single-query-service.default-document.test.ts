@@ -285,6 +285,51 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     });
   });
 
+  it("passes logical (not JSON-stringified) prior values to a dependent default function", () => {
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    const meta = siteSettingsMeta({
+      status: true,
+      fields: [
+        {
+          name: "settings",
+          type: "group",
+          fields: [{ name: "private", type: "checkbox" }],
+        },
+        { name: "tier", type: "text" },
+      ],
+    });
+
+    // `tier`'s default reads the earlier group value: it must see the object,
+    // not the JSON string stored for `settings`'s json-backed column.
+    registry.getCodeFirstFields.mockReturnValue([
+      {
+        name: "settings",
+        type: "group",
+        fields: [{ name: "private", type: "checkbox" }],
+        defaultValue: () => ({ private: true }),
+      },
+      {
+        name: "tier",
+        type: "text",
+        defaultValue: (data: { settings?: { private?: boolean } }) =>
+          data.settings?.private ? "pro" : "free",
+      },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues).toMatchObject({ tier: "pro" });
+  });
+
   it("keeps the serialized-meta default for a UI-created single (no code-first fields)", () => {
     // getCodeFirstFields returns undefined by default in the mock, mirroring a
     // UI-created single; the serialized primitive default still applies.

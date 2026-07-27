@@ -161,6 +161,10 @@ interface CollectionRegistrySurface {
 }
 interface SingleRegistrySurface {
   syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
+  // Refresh the live code-first config snapshot the default resolver reads, so
+  // an HMR-added single or changed function default is honoured. Optional for
+  // partial resolver fakes.
+  setCodeFirstSingles?(singles: unknown[]): void;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created singles. Optional for partial resolver fakes.
@@ -338,6 +342,9 @@ async function syncCodeFirstMetadataOnly(
     const singleReg = (await resolve(
       "singleRegistryService"
     )) as SingleRegistrySurface;
+    // Refresh the live default source (with function defaults intact) alongside
+    // the metadata sync, so a reloaded single's declared defaults stay current.
+    singleReg.setCodeFirstSingles?.(newConfig.singles ?? []);
     const payload = buildSingleSyncPayload(newConfig.singles ?? []);
     if (payload.length > 0) await singleReg.syncCodeFirstSingles(payload);
   } catch (err) {
@@ -1129,6 +1136,9 @@ export async function reloadNextlyConfig(opts?: {
       const codeFirstSingleConfigs = buildSingleSyncPayload(
         newConfig.singles ?? []
       );
+      // Refresh the live default source (with function defaults intact) so a
+      // reloaded single's declared defaults resolve against the current config.
+      singleReg.setCodeFirstSingles?.(newConfig.singles ?? []);
       if (codeFirstSingleConfigs.length > 0) {
         await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs);
 

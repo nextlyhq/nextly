@@ -72,6 +72,7 @@ import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
+import { reregisterSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
@@ -815,6 +816,20 @@ export async function registerServices(
 
     registerActivityLogHooks(hookRegistry);
     resolvedLogger.info?.("Activity log hooks registered");
+
+    // Register hooks declared on code-first Singles so they run on the read and
+    // update paths for every consumer (Direct API, REST, tests), not only apps
+    // that use the scaffolded init helper. reregister is clear-then-register, so
+    // a re-boot or config reload never double-registers into the global registry.
+    if (transformedConfig.singles && transformedConfig.singles.length > 0) {
+      const singleHooks = reregisterSingleHooks(
+        transformedConfig.singles,
+        hookRegistry
+      );
+      resolvedLogger.info?.(
+        `Registered ${singleHooks.totalHooks} hook(s) for ${singleHooks.singles.length} single(s)`
+      );
+    }
   }
 
   // now Payload-style: an auth-gated POST route in the project's app

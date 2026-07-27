@@ -1333,6 +1333,13 @@ export class SingleQueryService extends BaseService {
         )
       : undefined;
 
+    // A logical view of the document as it is built, holding structured values as
+    // real objects. Function defaults receive THIS, not `defaults`: `defaults`
+    // stores json-backed values as JSON strings for the DB insert, so a dependent
+    // default reading an earlier group/repeater/JSON field would otherwise see a
+    // string instead of the object.
+    const logicalDefaults: Record<string, unknown> = { ...defaults };
+
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
 
@@ -1354,7 +1361,7 @@ export class SingleQueryService extends BaseService {
         // localized fields now flow through this block, so it must be resolved.
         const resolved =
           typeof defaultSource.defaultValue === "function"
-            ? defaultSource.defaultValue(defaults)
+            ? defaultSource.defaultValue(logicalDefaults)
             : defaultSource.defaultValue;
         // A blocks default is checked here rather than only at config load,
         // because a function default can only be resolved against real data.
@@ -1363,6 +1370,9 @@ export class SingleQueryService extends BaseService {
         // field's own policy rejects — and the admin control is read-only, so
         // the stored value could not be corrected from the UI.
         assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
+        // Keep the object on the logical view for later dependent defaults, but
+        // JSON-encode it for the DB insert when the column is json-backed.
+        logicalDefaults[field.name] = resolved;
         defaults[field.name] =
           shouldTreatAsJson(field) && typeof resolved === "object"
             ? JSON.stringify(resolved)
@@ -1388,14 +1398,17 @@ export class SingleQueryService extends BaseService {
         }
         if ("required" in field && field.required) {
           defaults[field.name] = getDefaultValue(field);
+          logicalDefaults[field.name] = defaults[field.name];
         } else {
           delete defaults[field.name];
+          delete logicalDefaults[field.name];
         }
         continue;
       }
 
       if ("required" in field && field.required) {
         defaults[field.name] = getDefaultValue(field);
+        logicalDefaults[field.name] = defaults[field.name];
       }
     }
 

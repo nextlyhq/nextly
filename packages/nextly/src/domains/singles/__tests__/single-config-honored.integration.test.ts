@@ -10,11 +10,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { checkbox, defineSingle, group, text } from "../../../config";
-import {
-  getHookRegistry,
-  resetHookRegistry,
-} from "../../../hooks/hook-registry";
-import { registerSingleHooks } from "../../../hooks/register-single-hooks";
+import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   createTestNextly,
   type TestNextly,
@@ -56,10 +52,10 @@ describe("single config honored — hooks + defaults (integration)", () => {
       ],
     });
 
+    // Single hooks register automatically during framework boot
+    // (registerServices), so no manual registration is needed — a Direct-API
+    // consumer gets them the same way.
     current = await createTestNextly({ singles: [branding] });
-    // Register the single's hooks the way a scaffolded app's init helper does;
-    // the services read them from the global registry `createTestNextly` wires.
-    registerSingleHooks([branding], getHookRegistry());
 
     const service =
       current.getService<SingleEntryService>("singleEntryService");
