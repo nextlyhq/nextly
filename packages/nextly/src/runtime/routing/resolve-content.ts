@@ -86,7 +86,9 @@ export async function resolveContent(
     },
     {
       // Tag by the collection so any write to it makes this read fresh. The key
-      // varies by slug + locale so distinct URLs (and locales) cache separately.
+      // varies by every dimension that changes the read result — slug, locale,
+      // and the query shape (status field, depth, rich-text format) — so two
+      // callers that differ in any of them never share a cache entry.
       tags: nextlyTags(collection),
       keyParts: [
         "nextly",
@@ -95,6 +97,9 @@ export async function resolveContent(
         slugField,
         slug,
         locale ?? "",
+        statusField,
+        String(depth),
+        options.richTextFormat ?? "json",
       ],
       revalidate: options.revalidate ?? false,
     }

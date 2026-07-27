@@ -151,6 +151,9 @@ export function createContentRoute<TNode>(
         for (const item of result.items) {
           const value = item[slugField];
           if (typeof value !== "string" || value.trim() === "") continue;
+          // Skip reserved paths — `ContentPage` always `notFound()`s them, so
+          // pre-rendering them just schedules pages that can never be served.
+          if (isReservedPath(`/${value}`)) continue;
           params.push({ slug: value.split("/") });
           collected += 1;
           if (collected >= staticParamsLimit) break;

@@ -62,6 +62,21 @@ describe("createContentRoute (integration)", () => {
     expect(params).not.toContainEqual({ slug: ["secret"] });
   });
 
+  it("excludes published entries whose slug is a reserved path", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    await seed(current.nextly);
+    // A published entry sitting on a framework path must never be pre-rendered:
+    // `ContentPage` always notFound()s it, so the param would build an unservable page.
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "admin", title: "Admin", status: "published" },
+    });
+
+    const params = await route(current.nextly).generateStaticParams();
+    expect(params).not.toContainEqual({ slug: ["admin"] });
+    expect(params).toContainEqual({ slug: ["about"] });
+  });
+
   it("renders a resolved entry via the render callback", async () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
