@@ -70,11 +70,13 @@ export async function generateMetadata({
   // ogImage/canonical/noindex) and fills blanks from these fallbacks, emitting
   // the canonical, OpenGraph, Twitter card, and robots index/follow. The
   // article-specific OpenGraph fields are passed as caller extras.
+  const ogImage =
+    post.seo?.ogImage?.url ?? post.featuredImage?.url ?? undefined;
   return buildMetadata(post, {
     fallback: {
       title: post.title,
       description: post.excerpt ?? undefined,
-      image: post.featuredImage?.url ?? undefined,
+      image: ogImage,
       canonical: `/blog/${slug}`,
     },
     openGraph: {
@@ -82,6 +84,8 @@ export async function generateMetadata({
       publishedTime: post.publishedAt ?? undefined,
       modifiedTime: post.publishedAt ?? undefined,
       authors: post.author ? [post.author.name] : undefined,
+      // Keep the image's descriptive alt text for social-share accessibility.
+      ...(ogImage ? { images: [{ url: ogImage, alt: post.title }] } : {}),
     },
   });
 }

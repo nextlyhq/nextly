@@ -63,10 +63,18 @@ await resolveContent("posts", slug, { overrideAccess: true, status: "all" });
 > anonymous read. Gate that content behind an authenticated read (pass a `user`)
 > rather than the anonymous default.
 
+**Caching.** Only a **trusted** (`overrideAccess: true`) read with no `user` is
+F1-cached — an enforced read is never cached, because its result depends on an
+access decision that a content-tag bust can't invalidate (a stored read-policy
+change doesn't write an entry). So a public site that wants cached pages should
+read its public content with `overrideAccess: true`; access-gated or member
+content runs fresh per request.
+
 Other options: `slugField` (default `"slug"`), `depth`, `locale`,
 `richTextFormat`, `tags` (extra cache tags for populated relations),
-`revalidate` (a time-based safety net), and `cacheScope` (a discriminator when
-distinct readers — per tenant or database — resolve the same slug).
+`revalidate` (a time-based safety net for cached reads), and `cacheScope` (a
+discriminator when distinct readers — per tenant or database — resolve the same
+slug).
 
 ## createContentRoute — the optional catch-all
 

@@ -21,14 +21,6 @@ import { nextlyTags } from "../cache/nextly-tags";
 export type ContentEntry = Record<string, unknown>;
 
 /**
- * Default safety window (seconds) for an ENFORCED anonymous read, so a change to
- * a collection's stored read policy (which content tags don't invalidate)
- * self-heals within an hour even without a content write. An explicit
- * `revalidate` overrides it; trusted reads stay tag-only.
- */
-const ENFORCED_READ_REVALIDATE_SECONDS = 3600;
-
-/**
  * The booted-Nextly surface these helpers need: just a `find` reader. Typed
  * structurally (not as the Direct API class) so BOTH the internal singleton and
  * the public instance returned by `await getNextly(config)` satisfy it — the
@@ -68,11 +60,10 @@ export interface ResolveContentOptions {
    */
   tags?: string[];
   /**
-   * Time-based revalidation in seconds — a safety net on top of tag-based
-   * busting. Defaults to a finite window for an ENFORCED anonymous read (so a
-   * stored read-policy change self-heals even without a content write) and to
-   * `false` (tag-only) for a trusted read. Pass a number to set your own window,
-   * or `false` to force tag-only. A non-positive value is treated as `false`.
+   * Time-based revalidation in seconds for a CACHED (trusted) read — a safety
+   * net on top of tag-based busting. `false` (default) means tag-only; a
+   * non-positive value is treated as `false`. Ignored for enforced or
+   * user-scoped reads, which are never cached.
    */
   revalidate?: number | false;
   /**
@@ -93,7 +84,10 @@ export interface ResolveContentOptions {
    * `defineCollection({ access })` code rules require a `user` context to
    * evaluate, so they are not applied for an anonymous read — gate such content
    * behind an authenticated read (pass a `user`) rather than relying on the
-   * anonymous default.
+   * anonymous default. CACHING: only a trusted (`overrideAccess: true`) read
+   * with no `user` is F1-cached — an enforced read is never cached (its access
+   * decision can't be invalidated on a policy change). A public site that wants
+   * cached pages should read its public content with `overrideAccess: true`.
    */
   overrideAccess?: boolean;
   /** User identity to evaluate access rules against (with `overrideAccess: false`). */
@@ -166,13 +160,16 @@ export async function resolveContent(
     }
   };
 
-  // Any read carrying a user is uncached. Two reasons: (1) the caller's
-  // authorization can change without a content write, so a cached access
-  // decision could go stale; (2) the query service passes the user to
-  // `afterRead` hooks, so even a trusted (`overrideAccess: true`) read can
-  // produce user-dependent output that must not land in a shared cache entry.
-  // Only userless (anonymous / trusted-anonymous) reads are cached.
-  if (user) {
+  // ONLY a trusted, userless read is cached. An enforced read's result depends
+  // on an access decision that a content-tag bust can't invalidate — a stored
+  // read-policy change (public → restricted) doesn't write an entry, so a cached
+  // enforced result would keep serving to unauthorized visitors. And any read
+  // carrying a user can produce user-dependent output via `afterRead` hooks.
+  // So caching requires `overrideAccess: true` AND no user; every enforced or
+  // user-scoped read runs fresh per request. A public site that wants cached
+  // pages reads its public content trusted (`overrideAccess: true`).
+  const cacheable = overrideAccess && !user;
+  if (!cacheable) {
     return read();
   }
 
@@ -197,26 +194,13 @@ export async function resolveContent(
       // not be "json"), so key it as "inherit" — never as a concrete format — so
       // an explicit-format call can't reuse an inherited-shape cache entry.
       options.richTextFormat ?? "inherit",
-      // Only anonymous and trusted reads reach the cache (member reads are
-      // uncached above), so the access identity is one of these two.
-      overrideAccess ? "trusted" : "anon",
     ],
-    // Content writes bust the collection tag, but a change to the collection's
-    // stored READ POLICY does not — so an enforced anonymous read gets a finite
-    // default safety window (an explicit `revalidate` wins; `false` opts out), so
-    // a tightened policy self-heals within it rather than serving stale-public
-    // content until the next content write. A trusted read doesn't depend on the
-    // policy, so it stays tag-only. Any EXPLICIT `revalidate` wins — a positive
-    // number is used as-is; `false` or a non-positive number opts out to
-    // tag-only (`unstable_cache` rejects `0`). Only when the caller passes
-    // nothing does an enforced anonymous read fall back to the safety window.
+    // Trusted reads don't depend on an access decision, so tag-only busting is
+    // safe; an explicit positive `revalidate` adds a time-based safety net, and
+    // a non-positive value degrades to tag-only (`unstable_cache` rejects `0`).
     revalidate:
-      typeof options.revalidate === "number"
-        ? options.revalidate > 0
-          ? options.revalidate
-          : false
-        : options.revalidate === false || overrideAccess
-          ? false
-          : ENFORCED_READ_REVALIDATE_SECONDS,
+      typeof options.revalidate === "number" && options.revalidate > 0
+        ? options.revalidate
+        : false,
   });
 }
