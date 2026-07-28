@@ -221,6 +221,24 @@ export const env: Readonly<Env> = new Proxy({} as Env, {
   },
 });
 
+/**
+ * Discard the validated environment so the next read re-reads `process.env`.
+ *
+ * The cache above exists because validation must not run at import time, and
+ * in an application the environment is fixed once the process starts — so
+ * nothing in production ever needs this. A test process is the exception: the
+ * integration harness boots one instance per dialect in a single process, and
+ * without this the first boot would freeze `DB_DIALECT` for every boot after
+ * it. Consumers that read the dialect through this proxy — the boolean
+ * conversion in `toDialectBool`, the schema services' fallback — would then
+ * keep answering for a database nobody is connected to any more.
+ *
+ * @internal
+ */
+export function _resetEnvCache(): void {
+  _cachedEnv = null;
+}
+
 // Exposed helper for testing and tooling scenarios where a specific object of
 // variables should be validated instead of process.env.
 export function validateEnvObject(obj: Record<string, unknown>): Env {

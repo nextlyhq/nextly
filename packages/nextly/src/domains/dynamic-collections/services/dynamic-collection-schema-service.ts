@@ -25,6 +25,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { env } from "../../../shared/lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -57,6 +58,27 @@ export class DynamicCollectionSchemaService {
   /** Convert camelCase to snake_case (e.g., publishedAt → published_at) */
   private toSnakeCase(str: string): string {
     return str.replace(/([A-Z])/g, "_$1").toLowerCase();
+  }
+
+  /**
+   * The column type for a declared `slug`, taken from the canonical
+   * descriptor rather than this class's own type map.
+   *
+   * Every generated table gets a UNIQUE index on `slug`, and MySQL cannot
+   * index a TEXT column without a prefix length. The canonical descriptor
+   * already renders a text field as `varchar(255)` on MySQL, which is exactly
+   * what the runtime Drizzle table and the schema diff use for this column;
+   * this class's map renders it as `text`. The DDL therefore failed on the
+   * CREATE INDEX and left the table uncreated, and any table that did exist
+   * disagreed with the schema every later diff compared it against.
+   *
+   * Scoped to `slug` because that is the column this class indexes on
+   * creation. The two mappings still disagree elsewhere — see the note on
+   * `mapFieldTypeToSQL`.
+   */
+  private canonicalSlugType(field: FieldDefinition): string | null {
+    if (this.toSnakeCase(field.name) !== "slug") return null;
+    return getColumnDescriptor(field, this.dialect)?.dialectType ?? null;
   }
 
   /**
@@ -123,12 +145,9 @@ export class DynamicCollectionSchemaService {
           return null;
         }
 
-        const type = this.mapFieldTypeToSQL(
-          f.type,
-          f.length,
-          f.options,
-          f.validation
-        );
+        const type =
+          this.canonicalSlugType(f) ??
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation);
         const nullable = f.required ? "NOT NULL" : "";
 
         // one-to-one relationships should be unique
@@ -950,6 +969,19 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
 
   /**
    * Map field type to SQL column type (dialect-aware)
+   *
+   * This is a SECOND field-to-column mapping. The canonical one is
+   * `getColumnDescriptor` in `domains/schema/services/field-column-descriptor`,
+   * which the runtime Drizzle table and the schema diff both read, and the two
+   * do not agree: a plain `text` field renders here as `text` on MySQL and as
+   * `varchar(255)` there. A table created from this map is therefore compared
+   * against a schema that describes it differently.
+   *
+   * Only the `slug` column is routed to the canonical descriptor so far — see
+   * `canonicalSlugType` — because that is the one this class indexes on
+   * creation, where the disagreement stops being cosmetic and refuses the DDL
+   * outright. Converging the rest belongs with the column-descriptor
+   * consolidation rather than with a per-column patch.
    */
   mapFieldTypeToSQL(
     type: string,

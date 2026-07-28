@@ -115,8 +115,14 @@ When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is e
 ## Testing (`/testing`)
 
 ```ts
-createTestNextly(opts: { plugins: PluginDefinition[]; collections?: CollectionConfig[] }):
-  Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
+createTestNextly(opts: {
+  plugins: PluginDefinition[];
+  collections?: CollectionConfig[];
+  dialect?: "sqlite" | "postgresql" | "mysql";  // default sqlite (in-memory)
+  serverUrl?: string;                           // else TEST_POSTGRES_URL / TEST_MYSQL_URL
+}): Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
+
+getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
 ```
 
 ## Secrets

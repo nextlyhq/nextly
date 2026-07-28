@@ -270,6 +270,28 @@ export class NextlyError extends Error {
     });
   }
 
+  /**
+   * A call the caller got wrong, where naming the mistake IS the value of the
+   * error.
+   *
+   * The only factory that takes its public message from the caller. The
+   * generic messages elsewhere exist so an HTTP response cannot leak internal
+   * detail; this one is for arguments and configuration a developer controls
+   * and must be told about — a missing option, an unusable combination — where
+   * `internal()` would reduce the one useful sentence to "An unexpected error
+   * occurred." Do not pass user-supplied data through it.
+   */
+  static invalidInput(opts: {
+    message: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: opts.message,
+      logContext: opts.logContext,
+    });
+  }
+
   static validation(opts: {
     errors: ValidationPublicData["errors"];
     logContext?: Record<string, unknown>;

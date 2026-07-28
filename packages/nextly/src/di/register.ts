@@ -1990,7 +1990,14 @@ async function reconcileSingleTablesForBoot(
     const { DynamicCollectionSchemaService } = await import(
       "../domains/dynamic-collections/services/dynamic-collection-schema-service"
     );
-    const schemaService = new DynamicCollectionSchemaService();
+    // The dialect comes from the adapter that will run this DDL. Left to its
+    // own default the service reads DB_DIALECT, which is optional and falls
+    // back to "postgresql" — so an app configured with only a MySQL or SQLite
+    // DATABASE_URL would generate a single's table as PostgreSQL.
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      adapter.getCapabilities().dialect
+    );
     const singleRegistry = container.get<SingleRegistryService>(
       "singleRegistryService"
     );
