@@ -184,6 +184,62 @@ interface ProvisionedDatabase {
 }
 
 /**
+ * Capture the environment variables a boot is about to change, and return the
+ * function that puts them back.
+ *
+ * A variable that was absent has to be removed rather than assigned back:
+ * `process.env.X = undefined` stores the string "undefined", and the files that
+ * follow in this process would read it as configured. Restoring the variables
+ * is not enough on its own either — the validated environment is cached from
+ * its first read.
+ */
+function snapshotEnv(): () => void {
+  const previousUrl = process.env.DATABASE_URL;
+  const previousDialect = process.env.DB_DIALECT;
+  return () => {
+    if (previousUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousUrl;
+    if (previousDialect === undefined) delete process.env.DB_DIALECT;
+    else process.env.DB_DIALECT = previousDialect;
+    _resetEnvCache();
+  };
+}
+
+/**
+ * What the currently booted instance has done to this process, held here
+ * rather than only in its closure.
+ *
+ * A handle that is never destroyed still owns a database and an environment,
+ * and the next `createTestNextly` call can only reach them through this: its
+ * defensive reset disconnects the previous adapter, but the previous handle's
+ * closure is gone. Without it, an abandoned server-backed instance leaks its
+ * database on every recovery, and an abandoned SQLite one leaves `DB_DIALECT`
+ * reading `sqlite` for the rest of the run.
+ *
+ * `provisioned` is set for a server-backed boot (its `release` restores the
+ * environment itself); `restoreEnv` is set for a SQLite boot, which changes
+ * the environment but provisions nothing.
+ */
+let active: { provisioned?: ProvisionedDatabase; restoreEnv?: () => void } = {};
+
+/**
+ * Reclaim the database a previous instance left behind, without touching the
+ * environment.
+ *
+ * Deliberately not symmetric with `destroy()`. The environment belongs to
+ * whoever boots next: a boot that provisions immediately sets its own, and a
+ * boot that supplies its own adapter inherits the current one on purpose —
+ * restoring here would leave that second kind with no dialect configured at
+ * all. A provisioned handle still restores its own snapshot inside `release`,
+ * because the environment it set names a database about to be dropped.
+ */
+async function releaseActiveDatabase(): Promise<void> {
+  const previous = active;
+  active = {};
+  await previous.provisioned?.release().catch(() => {});
+}
+
+/**
  * Create a dedicated database for this boot and connect to it.
  *
  * The environment is set before the adapters are built and restored by
@@ -208,20 +264,7 @@ async function provisionDatabase(
   const databaseUrl = new URL(serverUrl);
   databaseUrl.pathname = `/${name}`;
 
-  const previousUrl = process.env.DATABASE_URL;
-  const previousDialect = process.env.DB_DIALECT;
-  // A variable that was absent has to be removed rather than assigned back:
-  // `process.env.X = undefined` stores the string "undefined", and the test
-  // files that follow in this process would read it as configured.
-  const restoreEnv = (): void => {
-    if (previousUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = previousUrl;
-    if (previousDialect === undefined) delete process.env.DB_DIALECT;
-    else process.env.DB_DIALECT = previousDialect;
-    // The validated environment is cached from its first read, so restoring
-    // the variables is not enough on its own.
-    _resetEnvCache();
-  };
+  const restoreEnv = snapshotEnv();
 
   let server: TestAdapter | undefined;
   let databaseExists = false;
@@ -356,6 +399,10 @@ export async function createTestNextly(
   // ensureCollectionTables workaround).
   clearCachedSnapshot();
   clearLiveSnapshots();
+  // After `shutdownServices` above has disconnected the previous adapter, so a
+  // database this drops has nothing attached to it. Covers the instance that
+  // was never destroyed: its closure is unreachable, but its database is not.
+  await releaseActiveDatabase();
 
   let adapter = opts.adapter;
   // Created for a non-SQLite boot and dropped by destroy(). Undefined when the
@@ -368,7 +415,11 @@ export async function createTestNextly(
     );
     adapter = provisioned.adapter;
   }
+  // Set when this boot changes the environment without provisioning anything,
+  // so `destroy()` can put it back the way the provisioned path does.
+  let restoreEnv: (() => void) | undefined;
   if (!adapter) {
+    restoreEnv = snapshotEnv();
     // Force the SQLite dialect so the env validation the factory triggers
     // (env.DATABASE_URL access) passes without a configured database — SQLite
     // needs no DATABASE_URL, and production-only checks are skipped under test.
@@ -386,9 +437,10 @@ export async function createTestNextly(
     } as Parameters<typeof createAdapter>[0]);
   }
   const logger = opts.logger ?? defaultTestLogger;
+  active = { provisioned, restoreEnv };
 
   try {
-    return await bootServices(adapter, logger, opts, provisioned);
+    return await bootServices(adapter, logger, opts, provisioned, restoreEnv);
   } catch (error) {
     // Two different failures reach here, and each needs a different half.
     //
@@ -409,8 +461,11 @@ export async function createTestNextly(
     // teardown depend on whether the boot got far enough to succeed.
     await adapter.disconnect().catch(() => {});
     // A boot that fails after the database was created would otherwise leave
-    // it on the server, along with the environment this instance set.
-    await provisioned?.release().catch(() => {});
+    // it on the server, along with whatever this instance changed about the
+    // environment — on either the provisioned or the SQLite path. Unlike the
+    // recovery path above, nothing is about to set an environment here.
+    await releaseActiveDatabase();
+    restoreEnv?.();
     throw error;
   }
 }
@@ -423,7 +478,8 @@ async function bootServices(
   adapter: TestAdapter,
   logger: Logger,
   opts: CreateTestNextlyOptions,
-  provisioned: ProvisionedDatabase | undefined
+  provisioned: ProvisionedDatabase | undefined,
+  restoreEnv: (() => void) | undefined
 ): Promise<TestNextly> {
   await registerServices({
     adapter,
@@ -516,8 +572,12 @@ async function bootServices(
       clearCachedSnapshot();
       clearLiveSnapshots();
       // Last, and only after shutdownServices has disconnected: PostgreSQL
-      // will not drop a database that still has a session attached.
+      // will not drop a database that still has a session attached. The
+      // SQLite path provisions nothing but still changed the environment, so
+      // it is put back here too.
       await provisioned?.release();
+      restoreEnv?.();
+      active = {};
     },
   };
 }

@@ -58,8 +58,10 @@ for (const dialect of SERVER_DIALECTS) {
   it(`restores the previous dialect once the ${dialect} instance is destroyed`, async () => {
     // Captured rather than assumed: what this should return to depends on what
     // ran before, and asserting "anything but the boot's dialect" would pass by
-    // accident whenever the two happened to differ.
-    const before = env.DB_DIALECT;
+    // accident whenever the two happened to differ. Read from `process.env`,
+    // not the proxy — reading the proxy validates, and a process configured
+    // only with TEST_POSTGRES_URL has no DATABASE_URL for the default dialect.
+    const before = process.env.DB_DIALECT;
 
     current = await createTestNextly({ dialect });
     expect(env.DB_DIALECT).toBe(dialect);
@@ -70,7 +72,7 @@ for (const dialect of SERVER_DIALECTS) {
     // The files that follow share this process, so the instance has to leave
     // the environment as it found it — including for readers that had already
     // cached it.
-    expect(env.DB_DIALECT).toBe(before);
+    expect(process.env.DB_DIALECT).toBe(before);
   }, 60_000);
 }
 
