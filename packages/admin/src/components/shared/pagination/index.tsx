@@ -21,7 +21,8 @@ import type { PaginationProps } from "./types";
  * ## Design Specifications
  * - **Button Size**: 32px (h-8 w-8) - sufficient touch target
  * - **Button Variant**: secondary (default), primary (current page)
- * - **Border Radius**: 6px (rounded-none) - matches design system
+ * - **Border Radius**: `rounded-md` on the standalone nav buttons; the numbered
+ *   buttons stay square because they overlap borders into a single strip
  * - **Spacing**: 8px gap (gap-2) between controls
  * - **Typography**: text-sm for page info and page size selector
  * - **Max Visible Pages**: Configurable (default: 5)
@@ -196,6 +197,8 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
       // Common button class
       const getButtonClass = (isActive: boolean) =>
         cn(
+          // Square corners: page buttons overlap their borders (-ml-px) into
+          // one continuous strip, which a radius would break apart.
           "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
           isActive
             ? "bg-primary! text-primary-foreground border-primary! z-20"
@@ -206,6 +209,8 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
       const renderEllipsis = (key: string) => (
         <span
           key={key}
+          // Square corners: the ellipsis sits inside the same
+          // overlapped-border strip as the page buttons.
           className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
           aria-hidden="true"
         >
@@ -340,7 +345,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
                     onPageSizeChange(newPageSize);
                   }}
                   disabled={isLoading}
-                  className="h-9 w-[70px] appearance-none rounded-none  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+                  className="h-9 w-[70px] appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
                 >
                   {pageSizeOptions.map(size => (
                     <option key={size} value={size}>
@@ -373,7 +378,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
             <button
               onClick={() => onPageChange(0)}
               disabled={currentPage === 0 || isLoading}
-              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to first page"
             >
               <ChevronsLeft className="h-4 w-4" />
@@ -383,7 +388,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage - 1)}
               disabled={currentPage === 0 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to previous page"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -396,7 +401,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage + 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to next page"
             >
               <ChevronRight className="h-4 w-4" />
@@ -406,7 +411,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
             <button
               onClick={() => onPageChange(totalPages - 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to last page"
             >
               <ChevronsRight className="h-4 w-4" />

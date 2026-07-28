@@ -83,7 +83,7 @@ export interface CodeInputProps<
 function CodeEditorSkeleton({ minHeight }: { minHeight: number }) {
   return (
     <div
-      className="flex items-center justify-center bg-primary/5 rounded-none animate-pulse"
+      className="flex items-center justify-center bg-primary/5 rounded-md animate-pulse"
       style={{ minHeight: `${minHeight}px` }}
     >
       <span className="text-sm text-muted-foreground">Loading editor...</span>
@@ -201,15 +201,15 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-none  border border-border transition-colors",
-        invalid ? "border-destructive" : "border-border",
+        "relative rounded-md  border border-input transition-colors",
+        invalid ? "border-destructive" : "border-input",
         (disabled || readOnly) && "opacity-60",
         className
       )}
     >
       {/* Language indicator */}
       {language && language !== "plaintext" && (
-        <div className="absolute right-2 top-2 z-10 rounded-none bg-primary/5 px-2 py-0.5 text-xs font-medium text-muted-foreground">
+        <div className="absolute right-2 top-2 z-10 rounded-sm bg-primary/5 px-2 py-0.5 text-xs font-medium text-muted-foreground">
           {language.toUpperCase()}
         </div>
       )}
@@ -236,7 +236,12 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
 
       {/* Validation error hint (shown below editor) */}
       {invalid && error?.message && (
-        <div className="border-t border-destructive bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        // The strip sits on the wrapper's bottom edge and fills its full width,
+        // so it takes the wrapper's own computed corner rather than painting
+        // square across it. `inherit` tracks whatever radius the wrapper ends up
+        // with instead of restating a step, and the editor keeps `overflow`
+        // visible so CodeMirror's own popups are not clipped.
+        <div className="rounded-b-[inherit] border-t border-destructive bg-destructive/5 px-3 py-2 text-xs text-destructive">
           {error.message}
         </div>
       )}

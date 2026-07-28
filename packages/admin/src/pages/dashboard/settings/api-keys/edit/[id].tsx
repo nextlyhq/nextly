@@ -64,7 +64,7 @@ const EditApiKeyContent: React.FC<{ id: string }> = ({ id }) => {
   }
 
   if (isLoading && !data) {
-    return <Skeleton className="h-[420px] w-full rounded-none" />;
+    return <Skeleton className="h-[420px] w-full rounded-lg" />;
   }
 
   if (!apiKey) {

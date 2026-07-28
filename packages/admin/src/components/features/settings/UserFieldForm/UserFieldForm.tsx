@@ -212,7 +212,7 @@ export function UserFieldForm({
           }}
           className="space-y-6"
         >
-          <div className="bg-card border border-border rounded-none overflow-hidden">
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
             {/* Single column: the type governs everything below it, so it is
                 the first decision the form asks for. */}
             <div className="mx-auto max-w-3xl space-y-8 p-6">
@@ -367,7 +367,7 @@ export function UserFieldForm({
                       control={form.control}
                       name="hasMany"
                       render={({ field }) => (
-                        <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
+                        <FormItem className="flex items-center justify-between rounded-md border border-border p-4">
                           <div className="space-y-0.5">
                             <FormLabel>Allow multiple selections</FormLabel>
                             <FormDescription>
@@ -393,7 +393,7 @@ export function UserFieldForm({
               {/* Section: Validation (collapsed — Required covers the common case) */}
               {showValidation && (
                 <Collapsible>
-                  <CollapsibleTrigger className="group flex w-full items-center justify-between rounded-none border border-border p-4 text-left">
+                  <CollapsibleTrigger className="group flex w-full items-center justify-between rounded-md border border-border p-4 text-left">
                     <div>
                       <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">
                         Validation
@@ -438,7 +438,7 @@ export function UserFieldForm({
                     control={form.control}
                     name="required"
                     render={({ field }) => (
-                      <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
+                      <FormItem className="flex items-center justify-between rounded-md border border-border p-4">
                         <div className="space-y-0.5">
                           <FormLabel>Required</FormLabel>
                         </div>
@@ -456,7 +456,7 @@ export function UserFieldForm({
                     control={form.control}
                     name="isActive"
                     render={({ field }) => (
-                      <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
+                      <FormItem className="flex items-center justify-between rounded-md border border-border p-4">
                         <div className="space-y-0.5">
                           <FormLabel>Active</FormLabel>
                         </div>

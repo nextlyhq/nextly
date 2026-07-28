@@ -26,6 +26,7 @@
  * @module shared/lib/field-level-registry
  */
 
+import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -251,6 +252,23 @@ function openNestedContainer(
 }
 
 /**
+ * Whether any field at this level has an access callback for the operation.
+ *
+ * Decides whether a snapshot is worth taking at all: a level with no callbacks
+ * never shows its data to app code, so copying it would be pure cost on every
+ * row of every list read.
+ */
+function levelHasAccessCallback(
+  fns: Record<string, FieldFunctions>,
+  operation: "create" | "update" | "read"
+): boolean {
+  for (const entry of Object.values(fns)) {
+    if (typeof entry.access?.[operation] === "function") return true;
+  }
+  return false;
+}
+
+/**
  * Recursive worker for write access. Every rule at one level is evaluated
  * against the SAME immutable snapshot of that level's data, so a rule that
  * reads a sibling field's value can't flip from deny to allow purely
@@ -264,7 +282,14 @@ async function applyWriteAccessRec(
   operation: "create" | "update",
   ctx: { user?: Record<string, unknown>; id?: string }
 ): Promise<void> {
-  const snapshot = { ...data };
+  // Taken BEFORE the recursion below, which rewrites nested containers in
+  // place as it redacts them: a rule at this level that reads into a nested
+  // value must see what the level held when it was entered, not what an
+  // earlier-registered field's recursion left behind. Skipped entirely when no
+  // rule at this level will run.
+  const snapshot = levelHasAccessCallback(fns, operation)
+    ? detachData(data)
+    : undefined;
   const denied: string[] = [];
   for (const [name, entry] of Object.entries(fns)) {
     if (!(name in data)) continue;
@@ -326,7 +351,13 @@ async function applyReadAccessRec(
   fns: Record<string, FieldFunctions>,
   ctx: { user?: Record<string, unknown>; id?: string }
 ): Promise<void> {
-  const snapshot = { ...entry };
+  // Taken BEFORE the recursion below replaces nested containers with their
+  // redacted serialization: a parent-level rule reading a protected nested
+  // value would otherwise find it already removed, and the outcome would turn
+  // on field registration order.
+  const snapshot = levelHasAccessCallback(fns, "read")
+    ? detachData(entry)
+    : undefined;
   const denied: string[] = [];
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;

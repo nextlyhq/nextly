@@ -19,7 +19,10 @@ import { cn } from "../lib/utils";
  * Design Specs:
  * - Size: 16px (h-4 w-4) - Fixed size matching Checkbox
  * - Border: 1px solid, expands to 5px when checked (visual indicator)
- * - Border radius: Full (rounded-none)
+ * - Border radius: `rounded-full`. Round means "pick one" and square means
+ *   "pick many"; a square radio would announce the wrong behaviour, so the
+ *   shape is fixed and deliberately outside the `--radius` scale. Checkbox
+ *   keeps the derived radius for the same reason.
  * - Transition: 150ms (consistent with design system)
  * - Focus ring: 2px ring with 2px offset
  *
@@ -58,13 +61,18 @@ const RadioGroupItem = forwardRef<
         // (~5% opacity, effectively invisible); hover strengthens above the resting state.
         // Resting border uses border-input (a visible 3:1 boundary); the checked
         // state switches to border-primary below, keeping the two states distinct.
-        "peer h-4 w-4 shrink-0 rounded-none border border-input bg-background cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/70 data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
+        // rounded-full is fixed rather than derived from --radius: the circle is
+        // what tells the user only one option can be chosen. The thick checked
+        // border leaves a background-coloured core, and because the border's
+        // inner edge is curved too that core reads as a round dot.
+        "peer h-4 w-4 shrink-0 rounded-full border border-input bg-background cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/70 data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
         className
       )}
       {...props}
     >
-      {/* No inner indicator needed -  border border-border expansion provides visual feedback */}
-      <RadioGroupPrimitive.Indicator />
+      {/* The indicator carries no marker of its own: the expanded border plus
+          the circular background core already render the selected dot. */}
+      <RadioGroupPrimitive.Indicator className="block size-full rounded-full" />
     </RadioGroupPrimitive.Item>
   );
 });

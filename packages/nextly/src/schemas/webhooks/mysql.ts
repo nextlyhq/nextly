@@ -90,6 +90,9 @@ export const nextlyWebhookDeliveries = mysqlTable(
   "nextly_webhook_deliveries",
   {
     id: varchar("id", { length: 191 }).primaryKey(),
+    // Both cascades are deliberate; see the PostgreSQL definition. Endpoints are
+    // soft-deleted so the webhook cascade never fires for retirement (history is
+    // kept); the event cascade is how retention prunes an event with its attempts.
     webhookId: varchar("webhook_id", { length: 191 })
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),

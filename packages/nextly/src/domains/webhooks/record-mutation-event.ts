@@ -18,6 +18,11 @@ import type { RequestActor } from "../../auth/request-actor";
 
 import { buildEnvelope } from "./envelope";
 import { recordEvent } from "./record-event";
+import {
+  endpointsPresent,
+  isWebhookAuditEnabled,
+  shouldRecordEvent,
+} from "./recording-activation";
 import { isWebhookRecordingEnabled } from "./recording-policy";
 import {
   sensitiveFieldPaths,
@@ -86,6 +91,28 @@ export async function recordMutationEvent(
   // ipAddress/userAgent) never enters the outbox or the delivery path. Enforced
   // here at the single seam so every write path inherits it.
   if (!resourceRecordingEnabled(args.resource)) {
+    return false;
+  }
+
+  // Endpoint/audit gate: an install with no enabled endpoint and the audit seam
+  // off records nothing, so a mutation never pays the outbox INSERT + full
+  // document serialization for an event no subscriber would receive. Both inputs
+  // are read synchronously with NO database access — safe inside this write
+  // transaction, where a read would deadlock a single-connection pool, cache a
+  // stale transaction snapshot, or poison the transaction on failure. Endpoint
+  // presence is a flag refreshed out of band (boot, endpoint CRUD, and a stale-
+  // read background reload), and fails open until primed. Race contract: a same-
+  // process endpoint change refreshes the flag immediately; an endpoint changed
+  // in another process is picked up within the flag TTL; a few events recorded
+  // just before the last endpoint is removed may remain and are pruned by
+  // retention.
+  if (
+    !shouldRecordEvent({
+      collectionAllows: true,
+      auditEnabled: isWebhookAuditEnabled(),
+      hasEndpoints: endpointsPresent(),
+    })
+  ) {
     return false;
   }
 

@@ -68,7 +68,7 @@ function MigrationIndicator({ status }: { status?: ComponentMigrationStatus }) {
 
   return (
     <span
-      className={`ml-auto h-2 w-2 rounded-none ${colors[status]}`}
+      className={`ml-auto h-2 w-2 rounded-full ${colors[status]}`}
       title={titles[status]}
       aria-label={titles[status]}
     />
@@ -197,7 +197,10 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                 isActive={isAnyComponentActive}
                 className="group/trigger"
               >
-                <Puzzle className="text-primary" />
+                {/* Uncolored so the icon inherits the menu button's ink and
+                    tracks its resting/active states, as every other nav icon
+                    does. */}
+                <Puzzle />
                 <span className="flex-1">Components</span>
                 <ChevronDown className="ml-auto transition-transform duration-300 ease-out group-data-[state=open]/trigger:rotate-180" />
               </SidebarMenuButton>
@@ -259,7 +262,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
               isActive={isAnyComponentActive}
               className="group/trigger"
             >
-              <Puzzle className="text-primary" />
+              <Puzzle />
               <span className="flex-1">Components</span>
               <ChevronDown className="ml-auto transition-transform duration-300 ease-out group-data-[state=open]/trigger:rotate-180" />
             </SidebarMenuButton>
@@ -301,7 +304,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                                 <Link
                                   key={component.id}
                                   href={href}
-                                  className={`flex items-center gap-2 py-1.5 px-2 text-sm rounded-none transition-colors ${
+                                  className={`flex items-center gap-2 py-1.5 px-2 text-sm rounded-md transition-colors ${
                                     isSubActive
                                       ? "bg-accent/20 text-foreground font-medium"
                                       : "text-muted-foreground hover:text-foreground hover:bg-accent/10"
@@ -356,7 +359,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
         isActive={isAnyComponentActive}
       >
         <Link href={ROUTES.BUILDER_COMPONENTS}>
-          <Puzzle className="text-primary" />
+          <Puzzle />
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>

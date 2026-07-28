@@ -120,7 +120,7 @@ const booleanRenderer: CellRenderer = ({ value }: CellContext) => {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-none px-2 py-0.5 text-[11px] font-medium border border-border",
+        "inline-flex items-center rounded-sm px-2 py-0.5 text-xs font-medium border border-border",
         on ? "bg-muted text-foreground" : "bg-transparent text-muted-foreground"
       )}
     >
@@ -181,7 +181,7 @@ const badgeRenderer: CellRenderer = ({ value }: CellContext) => {
   if (value === null || value === undefined || value === "")
     return <EmptyValue />;
   return (
-    <span className="inline-flex items-center rounded-none px-2 py-0.5 text-[11px] font-medium bg-muted text-foreground border border-border">
+    <span className="inline-flex items-center rounded-sm px-2 py-0.5 text-xs font-medium bg-muted text-foreground border border-border">
       {toText(value)}
     </span>
   );
@@ -198,13 +198,13 @@ const chipsRenderer: CellRenderer = ({ value }: CellContext) => {
       {shown.map((v, i) => (
         <span
           key={i}
-          className="inline-flex items-center rounded-none px-1.5 py-0.5 text-[11px] font-medium bg-muted text-foreground border border-border"
+          className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-xs font-medium bg-muted text-foreground border border-border"
         >
           {toText(v)}
         </span>
       ))}
       {extra > 0 && (
-        <span className="text-[11px] text-muted-foreground">+{extra}</span>
+        <span className="text-xs text-muted-foreground">+{extra}</span>
       )}
     </span>
   );
@@ -237,7 +237,7 @@ const uploadRenderer: CellRenderer = ({ value }: CellContext) => {
       <img
         src={url}
         alt={typeof name === "string" ? name : "media"}
-        className="h-8 w-8 rounded-none border border-border object-cover"
+        className="h-8 w-8 rounded-md border border-border object-cover"
       />
     );
   }

@@ -133,6 +133,7 @@ function ImageComponent({
             title={title}
             width={width}
             height={height}
+            // Square corners: content images render full-bleed in the document flow.
             className="w-full h-auto rounded-none"
             draggable={false}
           />

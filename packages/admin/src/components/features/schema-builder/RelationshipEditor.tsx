@@ -216,7 +216,7 @@ export function RelationshipEditor({
                     <button
                       type="button"
                       onClick={() => handleRemoveCollection(slug)}
-                      className="ml-0.5 rounded-none p-0.5 hover-subtle-row"
+                      className="ml-0.5 rounded-md p-0.5 hover-subtle-row"
                     >
                       <Icons.X className="h-3 w-3" />
                     </button>
@@ -284,7 +284,7 @@ export function RelationshipEditor({
                             handleCollectionToggle(collection.slug);
                           }
                         }}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-none text-left hover-subtle-row transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left hover-subtle-row transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <Checkbox
                           checked={isSelected}
@@ -295,7 +295,7 @@ export function RelationshipEditor({
                             {collection.label}
                           </div>
                           {collection.label !== collection.slug && (
-                            <div className="text-[10px] text-muted-foreground truncate">
+                            <div className="text-xs text-muted-foreground truncate">
                               {collection.slug}
                             </div>
                           )}
@@ -469,7 +469,7 @@ export function RelationshipEditor({
         </div>
 
         {filterOptions ? (
-          <div className="space-y-2 p-3 rounded-none  border border-border bg-background">
+          <div className="space-y-2 p-3 rounded-md  border border-border bg-background">
             <p className="text-xs text-muted-foreground mb-2">
               Only show documents where:
             </p>
@@ -487,7 +487,7 @@ export function RelationshipEditor({
                 className="h-8 text-sm"
               />
             </div>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               e.g., status = published
             </p>
           </div>

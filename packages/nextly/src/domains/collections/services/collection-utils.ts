@@ -63,11 +63,19 @@ export function isJsonFieldType(
   if (
     (fieldType === "select" ||
       fieldType === "text" ||
-      fieldType === "number" ||
-      fieldType === "relationship") &&
+      fieldType === "number") &&
     field?.hasMany
   ) {
     return true;
+  }
+
+  // A relationship is JSON-backed when it holds many values OR when it is
+  // polymorphic, because a polymorphic target is stored as `{relationTo,
+  // value}` rather than a plain id — the same rule `upload` below already
+  // applies. Testing only `hasMany` left a single polymorphic relationship
+  // written to its JSON column as a live object.
+  if (fieldType === "relationship") {
+    return !!(field?.hasMany || Array.isArray(field?.relationTo));
   }
 
   if (fieldType === "upload") {

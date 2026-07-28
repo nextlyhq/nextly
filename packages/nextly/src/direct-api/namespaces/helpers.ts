@@ -51,7 +51,8 @@ export function createRequestContext(args: DirectAPIConfig): RequestContext {
   return {
     user: {
       id: args.user.id,
-      email: "",
+      // Preserve the caller's real email so email-based access rules match.
+      email: typeof args.user.email === "string" ? args.user.email : "",
       role: args.user.role ?? "user",
       permissions: [],
     },
@@ -65,6 +66,12 @@ export function createRequestContext(args: DirectAPIConfig): RequestContext {
 export interface ServiceResultLike {
   success: boolean;
   statusCode: number;
+  /**
+   * Canonical `NextlyError` code carried by envelopes that originate from a
+   * NextlyError. Preferred over the status-derived fallback because one
+   * status can cover several codes (409 is both DUPLICATE and CONFLICT).
+   */
+  code?: string;
   message: string;
   data: unknown;
   errors?: Array<{ path: string; code: string; message: string }>;
@@ -80,7 +87,9 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
     return NextlyError.validation({ errors: result.errors });
   }
   return new NextlyError({
-    code: statusCodeToErrorCode(result.statusCode),
+    // The envelope's own code wins: the status-derived fallback can only
+    // guess the primary code for a status (409 always guesses CONFLICT).
+    code: result.code ?? statusCodeToErrorCode(result.statusCode),
     publicMessage: result.message,
     statusCode: result.statusCode,
     logContext:

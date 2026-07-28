@@ -161,4 +161,18 @@ describe("WebhookEndpointRegistry", () => {
     reader.resolveNext([row("fresh")]);
     expect((await second).map(e => e.id)).toEqual(["fresh"]);
   });
+
+  it("hasEnabledEndpoints reflects whether the enabled set is non-empty", async () => {
+    const reader = new FakeReader();
+    const registry = new WebhookEndpointRegistry(reader);
+
+    const none = registry.hasEnabledEndpoints();
+    reader.resolveNext([]);
+    expect(await none).toBe(false);
+
+    registry.invalidate();
+    const some = registry.hasEnabledEndpoints();
+    reader.resolveNext([row("w1")]);
+    expect(await some).toBe(true);
+  });
 });

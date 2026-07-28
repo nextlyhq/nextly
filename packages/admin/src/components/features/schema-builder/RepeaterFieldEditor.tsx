@@ -158,7 +158,7 @@ export function RepeaterFieldEditor({
             same surfaces the entry-form renderer will use. */}
         {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
         <div className="rounded border border-dashed border-border bg-primary/[0.02] p-2.5 space-y-1">
-          <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
+          <p className="text-xs font-bold tracking-[0.08em] uppercase text-muted-foreground">
             Preview
           </p>
           <p className="text-xs text-foreground/80">
@@ -216,7 +216,7 @@ export function RepeaterFieldEditor({
             label will look like with the current selection. */}
         {/* Semantic border token so the boundary is visible at the 3:1 UI minimum. */}
         <div className="rounded border border-dashed border-border bg-primary/[0.02] p-2.5 space-y-1">
-          <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
+          <p className="text-xs font-bold tracking-[0.08em] uppercase text-muted-foreground">
             Preview when rows are collapsed
           </p>
           {(rowLabelField
@@ -239,7 +239,7 @@ export function RepeaterFieldEditor({
         </div>
 
         {labelableFields.length === 0 && nestedFields.length > 0 && (
-          <div className="flex items-start gap-2 p-2 rounded-none bg-primary/5">
+          <div className="flex items-start gap-2 p-2 rounded-md bg-primary/5">
             <Icons.Info className="h-3.5 w-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
             <p className="text-xs text-muted-foreground">
               Add a text, email, number, select, date, or slug field to use as

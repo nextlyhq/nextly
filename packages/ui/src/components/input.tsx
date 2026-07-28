@@ -19,7 +19,7 @@ import { cn } from "../lib/utils";
  * Design Specs:
  * - Height: sm=32px, default=40px, lg=44px
  * - Padding: Horizontal varies by size (sm=10px, default=12px, lg=16px)
- * - Border radius: 0px (rounded-none)
+ * - Border radius: `rounded-md`, the control step of the `--radius` scale
  * - Border: 1px solid, changes on focus/error
  * - Transition: 150ms (consistent with design system)
  * - Font size: sm/default=14px (text-sm), lg=16px (text-base)
@@ -39,7 +39,7 @@ import { cn } from "../lib/utils";
  * - search: Search input with clear button
  */
 const inputVariants = cva(
-  "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-none border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-primary! focus-visible:border-primary! aria-invalid:border-destructive aria-invalid:focus:border-destructive! data-[invalid=true]:border-destructive data-[invalid=true]:focus:border-destructive!",
+  "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-md border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-primary! focus-visible:border-primary! aria-invalid:border-destructive aria-invalid:focus:border-destructive! data-[invalid=true]:border-destructive data-[invalid=true]:focus:border-destructive!",
   {
     variants: {
       size: {

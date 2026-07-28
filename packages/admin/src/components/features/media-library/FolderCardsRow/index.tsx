@@ -66,7 +66,7 @@ export function FolderCardsRow({
               type="button"
               onClick={() => onFolderSelect(folder.id)}
               className={cn(
-                "flex w-full items-center gap-3 rounded-none border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                "flex w-full items-center gap-3 rounded-md border border-border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                 isActive
                   ? "bg-primary/5 ring-1 ring-primary/20"
                   : "bg-card hover:bg-primary/5 hover:border-border-strong"
@@ -111,7 +111,7 @@ export function FolderCardsRow({
                   <button
                     type="button"
                     aria-label={`Folder actions for ${folder.name}`}
-                    className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/5 transition-colors cursor-pointer!"
+                    className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-primary/5 transition-colors cursor-pointer!"
                     onClick={e => e.stopPropagation()}
                   >
                     <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />

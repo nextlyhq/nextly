@@ -17,3 +17,15 @@ describe("sanitizeConfig — production migration db options", () => {
     expect(c.db.migrateLockTtlSeconds).toBe(120);
   });
 });
+
+describe("sanitizeConfig — webhook audit seam", () => {
+  it("defaults webhookAuditEnabled to false when unset", () => {
+    expect(sanitizeConfig({}).webhookAuditEnabled).toBe(false);
+  });
+
+  it("resolves webhooks.audit true", () => {
+    expect(
+      sanitizeConfig({ webhooks: { audit: true } }).webhookAuditEnabled
+    ).toBe(true);
+  });
+});

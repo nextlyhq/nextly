@@ -72,7 +72,7 @@ export function SortableHookCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "rounded-none  border border-border bg-background",
+        "rounded-md  border border-border bg-background",
         hook.enabled ? "border-border" : "border-border opacity-60"
       )}
     >
@@ -89,7 +89,7 @@ export function SortableHookCard({
         </button>
 
         {/* Hook Icon */}
-        <div className="w-6 h-6 rounded-none bg-primary/5 flex items-center justify-center">
+        <div className="w-6 h-6 rounded-sm bg-primary/5 flex items-center justify-center">
           <CategoryIcon className="h-3.5 w-3.5 text-muted-foreground" />
         </div>
 
@@ -99,7 +99,7 @@ export function SortableHookCard({
             <span className="text-sm font-medium truncate">
               {hookConfig.name}
             </span>
-            <Badge variant="outline" className="text-[10px] shrink-0">
+            <Badge variant="outline" className="text-xs shrink-0">
               {HOOK_TYPE_LABELS[hookConfig.hookType] || hookConfig.hookType}
             </Badge>
           </div>

@@ -283,7 +283,9 @@ export function UploadPreview({
           </div>
         )}
 
-        {/* External link indicator on hover (for files with URL) */}
+        {/* External link indicator on hover (for files with URL). Literal
+            black/white: this wash and its icon sit on the thumbnail image, so
+            they are keyed to the media rather than to the admin palette. */}
         {file.url && (
           <div
             className={cn(
@@ -339,7 +341,9 @@ export function UploadPreview({
         </Button>
       )}
 
-      {/* File info overlay */}
+      {/* File info overlay. The gradient scrim and its caption stay literal:
+          they are composited over the thumbnail image, not over a themed
+          surface, so a token would leave the text unreadable on pale media. */}
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2 pointer-events-none">
         <p className="text-xs text-white truncate">{file.filename}</p>
         <div className="flex items-center gap-2 text-xs text-white/70">

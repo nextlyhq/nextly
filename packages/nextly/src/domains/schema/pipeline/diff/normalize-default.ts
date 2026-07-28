@@ -18,10 +18,18 @@
 //     change_column_default op; we'd rather emit a false-positive op than
 //     silently swallow a real one.
 //
-// Scope: PostgreSQL is the only dialect that currently surfaces this
-// mismatch. MySQL/SQLite-specific equivalences can be added here when they
-// emerge; the function signature is dialect-agnostic so callers don't need
-// to know.
+// MySQL surfaces two more, both reported against the schema this project
+// itself writes:
+//   - `now()` and `CURRENT_TIMESTAMP` are synonyms (in PostgreSQL too), so a
+//     timestamp column reported one way and authored the other looked changed.
+//     They collapse into `now()`, the form already canonical here.
+//   - A boolean column stores 1/0, because MySQL booleans ARE `tinyint(1)`,
+//     while the desired side authors `true`/`false`. That collapse is applied
+//     ONLY when the column's type is boolean: for an integer column a default
+//     of `1` means the number one, and treating it as `true` would hide a real
+//     change. Hence the optional column-type argument.
+
+import { normalizeType } from "./normalize-type";
 
 // The list of PG type names that PG appends as a `::<type>` cast suffix to
 // literal defaults. Two-word types (`character varying`, `double precision`,
@@ -64,7 +72,12 @@ const CAST_SUFFIX_RE = new RegExp(
  * Return the canonical form of a column-default expression for diff
  * comparison. `undefined` (no default) is passed through unchanged.
  */
-export function normalizeDefault(expr: string | undefined): string | undefined {
+export function normalizeDefault(
+  expr: string | undefined,
+  // The column's declared type, when the caller has it. Only consulted to
+  // decide whether a bare 1/0 denotes a boolean.
+  columnType?: string
+): string | undefined {
   if (expr === undefined) return undefined;
 
   // Step 1: strip PG's redundant `::<type>` cast suffix when it follows a
@@ -91,6 +104,38 @@ export function normalizeDefault(expr: string | undefined): string | undefined {
   // identifier from `myfunc()` depending on how it was quoted.
   if (KEYWORD_WITH_OPTIONAL_PRECISION.test(normalised.trim())) {
     normalised = normalised.toLowerCase();
+  }
+
+  // Step 5: `current_timestamp` and `now()` denote the same value, and MySQL
+  // reports one where the schema authored the other — including with a
+  // fractional-seconds precision, where a DATETIME(3) column authored
+  // `CURRENT_TIMESTAMP(3)` reads back as `now(3)`. `now()` is the form this
+  // codebase already treats as canonical, so the keyword collapses into it
+  // and any precision is carried across unchanged. Whitespace inside the call
+  // is insignificant to every dialect but not to a string compare, so
+  // `CURRENT_TIMESTAMP ( 3 )` has to reduce to the same token as `now(3)`.
+  //
+  // A bare `now` is deliberately left alone: unlike the keywords it is not
+  // callable without parentheses in any supported dialect, so an expression
+  // that spells it that way is something else.
+  const timestampKeyword = normalised.trim().match(TIMESTAMP_KEYWORD);
+  if (timestampKeyword) {
+    const precision = timestampKeyword[2];
+    if (
+      timestampKeyword[1] === "current_timestamp" ||
+      precision !== undefined
+    ) {
+      normalised = precision ? `now(${precision})` : "now()";
+    }
+  }
+
+  // Step 6: a boolean column's default, whichever spelling the dialect
+  // reports. Gated on the column type because `1` is only "true" where the
+  // column is a boolean — elsewhere it is the number.
+  if (normalizeType(columnType) === "bool") {
+    const b = normalised.trim().toLowerCase();
+    if (b === "1" || b === "true") return "true";
+    if (b === "0" || b === "false") return "false";
   }
 
   return normalised;
@@ -134,13 +179,20 @@ const NILADIC_KEYWORDS = [
   "user",
 ].join("|");
 
-// The built-in keywords, alone or with a fractional-seconds precision, and
-// `now()`. These name the same thing in any case, so both sides of the diff
-// can be reduced to lower case; anything outside this set is left as written.
+// The built-in keywords, alone or called with an optional fractional-seconds
+// precision, and `now(...)`. These name the same thing in any case, so both
+// sides of the diff can be reduced to lower case; anything outside this set is
+// left as written. The precision is optional and may be empty because MySQL
+// accepts `CURRENT_TIMESTAMP()` as a call with no argument.
 const KEYWORD_WITH_OPTIONAL_PRECISION = new RegExp(
-  `^(?:now\\(\\)|(?:${NILADIC_KEYWORDS})(?:\\s*\\(\\s*\\d+\\s*\\))?)$`,
+  `^(?:now\\s*\\(\\s*\\d*\\s*\\)|(?:${NILADIC_KEYWORDS})(?:\\s*\\(\\s*\\d*\\s*\\))?)$`,
   "i"
 );
+
+// The two spellings of "the current timestamp", with the precision they may
+// carry. Applied after the lowercase pass, so it needs no `i` flag; the
+// capture groups are the keyword and the precision digits.
+const TIMESTAMP_KEYWORD = /^(current_timestamp|now)(?:\s*\(\s*(\d*)\s*\))?$/;
 
 const EXPRESSION_SHAPED = new RegExp(
   // Anything parenthesised (`(unixepoch())`), anything that calls (`now()`,

@@ -39,7 +39,7 @@ export { withDbErrors } from "./with-db-errors";
 
 // Note: initDatabase, quickInitDatabase, seedAll, seedPermissions are NOT exported here
 // as they contain Node.js-only code (fileURLToPath, fs, path).
-// Use CLI commands (nextly dev --seed, nextly migrate) or import directly from
+// Use CLI commands (nextly db:sync, nextly migrate) or import directly from
 // 'nextly/database/init' or 'nextly/database/seeders' for server-side use.
 
 /**

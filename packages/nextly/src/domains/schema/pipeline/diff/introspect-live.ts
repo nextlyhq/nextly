@@ -76,6 +76,7 @@ interface PgRow {
   udt_name: string;
   is_nullable: "YES" | "NO";
   column_default: string | null;
+  owned_sequence_default: boolean;
 }
 
 interface MysqlRow {
@@ -142,12 +143,34 @@ export async function introspectLiveSnapshot(
     // or "NO". column_default is the raw expression as written.
     //
     // drizzle-orm/node-postgres returns pg QueryResult { rows, rowCount, ... }.
+    // `owned_sequence_default` answers whether the default is the sequence
+    // this column owns, which is what `serial` materialises and the only
+    // sequence default the diff may treat as no default at all.
+    // `pg_get_serial_sequence` names the owned sequence (NULL when there is
+    // none); the substring pulls the sequence the default actually draws
+    // from. Both sides are cast to regclass so the comparison is by identity
+    // rather than by spelling — the default renders the name relative to the
+    // search path while the function returns it schema-qualified. Anything
+    // that is not exactly a `nextval()` call yields NULL from the substring
+    // and so falls to false, which is the safe direction: a default the diff
+    // does not recognise is reported, never swallowed.
     const result = (await dbTyped.execute(
-      sql`SELECT table_name, column_name, udt_name, is_nullable, column_default
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name IN (${tableNamesIn})
-          ORDER BY table_name, ordinal_position`
+      sql`SELECT c.table_name, c.column_name, c.udt_name, c.is_nullable,
+                 c.column_default,
+                 COALESCE(
+                   substring(
+                     c.column_default from '^nextval[(]''(.+)''::regclass[)]$'
+                   )::regclass
+                     = pg_get_serial_sequence(
+                         format('%I.%I', c.table_schema, c.table_name),
+                         c.column_name
+                       )::regclass,
+                   false
+                 ) AS owned_sequence_default
+          FROM information_schema.columns c
+          WHERE c.table_schema = 'public'
+            AND c.table_name IN (${tableNamesIn})
+          ORDER BY c.table_name, c.ordinal_position`
     )) as { rows: PgRow[] };
     const snapshot = buildSnapshotFromPgRows(result.rows);
     // Index query: join pg_index/pg_class/pg_attribute. Exclude primary keys
@@ -309,12 +332,16 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
       cols = [];
       byTable.set(r.table_name, cols);
     }
-    cols.push({
+    const column: ColumnSpec = {
       name: r.column_name,
       type: r.udt_name,
       nullable: r.is_nullable === "YES",
       default: r.column_default ?? undefined,
-    });
+    };
+    // Recorded only when true, so a snapshot carries the marker rather than a
+    // false on every column that has no sequence at all.
+    if (r.owned_sequence_default === true) column.ownedSequenceDefault = true;
+    cols.push(column);
   }
   return {
     tables: [...byTable.entries()].map(

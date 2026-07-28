@@ -242,7 +242,7 @@ export function ShowJSONDialog({
           </div>
 
           {/* API URL display */}
-          <code className="flex-1 text-xs text-muted-foreground truncate font-mono bg-primary/5 px-2 py-1 rounded-none">
+          <code className="flex-1 text-xs text-muted-foreground truncate font-mono bg-primary/5 px-2 py-1 rounded-sm">
             GET {apiUrl}
           </code>
 
@@ -277,7 +277,7 @@ export function ShowJSONDialog({
         </div>
 
         {/* JSON content area */}
-        <div className="flex-1 overflow-auto min-h-[300px] rounded-none  border border-border bg-primary/5">
+        <div className="flex-1 overflow-auto min-h-[300px] rounded-md  border border-border bg-primary/5">
           {isLoading ? (
             <div className="flex items-center justify-center h-full gap-2 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />

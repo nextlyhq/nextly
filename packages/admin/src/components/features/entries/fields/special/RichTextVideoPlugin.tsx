@@ -227,7 +227,7 @@ export function RichTextVideoPlugin({
 
           {/* Preview */}
           {previewInfo && (
-            <div className="p-3 rounded-none bg-primary/5 text-sm">
+            <div className="p-3 rounded-md bg-primary/5 text-sm">
               <span className="font-medium capitalize">
                 {previewInfo.provider}
               </span>{" "}

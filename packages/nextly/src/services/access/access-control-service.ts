@@ -347,6 +347,19 @@ export class AccessControlService {
         };
       }
 
+      // Only a boolean verdict or a query constraint is a decision. A rule that
+      // falls through returns `undefined`, and treating that as an allowed
+      // constraint of `undefined` fails OPEN: the caller is admitted and no
+      // predicate narrows the read. Dynamically imported rules are not checked
+      // against the function contract at runtime, so a missing return has to
+      // deny rather than authorize.
+      if (result === null || typeof result !== "object") {
+        return {
+          allowed: false,
+          reason: "Custom access function returned no decision",
+        };
+      }
+
       return { allowed: true, query: result };
     } catch (error) {
       console.error(

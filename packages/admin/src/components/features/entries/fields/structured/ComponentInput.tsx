@@ -314,12 +314,14 @@ function SingleComponentNonRepeatable({
             "border-y border-border hover:border-primary relative z-10"
           )}
         >
-          <span className="text-[11px] font-bold tracking-[0.08em] uppercase text-primary">
+          {/* Accordion label and its disclosure chevron are content, so they
+              take the page ink; the primary tint stays on the header fill. */}
+          <span className="text-xs font-bold tracking-[0.08em] uppercase text-foreground">
             {label}
           </span>
           <ChevronDown
             className={cn(
-              "h-4 w-4 text-primary transition-transform duration-200",
+              "h-4 w-4 text-foreground transition-transform duration-200",
               isOpen ? "rotate-0" : "-rotate-90"
             )}
           />
@@ -360,7 +362,7 @@ function SingleComponentNonRepeatable({
   return (
     <div
       className={cn(
-        "border border-border dark:border-border shadow-none rounded-none overflow-hidden",
+        "border border-border dark:border-border shadow-none rounded-md overflow-hidden",
         field.admin?.className
       )}
     >
@@ -533,7 +535,7 @@ function MultiComponentNonRepeatable({
         )}
 
         {!currentType && (
-          <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-none bg-primary/5">
+          <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-md bg-primary/5">
             Select a component type to add fields.
           </p>
         )}
@@ -717,7 +719,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
 
       {/* Empty State */}
       {items.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-none bg-primary/5">
+        <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-md bg-primary/5">
           <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
           {canAdd && (
@@ -930,7 +932,7 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "rounded-none  border border-border border-warning-200 bg-warning-50 dark:border-warning-900 dark:bg-warning-950 p-4",
+        "rounded-lg  border border-border border-warning-200 bg-warning-50 dark:border-warning-900 dark:bg-warning-950 p-4",
         className
       )}
     >

@@ -130,7 +130,7 @@ export function MediaListView({
           const isImage = type === "image";
           return (
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-none border border-border bg-card/50">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-card/50">
                 {isImage && (item.thumbnailUrl || item.url) ? (
                   <img
                     src={item.thumbnailUrl ?? item.url}
@@ -164,7 +164,7 @@ export function MediaListView({
         cell: ({ row: item }) => (
           <Badge
             variant="default"
-            className="rounded-none border border-border bg-muted px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-tight text-foreground"
+            className="rounded-sm border border-border bg-muted px-2.5 py-0.5 text-xs font-semibold uppercase tracking-tight text-foreground"
           >
             {getMediaType(item.mimeType)}
           </Badge>
@@ -276,15 +276,15 @@ export function MediaListView({
         {Array.from({ length: DEFAULT_MEDIA_SKELETON_COUNT }).map((_, i) => (
           <div
             key={i}
-            className="flex items-center gap-4 p-3 rounded-none  border border-border animate-pulse"
+            className="flex items-center gap-4 p-3 rounded-md  border border-border animate-pulse"
           >
-            <div className="w-10 h-10 rounded-none bg-muted" />
+            <div className="w-10 h-10 rounded-md bg-muted" />
             <div className="flex-1 space-y-1.5">
-              <div className="h-3.5 w-48 bg-muted rounded-none" />
-              <div className="h-3 w-24 bg-muted rounded-none" />
+              <div className="h-3.5 w-48 bg-muted rounded-sm" />
+              <div className="h-3 w-24 bg-muted rounded-sm" />
             </div>
-            <div className="h-3 w-16 bg-muted rounded-none" />
-            <div className="h-3 w-20 bg-muted rounded-none" />
+            <div className="h-3 w-16 bg-muted rounded-sm" />
+            <div className="h-3 w-20 bg-muted rounded-sm" />
           </div>
         ))}
       </div>

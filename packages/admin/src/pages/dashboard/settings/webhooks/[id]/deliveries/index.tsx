@@ -138,7 +138,7 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
           {isEndpointLoading ? (
-            <Skeleton className="h-5 w-48 rounded-none" />
+            <Skeleton className="h-5 w-48 rounded-sm" />
           ) : endpoint ? (
             <p className="text-sm text-muted-foreground">
               Endpoint:{" "}

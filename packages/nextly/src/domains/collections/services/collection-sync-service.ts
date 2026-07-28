@@ -6,7 +6,7 @@
  * TypeScript types.
  *
  * This service is typically called during:
- * - Development server startup (`nextly dev`)
+ * - Development server startup (HMR listener)
  * - CLI commands (`nextly sync`, `nextly generate:types`)
  * - Build process (`nextly build`)
  *

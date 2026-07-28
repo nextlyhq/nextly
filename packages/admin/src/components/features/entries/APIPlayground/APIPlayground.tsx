@@ -631,7 +631,7 @@ export function APIPlayground({
             value={action}
             onValueChange={v => setAction(v as EndpointAction)}
           >
-            <SelectTrigger className="h-full rounded-none border-0 px-4 text-sm shadow-none focus:ring-0">
+            <SelectTrigger className="h-full rounded-md border-0 px-4 text-sm shadow-none focus:ring-0">
               {/* The trigger renders its own content rather than echoing the
                   chosen item: the item carries a description for the menu, and
                   the default would drag that into the bar and wrap it. */}
@@ -639,7 +639,7 @@ export function APIPlayground({
                 <span className="flex items-baseline gap-2">
                   <span
                     className={cn(
-                      "shrink-0 font-mono text-[10px] font-semibold",
+                      "shrink-0 font-mono text-xs font-semibold",
                       METHOD_TONE[currentAction.method]
                     )}
                   >
@@ -662,7 +662,7 @@ export function APIPlayground({
                   <div className="flex items-baseline gap-2">
                     <span
                       className={cn(
-                        "w-12 shrink-0 font-mono text-[10px] font-semibold",
+                        "w-12 shrink-0 font-mono text-xs font-semibold",
                         METHOD_TONE[a.method]
                       )}
                     >
@@ -694,7 +694,7 @@ export function APIPlayground({
           leave neither usable, so the page scrolls there instead. */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-8 lg:grid-cols-12">
         {/* Request Builder Panel - 5 columns */}
-        <Card className="lg:col-span-5 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
+        <Card className="lg:col-span-5 flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
           <CardHeader className="p-6 pb-4" noBorder>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-semibold tracking-tight text-foreground">
@@ -810,7 +810,7 @@ export function APIPlayground({
         </Card>
 
         {/* Response Panel - 7 columns */}
-        <Card className="lg:col-span-7 flex flex-col min-h-0 rounded-none border-border shadow-none bg-card overflow-hidden">
+        <Card className="lg:col-span-7 flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
           <CardHeader className="p-6 pb-4" noBorder>
             <div className="flex items-center justify-between gap-4">
               <CardTitle className="text-base font-semibold tracking-tight text-foreground">

@@ -153,7 +153,7 @@ export function HookSelectorModal({
                         onClick={() => !isAdded && handleSelect(hook.id)}
                         disabled={isAdded}
                         className={cn(
-                          "w-full text-left p-3 rounded-none  border border-border transition-colors",
+                          "w-full text-left p-3 rounded-md  border border-border transition-colors",
                           isAdded
                             ? "bg-primary/5 border-border cursor-not-allowed opacity-60"
                             : "bg-background border-border hover:border-primary hover:bg-accent"
@@ -166,10 +166,7 @@ export function HookSelectorModal({
                                 {hook.name}
                               </span>
                               {isAdded && (
-                                <Badge
-                                  variant="default"
-                                  className="text-[10px]"
-                                >
+                                <Badge variant="default" className="text-xs">
                                   Added
                                 </Badge>
                               )}
@@ -178,10 +175,7 @@ export function HookSelectorModal({
                               {hook.description}
                             </p>
                           </div>
-                          <Badge
-                            variant="outline"
-                            className="text-[10px] shrink-0"
-                          >
+                          <Badge variant="outline" className="text-xs shrink-0">
                             {HOOK_TYPE_LABELS[hook.hookType] || hook.hookType}
                           </Badge>
                         </div>

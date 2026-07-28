@@ -96,6 +96,92 @@ describe("field-level registry", () => {
     expect(entry).toEqual({ id: "1", title: "t" });
   });
 
+  it("shows a rule the nested values another field's redaction removes", async () => {
+    // Redaction recurses into nested containers and rewrites them in place. A
+    // rule at the parent level that reads into one must be shown the level as
+    // it was entered, or its answer turns on which field happened to be
+    // registered first.
+    const seen: unknown[] = [];
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "meta",
+        type: "group",
+        fields: [
+          { name: "secret", type: "text", access: { read: () => false } },
+        ],
+      },
+      {
+        name: "title",
+        type: "text",
+        access: {
+          read: ({ data }: { data: Record<string, unknown> }) => {
+            seen.push((data.meta as { secret?: string } | undefined)?.secret);
+            return true;
+          },
+        },
+      },
+    ]);
+    const entry: Record<string, unknown> = {
+      id: "1",
+      title: "t",
+      meta: { secret: "s" },
+    };
+
+    await applyFieldReadAccess({ kind: "collection", slug: "posts", entry });
+
+    expect(seen).toEqual(["s"]);
+    // The response still has it removed.
+    expect(entry.meta).toEqual({});
+  });
+
+  it("keeps a rule's writes to its argument out of the entry", async () => {
+    // Access callbacks decide; they do not transform. A shallow snapshot left
+    // every nested container shared with the entry being judged.
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          read: ({ data }: { data: Record<string, unknown> }) => {
+            const meta = data.meta as Record<string, unknown> | undefined;
+            if (meta) meta.injected = "from-the-rule";
+            return true;
+          },
+        },
+      },
+    ]);
+    const entry: Record<string, unknown> = { id: "1", title: "t", meta: {} };
+
+    await applyFieldReadAccess({ kind: "collection", slug: "posts", entry });
+
+    expect(entry.meta).toEqual({});
+  });
+
+  it("accepts a payload carrying a value that cannot be structurally cloned", async () => {
+    // A JSON field may define `toJSON()` to choose its stored representation.
+    // Isolating the snapshot with `structuredClone` rejects the whole write on
+    // such a value, before the rule it was taken for even runs.
+    registerFieldFunctions("collection", "posts", [
+      { name: "title", type: "text", access: { update: () => true } },
+    ]);
+    const data: Record<string, unknown> = {
+      title: "t",
+      payload: { toJSON: () => ({ ok: true }) },
+    };
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      // Required: the write path treats a caller-less write as trusted and
+      // returns before any rule (or snapshot) runs.
+      user: { id: "u1" },
+    });
+
+    expect(data.title).toBe("t");
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {

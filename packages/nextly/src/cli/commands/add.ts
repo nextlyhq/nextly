@@ -112,8 +112,10 @@ function showWiring(pkg: string, context: CommandContext): void {
   logger.info(pc.gray(`    plugins: [${name}()],`));
   logger.info(pc.gray(`  });`));
   logger.newline();
+  // There is no `nextly dev` command: user apps run their own dev server
+  // (`next dev`), and the in-process HMR listener applies the schema.
   logger.info(
-    `Then run ${pc.yellow("nextly dev")} (or your dev server) to sync the plugin's schema.`
+    `Then start your dev server (${pc.yellow("next dev")}) to sync the plugin's schema.`
   );
   logger.info(
     pc.gray("Check the plugin's README for its exact export name and options.")

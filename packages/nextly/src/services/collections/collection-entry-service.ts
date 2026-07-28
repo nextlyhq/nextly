@@ -171,6 +171,8 @@ export class CollectionEntryService extends BaseService {
     where?: WhereFilter;
     richTextFormat?: RichTextOutputFormat;
     sort?: string;
+    /** Draft/Published lifecycle scope; forwarded to the query service. */
+    status?: "published" | "draft" | "all";
     overrideAccess?: boolean;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;

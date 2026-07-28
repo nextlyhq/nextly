@@ -173,6 +173,16 @@ export class WebhookEndpointRegistry {
     return this.getEnabledEndpoints();
   }
 
+  /**
+   * Whether any enabled endpoint exists, from the same cached list the drain
+   * reads (so this shares its invalidation and TTL). The recording gate's
+   * presence flag is refreshed from this on a pooled connection, never inside a
+   * content write transaction.
+   */
+  async hasEnabledEndpoints(): Promise<boolean> {
+    return (await this.getEnabledEndpoints()).length > 0;
+  }
+
   private async load(): Promise<WebhookEndpoint[]> {
     const rows = await this.reader.select<Record<string, unknown>>(
       "nextly_webhooks",

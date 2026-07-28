@@ -33,6 +33,7 @@ import type {
   BaseListOptions,
   BaseListResult,
 } from "../../../shared/base-registry-service";
+import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -520,6 +521,11 @@ export class CollectionRegistryService extends BaseRegistryService<
           JSON.stringify(config.revalidate ?? null) !==
             JSON.stringify(existing.revalidate ?? null) ||
           (config.localized === true) !== (existing.localized === true) ||
+          // Declared defaults are read from the stored definitions when an
+          // entry is created, and the schema hash omits them, so they need
+          // their own comparison or a changed default never reaches the write.
+          fieldDefaultsSignature(config.fields) !==
+            fieldDefaultsSignature(existing.fields) ||
           desiredTableName !== existing.tableName
         ) {
           // Fields changed, status toggle flipped, or `dbName` resolved to a

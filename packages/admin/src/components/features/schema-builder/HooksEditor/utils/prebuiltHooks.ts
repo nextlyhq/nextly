@@ -79,25 +79,6 @@ const auditFieldsConfigSchema = z.object({
 });
 
 /**
- * Configuration schema for webhook notification hook.
- */
-const webhookNotificationConfigSchema = z.object({
-  url: z.string().url().describe("Webhook URL"),
-  includeData: z
-    .boolean()
-    .default(true)
-    .describe("Include document data in payload"),
-  operations: z
-    .array(z.enum(["create", "update", "delete"]))
-    .default(["create", "update"])
-    .describe("Operations that trigger the webhook"),
-  secret: z
-    .string()
-    .optional()
-    .describe("Secret key for signature verification"),
-});
-
-/**
  * Configuration schema for unique validation hook.
  */
 const uniqueValidationConfigSchema = z.object({
@@ -132,14 +113,6 @@ export const prebuiltHooks: PrebuiltHookConfig[] = [
     hookType: "beforeChange",
     category: "audit",
     configSchema: auditFieldsConfigSchema,
-  },
-  {
-    id: "webhook-notification",
-    name: "Send Webhook",
-    description: "Send HTTP POST notification to a URL when documents change",
-    hookType: "afterChange",
-    category: "notification",
-    configSchema: webhookNotificationConfigSchema,
   },
   {
     id: "unique-validation",

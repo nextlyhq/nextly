@@ -59,6 +59,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
+import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
@@ -174,6 +175,9 @@ function errorToServiceResult<T = unknown>(
     return {
       success: false,
       statusCode: error.statusCode,
+      // The canonical code rides along so boundary translators can rebuild
+      // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
+      code: error.code,
       message: error.publicMessage,
       data: null,
       ...(validationErrors ? { errors: validationErrors } : {}),
@@ -194,6 +198,9 @@ function errorToServiceResult<T = unknown>(
   return {
     success: false,
     statusCode: mapped.statusCode,
+    // Same passthrough as the NextlyError branch: a unique-violation maps to
+    // DUPLICATE here, and the code keeps that distinction across the envelope.
+    code: mapped.code,
     message: mapped.publicMessage,
     data: null,
   };
@@ -359,6 +366,12 @@ export class CollectionMutationService extends BaseService {
     fields: readonly SensitiveFieldSource[],
     executor?: unknown
   ): Promise<readonly SensitiveFieldSource[]> {
+    // Gate only on the per-entity opt-out, NOT the endpoint/audit flag: that flag
+    // can flip on between this pre-record expansion and the in-transaction
+    // recordMutationEvent, and skipping expansion here while the choke point then
+    // records would ship component-nested secret/hidden values unstripped. The
+    // choke point still gates the actual write, so a gated-off collection records
+    // nothing — only this expansion runs, exactly as before endpoint gating.
     if (!isWebhookRecordingEnabled("collection", collectionSlug)) return fields;
     return this.webhookFieldTree(fields, executor);
   }
@@ -1544,19 +1557,34 @@ export class CollectionMutationService extends BaseService {
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
+      // Declared defaults are seeded before the first hook phase, so every hook
+      // — beforeOperation included — sees the values the entry will hold, and a
+      // hook that removes a defaulted field is not overridden by a later pass
+      // re-adding it. Seeded onto a copy so the caller's own object is not
+      // mutated. Everything after this point (generation, write access,
+      // validation, the insert) therefore works from complete data; generation
+      // still fills only the identity fields left unresolved, and running ahead
+      // of write access matches generation, so a field the caller may not
+      // create is not reintroduced.
+      const seededBody: Record<string, unknown> = { ...body };
+      applyFieldDefaults(seededBody, fields);
+
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
           operation: "create",
-          args: { data: body },
+          args: { data: seededBody },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
         });
 
-      // Use modified data if returned by beforeOperation
-      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
+      // Use modified data if returned by beforeOperation. A hook returning its
+      // own object owns what is in it, defaults included — they are not
+      // re-applied here, or a hook could never drop one.
+      const currentData =
+        (beforeOpArgs as BeforeOperationArgs)?.data ?? seededBody;
 
       // Execute beforeCreate hooks (code-registered)
       // Hooks run before validation and can modify the incoming data
@@ -4930,7 +4958,9 @@ export class CollectionMutationService extends BaseService {
           executor: tx.getDrizzle(),
         });
 
-      // Use modified data if returned by beforeOperation
+      // Use modified data if returned by beforeOperation. A hook returning its
+      // own object owns what is in it, defaults included — they are not
+      // re-applied here, or a hook could never drop one.
       const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
 
       // Execute beforeCreate hooks (code-registered)
@@ -6126,7 +6156,7 @@ export class CollectionMutationService extends BaseService {
           await this.hookService.hookRegistry.executeBeforeOperation({
             collection: params.collectionName,
             operation: "create",
-            args: { data: body },
+            args: { data: currentData },
             user: params.user
               ? { id: params.user.id, email: params.user.email }
               : undefined,
@@ -6141,7 +6171,7 @@ export class CollectionMutationService extends BaseService {
           ((beforeOpArgs as BeforeOperationArgs)?.data as Record<
             string,
             unknown
-          >) ?? body;
+          >) ?? currentData;
 
         // Execute beforeCreate hooks (code-registered)
         const beforeContext = this.hookService.buildHookContext({
@@ -6226,8 +6256,7 @@ export class CollectionMutationService extends BaseService {
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry). A
       // hook can set `slug`, so re-sanitize after it so the validated and
-      // stored value stays URL-safe. When hooks are skipped the slug is still
-      // the (already-sanitized) generated value, so no pass is needed.
+
       if (!skipHooks) {
         await runFieldHooks({
           kind: "collection",

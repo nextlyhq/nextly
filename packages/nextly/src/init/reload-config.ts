@@ -59,6 +59,7 @@ import { resolveCollectionTableName } from "../domains/schema/utils/resolve-tabl
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import { setWebhookAuditEnabled } from "../domains/webhooks/recording-activation";
 import {
   pruneRemovedCodeFirstRecording,
   setWebhookRecording,
@@ -494,6 +495,7 @@ export async function reloadNextlyConfig(opts?: {
         collections?: CollectionDef[];
         singles?: SingleDef[];
         components?: ComponentDef[];
+        webhookAuditEnabled?: boolean;
       }
     | undefined;
   try {
@@ -508,6 +510,7 @@ export async function reloadNextlyConfig(opts?: {
           collections?: CollectionDef[];
           singles?: SingleDef[];
           components?: ComponentDef[];
+          webhookAuditEnabled?: boolean;
         };
       }
     ).config;
@@ -542,6 +545,14 @@ export async function reloadNextlyConfig(opts?: {
     return;
   }
   if (!newConfig) return;
+
+  // Republish the audit seam from the reloaded config, so toggling
+  // `webhooks.audit` in nextly.config.ts takes effect on save without a restart.
+  // `loadConfig()` returns a sanitized config, so the flag is the resolved flat
+  // `webhookAuditEnabled`, not the raw `webhooks.audit` block. It is a single
+  // process-global flag that reads no field tree, so — like a recording opt-out
+  // — it is safe to apply immediately, before the schema diff is synced.
+  setWebhookAuditEnabled(newConfig.webhookAuditEnabled ?? false);
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
   // other service from DI in this path — the new gate gets prior-state
