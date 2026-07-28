@@ -30,4 +30,6 @@ A writer supplied a relationship id, not the related row's protected fields, so 
 
 This reaches every hop the response expands, not only the first: a related row's own relationships carry the rules of the collection at the far end, and those are evaluated too.
 
-Enforcement is keyed on there being a caller to judge. A trusted write (`overrideAccess`) and an internal write that forwards no user are unaffected — stripping there would hide fields from a writer nothing denied.
+Every caller the access gate applies to is judged, including one with no identity — an anonymous write permitted by a public update rule gets the same answer its read would give. Only a trusted write bypasses this, through `overrideAccess` rather than through an absent user.
+
+One consequence worth knowing if you write `afterUpdate` hooks: they receive the response as the caller will see it, so a related field that caller may not read is already gone. That matches how reads behave — related-row rules are applied while relationships expand, before `afterRead` hooks run — and it is why the two paths now agree. The Single's own fields are still redacted after your hooks, unchanged.

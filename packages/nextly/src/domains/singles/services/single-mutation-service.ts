@@ -1891,9 +1891,10 @@ export class SingleMutationService extends BaseService {
       // question the same caller's GET refuses — the write path is not a way
       // around the rule.
       //
-      // Enforcement is keyed on there being a caller to judge. A trusted or
-      // system write forwards none, and stripping for it would hide fields from
-      // an internal writer that nothing denied.
+      // Enforced for every caller the access gate applies to, which is what the
+      // read path does. A caller with no identity is judged as one — the same
+      // answer their read would get — and only a trusted write bypasses it,
+      // through `overrideAccess` rather than through an absent user.
       updatedDoc = await this.queryService.expandRelationshipFields(
         updatedDoc,
         fieldConfigs,
@@ -1901,7 +1902,7 @@ export class SingleMutationService extends BaseService {
         // its own default.
         undefined,
         {
-          enforceFieldAccess: Boolean(options.user),
+          enforceFieldAccess: true,
           user: options.user,
           overrideAccess: options.overrideAccess,
         }

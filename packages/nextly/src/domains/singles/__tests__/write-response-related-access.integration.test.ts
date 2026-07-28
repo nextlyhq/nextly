@@ -3,8 +3,8 @@
  *
  * Updating a Single returns the document, relationships expanded. Those related
  * rows belong to another collection and carry that collection's own field-level
- * `access.read` rules — rules the read paths have evaluated since #335, and
- * which this path did not, because it forwarded no caller.
+ * `access.read` rules. A read evaluates them; this response did not, because it
+ * forwarded no caller for them to be evaluated against.
  *
  * The writer supplied a relationship id, not the related row's protected
  * fields, so "they just wrote it" does not cover them. Leaving the response
@@ -144,6 +144,53 @@ describe("single write response — related-row field access (integration)", () 
     )?.author?.org;
     expect(nested).toMatchObject({ name: "Acme" });
     expect(nested).not.toHaveProperty("blocked");
+  });
+
+  it("withholds the field from a caller with no identity too", async () => {
+    // A Single whose update rule admits anyone still returns related rows, and
+    // an anonymous caller's read strips the protected field — so the write
+    // response cannot be the one place it survives. Absence of a user is not
+    // trust; `overrideAccess` is.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          access: { update: () => true },
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Ada", suspended: true }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+
+    const result = await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { routeAuthorized: true }
+    );
+
+    expect(result.success).toBe(true);
+    const related = (result.data as { author?: Record<string, unknown> })
+      ?.author;
+    expect(related).toMatchObject({ name: "Ada" });
+    expect(related).not.toHaveProperty("suspended");
   });
 
   it("leaves a trusted write's response whole", async () => {
