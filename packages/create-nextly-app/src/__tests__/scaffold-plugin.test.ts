@@ -101,6 +101,9 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     );
     expect(workspaceYaml).toContain("allowBuilds:");
     expect(workspaceYaml).toContain("better-sqlite3");
+    // Registry scaffolds resolve everything from npm — the yalc override
+    // block must never leak into them.
+    expect(workspaceYaml).not.toContain("overrides:");
 
     // The dev playground must boot with zero manual steps: without dev/.env
     // the dialect defaults to postgresql and `next dev` aborts in the
@@ -165,6 +168,40 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     );
     expect(devConfig).toContain('"@acme/nextly-plugin-test"');
     expect(devConfig).not.toMatch(/\{\{\s*\w+\s*\}\}/);
+  });
+
+  it("pins yalc scaffolds' nested resolutions to the local store", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-yalc-"));
+    target = path.join(workdir, "my-plugin");
+
+    await copyTemplate({
+      projectName: "yalc-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: { type: "sqlite" } as unknown as DatabaseConfig,
+      useYalc: true,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+    });
+
+    // Yalc rewrites workspace:* ranges to *, which semver treats as
+    // stable-only — without an overrides pin, pnpm resolves the packages'
+    // nested copies of each other from the registry's last stable release
+    // and the mixed versions crash at runtime.
+    const workspaceYaml = await readFile(
+      path.join(target, "pnpm-workspace.yaml"),
+      "utf-8"
+    );
+    expect(workspaceYaml).toContain("overrides:");
+    expect(workspaceYaml).toContain('"nextly": "file:.yalc/nextly"');
+    expect(workspaceYaml).toContain(
+      '"@nextlyhq/plugin-sdk": "file:.yalc/@nextlyhq/plugin-sdk"'
+    );
+    expect(workspaceYaml).toContain(
+      '"@nextlyhq/adapter-drizzle": "file:.yalc/@nextlyhq/adapter-drizzle"'
+    );
   });
 
   it("restores .gitignore from the publish-safe bundled name", async () => {

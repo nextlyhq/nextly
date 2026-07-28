@@ -638,6 +638,23 @@ export const NATIVE_BUILD_DEPENDENCIES = [
 ] as const;
 
 /**
+ * The Nextly-family packages a plugin scaffold links from the local yalc
+ * store under --use-yalc. Single source of truth shared by the installer
+ * (which runs `yalc add` for each) and the pnpm-workspace.yaml generator
+ * (which pins every nested resolution to the same local copies).
+ */
+export const PLUGIN_YALC_PACKAGES = [
+  "nextly",
+  "@nextlyhq/admin",
+  "@nextlyhq/ui",
+  "@nextlyhq/adapter-drizzle",
+  "@nextlyhq/adapter-postgres",
+  "@nextlyhq/adapter-mysql",
+  "@nextlyhq/adapter-sqlite",
+  "@nextlyhq/plugin-sdk",
+] as const;
+
+/**
  * Generate the `pnpm-workspace.yaml` for a scaffolded project.
  *
  * pnpm 10+ blocks dependency build scripts by default and the allowlist's
@@ -649,14 +666,38 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  * Both keys are emitted so native deps compile on any pnpm 10.6+/11. pnpm 9
  * runs build scripts by default and ignores this file; npm/yarn ignore it too,
  * so it is safe to ship in every scaffold regardless of package manager.
+ *
+ * `yalcOverrides` (yalc scaffolds only) additionally emits an `overrides`
+ * map pinning each named package to its `file:.yalc/<name>` copy. Yalc
+ * rewrites `workspace:*` inter-package ranges to `*`, and semver `*` never
+ * matches prereleases — so without the pin, pnpm resolves the packages'
+ * NESTED copies of each other from the registry's last stable release
+ * (0.0.1), and the scaffold crashes on APIs that old code lacks. Overrides
+ * apply to every resolution in the tree, forcing one consistent local set.
  */
-export function generatePnpmWorkspaceYaml(): string {
+export function generatePnpmWorkspaceYaml(options?: {
+  yalcOverrides?: readonly string[];
+}): string {
   const allowBuilds = NATIVE_BUILD_DEPENDENCIES.map(
     dep => `  ${dep}: true`
   ).join("\n");
   const onlyBuilt = NATIVE_BUILD_DEPENDENCIES.map(dep => `  - ${dep}`).join(
     "\n"
   );
+
+  let overridesBlock = "";
+  if (options?.yalcOverrides && options.yalcOverrides.length > 0) {
+    const overrides = options.yalcOverrides
+      .map(pkg => `  "${pkg}": "file:.yalc/${pkg}"`)
+      .join("\n");
+    overridesBlock =
+      "\n# Pin every resolution (including nested ones) of the yalc-linked\n" +
+      "# packages to the local store. Yalc rewrites their workspace:* ranges\n" +
+      "# to *, which semver treats as stable-only — without this pin, pnpm\n" +
+      "# fetches ancient registry releases for the packages' internal copies\n" +
+      "# of each other and the mixed versions crash at runtime.\n" +
+      `overrides:\n${overrides}\n`;
+  }
 
   return (
     "# Allow native dependencies to run their build scripts. pnpm 10+ blocks\n" +
@@ -666,7 +707,8 @@ export function generatePnpmWorkspaceYaml(): string {
     "# pnpm 11+ reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`.\n" +
     "# npm, yarn, and pnpm 9 ignore this file (they run build scripts by default).\n" +
     `allowBuilds:\n${allowBuilds}\n` +
-    `onlyBuiltDependencies:\n${onlyBuilt}\n`
+    `onlyBuiltDependencies:\n${onlyBuilt}\n` +
+    overridesBlock
   );
 }
 
@@ -971,10 +1013,14 @@ async function copyPluginTemplate(opts: {
   // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/
   // playground uses better-sqlite3 (native build) — so this file is what lets
   // `pnpm install` build it instead of aborting with ERR_PNPM_IGNORED_BUILDS.
-  // Harmless for npm/yarn/pnpm 9.
+  // Harmless for npm/yarn/pnpm 9. Yalc scaffolds additionally pin every
+  // nested resolution of the linked packages to the local store (see
+  // generatePnpmWorkspaceYaml).
   await fs.writeFile(
     path.join(targetDir, "pnpm-workspace.yaml"),
-    generatePnpmWorkspaceYaml(),
+    generatePnpmWorkspaceYaml(
+      useYalc ? { yalcOverrides: PLUGIN_YALC_PACKAGES } : undefined
+    ),
     "utf-8"
   );
 
