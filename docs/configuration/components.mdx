@@ -12,7 +12,7 @@ Components are reusable field-group templates. Define a set of fields once as a 
 Key characteristics:
 
 - **Templates, not documents** — components define a field structure; each embed creates its own data row.
-- **Own database table** — each component type gets a table prefixed with `comp_` (e.g. `comp_seo`).
+- **Own database table** — each component type gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
 - **Nesting** — a component's fields can include `component` fields referencing other components (max depth: 3 levels).
 - **Slug uniqueness** — component slugs must be unique across components, collections, **and** singles.
 - **Dual creation** — define in code with `defineComponent()` or visually in the Visual Schema Builder.
@@ -80,7 +80,6 @@ Only `slug` and `fields` are required.
 | `admin.description` | `string` | No | Help text in the component selector modal. |
 | `admin.hidden` | `boolean` | No | Hide from admin navigation. Still usable in code and via API. |
 | `admin.imageURL` | `string` | No | Preview image URL shown in the component selector. |
-| `dbName` | `string` | No | Custom database table name (overrides `comp_{slug}`). |
 | `description` | `string` | No | General description; falls back to `admin.description`. |
 | `custom` | `Record<string, unknown>` | No | Arbitrary metadata for plugins or custom code. Not persisted. |
 
