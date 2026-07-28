@@ -1,16 +1,20 @@
 /**
- * Webhook-event completeness matrix for the PROGRAMMATIC write paths.
+ * Webhook-event AND version-capture completeness matrix for the PROGRAMMATIC
+ * write paths.
  *
  * The interactive create/update/delete paths are covered by `capture-matrix`.
  * This grid enumerates the tx-API and batch write paths that plugins, importers,
  * and agents use — `createEntryInTransaction`, `updateEntryInTransaction`,
  * `createEntries`, `updateEntries`, and `publishAllLocales` — and asserts each
- * records its outbox event. It is the loud-failure guard for the invariant
- * "every write is an event": a future write path added without recording fails
- * a cell here rather than going silently dark.
+ * BOTH records its outbox event AND captures a durable version snapshot. It is
+ * the loud-failure guard for the twin invariants "every write is an event" and
+ * "every write is captured": a future write path added without recording, or
+ * without capturing, fails a cell here rather than going silently dark.
  *
  * Recording is endpoint-gated in production; the test harness defaults the gate
- * open, so no endpoint registration is needed.
+ * open, so no endpoint registration is needed. Version counts are scoped to each
+ * written entry's own id, so the shared `nextly_versions` table cannot leak a
+ * count in from another case in the sequential run.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +41,13 @@ interface EventRow {
   type: string;
 }
 
+// nextly_versions is a Drizzle-schema core table, so adapter.select returns
+// camelCase property keys (scopeSlug/entryId), unlike raw dc_ tables.
+interface VersionRow {
+  scopeSlug: string;
+  entryId: string;
+}
+
 const COLLECTION = "posts";
 
 async function boot(localized: boolean): Promise<TestNextly> {
@@ -46,6 +57,9 @@ async function boot(localized: boolean): Promise<TestNextly> {
         slug: COLLECTION,
         localized,
         status: true,
+        // Opt into version history so each write path's snapshot is asserted
+        // alongside its event; capture is additive and does not change events.
+        versions: true,
         fields: [text({ name: "title", localized })],
       }),
     ],
@@ -54,6 +68,16 @@ async function boot(localized: boolean): Promise<TestNextly> {
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
   return current;
+}
+
+/** Version snapshots recorded for one specific entry in this collection. */
+async function versionsForEntry(
+  t: TestNextly,
+  entryId: string
+): Promise<number> {
+  const rows = await t.adapter.select<VersionRow>("nextly_versions");
+  return rows.filter(r => r.scopeSlug === COLLECTION && r.entryId === entryId)
+    .length;
 }
 
 /** Create the `_locales` companion through the production DDL path. */
@@ -98,59 +122,80 @@ async function seed(
 interface PathCase {
   label: string;
   localized: boolean;
-  /** Drive the write path under test. */
-  run: (t: TestNextly, e: CollectionEntryService) => Promise<void>;
+  /**
+   * Drive the write path under test and return the ids of every entry it
+   * created or updated, so the version assertion scopes to exactly those rows.
+   */
+  run: (t: TestNextly, e: CollectionEntryService) => Promise<string[]>;
   /**
    * Minimum count required per event type. Cells assert the path emits at least
    * this many of each type. The assert type set is derived from the keys; a seed
    * step must never emit the SAME type being asserted, so counts stay clean.
    */
   atLeast: Record<string, number>;
+  /**
+   * Minimum version snapshots expected for EACH written entry. A create path
+   * captures its one snapshot (1). An update path is seeded through the
+   * interactive create (which captures 1) and then writes again, so the written
+   * entry carries two (2).
+   */
+  minVersionsPerEntry: number;
 }
 
 const CASES: PathCase[] = [
   {
-    label: "createEntryInTransaction records entry.created",
+    label: "createEntryInTransaction records entry.created + captures version",
     localized: false,
     run: async (t, e) => {
-      await t.adapter.transaction(tx =>
+      const res = await t.adapter.transaction(tx =>
         e.createEntryInTransaction(
           tx as never,
           { collectionName: COLLECTION, overrideAccess: true },
           { title: "a", status: "draft" }
         )
       );
+      return [(res.data as { id: string }).id];
     },
     atLeast: { "entry.created": 1 },
+    minVersionsPerEntry: 1,
   },
   {
-    label: "createEntryInTransaction as published records entry.published",
+    label:
+      "createEntryInTransaction as published records entry.published + captures version",
     localized: false,
     run: async (t, e) => {
-      await t.adapter.transaction(tx =>
+      const res = await t.adapter.transaction(tx =>
         e.createEntryInTransaction(
           tx as never,
           { collectionName: COLLECTION, overrideAccess: true },
           { title: "a", status: "published" }
         )
       );
+      return [(res.data as { id: string }).id];
     },
     // A create landing directly on published is a create AND a publish.
     atLeast: { "entry.created": 1, "entry.published": 1 },
+    minVersionsPerEntry: 1,
   },
   {
-    label: "createEntries as published records entry.published per item",
+    label:
+      "createEntries as published records entry.published per item + captures version",
     localized: false,
     run: async (_t, e) => {
-      await e.createEntries({ collectionName: COLLECTION, overrideAccess: true }, [
-        { title: "a", status: "published" },
-        { title: "b", status: "published" },
-      ]);
+      const res = await e.createEntries(
+        { collectionName: COLLECTION, overrideAccess: true },
+        [
+          { title: "a", status: "published" },
+          { title: "b", status: "published" },
+        ]
+      );
+      return res.ids;
     },
     atLeast: { "entry.created": 2, "entry.published": 2 },
+    minVersionsPerEntry: 1,
   },
   {
-    label: "updateEntryInTransaction records entry.updated",
+    label: "updateEntryInTransaction records entry.updated + captures version",
     localized: false,
     run: async (t, e) => {
       const id = await seed(t, { title: "a", status: "draft" });
@@ -161,22 +206,29 @@ const CASES: PathCase[] = [
           { title: "b" }
         )
       );
+      return [id];
     },
     atLeast: { "entry.updated": 1 },
+    minVersionsPerEntry: 2,
   },
   {
-    label: "createEntries records entry.created per item",
+    label: "createEntries records entry.created per item + captures version",
     localized: false,
     run: async (_t, e) => {
-      await e.createEntries({ collectionName: COLLECTION, overrideAccess: true }, [
-        { title: "a", status: "draft" },
-        { title: "b", status: "draft" },
-      ]);
+      const res = await e.createEntries(
+        { collectionName: COLLECTION, overrideAccess: true },
+        [
+          { title: "a", status: "draft" },
+          { title: "b", status: "draft" },
+        ]
+      );
+      return res.ids;
     },
     atLeast: { "entry.created": 2 },
+    minVersionsPerEntry: 1,
   },
   {
-    label: "updateEntries records entry.updated per item",
+    label: "updateEntries records entry.updated per item + captures version",
     localized: false,
     run: async (t, e) => {
       const id1 = await seed(t, { title: "a", status: "draft" });
@@ -185,11 +237,14 @@ const CASES: PathCase[] = [
         { id: id1, data: { title: "a2" } },
         { id: id2, data: { title: "b2" } },
       ]);
+      return [id1, id2];
     },
     atLeast: { "entry.updated": 2 },
+    minVersionsPerEntry: 2,
   },
   {
-    label: "publishAllLocales records entry.updated + entry.published",
+    label:
+      "publishAllLocales records entry.updated + entry.published + captures version",
     localized: true,
     run: async (t, e) => {
       const id = await seed(t, { title: "a", status: "draft" });
@@ -198,9 +253,11 @@ const CASES: PathCase[] = [
         entryId: id,
         overrideAccess: true,
       });
+      return [id];
     },
     // A draft going live across locales is both a content update and a publish.
     atLeast: { "entry.updated": 1, "entry.published": 1 },
+    minVersionsPerEntry: 2,
   },
 ];
 
@@ -210,7 +267,7 @@ describe("webhook write-path event matrix — programmatic writes (integration)"
     if (pathCase.localized) await migrate(t);
     const e = entriesOf(t);
 
-    await pathCase.run(t, e);
+    const writtenIds = await pathCase.run(t, e);
 
     const rows = await t.adapter.select<EventRow>("nextly_events");
     for (const [type, min] of Object.entries(pathCase.atLeast)) {
@@ -218,6 +275,18 @@ describe("webhook write-path event matrix — programmatic writes (integration)"
       expect(count, `${pathCase.label}: expected >=${min} ${type}`).toBeGreaterThanOrEqual(
         min
       );
+    }
+
+    // Every write path must also leave a durable version behind. Scoped to each
+    // written entry's own id so the shared nextly_versions table cannot leak a
+    // count in from a sibling case in the sequential run.
+    expect(writtenIds.length).toBeGreaterThan(0);
+    for (const id of writtenIds) {
+      const versions = await versionsForEntry(t, id);
+      expect(
+        versions,
+        `${pathCase.label}: expected >=${pathCase.minVersionsPerEntry} versions for entry ${id}`
+      ).toBeGreaterThanOrEqual(pathCase.minVersionsPerEntry);
     }
   });
 });

@@ -464,6 +464,102 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Assemble a full read-shape document for a row written on a caller's
+   * transaction: the already read-shaped parent columns plus a fresh read of the
+   * row's component subtrees and many-to-many id arrays on that same
+   * transaction. Returns both the composed parts (so a caller can index a
+   * version snapshot from them without a second relations read) and the
+   * assembled document (the shape the outbox event carries).
+   *
+   * The tx-API and batch write paths build only the parent row inline; routing
+   * their event payload through here gives it the same relational completeness
+   * the interactive paths carry. These paths route no localized write, so the
+   * relations are read without a locale (a single set of values).
+   */
+  private async readTxDocumentParts(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      tableName: string;
+      entryId: string;
+      // Already read-shaped (JSON parsed, timestamps camelCased) and stripped of
+      // password/system-owner fields by the caller.
+      parentRow: Record<string, unknown>;
+      fields: FieldDefinition[];
+      manyToManyFields: FieldDefinition[];
+    }
+  ): Promise<{
+    documentParts: {
+      parentRow: Record<string, unknown>;
+      components: Record<string, unknown>;
+      manyToMany: Record<string, string[]>;
+    };
+    document: Record<string, unknown>;
+  }> {
+    const { components, manyToMany } = await this.buildFullSnapshotRelations(
+      tx,
+      args.entryId,
+      args.collectionName,
+      args.tableName,
+      args.fields,
+      args.manyToManyFields
+    );
+    const documentParts = {
+      parentRow: args.parentRow,
+      components,
+      manyToMany,
+    };
+    return { documentParts, document: assembleDocument(documentParts) };
+  }
+
+  /**
+   * Capture one durable version snapshot on a caller's transaction from parts
+   * already assembled by {@link readTxDocumentParts}, when the collection opts
+   * into versioning. A no-op otherwise, so a tx-API or batch write into a
+   * non-versioned collection stays free of the tagging walk.
+   *
+   * The snapshot commits atomically with the content write on the caller's
+   * transaction — history never records a write that later rolls back. These
+   * paths route no localized write, so the snapshot holds a single set of values
+   * and carries no locale tag.
+   */
+  private async captureTxVersion(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      // The written row's own status value; indexed as the version's status.
+      contentStatus: unknown;
+      createdBy: string | null;
+      versionsConfig: ResolvedVersionsConfig | null | undefined;
+      documentParts: {
+        parentRow: Record<string, unknown>;
+        components: Record<string, unknown>;
+        manyToMany: Record<string, string[]>;
+      };
+      fields: FieldDefinition[];
+    }
+  ): Promise<void> {
+    if (!args.versionsConfig?.enabled) {
+      return;
+    }
+    await captureInTx(tx, this.versionCapture, {
+      ref: {
+        scopeKind: "collection",
+        scopeSlug: args.collectionName,
+        entryId: args.entryId,
+      },
+      contentStatus: args.contentStatus,
+      // Tagged for the snapshot alone: `documentParts` is also what the outbox
+      // event carries, and that payload is read shape.
+      parts: await this.snapshotPartsFor(args.documentParts, args.fields, tx),
+      createdBy: args.createdBy,
+      locale: null,
+      maxPerDoc: args.versionsConfig.maxPerDoc,
+    });
+  }
+
+  /**
    * Assemble a removed entry as the read shape the create/update events carry —
    * JSON container fields parsed, component subtrees and many-to-many id arrays
    * populated, password and system-owner fields stripped — so a delete event
@@ -5312,16 +5408,38 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Append the outbox event on the caller's transaction so a create through
-      // the tx-API (importers, plugins, batch) is observable too — the invariant
-      // the interactive and delete-in-tx paths already hold. Built from the
-      // freshly-inserted row in read shape; recorded on `tx` so it commits with
-      // the entry and never survives a rollback. Carried on the result so the
-      // owning caller flushes the drain after IT commits.
-      const createdDocument = this.readShapeEventDocument(
-        entry as Record<string, unknown>,
-        fields
-      );
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction, so a create through the tx-API (importers, plugins, batch)
+      // is captured AND observable — the invariant the interactive and
+      // delete-in-tx paths already hold. Both are built from ONE relations read:
+      // the freshly-inserted parent row in read shape, plus its component
+      // subtrees and m2m id arrays read back on `tx`, so the version and the
+      // event carry the same complete document. Recorded on `tx` so they commit
+      // with the entry and never survive a rollback; the event is carried on the
+      // result so the owning caller flushes the drain after IT commits.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      const { documentParts: createdParts, document: createdDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: (entry as Record<string, unknown>).id as string,
+          parentRow: this.readShapeEventDocument(
+            entry as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId: (entry as Record<string, unknown>).id as string,
+        contentStatus: (entry as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: createdParts,
+        fields,
+      });
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
@@ -5809,6 +5927,20 @@ export class CollectionMutationService extends BaseService {
         }
       );
 
+      // Assemble the `previous` document BEFORE the junction rows are rewritten,
+      // so a relationship-only update still lists the changed field: reading m2m
+      // after the delete+insert below would report the new ids as the old ones.
+      // The pre-update parent row plus its current (pre-rewrite) component and
+      // m2m relations, read on `tx`.
+      const { document: previousDocument } = await this.readTxDocumentParts(tx, {
+        collectionName: params.collectionName,
+        tableName,
+        entryId: params.entryId,
+        parentRow: this.readShapeEventDocument(existingEntry, fields),
+        fields,
+        manyToManyFields,
+      });
+
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       for (const field of manyToManyFields) {
@@ -5833,22 +5965,39 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Append the outbox event on the caller's transaction so an update through
-      // the tx-API (importers, plugins) is observable too — the invariant the
-      // interactive path holds. Built from the freshly-updated row and the
-      // pre-update row in read shape; recorded on `tx` so it commits with the
-      // update and never survives a rollback. A status-lifecycle transition also
-      // emits its publish/unpublish/status_changed event, gated on the
-      // collection's Draft/Published flag so an ordinary user `status` field is
-      // not mistaken for a lifecycle change.
-      const updatedDocument = this.readShapeEventDocument(
-        updated as Record<string, unknown>,
-        fields
-      );
-      const previousDocument = this.readShapeEventDocument(
-        existingEntry,
-        fields
-      );
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction, so an update through the tx-API (importers, plugins) is
+      // captured AND observable — the invariant the interactive path holds. The
+      // updated document is built from ONE post-rewrite relations read (parent
+      // row plus its component subtrees and m2m id arrays on `tx`), shared by the
+      // version and the event so both carry the same complete document. Recorded
+      // on `tx` so they commit with the update and never survive a rollback. A
+      // status-lifecycle transition also emits its publish/unpublish/
+      // status_changed event, gated on the collection's Draft/Published flag so
+      // an ordinary user `status` field is not mistaken for a lifecycle change.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      const { documentParts: updatedParts, document: updatedDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: params.entryId,
+          parentRow: this.readShapeEventDocument(
+            updated as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        contentStatus: (updated as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: updatedParts,
+        fields,
+      });
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
@@ -6630,15 +6779,37 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Append the outbox event on the caller's transaction so a batch create
-      // (createEntries) is observable too — the same invariant the interactive
-      // path holds. Recording is NOT a hook, so it runs even under `skipHooks`;
-      // built from the freshly-inserted row in read shape and recorded on `tx`
-      // so it commits with the entry and never survives a rollback.
-      const createdDocument = this.readShapeEventDocument(
-        entry as Record<string, unknown>,
-        fields
-      );
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction so a batch create (createEntries) is captured AND observable
+      // — the same invariant the interactive path holds. Recording and capture
+      // are NOT hooks, so they run even under `skipHooks`; both are built from
+      // ONE relations read (the freshly-inserted parent row in read shape plus
+      // its component subtrees and m2m id arrays on `tx`), so the version and the
+      // event carry the same complete document, and recorded on `tx` so they
+      // commit with the entry and never survive a rollback.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      const { documentParts: createdParts, document: createdDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: (entry as Record<string, unknown>).id as string,
+          parentRow: this.readShapeEventDocument(
+            entry as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId: (entry as Record<string, unknown>).id as string,
+        contentStatus: (entry as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: createdParts,
+        fields,
+      });
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
@@ -7198,6 +7369,19 @@ export class CollectionMutationService extends BaseService {
         }
       );
 
+      // Assemble the `previous` document BEFORE the junction rows are rewritten,
+      // so a relationship-only update still lists the changed field: reading m2m
+      // after the delete+insert below would report the new ids as the old ones.
+      // The pre-update parent row plus its current (pre-rewrite) relations on `tx`.
+      const { document: previousDocument } = await this.readTxDocumentParts(tx, {
+        collectionName: params.collectionName,
+        tableName,
+        entryId,
+        parentRow: this.readShapeEventDocument(existingEntry, fields),
+        fields,
+        manyToManyFields,
+      });
+
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
@@ -7225,21 +7409,38 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Append the outbox event on the caller's transaction so a batch update
-      // (updateEntries) is observable too. Recording is NOT a hook, so it runs
-      // even under `skipHooks`; built from the freshly-updated row and the
-      // pre-update row in read shape and recorded on `tx` so it commits with the
-      // update and never survives a rollback. A status-lifecycle transition also
-      // emits its publish/unpublish/status_changed event, gated on the
-      // collection's Draft/Published flag.
-      const updatedDocument = this.readShapeEventDocument(
-        updated as Record<string, unknown>,
-        fields
-      );
-      const previousDocument = this.readShapeEventDocument(
-        existingEntry,
-        fields
-      );
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction so a batch update (updateEntries) is captured AND observable.
+      // Recording and capture are NOT hooks, so they run even under `skipHooks`;
+      // both are built from ONE post-rewrite relations read (parent row plus its
+      // component subtrees and m2m id arrays on `tx`), shared by the version and
+      // the event so both carry the same complete document, and recorded on `tx`
+      // so they commit with the update and never survive a rollback. A
+      // status-lifecycle transition also emits its publish/unpublish/
+      // status_changed event, gated on the collection's Draft/Published flag.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      const { documentParts: updatedParts, document: updatedDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId,
+          parentRow: this.readShapeEventDocument(
+            updated as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId,
+        contentStatus: (updated as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: updatedParts,
+        fields,
+      });
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
