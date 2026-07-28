@@ -27,6 +27,7 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { CORE_TABLE_NAMES, CORE_TABLE_PREFIXES } from "../../schemas/index";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -81,6 +82,10 @@ export type ComponentValidationErrorCode =
   | "SLUG_INVALID_FORMAT"
   | "SLUG_RESERVED"
   | "SLUG_SQL_KEYWORD"
+  // Custom table-name errors
+  | "DB_NAME_INVALID_TYPE"
+  | "DB_NAME_INVALID_FORMAT"
+  | "DB_NAME_RESERVED"
   // Field errors
   | "FIELDS_REQUIRED"
   | "FIELDS_INVALID_TYPE"
@@ -314,6 +319,55 @@ function validateFields(
 // ============================================================
 
 /**
+ * Validates a custom physical table name.
+ *
+ * A component's `dbName` is honored verbatim, so an unchecked value can name a
+ * table this component does not own. Pointing the registry at a framework or
+ * another entity's table would make unrelated rows look like component
+ * instances, and an entity delete would sweep them.
+ */
+function validateDbName(
+  dbName: unknown,
+  errors: ComponentValidationError[]
+): void {
+  if (dbName === undefined) return;
+
+  if (typeof dbName !== "string" || dbName.trim() === "") {
+    errors.push({
+      path: "dbName",
+      message: "dbName must be a non-empty string when provided.",
+      code: "DB_NAME_INVALID_TYPE",
+    });
+    return;
+  }
+
+  if (!/^[a-z_][a-z0-9_]*$/.test(dbName)) {
+    errors.push({
+      path: "dbName",
+      message:
+        "dbName must be lowercase and contain only letters, digits and underscores, starting with a letter or underscore.",
+      code: "DB_NAME_INVALID_FORMAT",
+    });
+    return;
+  }
+
+  // Core tables belong to the framework, and the managed prefixes address
+  // collections, singles and generated component tables — claiming any of them
+  // would alias storage that another owner already writes to.
+  const collides =
+    CORE_TABLE_NAMES.includes(dbName) ||
+    CORE_TABLE_PREFIXES.some(prefix => dbName.startsWith(prefix));
+
+  if (collides) {
+    errors.push({
+      path: "dbName",
+      message: `dbName '${dbName}' names framework-managed storage. Choose a name outside the reserved tables and prefixes.`,
+      code: "DB_NAME_RESERVED",
+    });
+  }
+}
+
+/**
  * Validates a complete Component configuration.
  *
  * Performs comprehensive validation including slug format/reserved names,
@@ -347,6 +401,8 @@ export function validateComponentConfig(
     reservedSlugsSet: RESERVED_COMPONENT_SLUGS_SET,
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
+
+  validateDbName(config.dbName, errors);
 
   validateFields(config.fields, errors);
 
