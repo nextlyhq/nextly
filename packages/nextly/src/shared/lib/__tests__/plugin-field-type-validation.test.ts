@@ -305,6 +305,46 @@ describe("plugin field-type validation", () => {
     );
   });
 
+  it("refuses a json value JSON cannot represent, before the type sees it", async () => {
+    // A json-backed type's primitive had no rules at all, so a cycle reached
+    // the validator and then the driver, where it surfaces as a server error
+    // instead of a rejected value.
+    const seen = vi.fn(() => true as const);
+    registerDocument(seen);
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    const issues = await validateEntryData(
+      { body: cyclic },
+      [{ name: "body", type: "document" }],
+      { mode: "create" }
+    );
+
+    expect(issues).toEqual([
+      {
+        path: "body",
+        code: "INVALID_TYPE",
+        message: "body must be JSON-serializable.",
+      },
+    ]);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("still accepts ordinary json a caller would send", async () => {
+    // Narrower than the rule a block document answers to: an absent member is
+    // normal JavaScript, not a value the column cannot hold.
+    registerDocument(() => true);
+
+    const issues = await validateEntryData(
+      { body: { title: "ok", note: undefined, scores: [1, 2] } },
+      [{ name: "body", type: "document" }],
+      { mode: "create" }
+    );
+
+    expect(issues).toEqual([]);
+  });
+
   it("reports the operation, not the mode the nested walk runs under", async () => {
     // Rows are walked in "create" mode because a row is a complete object
     // whose required fields must all be present. That says nothing about

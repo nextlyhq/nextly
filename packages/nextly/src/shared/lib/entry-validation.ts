@@ -163,6 +163,23 @@ function selectOptionValues(field: ValidatableField): string[] {
     .filter((v): v is string => typeof v === "string");
 }
 
+/**
+ * Whether JSON can represent a value at all.
+ *
+ * Deliberately narrower than the rule a block document answers to, which also
+ * refuses values JSON reshapes rather than rejects — an `undefined` member, a
+ * Map, a NaN. A json field carries ordinary data from ordinary callers, and
+ * `{ note: undefined }` is normal JavaScript for a field that declares no
+ * shape. What cannot pass is what would throw on write or store nothing.
+ */
+function isJsonRepresentable(value: unknown): boolean {
+  try {
+    return JSON.stringify(value) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 /** Date-only (YYYY-MM-DD) or anything Date.parse accepts. */
 function isValidDateValue(value: unknown): boolean {
   if (value instanceof Date) return !Number.isNaN(value.getTime());
@@ -561,7 +578,23 @@ async function validateFieldValue(
       break;
     }
 
-    // relationship/upload/json/component values are shaped by their own
+    case "json": {
+      // A json column holds whatever JSON can represent, and a bigint or a
+      // cycle is not that: serialization throws on it further down the write,
+      // surfacing as a server error rather than as a rejected value. A bare
+      // function or symbol encodes to nothing at all, which would store the
+      // field as absent rather than as what was sent.
+      if (!isJsonRepresentable(value)) {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${label} must be JSON-serializable.`,
+        });
+      }
+      break;
+    }
+
+    // relationship/upload/component values are shaped by their own
     // normalization passes and referential checks; no scalar rules apply.
     default:
       break;

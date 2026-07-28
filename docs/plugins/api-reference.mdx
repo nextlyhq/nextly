@@ -199,6 +199,9 @@ then the field's own `validate` — so a schema author adds rules on top of your
 rather than replacing them. Two values never reach `validate`: an absent one
 (that is what `required` is for) and one the storage primitive already refused,
 so you never have to re-check that you were handed the shape your type stores.
+For `json` that check is representability — a cycle or a `BigInt` is rejected
+before you see it — and nothing more, so the shape of the document is yours to
+define.
 
 Anything you return outside `true | string | PluginFieldIssue[]` is a refusal,
 as is throwing — a validator that forgets to return fails the write rather than
