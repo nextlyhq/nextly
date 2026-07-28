@@ -19,12 +19,18 @@
 // Output ordering (deterministic for testability):
 //   1. add_table operations, sorted by table name.
 //   2. drop_table operations, sorted by table name.
-//   3. Per-table column ops (tables alphabetical):
+//   3. drop_index operations (tables alphabetical) — BEFORE column ops, so
+//      a dropped column's index is gone before the column drop (SQLite
+//      cannot drop an indexed column), and so reversed inverse ops create
+//      columns before the indexes that cover them.
+//   4. Per-table column ops (tables alphabetical):
 //      a. drop_column (alphabetical by columnName)
 //      b. add_column (alphabetical by columnName)
 //      c. change_column_type (alphabetical)
 //      d. change_column_nullable (alphabetical)
 //      e. change_column_default (alphabetical)
+//   5. add_index operations (tables alphabetical) — AFTER column ops, so a
+//      new column exists before its index is created.
 
 import { indexKey, isManagedIndexName } from "./index-util";
 import { normalizeDefault } from "./normalize-default";
@@ -59,7 +65,8 @@ export function diffSnapshots(
 
   const tableOps: Operation[] = [];
   const columnOps: Operation[] = [];
-  const indexOps: Operation[] = [];
+  const dropIndexOps: Operation[] = [];
+  const addIndexOps: Operation[] = [];
 
   // Pass 1: table-level ops (add_table, drop_table). rename_table is NOT
   // detected here; same as columns, the rename detector reads (drop, add)
@@ -87,11 +94,22 @@ export function diffSnapshots(
       // Pass 2: column-level ops for tables present in both snapshots.
       columnOps.push(...diffColumns(name, prevT.columns, curT.columns));
       // Pass 3: index-level ops (sentinel: skip when either side untracked).
-      indexOps.push(...diffIndexes(name, prevT.indexes, curT.indexes));
+      for (const op of diffIndexes(name, prevT.indexes, curT.indexes)) {
+        if (op.type === "drop_index") dropIndexOps.push(op);
+        else addIndexOps.push(op);
+      }
     }
   }
 
-  return [...tableOps, ...columnOps, ...indexOps];
+  // drop_index precedes the column ops: SQLite refuses ALTER TABLE ... DROP
+  // COLUMN while an index still covers the column, so a removed field's
+  // managed index must be gone before its column drop runs. The same order
+  // makes down-migrations sound — buildInverseOperations reverses the list,
+  // so (drop_index, drop_column) inverts to (add_column, add_index), creating
+  // the column before the index that needs it. add_index stays last for the
+  // mirror-image reason: a new column's index can only be created after the
+  // column exists.
+  return [...tableOps, ...dropIndexOps, ...columnOps, ...addIndexOps];
 }
 
 /**
