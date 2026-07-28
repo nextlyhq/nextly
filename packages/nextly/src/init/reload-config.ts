@@ -646,8 +646,25 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  // Normalize components. Names resolve canonically: custom dbName verbatim,
-  // otherwise comp_<slug_with_underscores>.
+  // Normalize components. The registry records where each component's data
+  // physically lives and may deliberately retain a name that differs from the
+  // configured `dbName` (when the stored table already holds instances), so the
+  // diff targets that table; a config-derived name would alter a table the
+  // runtime never reads. Falls back to canonical resolution for components the
+  // registry has not seen yet, and for a registry that cannot be read here.
+  const registeredComponentTables = new Map<string, string>();
+  try {
+    const compRegistry = (await resolve(
+      "componentRegistryService"
+    )) as ComponentRegistrySurface;
+    for (const record of (await compRegistry.getAllComponents?.()) ?? []) {
+      if (record.slug && record.tableName) {
+        registeredComponentTables.set(record.slug, record.tableName);
+      }
+    }
+  } catch {
+    // Registry unavailable this early in a reload; canonical names still apply.
+  }
   const componentTargets: Array<{
     slug: string;
     tableName: string;
@@ -658,7 +675,9 @@ export async function reloadNextlyConfig(opts?: {
     if (!c.slug) continue;
     componentTargets.push({
       slug: c.slug,
-      tableName: resolveComponentTableName(c.slug, c.dbName),
+      tableName:
+        registeredComponentTables.get(c.slug) ??
+        resolveComponentTableName(c.slug, c.dbName),
       fields: (c.fields ?? []) as MinimalField[],
       // i18n: carry `localized` so the HMR diff omits translatable columns from the
       // component's main table and registers its companion.

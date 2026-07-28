@@ -1711,11 +1711,25 @@ async function syncCodeFirstComponents(
     "../domains/schema/utils/resolve-table-name"
   );
 
+  // The registry records where each component's data physically lives, and the
+  // sync above may have deliberately retained a stored name that differs from
+  // the configured `dbName` (when the stored table already holds instances).
+  // DDL therefore follows the registry: deriving the target from config instead
+  // would create or alter a table that runtime never reads or writes.
+  const registeredTables = new Map(
+    (await componentRegistry.getAllComponents()).map(record => [
+      record.slug,
+      record.tableName,
+    ])
+  );
+  const componentTableFor = (slug: string, dbName?: string): string =>
+    registeredTables.get(slug) ?? resolveComponentTableName(slug, dbName);
+
   for (const slug of componentSyncResult.unchanged) {
     // A component may declare a custom `dbName`, in which case its table is not
     // named `comp_<slug>` at all. Probing the unresolved name would never find
     // it and would queue a redundant sync on every boot.
-    const tableName = resolveComponentTableName(
+    const tableName = componentTableFor(
       slug,
       transformedConfig.components.find(c => c.slug === slug)?.dbName
     );
@@ -1751,7 +1765,7 @@ async function syncCodeFirstComponents(
       );
       if (!compConfig) continue;
 
-      const tableName = resolveComponentTableName(slug, compConfig.dbName);
+      const tableName = componentTableFor(slug, compConfig.dbName);
 
       // i18n: a localized component omits its translatable columns from the main comp_
       // table and gets a companion `comp_<slug>_locales` (created below).
