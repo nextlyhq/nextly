@@ -192,6 +192,16 @@ export class CollectionService extends BaseService {
   private readonly pendingTxEvents = new Set<unknown>();
 
   /**
+   * Transaction handles whose `*InTransaction` wrappers committed at least one
+   * write, independent of whether that write produced a revalidation intent or an
+   * outbox event. `withTransaction` offers the opportunistic retention pass for
+   * any committed write (matching the automatic path), so a write that opts out
+   * of BOTH revalidation and recording still triggers the pass rather than
+   * relying on those optional signals.
+   */
+  private readonly pendingTxCommittedWrites = new Set<unknown>();
+
+  /**
    * Run work inside a database transaction, then flush the cache-revalidation
    * intents produced by any createEntryInTransaction / updateEntryInTransaction /
    * deleteEntryInTransaction calls made against the same `tx`. The flush happens
@@ -217,6 +227,7 @@ export class CollectionService extends BaseService {
     let ownsFlush = false;
     let collector: RevalidationIntent[] | undefined;
     let sawEvent = false;
+    let sawCommittedWrite = false;
     const result = await this.adapter.transaction(async tx => {
       collector = this.pendingTxIntents.get(tx);
       if (!collector) {
@@ -235,8 +246,10 @@ export class CollectionService extends BaseService {
         // post-commit drain below can see it.
         if (ownsFlush) {
           sawEvent = this.pendingTxEvents.has(tx);
+          sawCommittedWrite = this.pendingTxCommittedWrites.has(tx);
           this.pendingTxIntents.delete(tx);
           this.pendingTxEvents.delete(tx);
+          this.pendingTxCommittedWrites.delete(tx);
         }
       }
     });
@@ -247,14 +260,14 @@ export class CollectionService extends BaseService {
       await this.entryService.flushRevalidationIntents(collectedIntents);
     }
     // A committed transaction runs the same post-write maintenance the automatic
-    // paths run: the opportunistic retention pass for any committed write (a
-    // collected intent or a recorded event both signal one), and the fast drain
-    // once when an outbox event was recorded — so tx-API writes deliver, and
-    // prune, as promptly as the non-transaction paths instead of waiting for an
-    // unrelated operation.
-    if (ownsFlush && (collectedIntents.length > 0 || sawEvent)) {
+    // paths run: the opportunistic retention pass for any committed write —
+    // tracked independently of the optional revalidation/recording signals so a
+    // write that opted out of both still prunes — and the fast drain once when an
+    // outbox event was recorded, so tx-API writes deliver, and prune, as promptly
+    // as the non-transaction paths instead of waiting for an unrelated operation.
+    if (ownsFlush && (sawCommittedWrite || sawEvent)) {
       await this.entryService.offerPostCommitTxMaintenance({
-        committedWrite: true,
+        committedWrite: sawCommittedWrite || sawEvent,
         recordedEvent: sawEvent,
       });
     }
@@ -289,6 +302,20 @@ export class CollectionService extends BaseService {
   ): void {
     if (!eventRecorded) return;
     if (this.pendingTxIntents.has(tx)) this.pendingTxEvents.add(tx);
+  }
+
+  /**
+   * Record that a wrapper's `*InTransaction` write succeeded against the active
+   * owned transaction, so `withTransaction` offers retention for the committed
+   * write even when it produced no intent and no event. A failed wrapper throws
+   * (rolling the transaction back), so only committed writes reach here.
+   */
+  private collectTxCommittedWrite(
+    tx: TransactionContext,
+    success: boolean | undefined
+  ): void {
+    if (!success) return;
+    if (this.pendingTxIntents.has(tx)) this.pendingTxCommittedWrites.add(tx);
   }
 
   /**
@@ -867,6 +894,7 @@ export class CollectionService extends BaseService {
     // withTransaction flushes what was collected once the transaction commits.
     this.collectTxIntent(tx, result.revalidationIntent);
     this.collectTxEvent(tx, result.eventRecorded);
+    this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
       this.logger.warn("Entry creation in transaction failed", {
@@ -922,6 +950,7 @@ export class CollectionService extends BaseService {
     // post-write hook failure still busts the tags (see createEntryInTransaction).
     this.collectTxIntent(tx, result.revalidationIntent);
     this.collectTxEvent(tx, result.eventRecorded);
+    this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
       if (result.statusCode === 404) {
@@ -995,6 +1024,7 @@ export class CollectionService extends BaseService {
     // post-delete hook failure still busts the tags (see createEntryInTransaction).
     this.collectTxIntent(tx, result.revalidationIntent);
     this.collectTxEvent(tx, result.eventRecorded);
+    this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
       if (result.statusCode === 404) {
