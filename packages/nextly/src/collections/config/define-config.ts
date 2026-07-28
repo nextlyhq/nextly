@@ -32,7 +32,7 @@
  * ```
  */
 
-import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-component";
+import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../components/config/validate-field-group";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
@@ -211,9 +211,9 @@ function validateComponentNesting(
 
   for (const slug of graph.keys()) {
     const depth = getMaxDepth(slug);
-    if (depth > MAX_COMPONENT_NESTING_DEPTH) {
+    if (depth > MAX_FIELD_GROUP_NESTING_DEPTH) {
       throw new Error(
-        `Component nesting depth exceeds maximum of ${MAX_COMPONENT_NESTING_DEPTH} levels ` +
+        `Component nesting depth exceeds maximum of ${MAX_FIELD_GROUP_NESTING_DEPTH} levels ` +
           `(component '${slug}' has a nesting chain ${depth} levels deep). ` +
           `Simplify the component structure to reduce nesting.`
       );

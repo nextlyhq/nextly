@@ -36,7 +36,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { q } from "../../i18n/migration/ddl-types";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
 
-/** Bound on how deep component nesting is followed; mirrors MAX_COMPONENT_NESTING_DEPTH. */
+/** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
 const DEFAULT_MAX_DEPTH = 10;
 
 /** Registry table holding one row per component, including its physical table name. */

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { ComponentConfig } from "../../components/config/types";
+import type { FieldGroupConfig } from "../../components/config/types";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { SingleConfig } from "../../singles/config/types";
 
@@ -67,7 +67,7 @@ describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
   const single = (slug: string) =>
     ({ slug, fields: [] }) as unknown as SingleConfig;
   const comp = (slug: string) =>
-    ({ slug, fields: [] }) as unknown as ComponentConfig;
+    ({ slug, fields: [] }) as unknown as FieldGroupConfig;
   const base = (): SanitizedNextlyConfig =>
     ({
       collections: [],

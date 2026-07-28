@@ -9,9 +9,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  component,
+  fieldGroup,
   defineCollection,
-  defineComponent,
+  defineFieldGroup,
   defineSingle,
   group,
   json,
@@ -317,7 +317,7 @@ describe("version capture on update (integration)", () => {
     // component, silently losing it on a later restore.
     current = await createTestNextly({
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero",
           fields: [text({ name: "heading" })],
         }),
@@ -328,7 +328,7 @@ describe("version capture on update (integration)", () => {
           versions: true,
           fields: [
             text({ name: "title" }),
-            component({ name: "hero", component: "hero" }),
+            fieldGroup({ name: "hero", component: "hero" }),
           ],
         }),
       ],
@@ -479,7 +479,7 @@ describe("version capture on update (integration)", () => {
         locales: [{ code: "en" }, { code: "de" }],
       },
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero",
           localized: true,
           fields: [text({ name: "heading" })],
@@ -491,7 +491,7 @@ describe("version capture on update (integration)", () => {
           versions: true,
           fields: [
             text({ name: "title" }),
-            component({ name: "hero", component: "hero" }),
+            fieldGroup({ name: "hero", component: "hero" }),
           ],
         }),
       ],
@@ -530,7 +530,7 @@ describe("version capture on update (integration)", () => {
         locales: [{ code: "en" }, { code: "de" }],
       },
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero",
           localized: true,
           fields: [text({ name: "heading" })],
@@ -542,7 +542,7 @@ describe("version capture on update (integration)", () => {
           versions: true,
           fields: [
             text({ name: "title" }),
-            component({ name: "hero", component: "hero" }),
+            fieldGroup({ name: "hero", component: "hero" }),
           ],
         }),
       ],
@@ -574,7 +574,7 @@ describe("version capture on update (integration)", () => {
     // is the only thing that would reveal the mismatch.
     current = await createTestNextly({
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero",
           fields: [text({ name: "heading" })],
         }),
@@ -585,7 +585,7 @@ describe("version capture on update (integration)", () => {
           versions: true,
           fields: [
             text({ name: "title" }),
-            component({ name: "hero", component: "hero" }),
+            fieldGroup({ name: "hero", component: "hero" }),
           ],
         }),
       ],
@@ -620,7 +620,7 @@ describe("version capture on update (integration)", () => {
     // — the two capture paths are separate code.
     current = await createTestNextly({
       components: [
-        defineComponent({ slug: "hero", fields: [text({ name: "heading" })] }),
+        defineFieldGroup({ slug: "hero", fields: [text({ name: "heading" })] }),
       ],
       singles: [
         defineSingle({
@@ -629,7 +629,7 @@ describe("version capture on update (integration)", () => {
           fields: [
             group({
               name: "meta",
-              fields: [component({ name: "hero", component: "hero" })],
+              fields: [fieldGroup({ name: "hero", component: "hero" })],
             }),
           ],
         }),

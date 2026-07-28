@@ -30,9 +30,9 @@ import {
   dynamicCollectionsSqlite,
 } from "./dynamic-collections";
 import {
-  dynamicComponentsPg,
-  dynamicComponentsMysql,
-  dynamicComponentsSqlite,
+  dynamicFieldGroupsPg,
+  dynamicFieldGroupsMysql,
+  dynamicFieldGroupsSqlite,
 } from "./dynamic-components";
 import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
 import { dynamicSinglesPg } from "./dynamic-singles/postgres";
@@ -106,7 +106,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsPg,
         dynamicSinglesPg,
-        dynamicComponentsPg,
+        dynamicFieldGroupsPg,
         siteSettingsPg,
         userFieldDefinitionsPg,
         emailProvidersPg,
@@ -117,7 +117,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsMysql,
         dynamicSinglesMysql,
-        dynamicComponentsMysql,
+        dynamicFieldGroupsMysql,
         siteSettingsMysql,
         userFieldDefinitionsMysql,
         emailProvidersMysql,
@@ -128,7 +128,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsSqlite,
         dynamicSinglesSqlite,
-        dynamicComponentsSqlite,
+        dynamicFieldGroupsSqlite,
         siteSettingsSqlite,
         userFieldDefinitionsSqlite,
         emailProvidersSqlite,

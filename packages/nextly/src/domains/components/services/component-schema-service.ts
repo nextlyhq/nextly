@@ -55,7 +55,7 @@ import {
   isGroupField,
   isJSONField,
   isBlocksField,
-  isComponentField,
+  isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
 import type {
@@ -210,7 +210,7 @@ export class ComponentSchemaService {
     for (const field of fields) {
       if (!isDataField(field)) continue;
       // Skip component fields — data lives in the referenced component's table.
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       // i18n: translatable columns live in the companion, not the main comp_ table.
       if ("name" in field && field.name && localizedNames.has(field.name)) {
         continue;
@@ -254,7 +254,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
       if (localizedNames.has(field.name)) continue;
@@ -276,7 +276,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
       if (localizedNames.has(field.name)) continue;
@@ -299,7 +299,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
       if (localizedNames.has(field.name)) continue;
@@ -523,7 +523,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToPostgresColumn(field);
@@ -573,7 +573,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToMySQLColumn(field);
@@ -615,7 +615,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToSQLiteColumn(field);
@@ -652,7 +652,7 @@ export class ComponentSchemaService {
 
     const fieldColumns = fields
       .filter(
-        (f): f is DataFieldConfig => isDataField(f) && !isComponentField(f)
+        (f): f is DataFieldConfig => isDataField(f) && !isFieldGroupField(f)
       )
       .map(f => {
         const drizzleType = this.mapFieldToDrizzleCode(f);
@@ -686,7 +686,7 @@ export class ComponentSchemaService {
 
     const fieldIndexes = fields
       .filter(
-        (f): f is DataFieldConfig => isDataField(f) && !isComponentField(f)
+        (f): f is DataFieldConfig => isDataField(f) && !isFieldGroupField(f)
       )
       .filter(
         (f): f is DataFieldConfig & { name: string } =>
@@ -1152,7 +1152,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     }
 
     for (const field of fields) {
-      if (!isDataField(field) || isComponentField(field)) continue;
+      if (!isDataField(field) || isFieldGroupField(field)) continue;
 
       if (this.dialect === "sqlite") {
         if (isNumberField(field)) {
@@ -1334,7 +1334,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     const map = new Map<string, DataFieldConfig>();
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       map.set(field.name, field);
     }

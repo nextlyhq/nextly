@@ -35,7 +35,7 @@ import type {
   BlocksFieldConfig,
   JSONFieldConfig,
   // Component field types
-  ComponentFieldConfig,
+  FieldGroupFieldConfig,
   // Chips field type
   ChipsFieldConfig,
   // Union types
@@ -318,12 +318,12 @@ export const isBlocksField = createTypeGuard<BlocksFieldConfig>("blocks");
  *
  * @example
  * ```typescript
- * if (isComponentField(field)) {
+ * if (isFieldGroupField(field)) {
  *   console.log(field.component, field.components, field.repeatable);
  * }
  * ```
  */
-export const isComponentField = createTypeGuard<ComponentFieldConfig>(
+export const isFieldGroupField = createTypeGuard<FieldGroupFieldConfig>(
   STORAGE_FORMAT.fieldType
 );
 

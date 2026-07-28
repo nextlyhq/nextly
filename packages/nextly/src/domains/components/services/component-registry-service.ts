@@ -1,18 +1,18 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import type { ComponentAdminOptions } from "../../../components/config/types";
-import { MAX_COMPONENT_NESTING_DEPTH } from "../../../components/config/validate-component";
+import type { FieldGroupAdminOptions } from "../../../components/config/types";
+import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../../components/config/validate-field-group";
 import { toDbError } from "../../../database/errors";
 // PR 4 migration: switched the throw layer to NextlyError. Public messages now
 // follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
 // `logContext` so operators retain full diagnostic context.
 import { NextlyError } from "../../../errors";
 import type {
-  DynamicComponentInsert,
-  DynamicComponentRecord,
-  ComponentMigrationStatus,
-  ComponentSource,
+  DynamicFieldGroupInsert,
+  DynamicFieldGroupRecord,
+  FieldGroupMigrationStatus,
+  FieldGroupSource,
 } from "../../../schemas/dynamic-components/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { BaseRegistryService } from "../../../shared/base-registry-service";
@@ -41,7 +41,7 @@ export interface ComponentReference {
 }
 
 export interface UpdateComponentOptions {
-  source?: ComponentSource;
+  source?: FieldGroupSource;
 }
 
 /**
@@ -54,9 +54,9 @@ export interface UpdateComponentOptions {
 export interface CodeFirstComponentConfig {
   slug: string;
   label: string;
-  fields: DynamicComponentInsert["fields"];
+  fields: DynamicFieldGroupInsert["fields"];
   description?: string;
-  admin?: ComponentAdminOptions;
+  admin?: FieldGroupAdminOptions;
   configPath?: string;
   /** i18n: whether the component is localized (translatable fields → companion table). */
   localized?: boolean;
@@ -70,8 +70,8 @@ export interface SyncComponentResult {
 }
 
 export interface ListComponentsOptions extends BaseListOptions {
-  source?: ComponentSource;
-  migrationStatus?: ComponentMigrationStatus;
+  source?: FieldGroupSource;
+  migrationStatus?: FieldGroupMigrationStatus;
 }
 
 /**
@@ -81,12 +81,12 @@ export interface ListComponentsOptions extends BaseListOptions {
  * triggers @typescript-eslint/no-empty-object-type. The named export is preserved
  * for clearer call-site semantics even though it adds no members today.
  */
-export type ListComponentsResult = BaseListResult<DynamicComponentRecord>;
+export type ListComponentsResult = BaseListResult<DynamicFieldGroupRecord>;
 
 export interface EnrichedComponentSchema {
   label: string;
   fields: Record<string, unknown>[];
-  admin?: ComponentAdminOptions;
+  admin?: FieldGroupAdminOptions;
 }
 
 export interface EnrichedFieldConfig extends Record<string, unknown> {
@@ -97,8 +97,8 @@ export interface EnrichedFieldConfig extends Record<string, unknown> {
 }
 
 export class ComponentRegistryService extends BaseRegistryService<
-  DynamicComponentRecord,
-  ComponentMigrationStatus
+  DynamicFieldGroupRecord,
+  FieldGroupMigrationStatus
 > {
   protected readonly registryTableName = STORAGE_FORMAT.registryTable;
   protected readonly resourceType = "Component";
@@ -115,20 +115,20 @@ export class ComponentRegistryService extends BaseRegistryService<
   async getComponentBySlug(
     slug: string,
     executor?: unknown
-  ): Promise<DynamicComponentRecord | null> {
+  ): Promise<DynamicFieldGroupRecord | null> {
     return this.getRecordBySlug(slug, executor);
   }
 
   async getComponent(
     slug: string,
     executor?: unknown
-  ): Promise<DynamicComponentRecord> {
+  ): Promise<DynamicFieldGroupRecord> {
     return this.getRecordOrThrow(slug, executor);
   }
 
   async getAllComponents(
     options?: ListComponentsOptions
-  ): Promise<DynamicComponentRecord[]> {
+  ): Promise<DynamicFieldGroupRecord[]> {
     return this.getAllRecords(options);
   }
 
@@ -144,7 +144,7 @@ export class ComponentRegistryService extends BaseRegistryService<
 
   async updateMigrationStatus(
     slug: string,
-    status: ComponentMigrationStatus,
+    status: FieldGroupMigrationStatus,
     migrationId?: string
   ): Promise<void> {
     return this.updateRecordMigrationStatus(slug, status, migrationId);
@@ -153,11 +153,11 @@ export class ComponentRegistryService extends BaseRegistryService<
   async updateMigrationStatusWithVerification(
     slug: string,
     tableName: string
-  ): Promise<{ verified: boolean; status: ComponentMigrationStatus }> {
+  ): Promise<{ verified: boolean; status: FieldGroupMigrationStatus }> {
     return this.updateMigrationStatusWithTableVerification(slug, tableName);
   }
 
-  async getPendingMigrations(): Promise<DynamicComponentRecord[]> {
+  async getPendingMigrations(): Promise<DynamicFieldGroupRecord[]> {
     return this.getRecordsWithPendingMigrations();
   }
 
@@ -168,8 +168,8 @@ export class ComponentRegistryService extends BaseRegistryService<
    * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
   async registerComponent(
-    data: DynamicComponentInsert
-  ): Promise<DynamicComponentRecord> {
+    data: DynamicFieldGroupInsert
+  ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Registering Component", { slug: data.slug });
 
     const existing = await this.getComponentBySlug(data.slug);
@@ -210,7 +210,7 @@ export class ComponentRegistryService extends BaseRegistryService<
     };
 
     try {
-      const result = await this.adapter.insert<DynamicComponentRecord>(
+      const result = await this.adapter.insert<DynamicFieldGroupRecord>(
         this.registryTableName,
         record,
         { returning: "*" }
@@ -233,9 +233,9 @@ export class ComponentRegistryService extends BaseRegistryService<
 
   async registerComponentInTransaction(
     tx: TransactionContext,
-    data: DynamicComponentInsert
-  ): Promise<DynamicComponentRecord> {
-    const existing = await tx.selectOne<DynamicComponentRecord>(
+    data: DynamicFieldGroupInsert
+  ): Promise<DynamicFieldGroupRecord> {
+    const existing = await tx.selectOne<DynamicFieldGroupRecord>(
       this.registryTableName,
       {
         where: this.whereEq("slug", data.slug),
@@ -275,7 +275,7 @@ export class ComponentRegistryService extends BaseRegistryService<
       updated_at: now,
     };
 
-    const result = await tx.insert<DynamicComponentRecord>(
+    const result = await tx.insert<DynamicFieldGroupRecord>(
       this.registryTableName,
       record,
       { returning: "*" }
@@ -292,9 +292,9 @@ export class ComponentRegistryService extends BaseRegistryService<
    */
   async updateComponent(
     slug: string,
-    data: Partial<DynamicComponentInsert>,
+    data: Partial<DynamicFieldGroupInsert>,
     options?: UpdateComponentOptions
-  ): Promise<DynamicComponentRecord> {
+  ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
 
     const existing = await this.getComponent(slug);
@@ -358,7 +358,7 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.update<DynamicComponentRecord>(
+      const results = await this.adapter.update<DynamicFieldGroupRecord>(
         this.registryTableName,
         updateData,
         this.whereEq("slug", slug),
@@ -773,15 +773,15 @@ export class ComponentRegistryService extends BaseRegistryService<
 
   private async fetchComponentsBySlugsBatch(
     slugs: string[]
-  ): Promise<Map<string, DynamicComponentRecord>> {
-    const componentMap = new Map<string, DynamicComponentRecord>();
+  ): Promise<Map<string, DynamicFieldGroupRecord>> {
+    const componentMap = new Map<string, DynamicFieldGroupRecord>();
 
     if (slugs.length === 0) {
       return componentMap;
     }
 
     try {
-      const results = await this.adapter.select<DynamicComponentRecord>(
+      const results = await this.adapter.select<DynamicFieldGroupRecord>(
         this.registryTableName,
         {
           where: {
@@ -814,7 +814,7 @@ export class ComponentRegistryService extends BaseRegistryService<
 
   private async enrichFieldsRecursive(
     fields: Record<string, unknown>[],
-    componentMap: Map<string, DynamicComponentRecord>,
+    componentMap: Map<string, DynamicFieldGroupRecord>,
     currentDepth: number
   ): Promise<EnrichedFieldConfig[]> {
     const enrichedFields: EnrichedFieldConfig[] = [];
@@ -833,7 +833,7 @@ export class ComponentRegistryService extends BaseRegistryService<
               unknown
             >[];
             if (
-              currentDepth < MAX_COMPONENT_NESTING_DEPTH &&
+              currentDepth < MAX_FIELD_GROUP_NESTING_DEPTH &&
               Array.isArray(componentFields)
             ) {
               const nestedSlugs = this.collectComponentSlugs(componentFields);
@@ -871,7 +871,7 @@ export class ComponentRegistryService extends BaseRegistryService<
                 unknown
               >[];
               if (
-                currentDepth < MAX_COMPONENT_NESTING_DEPTH &&
+                currentDepth < MAX_FIELD_GROUP_NESTING_DEPTH &&
                 Array.isArray(componentFields)
               ) {
                 const nestedSlugs = this.collectComponentSlugs(componentFields);
@@ -993,8 +993,8 @@ export class ComponentRegistryService extends BaseRegistryService<
   }
 
   protected deserializeRecord(
-    record: DynamicComponentRecord | Record<string, unknown>
-  ): DynamicComponentRecord {
+    record: DynamicFieldGroupRecord | Record<string, unknown>
+  ): DynamicFieldGroupRecord {
     const r = record as Record<string, unknown>;
     const fields = r.fields as string | object;
     const admin = r.admin as string | object | null;
@@ -1018,20 +1018,20 @@ export class ComponentRegistryService extends BaseRegistryService<
       description: r.description as string | undefined,
       fields:
         typeof fields === "string"
-          ? (JSON.parse(fields) as DynamicComponentRecord["fields"])
-          : (fields as DynamicComponentRecord["fields"]),
+          ? (JSON.parse(fields) as DynamicFieldGroupRecord["fields"])
+          : (fields as DynamicFieldGroupRecord["fields"]),
       admin: admin
         ? typeof admin === "string"
-          ? (JSON.parse(admin) as ComponentAdminOptions)
+          ? (JSON.parse(admin) as FieldGroupAdminOptions)
           : admin
         : undefined,
-      source: r.source as ComponentSource,
+      source: r.source as FieldGroupSource,
       locked: Boolean(r.locked),
       localized: Boolean(r.localized),
       configPath,
       schemaHash,
       schemaVersion,
-      migrationStatus: migrationStatus as ComponentMigrationStatus,
+      migrationStatus: migrationStatus as FieldGroupMigrationStatus,
       lastMigrationId,
       createdBy,
       createdAt: this.normalizeDbTimestamp(createdAt) as unknown as Date,

@@ -698,13 +698,13 @@ export function buildRestorePayload(
     // instances that were not in the incoming set — so resubmitting a snapshot
     // of only-removed types would clear the field rather than leaving it alone.
     const allowed = allowedComponentSlugs(field);
-    const isComponentField = allowed !== null;
+    const isFieldGroupField = allowed !== null;
     const children = childrenOf(field, componentSchemas);
 
     // A component field is partitioned even when its schema resolves to no
     // children: a component may legitimately declare none. Gating the partition
     // on children alone would let those fields through unchecked.
-    if (isComponentField || children.length > 0) {
+    if (isFieldGroupField || children.length > 0) {
       // A cleared field is restored as-is, so the update path removes the live
       // rows. Filtering cannot tell that from a value that lost every instance,
       // and the two need opposite outcomes.
@@ -712,7 +712,7 @@ export function buildRestorePayload(
       // Except when the field permits no component at all: the save path has no
       // branch for an empty allowlist, so the clear would never be applied and
       // the live rows would survive a restore that reported success.
-      if (isComponentField && isClearedComponentValue(value)) {
+      if (isFieldGroupField && isClearedComponentValue(value)) {
         if (allowed.size === 0) {
           droppedFields.push(key);
           continue;
@@ -754,7 +754,7 @@ export function buildRestorePayload(
         removed,
         blocked,
         key,
-        isComponentField,
+        isFieldGroupField,
         fieldNamesMultipleComponents(field)
       );
 
@@ -774,7 +774,7 @@ export function buildRestorePayload(
       // component since, every key of the old value is unknown to the new
       // schema — which is what this detects, rather than pruning the old
       // component's values into the new component's shape.
-      if (isComponentField && retainsNothing(pruned)) {
+      if (isFieldGroupField && retainsNothing(pruned)) {
         droppedFields.push(key);
         continue;
       }

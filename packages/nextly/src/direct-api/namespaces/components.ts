@@ -9,7 +9,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import { assertValidComponentConfig } from "../../components/config/validate-component";
+import { assertValidFieldGroupConfig } from "../../components/config/validate-field-group";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
@@ -167,7 +167,7 @@ export function createComponentsNamespace(
       // Validated for slug format and reserved names. Two slugs that collapse
       // to one table are caught by defineConfig for code-first components and
       // by the unique index on dynamic_components.table_name here.
-      assertValidComponentConfig({
+      assertValidFieldGroupConfig({
         slug: args.slug,
         label: { singular: args.label },
         fields: fieldsTyped,

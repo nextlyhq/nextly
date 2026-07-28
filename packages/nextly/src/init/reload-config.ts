@@ -49,7 +49,7 @@ import { mergeRegisteredCollectionsSafely } from "../domains/schema/pipeline/reg
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
-  DesiredComponent,
+  DesiredFieldGroup,
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
@@ -936,12 +936,12 @@ export async function reloadNextlyConfig(opts?: {
   }
 
   // Per-component diff + safety classification — mirrors the singles loop.
-  const desiredComponents: Record<string, DesiredComponent> = {};
+  const desiredComponents: Record<string, DesiredFieldGroup> = {};
   for (const target of componentTargets) {
-    const entry: DesiredComponent = {
+    const entry: DesiredFieldGroup = {
       slug: target.slug,
       tableName: target.tableName,
-      fields: target.fields as DesiredComponent["fields"],
+      fields: target.fields as DesiredFieldGroup["fields"],
       localized: target.localized === true,
     };
     try {
@@ -1091,7 +1091,7 @@ export async function reloadNextlyConfig(opts?: {
         desiredComponents[c.slug] = {
           slug: c.slug,
           tableName: c.tableName,
-          fields: (c.fields ?? []) as DesiredComponent["fields"],
+          fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
         };
       }
     }

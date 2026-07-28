@@ -33,7 +33,7 @@ import type {
   SecurityConfig,
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
-import type { ComponentConfig } from "../components/config/types";
+import type { FieldGroupConfig } from "../components/config/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
@@ -235,7 +235,7 @@ export interface NextlyServiceConfig {
   singles?: SingleConfig[];
 
   /** Component (reusable field group) configurations. */
-  components?: ComponentConfig[];
+  components?: FieldGroupConfig[];
 
   /** User model extension configuration. */
   users?: UserConfig;
@@ -1748,7 +1748,7 @@ async function syncCodeFirstComponents(
       description: comp.description,
       admin: comp.admin,
       configPath: `${STORAGE_FORMAT.configPathDir}/${comp.slug}.ts`,
-      // i18n: forward the localized flag from defineComponent so the registry persists
+      // i18n: forward the localized flag from defineFieldGroup so the registry persists
       // it and the companion is provisioned for embedded per-language values.
       localized: (comp as { localized?: boolean }).localized === true,
     }));

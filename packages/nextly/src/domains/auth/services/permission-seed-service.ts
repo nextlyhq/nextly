@@ -901,11 +901,11 @@ export class PermissionSeedService extends BaseService {
   }
 
   private async getAllComponentSlugs(): Promise<string[]> {
-    if (!this.tables?.dynamicComponents) return [];
+    if (!this.tables?.dynamicFieldGroups) return [];
 
     const rows = await this.db
-      .select({ slug: this.tables.dynamicComponents.slug })
-      .from(this.tables.dynamicComponents);
+      .select({ slug: this.tables.dynamicFieldGroups.slug })
+      .from(this.tables.dynamicFieldGroups);
 
     return rows.map((row: { slug: string }) => String(row.slug));
   }

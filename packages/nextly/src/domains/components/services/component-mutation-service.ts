@@ -7,14 +7,14 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
+import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import { toDbError } from "../../../database/errors";
 // PR 4 migration: ServiceError throws replaced with NextlyError. The legacy
 // `ServiceError.fromDatabaseError` boundary maps to `NextlyError.fromDatabaseError`,
 // and the `instanceof ServiceError` rethrow guards become `NextlyError.is(...)`
 // so any error type travelling through the shim is preserved.
 import { NextlyError } from "../../../errors";
-import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-components/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
@@ -71,7 +71,7 @@ export interface DeleteComponentDataParams {
   fields: FieldConfig[];
 }
 
-function isComponentField(field: FieldConfig): field is ComponentFieldConfig {
+function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return field.type === STORAGE_FORMAT.fieldType;
 }
 
@@ -98,7 +98,7 @@ export class ComponentMutationService extends BaseService {
    * the companion via {@link upsertLocalizedComponent}.
    */
   private splitLocalizedComponent(
-    meta: DynamicComponentRecord,
+    meta: DynamicFieldGroupRecord,
     data: Record<string, unknown>
   ): {
     schema: ReturnType<typeof buildCompanionSchema>;
@@ -209,7 +209,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields, data, locale } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       const fieldName = field.name;
       const fieldData = data[fieldName];
@@ -267,7 +267,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields, data, locale } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       const fieldName = field.name;
       const fieldData = data[fieldName];
@@ -325,7 +325,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       await this.deleteFieldComponentData(
         parentId,
@@ -343,7 +343,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       await this.deleteFieldComponentDataInTx(
         tx,
@@ -775,7 +775,7 @@ export class ComponentMutationService extends BaseService {
     parentId: string;
     parentTable: string;
     fieldName: string;
-    field: ComponentFieldConfig;
+    field: FieldGroupFieldConfig;
     data: unknown;
     locale?: string;
   }): Promise<void> {
@@ -793,7 +793,7 @@ export class ComponentMutationService extends BaseService {
 
     try {
       const existingByTable = new Map<string, ComponentRow[]>();
-      const metaCache = new Map<string, DynamicComponentRecord>();
+      const metaCache = new Map<string, DynamicFieldGroupRecord>();
 
       for (const slug of allowedSlugs) {
         try {
@@ -946,7 +946,7 @@ export class ComponentMutationService extends BaseService {
       parentId: string;
       parentTable: string;
       fieldName: string;
-      field: ComponentFieldConfig;
+      field: FieldGroupFieldConfig;
       data: unknown;
       locale?: string;
     }
@@ -965,7 +965,7 @@ export class ComponentMutationService extends BaseService {
 
     try {
       const existingByTable = new Map<string, ComponentRow[]>();
-      const metaCache = new Map<string, DynamicComponentRecord>();
+      const metaCache = new Map<string, DynamicFieldGroupRecord>();
 
       for (const slug of allowedSlugs) {
         try {
@@ -1094,7 +1094,7 @@ export class ComponentMutationService extends BaseService {
     parentId: string,
     parentTable: string,
     fieldName: string,
-    field: ComponentFieldConfig
+    field: FieldGroupFieldConfig
   ): Promise<void> {
     const slugs = this.getComponentSlugs(field);
 
@@ -1124,7 +1124,7 @@ export class ComponentMutationService extends BaseService {
     parentId: string,
     parentTable: string,
     fieldName: string,
-    field: ComponentFieldConfig
+    field: FieldGroupFieldConfig
   ): Promise<void> {
     const slugs = this.getComponentSlugs(field);
 
@@ -1358,7 +1358,7 @@ export class ComponentMutationService extends BaseService {
     }
   }
 
-  private getComponentSlugs(field: ComponentFieldConfig): string[] {
+  private getComponentSlugs(field: FieldGroupFieldConfig): string[] {
     if (field.components && field.components.length > 0) {
       return field.components;
     }

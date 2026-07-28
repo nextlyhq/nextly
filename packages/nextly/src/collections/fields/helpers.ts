@@ -55,7 +55,7 @@ import type {
   BlocksFieldConfig,
   JSONFieldConfig,
   // Component field types
-  ComponentFieldConfig,
+  FieldGroupFieldConfig,
   // Chips field types
   ChipsFieldConfig,
 } from "./types";
@@ -650,17 +650,17 @@ export const json = (
  * @example
  * ```typescript
  * // Single component (one specific type)
- * component({ name: 'seo', component: 'seo' })
+ * fieldGroup({ name: 'seo', component: 'seo' })
  *
  * // Multi-component / dynamic zone (editor picks type)
- * component({
+ * fieldGroup({
  *   name: 'layout',
  *   components: ['hero', 'cta', 'content'],
  *   repeatable: true,
  * })
  *
  * // Repeatable single component
- * component({
+ * fieldGroup({
  *   name: 'features',
  *   component: 'feature-card',
  *   repeatable: true,
@@ -669,9 +669,9 @@ export const json = (
  * })
  * ```
  */
-export const component = (
-  config: Omit<ComponentFieldConfig, "type">
-): ComponentFieldConfig => ({
+export const fieldGroup = (
+  config: Omit<FieldGroupFieldConfig, "type">
+): FieldGroupFieldConfig => ({
   ...config,
   type: STORAGE_FORMAT.fieldType,
 });

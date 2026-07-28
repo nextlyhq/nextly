@@ -293,7 +293,7 @@ export async function syncComponents(
     serviceLogger
   );
 
-  // Transform ComponentConfig[] to CodeFirstComponentConfig[]
+  // Transform FieldGroupConfig[] to CodeFirstComponentConfig[]
   const codeFirstConfigs: CodeFirstComponentConfig[] = config.components.map(
     component => ({
       slug: component.slug,

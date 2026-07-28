@@ -10,8 +10,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  component,
-  defineComponent,
+  fieldGroup,
+  defineFieldGroup,
   defineSingle,
   password,
   text,
@@ -515,7 +515,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero",
           localized: false,
           fields: [text({ name: "heading" })],
@@ -527,7 +527,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           localized: true,
           fields: [
             text({ name: "title", localized: true }),
-            component({ name: "hero", component: "hero" }),
+            fieldGroup({ name: "hero", component: "hero" }),
           ],
         }),
       ],
@@ -553,7 +553,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -563,7 +563,7 @@ describe("webhook outbox capture — singles (integration)", () => {
         defineSingle({
           slug: "preferences",
           localized: true,
-          fields: [component({ name: "hero", component: "hero" })],
+          fields: [fieldGroup({ name: "hero", component: "hero" })],
         }),
       ],
     });
@@ -589,7 +589,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero_localized",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -600,7 +600,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           slug: "preferences",
           localized: true,
           fields: [
-            component({
+            fieldGroup({
               name: "blocks",
               components: ["hero_localized"],
               repeatable: true,
@@ -630,7 +630,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero_localized",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -641,7 +641,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           slug: "preferences",
           localized: true,
           fields: [
-            component({
+            fieldGroup({
               name: "blocks",
               component: "hero_localized",
               repeatable: true,
@@ -671,7 +671,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "hero_mixed",
           localized: true,
           fields: [
@@ -684,7 +684,7 @@ describe("webhook outbox capture — singles (integration)", () => {
         defineSingle({
           slug: "preferences",
           localized: true,
-          fields: [component({ name: "hero", component: "hero_mixed" })],
+          fields: [fieldGroup({ name: "hero", component: "hero_mixed" })],
         }),
       ],
     });

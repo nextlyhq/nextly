@@ -9,9 +9,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  component,
+  fieldGroup,
   defineCollection,
-  defineComponent,
+  defineFieldGroup,
   password,
   text,
 } from "../../../config";
@@ -236,7 +236,7 @@ describe("webhook outbox capture (integration)", () => {
     // this value ships in cleartext.
     current = await createTestNextly({
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "profile",
           fields: [
             text({ name: "heading" }),
@@ -249,7 +249,7 @@ describe("webhook outbox capture (integration)", () => {
           slug: "pages",
           fields: [
             text({ name: "title" }),
-            component({ name: "profile", component: "profile" }),
+            fieldGroup({ name: "profile", component: "profile" }),
           ],
         }),
       ],
@@ -474,7 +474,7 @@ describe("webhook outbox capture (integration)", () => {
     // there too — otherwise a delete would leak what a create never did.
     current = await createTestNextly({
       components: [
-        defineComponent({
+        defineFieldGroup({
           slug: "profile",
           fields: [
             text({ name: "heading" }),
@@ -487,7 +487,7 @@ describe("webhook outbox capture (integration)", () => {
           slug: "pages",
           fields: [
             text({ name: "title" }),
-            component({ name: "profile", component: "profile" }),
+            fieldGroup({ name: "profile", component: "profile" }),
           ],
         }),
       ],

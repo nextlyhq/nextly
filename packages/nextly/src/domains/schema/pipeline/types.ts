@@ -16,7 +16,7 @@ import type {
 export interface DesiredSchema {
   collections: Record<string, DesiredCollection>;
   singles: Record<string, DesiredSingle>;
-  components: Record<string, DesiredComponent>;
+  components: Record<string, DesiredFieldGroup>;
 }
 
 export interface DesiredCollection {
@@ -65,7 +65,7 @@ export interface DesiredSingle {
   locked?: boolean;
 }
 
-export interface DesiredComponent {
+export interface DesiredFieldGroup {
   slug: string;
   tableName: string;
   fields: FieldConfig[];

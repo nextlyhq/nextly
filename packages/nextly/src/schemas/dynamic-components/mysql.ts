@@ -20,13 +20,13 @@
  * @example
  * ```typescript
  * import {
- *   dynamicComponentsMysql,
- *   type DynamicComponentMysql,
- *   type DynamicComponentInsertMysql,
+ *   dynamicFieldGroupsMysql,
+ *   type DynamicFieldGroupMysql,
+ *   type DynamicFieldGroupInsertMysql,
  * } from '@nextly/schemas/dynamic-components/mysql';
  *
  * // Insert a new Component
- * const newComponent = await db.insert(dynamicComponentsMysql).values({
+ * const newComponent = await db.insert(dynamicFieldGroupsMysql).values({
  *   slug: 'seo',
  *   label: 'SEO Metadata',
  *   tableName: 'comp_seo',
@@ -49,10 +49,10 @@ import {
 } from "drizzle-orm/mysql-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { ComponentAdminOptions } from "../../components/config/types";
+import type { FieldGroupAdminOptions } from "../../components/config/types";
 import { STORAGE_FORMAT } from "../storage-format";
 
-import type { ComponentSource, ComponentMigrationStatus } from "./types";
+import type { FieldGroupSource, FieldGroupMigrationStatus } from "./types";
 
 // ============================================================
 // Dynamic Components Table (MySQL)
@@ -67,7 +67,7 @@ import type { ComponentSource, ComponentMigrationStatus } from "./types";
  * - Migration status (synced, pending, generated, applied)
  * - Schema versioning and change detection
  */
-export const dynamicComponentsMysql = mysqlTable(
+export const dynamicFieldGroupsMysql = mysqlTable(
   STORAGE_FORMAT.registryTable,
   {
     // --------------------------------------------------------
@@ -118,7 +118,7 @@ export const dynamicComponentsMysql = mysqlTable(
      * Admin UI configuration options.
      * Controls category grouping, icon, visibility, etc.
      */
-    admin: json("admin").$type<ComponentAdminOptions>(),
+    admin: json("admin").$type<FieldGroupAdminOptions>(),
 
     // --------------------------------------------------------
     // Unified Model Fields
@@ -126,11 +126,11 @@ export const dynamicComponentsMysql = mysqlTable(
 
     /**
      * Where the Component was defined.
-     * - 'code': defineComponent() in a config file
+     * - 'code': defineFieldGroup() in a config file
      * - 'ui': Visual Component Builder
      */
     source: varchar("source", { length: 255 })
-      .$type<ComponentSource>()
+      .$type<FieldGroupSource>()
       .default("ui")
       .notNull(),
 
@@ -170,7 +170,7 @@ export const dynamicComponentsMysql = mysqlTable(
      * Current migration status.
      */
     migrationStatus: varchar("migration_status", { length: 20 })
-      .$type<ComponentMigrationStatus>()
+      .$type<FieldGroupMigrationStatus>()
       .default("pending")
       .notNull(),
 
@@ -227,10 +227,11 @@ export const dynamicComponentsMysql = mysqlTable(
 /**
  * MySQL-specific select type for dynamic Components.
  */
-export type DynamicComponentMysql = typeof dynamicComponentsMysql.$inferSelect;
+export type DynamicFieldGroupMysql =
+  typeof dynamicFieldGroupsMysql.$inferSelect;
 
 /**
  * MySQL-specific insert type for dynamic Components.
  */
-export type DynamicComponentInsertMysql =
-  typeof dynamicComponentsMysql.$inferInsert;
+export type DynamicFieldGroupInsertMysql =
+  typeof dynamicFieldGroupsMysql.$inferInsert;

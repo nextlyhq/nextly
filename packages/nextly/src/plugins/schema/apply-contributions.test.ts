@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../../errors/nextly-error";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
-import type { ComponentConfig } from "../../components/config/types";
+import type { FieldGroupConfig } from "../../components/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { SingleConfig } from "../../singles/config/types";
 import type { PluginContributions } from "../contributions";
@@ -21,8 +21,8 @@ const coll = (slug: string): CollectionConfig =>
   ({ slug, fields: [] }) as unknown as CollectionConfig;
 const single = (slug: string): SingleConfig =>
   ({ slug, fields: [] }) as unknown as SingleConfig;
-const comp = (slug: string): ComponentConfig =>
-  ({ slug, fields: [] }) as unknown as ComponentConfig;
+const comp = (slug: string): FieldGroupConfig =>
+  ({ slug, fields: [] }) as unknown as FieldGroupConfig;
 
 const cfg = (partial: Partial<NextlyServiceConfig>): NextlyServiceConfig =>
   ({ imageProcessor: {}, ...partial }) as unknown as NextlyServiceConfig;

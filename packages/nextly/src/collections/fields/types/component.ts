@@ -38,10 +38,10 @@ import type { BaseFieldConfig } from "./base";
  *
  * @example Single component mode
  * ```typescript
- * import { component } from 'nextly';
+ * import { fieldGroup } from 'nextly';
  *
  * // Embed one specific component type
- * component({
+ * fieldGroup({
  *   name: 'seo',
  *   component: 'seo',
  * })
@@ -49,10 +49,10 @@ import type { BaseFieldConfig } from "./base";
  *
  * @example Multi-component mode (dynamic zone)
  * ```typescript
- * import { component } from 'nextly';
+ * import { fieldGroup } from 'nextly';
  *
  * // Allow editors to pick from multiple component types
- * component({
+ * fieldGroup({
  *   name: 'layout',
  *   components: ['hero', 'cta', 'content'],
  *   repeatable: true,
@@ -61,10 +61,10 @@ import type { BaseFieldConfig } from "./base";
  *
  * @example Repeatable single component
  * ```typescript
- * import { component } from 'nextly';
+ * import { fieldGroup } from 'nextly';
  *
  * // Array of the same component type
- * component({
+ * fieldGroup({
  *   name: 'features',
  *   component: 'feature-card',
  *   repeatable: true,
@@ -73,7 +73,7 @@ import type { BaseFieldConfig } from "./base";
  * })
  * ```
  */
-export interface ComponentFieldConfig extends BaseFieldConfig {
+export interface FieldGroupFieldConfig extends BaseFieldConfig {
   type: typeof STORAGE_FORMAT.fieldType;
 
   /**

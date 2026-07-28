@@ -20,13 +20,13 @@
  * @example
  * ```typescript
  * import {
- *   dynamicComponentsSqlite,
- *   type DynamicComponentSqlite,
- *   type DynamicComponentInsertSqlite,
+ *   dynamicFieldGroupsSqlite,
+ *   type DynamicFieldGroupSqlite,
+ *   type DynamicFieldGroupInsertSqlite,
  * } from '@nextly/schemas/dynamic-components/sqlite';
  *
  * // Insert a new Component
- * const newComponent = await db.insert(dynamicComponentsSqlite).values({
+ * const newComponent = await db.insert(dynamicFieldGroupsSqlite).values({
  *   slug: 'seo',
  *   label: 'SEO Metadata',
  *   tableName: 'comp_seo',
@@ -40,10 +40,10 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { ComponentAdminOptions } from "../../components/config/types";
+import type { FieldGroupAdminOptions } from "../../components/config/types";
 import { STORAGE_FORMAT } from "../storage-format";
 
-import type { ComponentSource, ComponentMigrationStatus } from "./types";
+import type { FieldGroupSource, FieldGroupMigrationStatus } from "./types";
 
 // ============================================================
 // Dynamic Components Table (SQLite)
@@ -58,7 +58,7 @@ import type { ComponentSource, ComponentMigrationStatus } from "./types";
  * - Migration status (synced, pending, generated, applied)
  * - Schema versioning and change detection
  */
-export const dynamicComponentsSqlite = sqliteTable(
+export const dynamicFieldGroupsSqlite = sqliteTable(
   STORAGE_FORMAT.registryTable,
   {
     // --------------------------------------------------------
@@ -109,7 +109,7 @@ export const dynamicComponentsSqlite = sqliteTable(
      * Admin UI configuration options.
      * Controls category grouping, icon, visibility, etc.
      */
-    admin: text("admin", { mode: "json" }).$type<ComponentAdminOptions>(),
+    admin: text("admin", { mode: "json" }).$type<FieldGroupAdminOptions>(),
 
     // --------------------------------------------------------
     // Unified Model Fields
@@ -117,10 +117,10 @@ export const dynamicComponentsSqlite = sqliteTable(
 
     /**
      * Where the Component was defined.
-     * - 'code': defineComponent() in a config file
+     * - 'code': defineFieldGroup() in a config file
      * - 'ui': Visual Component Builder
      */
-    source: text("source").$type<ComponentSource>().default("ui").notNull(),
+    source: text("source").$type<FieldGroupSource>().default("ui").notNull(),
 
     /**
      * If true, the Component cannot be modified via the Admin UI.
@@ -160,7 +160,7 @@ export const dynamicComponentsSqlite = sqliteTable(
      * Current migration status.
      */
     migrationStatus: text("migration_status")
-      .$type<ComponentMigrationStatus>()
+      .$type<FieldGroupMigrationStatus>()
       .default("pending")
       .notNull(),
 
@@ -217,11 +217,11 @@ export const dynamicComponentsSqlite = sqliteTable(
 /**
  * SQLite-specific select type for dynamic Components.
  */
-export type DynamicComponentSqlite =
-  typeof dynamicComponentsSqlite.$inferSelect;
+export type DynamicFieldGroupSqlite =
+  typeof dynamicFieldGroupsSqlite.$inferSelect;
 
 /**
  * SQLite-specific insert type for dynamic Components.
  */
-export type DynamicComponentInsertSqlite =
-  typeof dynamicComponentsSqlite.$inferInsert;
+export type DynamicFieldGroupInsertSqlite =
+  typeof dynamicFieldGroupsSqlite.$inferInsert;

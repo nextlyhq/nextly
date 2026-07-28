@@ -1,8 +1,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
-import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
+import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
+import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-components/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
@@ -136,7 +136,7 @@ export interface PopulateComponentDataManyParams {
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
 // import into collections just for a type predicate.
-function isComponentField(field: FieldConfig): field is ComponentFieldConfig {
+function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return field.type === STORAGE_FORMAT.fieldType;
 }
 
@@ -170,7 +170,7 @@ export class ComponentQueryService extends BaseService {
    * and a pooled read would not see them.
    */
   private async overlayLocalizedComponent(
-    meta: DynamicComponentRecord,
+    meta: DynamicFieldGroupRecord,
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: string | false,
@@ -254,7 +254,7 @@ export class ComponentQueryService extends BaseService {
    * values are decoded; otherwise the field holds a single resolved value.
    */
   private decodeJsonLocalizedValues(
-    meta: DynamicComponentRecord,
+    meta: DynamicFieldGroupRecord,
     localizedFields: { name: string; column: string }[],
     dataArray: Record<string, unknown>[],
     allLocales: boolean
@@ -349,7 +349,7 @@ export class ComponentQueryService extends BaseService {
     const result = { ...entry };
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
       const fieldName = field.name;
 
       if (!this.shouldPopulateField(fieldName, select)) {
@@ -441,9 +441,9 @@ export class ComponentQueryService extends BaseService {
       .filter((id): id is string => Boolean(id));
     if (entryIds.length === 0) return entries;
 
-    const componentFields: ComponentFieldConfig[] = [];
+    const componentFields: FieldGroupFieldConfig[] = [];
     for (const field of fields) {
-      if (isComponentField(field)) {
+      if (isFieldGroupField(field)) {
         if (!this.shouldPopulateField(field.name, select)) {
           continue;
         }
@@ -633,7 +633,7 @@ export class ComponentQueryService extends BaseService {
     parentId: string,
     parentTable: string,
     fieldName: string,
-    field: ComponentFieldConfig,
+    field: FieldGroupFieldConfig,
     depth: number,
     currentDepth: number,
     locale?: string,
@@ -824,7 +824,7 @@ export class ComponentQueryService extends BaseService {
     parentIds: string[],
     parentTable: string,
     fieldName: string,
-    field: ComponentFieldConfig,
+    field: FieldGroupFieldConfig,
     depth: number,
     currentDepth: number,
     locale?: string,
@@ -1044,7 +1044,7 @@ export class ComponentQueryService extends BaseService {
   }
 
   private getPopulateDefaultValue(
-    field: ComponentFieldConfig
+    field: FieldGroupFieldConfig
   ): null | unknown[] {
     if (field.repeatable || (field.components && field.components.length > 0)) {
       return [];
