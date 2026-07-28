@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Component table names now resolve through a single canonical path, so a custom dbName is honored verbatim everywhere instead of being force-prefixed in the registry.
+Component tables are always derived from the component slug, resolved through a single canonical path. A custom `dbName` is no longer accepted on `defineComponent` or `components.create()`: it could name storage the component does not own, and whether two spellings refer to one table depends on database server configuration rather than anything the config can state. Components that relied on it should drop the option and let the table name derive from the slug.
