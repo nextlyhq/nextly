@@ -5,6 +5,8 @@
 "@nextlyhq/adapter-sqlite": patch
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/plugin-seo": patch
 "create-nextly-app": patch
 "@nextlyhq/eslint-config": patch
 "nextly": patch
