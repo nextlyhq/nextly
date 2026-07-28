@@ -17,7 +17,6 @@ import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
-import { pluginFieldOptionIssues } from "../../shared/lib/plugin-field-options";
 
 /**
  * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
@@ -278,18 +277,6 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       fields: z.array(uiSchemaFieldSchema).optional(),
     })
     .superRefine((f, ctx) => {
-      // A plugin type's own declaration checks. The Builder writes the same
-      // field a code-first config declares, so both authoring paths refuse the
-      // same declaration rather than one storing what the other rejects.
-      for (const issue of pluginFieldOptionIssues(f)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: issue.message,
-          // Zod paths are segments, and a returned path names an option
-          // relative to the field, so it is split rather than concatenated.
-          path: issue.path ? issue.path.split(".") : [],
-        });
-      }
       if (
         (f.type === "select" || f.type === "radio") &&
         (!f.options || f.options.length === 0)

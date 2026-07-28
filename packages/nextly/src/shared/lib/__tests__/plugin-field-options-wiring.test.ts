@@ -16,6 +16,8 @@ import {
   clearFieldTypes,
   registerFieldType,
 } from "../../../domains/schema/field-types/field-type-registry";
+import { assertValidFieldsPayload } from "../../../api/fields-payload";
+import { NextlyError } from "../../../errors/nextly-error";
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
 import { validateSingleConfig } from "../../../singles/config/validate-single";
 import type { SingleConfig } from "../../../singles/config/types";
@@ -58,6 +60,22 @@ function registerDocument(): void {
       return true;
     },
   });
+}
+
+/** The `{path, message}` issues a validation refusal carries. */
+function issuesOfPayload(
+  fields: unknown
+): Array<{ path: string; code: string; message: string }> {
+  try {
+    assertValidFieldsPayload(fields);
+  } catch (error) {
+    if (!(error instanceof NextlyError)) throw error;
+    const data = error.publicData as
+      | { errors?: Array<{ path: string; code: string; message: string }> }
+      | undefined;
+    return data?.errors ?? [];
+  }
+  return [];
 }
 
 const badField = {
@@ -126,44 +144,35 @@ describe("declaration checks reach every authoring path", () => {
     expect(result.errors.map(e => e.path)).toContain("fields[0].policy.kinds");
   });
 
-  it("refuses a Schema Builder save whose declared option is wrong", () => {
+  it("refuses a Schema Builder write, reading the payload that gets stored", () => {
     registerDocument();
 
-    // `blocks` is one of the option keys the manifest declares, so it is the
-    // one shape a plugin type's check can currently see on this path.
-    const parsed = uiSchemaFieldSchema.safeParse({
-      name: "body",
-      type: "document",
-      blocks: { kinds: [] },
+    // The API validates a parsed copy but persists the ORIGINAL, so a plugin
+    // type's options reach the database even though the manifest schema strips
+    // them. Checking the parsed copy would approve a field with its options
+    // removed and then store the ones it never saw.
+    expect(issuesOfPayload([badField])).toContainEqual({
+      path: "0.policy.kinds",
+      code: "FIELD_TYPE_INVALID",
+      message: "policy.kinds must name at least one kind.",
     });
+  });
 
-    expect(parsed.success).toBe(false);
-    if (parsed.success) return;
-    // Zod reports path segments rather than a dotted string, so a returned
-    // option path has to survive the split to land on the right admin control.
-    // The message matters as much as the path: the manifest has its own
-    // `blocks.kinds` rule reporting at exactly this path, so asserting the path
-    // alone would pass with the plugin hook removed entirely.
-    expect(parsed.error.issues).toContainEqual(
-      expect.objectContaining({
-        path: ["blocks", "kinds"],
-        message: "blocks.kinds must name at least one kind.",
-      })
+  it("locates the issue on a field nested in a repeater", () => {
+    registerDocument();
+
+    expect(
+      issuesOfPayload([{ name: "rows", type: "repeater", fields: [badField] }])
+    ).toContainEqual(
+      expect.objectContaining({ path: "0.fields.0.policy.kinds" })
     );
   });
 
-  it("cannot yet see an option key the manifest does not declare", () => {
+  it("strips the option from the manifest copy, which is why the check reads the original", () => {
     registerDocument();
 
-    // The manifest object strips unknown keys, and it does so deliberately:
-    // an undeclared `blocks` would be dropped and persist a field accepting
-    // everything the submitted schema meant to exclude. The cost is that a
-    // plugin type's OWN options never reach the stored manifest either, so
-    // there is nothing for its check to read here.
-    //
-    // This is why the same declaration is refused code-first and accepted by
-    // the Builder. Closing it needs a generic options bag in the manifest,
-    // which is a change to the persisted schema format.
+    // Pins the stripping this arrangement exists because of: the parsed field
+    // has no `policy` at all, so a check run against it could never fire.
     const parsed = uiSchemaFieldSchema.safeParse(badField);
 
     expect(parsed.success).toBe(true);
@@ -185,14 +194,10 @@ describe("declaration checks reach every authoring path", () => {
         fields: [good],
       } as unknown as CollectionConfig).valid
     ).toBe(true);
-    // Through a declared key, so this exercises the check rather than passing
-    // because the option was stripped before it ran.
     expect(
-      uiSchemaFieldSchema.safeParse({
-        name: "body",
-        type: "document",
-        blocks: { kinds: ["page"] },
-      }).success
-    ).toBe(true);
+      issuesOfPayload([
+        { name: "body", type: "document", policy: { kinds: ["page"] } },
+      ])
+    ).toEqual([]);
   });
 });

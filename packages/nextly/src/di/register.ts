@@ -133,6 +133,7 @@ import type { Logger } from "../services/shared";
 import type { UserExtSchemaService } from "../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { registerFieldFunctions } from "../shared/lib/field-level-registry";
 import type { AdminConfig, AuthConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
@@ -426,6 +427,17 @@ export async function registerServices(
       registerFieldType(withoutDisabledBehavior(fieldType, fieldTypePlugin));
     }
   }
+
+  // Now that the registry is populated, each plugin field type gets to check the
+  // declarations that use it. A plugin's own contributions are raw configs — its
+  // type is not registered when its module is evaluated, so they cannot go
+  // through `defineCollection` — and nothing else on this path validates them.
+  //
+  // Only the type's own rules run, never the general config validators: those
+  // would newly refuse pre-existing declarations that boot fine today, whereas a
+  // rule that can fire here has to have been written against a field type in
+  // this same process.
+  assertPluginFieldDeclarations(transformedConfig);
 
   const {
     adapter: providedAdapter,

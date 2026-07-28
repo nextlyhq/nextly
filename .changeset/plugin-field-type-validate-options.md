@@ -22,7 +22,7 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Plugin-contributed field types can now state rules about their own declaration, not just about stored values. `PluginFieldType.validateOptions(field)` runs when a schema is registered — for code-first collection, single, and component configs, and for Schema Builder saves — and returns `true`, a message, or a list of issues naming the options at fault.
+Plugin-contributed field types can now state rules about their own declaration, not just about stored values. `PluginFieldType.validateOptions(field)` runs on every path a declaration reaches storage by — the `define*` calls, Schema Builder writes, `nextly build`, and boot for a plugin's own contributions — and returns `true`, a message, or a list of issues naming the options at fault. It reads the declaration as written, which on the Builder path means the submitted payload rather than the parsed copy, since that is what gets persisted.
 
 Without it a custom type's options were accepted unread, so a declaration that no value could ever satisfy was only discovered per write, which reports a schema defect to the writer who cannot fix it. A disabled plugin's declaration checks no longer run, matching its `validate`.
 

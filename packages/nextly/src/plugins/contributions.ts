@@ -205,12 +205,21 @@ export interface PluginFieldType {
    * writer cannot fix it, and it fails every write until whoever declared the
    * field notices.
    *
-   * Runs wherever a config is validated: `defineCollection`/`defineSingle`/
-   * `defineComponent`, and a Schema Builder save before it is stored. Note that
-   * a define call validates when the config module is evaluated, so the type
-   * must already be registered by then — the same condition the field type
-   * itself is under, since an unregistered type is refused outright. Boot does
-   * not re-validate configs after registering field types.
+   * Runs on every path a declaration reaches storage by: the `define*` calls,
+   * a Schema Builder write, `nextly build`, and boot — where a plugin's own raw
+   * contributions are checked once the registry is populated, since they cannot
+   * go through a `define*` call that would reject their not-yet-registered type.
+   *
+   * Checks the declaration as WRITTEN. On the Builder path that means the
+   * submitted payload rather than the parsed copy, because the manifest schema
+   * drops keys it does not declare while the write persists the original — so
+   * the options a type reads are present in what is stored and absent from what
+   * was parsed.
+   *
+   * Runs for fields on collections, singles and components, including nested
+   * ones. A type offered only on the `users`, `forms`, or `blocks` surface does
+   * NOT get its declarations checked: those surfaces have their own config
+   * validators, which do not consult this registry.
    *
    * Synchronous on purpose: a declaration is checked against itself, and a
    * config-time rule that needed I/O would make startup depend on something

@@ -251,19 +251,29 @@ not a crash. A returned `code` is **not** carried: config errors report through
 closed, public code unions, so the canonical member is used and your message
 carries the detail.
 
-**Where it runs.** Wherever a config is validated — `defineCollection`,
-`defineSingle`, `defineComponent`, and Schema Builder saves. Two caveats worth
-knowing:
+**Where it runs.** Every path a declaration reaches storage by:
 
-- A `define*` call validates when its module is evaluated, so your type must
-  already be registered by then. This is not a new constraint: an unregistered
-  type is refused outright as an unknown field type. Boot does not re-validate
-  configs after registering field types, so a config that was never validated is
-  not validated later either.
-- The stored manifest declares its option keys and strips the rest, so a plugin
-  type's own options do not currently survive a Schema Builder save and there is
-  nothing there for the check to read. Options the manifest already declares are
-  checked normally.
+| Path | When |
+|---|---|
+| `defineCollection` / `defineSingle` / `defineComponent` | as the config module is evaluated |
+| Schema Builder writes | before the payload is stored |
+| `nextly build` | over collections, singles and components |
+| boot | over a plugin's own raw contributions, once the registry is populated |
+
+The boot pass exists because a plugin cannot route its own contributions through
+a `define*` call — its type is not registered when its module is evaluated, so
+the call would reject the type outright. Only the field types' own rules run
+there, never the general config validators, so it cannot newly refuse a schema
+that starts fine today.
+
+Your check always sees the declaration **as written**. On the Builder path that
+is the submitted payload, not the parsed copy: the manifest schema drops keys it
+does not declare, while the write persists the original, so your options are
+present in what gets stored and absent from what was parsed.
+
+Fields nested in a `repeater` or `group` are covered. A type offered only on the
+`users`, `forms`, or `blocks` surface is **not**: those surfaces have their own
+config validators, which do not consult this registry.
 
 ## Secrets
 

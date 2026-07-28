@@ -10,12 +10,15 @@
  * write would silently diverge the git-facing schema from the database.
  *
  * Validation-only by design: the original payload is persisted, not the
- * parsed copy, so builder-specific passthrough keys survive untouched.
+ * parsed copy, so builder-specific passthrough keys survive untouched. That is
+ * also why a plugin field type's own declaration checks run here against the
+ * unparsed payload: the keys they read are the ones the parsed copy drops.
  */
 import { z } from "zod";
 
 import { NextlyError } from "../errors/nextly-error";
 import { uiSchemaFieldSchema } from "../schemas/_zod/ui-schema";
+import { pluginFieldOptionIssues } from "../shared/lib/plugin-field-options";
 
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -50,6 +53,45 @@ const fieldsArraySchema = z
   });
 
 /**
+ * Run each plugin field type's own declaration checks over the payload.
+ *
+ * Deliberately against the ORIGINAL array rather than the parsed copy. The
+ * manifest schema strips keys it does not declare, and a plugin type's options
+ * are exactly that — but this module persists what it was given, not what it
+ * parsed, so those options reach the database. Validating the parsed copy would
+ * check a field with the options already removed and store the ones it never
+ * saw.
+ */
+function assertValidPluginFieldOptions(fields: unknown): void {
+  if (!Array.isArray(fields)) return;
+  const errors: Array<{ path: string; code: string; message: string }> = [];
+
+  const walk = (list: unknown[], basePath: string): void => {
+    list.forEach((field, index) => {
+      if (field === null || typeof field !== "object") return;
+      const at = basePath ? `${basePath}.${index}` : String(index);
+      for (const issue of pluginFieldOptionIssues(field)) {
+        errors.push({
+          path: issue.path ? `${at}.${issue.path}` : at,
+          code: "FIELD_TYPE_INVALID",
+          message: issue.message,
+        });
+      }
+      // repeater/group carry their own fields, and a plugin type nested in one
+      // is stored the same way as a top-level one.
+      const nested = (field as { fields?: unknown }).fields;
+      if (Array.isArray(nested)) walk(nested, `${at}.fields`);
+    });
+  };
+
+  walk(fields, "");
+
+  if (errors.length > 0) {
+    throw NextlyError.validation({ errors });
+  }
+}
+
+/**
  * Throw `NextlyError.validation` (with per-field paths) unless `fields`
  * satisfies the manifest field rules.
  *
@@ -66,6 +108,7 @@ export function assertValidFieldsPayload(
   if (!parsed.success) {
     throw nextlyValidationFromZod(parsed.error);
   }
+  assertValidPluginFieldOptions(fields);
   if (opts.kind === "collection" && Array.isArray(fields)) {
     fields.forEach((field, index) => {
       const name = (field as { name?: unknown } | null)?.name;
