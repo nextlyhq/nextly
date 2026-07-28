@@ -140,8 +140,17 @@ describe("AdvancedTab -- cache revalidation", () => {
     const sw = screen.getByRole("switch", { name: /cache revalidation/i });
     expect(sw.getAttribute("data-state")).toBe("unchecked");
   });
+});
 
-  it("renders webhook recording checked by default because recording is on", () => {
+describe("AdvancedTab -- webhook recording", () => {
+  it("renders nothing when the kind does not enable it", () => {
+    render(<Controlled fields={["status"]} />);
+    expect(
+      screen.queryByRole("switch", { name: /webhook recording/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders checked by default because recording is on", () => {
     // Like revalidation, an absent value means ON. Showing it unchecked would
     // tell an operator their content is already being kept out of the outbox
     // when it is in fact being delivered.

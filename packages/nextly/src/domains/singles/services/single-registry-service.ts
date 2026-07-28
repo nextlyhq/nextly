@@ -51,7 +51,10 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { clearWebhookRecording } from "../../webhooks/recording-policy";
+import {
+  clearWebhookRecording,
+  setWebhookRecording,
+} from "../../webhooks/recording-policy";
 
 import { resolveSingleTableName } from "./resolve-single-table-name";
 
@@ -272,6 +275,20 @@ export class SingleRegistryService extends BaseRegistryService<
         { returning: "*" }
       );
 
+      // Publish the decision into the live policy as well as the column, for
+      // the same reason as collections: the boot-time read only runs at
+      // startup, so a Builder-created single would otherwise keep recording
+      // until the next restart. Code-first singles are already published from
+      // their config, which stays the source of truth.
+      if (data.source !== "code") {
+        setWebhookRecording(
+          "single",
+          data.slug,
+          data.webhooks?.record !== false,
+          "db"
+        );
+      }
+
       this.logger.info("Single registered", {
         slug: data.slug,
         source: data.source,
@@ -460,6 +477,18 @@ export class SingleRegistryService extends BaseRegistryService<
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
         throw NextlyError.notFound({ logContext: { slug } });
+      }
+
+      // Mirror the stored change into the live policy so turning the switch
+      // off takes effect on the next write rather than the next restart.
+      if (data.webhooks !== undefined) {
+        setWebhookRecording(
+          "single",
+          targetSlug,
+          data.webhooks?.record !== false,
+          "db"
+        );
+        if (targetSlug !== slug) clearWebhookRecording("single", slug);
       }
 
       this.logger.info("Single updated", { slug });

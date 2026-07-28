@@ -5,10 +5,17 @@ import { NextlyError } from "../../../errors";
 import type { RevalidateConfig } from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
+import type {
+  MigrationStatus,
+  StoredWebhookRecording,
+} from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import {
+  clearWebhookRecording,
+  setWebhookRecording,
+} from "../../webhooks/recording-policy";
 
 export interface CollectionMetadata {
   id: string;
@@ -42,6 +49,12 @@ export interface CollectionMetadata {
    * honor `disable` and merge extra `tags`.
    */
   revalidate?: RevalidateConfig | null;
+  /**
+   * Webhook recording policy, or null when the collection records (the
+   * default). Backed by the `dynamic_collections.webhooks` JSON column; boot
+   * reads it back so a Builder-authored opt-out survives a restart.
+   */
+  webhooks?: StoredWebhookRecording | null;
   admin?: {
     group?: string;
     icon?: string;
@@ -195,6 +208,8 @@ export class DynamicCollectionRegistryService extends BaseService {
       versions: metadata.versions ?? null,
       // Cache-revalidation config (or null). Stored as JSON like `versions`.
       revalidate: metadata.revalidate ?? null,
+      // Webhook recording policy (or null). Stored as JSON like `revalidate`.
+      webhooks: metadata.webhooks ?? null,
       configPath: metadata.configPath,
       schemaHash: metadata.schemaHash,
       schemaVersion: metadata.schemaVersion ?? 1,
@@ -204,6 +219,20 @@ export class DynamicCollectionRegistryService extends BaseService {
       hooks: metadata.hooks,
       createdBy: metadata.createdBy,
     });
+
+    // Publish the decision into the live policy as well as the column. The
+    // boot-time read only runs at startup, so without this a Builder-created
+    // collection would keep recording until the next restart — precisely the
+    // window in which its first content is written. Code-first entities are
+    // skipped: their config is the source of truth and is already published.
+    if (metadata.source !== "code") {
+      setWebhookRecording(
+        "collection",
+        metadata.slug,
+        metadata.webhooks?.record !== false,
+        "db"
+      );
+    }
 
     // Avoids .returning() which is not supported in all MySQL versions/drivers.
     return metadata;
@@ -241,6 +270,21 @@ export class DynamicCollectionRegistryService extends BaseService {
       .update(this.dynamicCollections)
       .set(updateData)
       .where(eq(this.dynamicCollections.slug, collectionSlug));
+
+    // Mirror the stored change into the live policy so turning the switch off
+    // takes effect on the next write rather than the next restart. A rename
+    // moves the decision to the new slug and drops the old one.
+    if (updates.webhooks !== undefined) {
+      setWebhookRecording(
+        "collection",
+        targetSlug,
+        updates.webhooks?.record !== false,
+        "db"
+      );
+      if (targetSlug !== collectionSlug) {
+        clearWebhookRecording("collection", collectionSlug);
+      }
+    }
 
     return this.getCollection(collectionSlug);
   }

@@ -38,7 +38,10 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { clearWebhookRecording } from "../../webhooks/recording-policy";
+import {
+  clearWebhookRecording,
+  setWebhookRecording,
+} from "../../webhooks/recording-policy";
 
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
@@ -262,6 +265,20 @@ export class CollectionRegistryService extends BaseRegistryService<
         { returning: "*" }
       );
 
+      // Publish the decision into the live policy as well as the column. The
+      // boot-time read only runs at startup, so without this a Builder-created
+      // collection would keep recording until the next restart — the window in
+      // which its content is most likely to be created. Code-first entities are
+      // skipped: their config is the source of truth and is already published.
+      if (data.source !== "code") {
+        setWebhookRecording(
+          "collection",
+          data.slug,
+          data.webhooks?.record !== false,
+          "db"
+        );
+      }
+
       this.logger.info("Collection registered", {
         slug: data.slug,
         source: data.source,
@@ -425,6 +442,19 @@ export class CollectionRegistryService extends BaseRegistryService<
       if (results.length === 0) {
         // Generic "Not found." from the factory; slug moves to logContext.
         throw NextlyError.notFound({ logContext: { slug } });
+      }
+
+      // Mirror the stored change into the live policy so turning the switch
+      // off takes effect on the next write, not the next restart. Scoped to the
+      // target slug, which a rename moves the decision to.
+      if (data.webhooks !== undefined && options?.source !== "code") {
+        setWebhookRecording(
+          "collection",
+          targetSlug,
+          data.webhooks?.record !== false,
+          "db"
+        );
+        if (targetSlug !== slug) clearWebhookRecording("collection", slug);
       }
 
       this.logger.info("Collection updated", { slug });
