@@ -142,12 +142,14 @@ To check your plugin against a real database, pass `dialect`. Each boot gets its
 ```ts
 import {
   createTestNextly,
-  getAvailableTestDialects,
+  getConfiguredTestDialects,
 } from "@nextlyhq/plugin-sdk/testing";
 
-// "sqlite" is always available; the others need TEST_POSTGRES_URL /
-// TEST_MYSQL_URL to point at a server you are willing to create databases on.
-for (const dialect of getAvailableTestDialects()) {
+// "sqlite" is always included; the others are included when TEST_POSTGRES_URL /
+// TEST_MYSQL_URL point at a server you are willing to create databases on.
+// Configured, not probed: a URL you set but cannot reach fails rather than
+// skipping, which is usually what you want from a broken environment.
+for (const dialect of getConfiguredTestDialects()) {
   describe(`myPlugin (${dialect})`, () => {
     it("works", async () => {
       const t = await createTestNextly({ dialect, plugins: [myPlugin()] });

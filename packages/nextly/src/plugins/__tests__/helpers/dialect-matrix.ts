@@ -13,7 +13,7 @@
  */
 import { describe } from "vitest";
 
-import { getAvailableTestDialects, type TestDialect } from "../../test-nextly";
+import { getConfiguredTestDialects, type TestDialect } from "../../test-nextly";
 
 /** Every dialect, in the order the matrix reports them. */
 const ALL_DIALECTS: TestDialect[] = ["sqlite", "postgresql", "mysql"];
@@ -28,7 +28,7 @@ export function describeEachDialect(
   title: string,
   body: (dialect: TestDialect) => void
 ): void {
-  const available = new Set(getAvailableTestDialects());
+  const available = new Set(getConfiguredTestDialects());
   for (const dialect of ALL_DIALECTS) {
     const name = `${title} (${dialect})`;
     if (available.has(dialect)) {

@@ -27,14 +27,22 @@ import {
   dropDatabaseStatement,
   type ProvisionableDialect,
 } from "../database/test-database-ddl";
-import { getService, registerServices, shutdownServices } from "../di/register";
+import {
+  clearServices,
+  getService,
+  registerServices,
+  shutdownServices,
+} from "../di/register";
 import { getNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
 import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { normalizeLocalization } from "../domains/i18n/config/normalize";
 import type { LocalizationConfig } from "../domains/i18n/config/types";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
-import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
+import {
+  refreshEndpointPresence,
+  resetWebhookActivation,
+} from "../domains/webhooks/recording-activation";
 import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-policy";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus } from "../events/event-bus";
@@ -48,6 +56,7 @@ import {
 } from "../init/schema-snapshot-cache";
 import type { CollectionAccessRules } from "../services/access";
 import type { Logger } from "../services/shared";
+import { _resetEnvCache } from "../shared/lib/env";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -72,19 +81,25 @@ const DIALECT_SERVER_URL_ENV = {
 } as const;
 
 /**
- * Which dialects this process can actually boot on.
+ * Which dialects this process is CONFIGURED to boot on.
  *
- * SQLite is always available — it runs in memory with no server. The others
- * are available only when their server URL is configured, so a suite can cover
- * every dialect a developer has running without failing on the ones they do
- * not.
+ * SQLite is always included — it runs in memory with no server. The others are
+ * included when their server URL is set, so a suite can cover every dialect a
+ * developer has configured without failing on the ones they have not.
+ *
+ * Configured is not the same as reachable, and this deliberately does not
+ * probe: a URL pointing at a stopped container is still reported, and the
+ * suite will fail against it rather than skip. That is the intended outcome —
+ * a dialect someone asked for and cannot reach is a broken environment, and
+ * silently skipping it is how the gaps this harness exists to close were
+ * hidden in the first place.
  */
-export function getAvailableTestDialects(): TestDialect[] {
-  const available: TestDialect[] = ["sqlite"];
+export function getConfiguredTestDialects(): TestDialect[] {
+  const configured: TestDialect[] = ["sqlite"];
   for (const dialect of ["postgresql", "mysql"] as const) {
-    if (process.env[DIALECT_SERVER_URL_ENV[dialect]]) available.push(dialect);
+    if (process.env[DIALECT_SERVER_URL_ENV[dialect]]) configured.push(dialect);
   }
-  return available;
+  return configured;
 }
 
 export interface CreateTestNextlyOptions {
@@ -95,11 +110,13 @@ export interface CreateTestNextlyOptions {
    * `destroy()`, because the shared test database is written to by every other
    * suite in the run and cannot answer a question about schema state. Requires
    * the dialect's server URL (`TEST_POSTGRES_URL` / `TEST_MYSQL_URL`) unless
-   * `serverUrl` is given; check `getAvailableTestDialects()` to skip cleanly
-   * when it is not configured.
+   * `serverUrl` is given; check `getConfiguredTestDialects()` to skip
+   * cleanly when it is not configured.
    *
-   * Ignored when `adapter` is supplied — an explicit adapter means the caller
-   * owns the connection and its lifetime.
+   * Ignored when `adapter` is supplied: that adapter is used as given, and
+   * nothing is provisioned or dropped for it. Note that `destroy()` still
+   * disconnects it, as it always has — supplying an adapter chooses the
+   * connection, not its lifetime.
    */
   dialect?: TestDialect;
   /**
@@ -201,6 +218,9 @@ async function provisionDatabase(
     else process.env.DATABASE_URL = previousUrl;
     if (previousDialect === undefined) delete process.env.DB_DIALECT;
     else process.env.DB_DIALECT = previousDialect;
+    // The validated environment is cached from its first read, so restoring
+    // the variables is not enough on its own.
+    _resetEnvCache();
   };
 
   let server: TestAdapter | undefined;
@@ -208,6 +228,10 @@ async function provisionDatabase(
   try {
     process.env.DATABASE_URL = serverUrl;
     process.env.DB_DIALECT = dialect;
+    // Everything that reads the dialect through the `env` proxy — the boolean
+    // conversion in `toDialectBool`, the schema services' fallback — would
+    // otherwise answer for whichever dialect booted first in this process.
+    _resetEnvCache();
     server = await createAdapter({ type: dialect, url: serverUrl });
     const serverAdapter = server;
 
@@ -215,6 +239,7 @@ async function provisionDatabase(
     databaseExists = true;
 
     process.env.DATABASE_URL = databaseUrl.toString();
+    _resetEnvCache();
     const adapter = await createAdapter({
       type: dialect,
       url: databaseUrl.toString(),
@@ -267,13 +292,15 @@ function resolveServerUrl(
   const envName = DIALECT_SERVER_URL_ENV[dialect];
   const url = override ?? process.env[envName];
   if (!url) {
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          `createTestNextly({ dialect: "${dialect}" }) needs a server to ` +
-          `connect to. Set ${envName}, or pass serverUrl. Use ` +
-          `getAvailableTestDialects() to skip when it is not configured.`,
-      },
+    // The guidance is the whole value of this error, so it goes in the public
+    // message: `internal()` would reduce it to "An unexpected error occurred."
+    // and the harness has no logger wired up to surface the context instead.
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        `createTestNextly({ dialect: "${dialect}" }) needs a server to ` +
+        `connect to. Set ${envName}, or pass serverUrl. Use ` +
+        `getConfiguredTestDialects() to skip when it is not configured.`,
     });
   }
   return url;
@@ -339,6 +366,9 @@ export async function createTestNextly(
     // (env.DATABASE_URL access) passes without a configured database — SQLite
     // needs no DATABASE_URL, and production-only checks are skipped under test.
     process.env.DB_DIALECT = "sqlite";
+    // Same reason as the provisioned path: a previous boot on another dialect
+    // would otherwise still be the one this process's `env` reports.
+    _resetEnvCache();
     // `memory: true` forces an in-memory DB. The factory otherwise falls back
     // to a default SQLite *file*, which would persist across test runs. The
     // SqliteAdapter honours `memory` ahead of any url, but the factory's
@@ -354,10 +384,19 @@ export async function createTestNextly(
     return await bootServices(adapter, logger, opts, provisioned);
   } catch (error) {
     // `registerServices` marks itself registered only on a successful boot, so
-    // a later `shutdownServices()` will not close this pool — it has to be
-    // disconnected here, and before the database is dropped. Only when this
-    // function created it: an adapter the caller supplied is theirs to close.
-    if (!opts.adapter) await adapter.disconnect().catch(() => {});
+    // `shutdownServices()` no-ops afterwards and none of this is cleaned up by
+    // the next boot's defensive reset.
+    //
+    // The container has to be cleared explicitly. `registerSingleton` installs
+    // a factory that keeps any instance already built, so a half-registered
+    // adapter would survive re-registration and the next boot would be handed
+    // this disconnected one — pointing at a database that no longer exists.
+    clearServices();
+    // Disconnected before the database is dropped, and regardless of who
+    // supplied it: a successful boot's `destroy()` closes the adapter through
+    // `shutdownServices` either way, so doing anything else here would make
+    // teardown depend on whether the boot got far enough to succeed.
+    await adapter.disconnect().catch(() => {});
     // A boot that fails after the database was created would otherwise leave
     // it on the server, along with the environment this instance set.
     await provisioned?.release().catch(() => {});
@@ -436,6 +475,12 @@ async function bootServices(
     events: getEventBus(),
     adapter,
     async destroy() {
+      // Boot schedules an endpoint-presence read that is deliberately not
+      // awaited. Drained here, while the adapter is still connected: a query
+      // that arrives after the pool closes is raised by mysql2 as an
+      // unhandled exception rather than a rejected promise, which ends the
+      // whole run instead of the one query.
+      await refreshEndpointPresence().catch(() => {});
       // shutdownServices runs plugin destroy() once T9 wires it, then
       // disconnects the adapter and clears the container.
       await shutdownServices();

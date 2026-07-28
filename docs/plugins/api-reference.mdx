@@ -122,7 +122,7 @@ createTestNextly(opts: {
   serverUrl?: string;                           // else TEST_POSTGRES_URL / TEST_MYSQL_URL
 }): Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
 
-getAvailableTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
+getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
 ```
 
 ## Secrets

@@ -10,7 +10,7 @@
 
 export {
   createTestNextly,
-  getAvailableTestDialects,
+  getConfiguredTestDialects,
   type CreateTestNextlyOptions,
   type TestDialect,
   type TestNextly,
