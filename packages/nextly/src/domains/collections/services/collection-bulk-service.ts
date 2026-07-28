@@ -25,7 +25,6 @@ import type { WhereFilter } from "../../../services/collections/query-operators"
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
-import { withVersionConflictRetry } from "../../versions/version-conflict";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionMutationService } from "./collection-mutation-service";
@@ -1071,35 +1070,20 @@ export class CollectionBulkService extends BaseService {
     let integrityRollback = false;
     // Process all entries within a single transaction
     try {
-      // Retry the WHOLE batch on a version-allocation race: a concurrent write
-      // to the same versioned entry makes capture raise VersionConflictError,
-      // and re-running re-reads the next free version number — the same
-      // guarantee the interactive path gives. A non-conflict failure (including
-      // a marked integrity failure) is not retried and propagates below.
-      await withVersionConflictRetry(() =>
-        this.adapter.transaction(async tx => {
-          // Reset per attempt: a retry re-runs every item, so the accumulators
-          // must not carry counts from the rolled-back attempt.
-          result.successful = 0;
-          result.failed = 0;
-          result.errors = [];
-          result.ids = [];
-          result.eventRecorded = undefined;
-          collectedIntents.length = 0;
-          integrityRollback = false;
-          // Process in batches for memory efficiency
-          for (let i = 0; i < entries.length; i += batchSize) {
-            const batch = entries.slice(
-              i,
-              Math.min(i + batchSize, entries.length)
-            );
+      await this.adapter.transaction(async tx => {
+        // Process in batches for memory efficiency
+        for (let i = 0; i < entries.length; i += batchSize) {
+          const batch = entries.slice(
+            i,
+            Math.min(i + batchSize, entries.length)
+          );
 
-            // Process each entry in the batch
-            for (let j = 0; j < batch.length; j++) {
-              const entryIndex = i + j;
-              const entryData = batch[j];
+          // Process each entry in the batch
+          for (let j = 0; j < batch.length; j++) {
+            const entryIndex = i + j;
+            const entryData = batch[j];
 
-              try {
+            try {
                 // Create entry using transaction method
                 const createResult =
                   await this.mutationService.createSingleEntryInTransaction(
@@ -1165,8 +1149,7 @@ export class CollectionBulkService extends BaseService {
               }
             }
           }
-        })
-      );
+        });
       // Reached only when the transaction committed, so the collected intents
       // describe rows that actually persist.
       if (collectedIntents.length > 0) {
@@ -1525,35 +1508,20 @@ export class CollectionBulkService extends BaseService {
     let integrityRollback = false;
     // Process all entries within a single transaction
     try {
-      // Retry the WHOLE batch on a version-allocation race: a concurrent write
-      // to the same versioned entry makes capture raise VersionConflictError,
-      // and re-running re-reads the next free version number — the same
-      // guarantee the interactive path gives. A non-conflict failure (including
-      // a marked integrity failure) is not retried and propagates below.
-      await withVersionConflictRetry(() =>
-        this.adapter.transaction(async tx => {
-          // Reset per attempt: a retry re-runs every item, so the accumulators
-          // must not carry counts from the rolled-back attempt.
-          result.successful = 0;
-          result.failed = 0;
-          result.errors = [];
-          result.ids = [];
-          result.eventRecorded = undefined;
-          collectedIntents.length = 0;
-          integrityRollback = false;
-          // Process in batches for memory efficiency
-          for (let i = 0; i < entries.length; i += batchSize) {
-            const batch = entries.slice(
-              i,
-              Math.min(i + batchSize, entries.length)
-            );
+      await this.adapter.transaction(async tx => {
+        // Process in batches for memory efficiency
+        for (let i = 0; i < entries.length; i += batchSize) {
+          const batch = entries.slice(
+            i,
+            Math.min(i + batchSize, entries.length)
+          );
 
-            // Process each entry in the batch
-            for (let j = 0; j < batch.length; j++) {
-              const entryIndex = i + j;
-              const { id, data } = batch[j];
+          // Process each entry in the batch
+          for (let j = 0; j < batch.length; j++) {
+            const entryIndex = i + j;
+            const { id, data } = batch[j];
 
-              try {
+            try {
                 // Update entry using transaction method
                 const updateResult =
                   await this.mutationService.updateSingleEntryInTransaction(
@@ -1618,8 +1586,7 @@ export class CollectionBulkService extends BaseService {
               }
             }
           }
-        })
-      );
+        });
       // Reached only when the transaction committed, so the collected intents
       // describe rows that actually persist.
       if (collectedIntents.length > 0) {

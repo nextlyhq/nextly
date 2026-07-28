@@ -95,6 +95,7 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
@@ -5499,11 +5500,14 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
       // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND the collection opted out of
-      // webhooks): the parent columns are then the whole document.
+      // event will consume them: versioning off AND no outbox event would record
+      // (opted out, or no endpoint and audit off). The full outbox gate, not just
+      // the per-entity opt-out, so a webhook-permitted collection with no endpoint
+      // does not pay the reads (or risk a relation-read failure rolling back an
+      // otherwise valid scalar write) for a payload nobody consumes.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        isWebhookRecordingEnabled("collection", params.collectionName);
+        isOutboxRecordingActive("collection", params.collectionName);
       const { documentParts: createdParts, document: createdDocument } =
         await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
@@ -6020,11 +6024,14 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
       // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND the collection opted out of
-      // webhooks): the parent columns are then the whole document.
+      // event will consume them: versioning off AND no outbox event would record
+      // (opted out, or no endpoint and audit off). The full outbox gate, not just
+      // the per-entity opt-out, so a webhook-permitted collection with no endpoint
+      // does not pay the reads (or risk a relation-read failure rolling back an
+      // otherwise valid scalar write) for a payload nobody consumes.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        isWebhookRecordingEnabled("collection", params.collectionName);
+        isOutboxRecordingActive("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m
@@ -6893,11 +6900,14 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
       // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND the collection opted out of
-      // webhooks): the parent columns are then the whole document.
+      // event will consume them: versioning off AND no outbox event would record
+      // (opted out, or no endpoint and audit off). The full outbox gate, not just
+      // the per-entity opt-out, so a webhook-permitted collection with no endpoint
+      // does not pay the reads (or risk a relation-read failure rolling back an
+      // otherwise valid scalar write) for a payload nobody consumes.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        isWebhookRecordingEnabled("collection", params.collectionName);
+        isOutboxRecordingActive("collection", params.collectionName);
       const { documentParts: createdParts, document: createdDocument } =
         await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
@@ -7486,11 +7496,14 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
       // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND the collection opted out of
-      // webhooks): the parent columns are then the whole document.
+      // event will consume them: versioning off AND no outbox event would record
+      // (opted out, or no endpoint and audit off). The full outbox gate, not just
+      // the per-entity opt-out, so a webhook-permitted collection with no endpoint
+      // does not pay the reads (or risk a relation-read failure rolling back an
+      // otherwise valid scalar write) for a payload nobody consumes.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        isWebhookRecordingEnabled("collection", params.collectionName);
+        isOutboxRecordingActive("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m
