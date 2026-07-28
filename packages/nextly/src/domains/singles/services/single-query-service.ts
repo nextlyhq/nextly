@@ -219,9 +219,20 @@ function isMisshapenContainer(
   const parsed = parseContainer(value);
   if (parsed === UNREADABLE_CONTAINER) return true;
   if (parsed === null || parsed === undefined) return false;
-  return type === "repeater"
-    ? !Array.isArray(parsed)
-    : typeof parsed !== "object" || Array.isArray(parsed);
+  if (type !== "repeater") {
+    return typeof parsed !== "object" || Array.isArray(parsed);
+  }
+  if (!Array.isArray(parsed)) return true;
+  // A row that is not an object is as unreadable as the whole container being
+  // the wrong shape: it becomes no row at all, and the walk steps over every
+  // relationship it was supposed to hold. An absent row is not this — nothing
+  // was stored there.
+  return parsed.some(
+    row =>
+      row !== null &&
+      row !== undefined &&
+      (typeof row !== "object" || Array.isArray(row))
+  );
 }
 
 function containerRows(

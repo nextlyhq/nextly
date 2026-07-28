@@ -18,6 +18,7 @@ import {
   defineSingle,
   group,
   relationship,
+  repeater,
   text,
 } from "../../../config";
 import {
@@ -1231,6 +1232,92 @@ describe("Single custom read rules vs the assembled document (integration)", () 
       "dynamic_singles",
       { fields },
       { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("refuses when a repeater row is not a row", async () => {
+    // The container parses and is an array, so the outer shape check passes,
+    // but a scalar entry becomes no row at all — and the walk steps over every
+    // relationship that row was supposed to hold.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            repeater({
+              name: "items",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", items: [] },
+      { overrideAccess: true }
+    );
+    await current.adapter.update("single_branding", { items: "[42]" }, {});
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("leaves an empty repeater alone", async () => {
+    // The mirror: a repeater that legitimately holds no rows, and one holding a
+    // row with nothing in it, are both ordinary documents rather than evidence
+    // that went missing.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            repeater({
+              name: "items",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", items: [{}] },
+      { overrideAccess: true }
     );
 
     const result = await entry.get("branding", {
