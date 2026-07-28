@@ -270,6 +270,42 @@ describe("polymorphic relationship expansion (integration)", () => {
     expect(target).not.toHaveProperty("apiKey");
   });
 
+  // A populated value is reduced back to a bare id on write unless it still
+  // says which collection it came from, and a bare id resolves against the
+  // field's first declared target. So reading at depth and saving the document
+  // back unchanged has to leave the reference pointing where it did.
+  it("survives a read-then-write round trip at depth", async () => {
+    const { handler, pageRefId } = await bootPolymorphic();
+
+    const read = await handler.getEntry({
+      collectionName: "refs",
+      entryId: pageRefId,
+      depth: 1,
+      overrideAccess: true,
+    });
+    const populated = (read.data as { target?: Record<string, unknown> })
+      .target;
+    expect(populated).toMatchObject({ title: "A page" });
+
+    // Saved back exactly as it was served, which is what a client editing one
+    // other field does.
+    await handler.updateEntry(
+      { collectionName: "refs", entryId: pageRefId, overrideAccess: true },
+      { name: "renamed", target: populated }
+    );
+
+    const after = await handler.getEntry({
+      collectionName: "refs",
+      entryId: pageRefId,
+      depth: 1,
+      overrideAccess: true,
+    });
+    // Still the page, not a post and not empty: the target survived the trip.
+    expect(
+      (after.data as { target?: Record<string, unknown> }).target
+    ).toMatchObject({ title: "A page" });
+  });
+
   it("keeps the pair intact when no expansion was asked for", async () => {
     const { handler, postRefId } = await bootPolymorphic();
 

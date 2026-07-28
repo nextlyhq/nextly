@@ -180,6 +180,41 @@ function extractRelationshipId(value: unknown): unknown {
 }
 
 /**
+ * A resolved relationship value: which collection the row is read from, and
+ * whether the stored value named that collection itself.
+ *
+ * `discriminated` decides what the populated row has to carry back, not where
+ * it is read from — a value that named its collection has to keep saying so in
+ * the response, or saving the document back loses it.
+ */
+interface RelationshipRef {
+  collection: string;
+  id: string;
+  discriminated: boolean;
+}
+
+/**
+ * Keeps a populated multi-target value round-trippable.
+ *
+ * The write path reduces a populated object to a bare id unless it still
+ * carries both `relationTo` and `value`, so a document read at depth and saved
+ * back unchanged would lose the collection the reference named and resolve the
+ * id against the field's first declared target instead — silently retargeting
+ * or dropping the relationship.
+ *
+ * Carried beside the row's own columns rather than wrapping it, because that is
+ * the shape the write path already accepts, and applied only to values that
+ * arrived discriminated so an ordinary single-target row is untouched.
+ */
+function withReferenceIdentity(
+  row: Record<string, unknown>,
+  ref: RelationshipRef
+): Record<string, unknown> {
+  if (!ref.discriminated) return row;
+  return { ...row, relationTo: ref.collection, value: ref.id };
+}
+
+/**
  * The collections a relationship field is allowed to point at.
  *
  * A many-to-many field keeps its target under `options.target`, matching how
@@ -212,7 +247,7 @@ function declaredTargets(field: FieldDefinition): string[] {
 function readPolymorphicRef(
   value: unknown,
   allowedTargets: string[]
-): { collection: string; id: string } | null {
+): RelationshipRef | null {
   // Dialects without a native object column hand the pair back as the JSON
   // text it was stored as. Only a value that actually parses to the pair is
   // treated as one: an ordinary id is a bare string, and a Postgres array
@@ -232,7 +267,7 @@ function readPolymorphicRef(
   const { relationTo, value: id } = candidate as Record<string, unknown>;
   if (typeof relationTo !== "string" || typeof id !== "string") return null;
   if (!allowedTargets.includes(relationTo)) return null;
-  return { collection: relationTo, id };
+  return { collection: relationTo, id, discriminated: true };
 }
 
 /**
@@ -630,7 +665,7 @@ function readRelationshipRef(
   value: unknown,
   fallbackCollection: string,
   allowedTargets: string[]
-): { collection: string; id: string } | null {
+): RelationshipRef | null {
   if (value == null) return null;
   const polymorphic = readPolymorphicRef(value, allowedTargets);
   if (polymorphic) return polymorphic;
@@ -638,7 +673,9 @@ function readRelationshipRef(
   // would send the whole object to the loader as a bound parameter.
   if (isPolymorphicRefShape(value)) return null;
   const id = extractRelationshipId(value);
-  return typeof id === "string" ? { collection: fallbackCollection, id } : null;
+  return typeof id === "string"
+    ? { collection: fallbackCollection, id, discriminated: false }
+    : null;
 }
 
 /**
@@ -669,7 +706,7 @@ function normalizeToRelationshipRefs(
   value: unknown,
   fallbackCollection: string,
   allowedTargets: string[]
-): { collection: string; id: string }[] {
+): RelationshipRef[] {
   const items = readItemArray(value);
   return normalizeToIdArray(value)
     .map((id, index) => {
@@ -680,9 +717,9 @@ function normalizeToRelationshipRefs(
       // names a collection this field never declared, so there is no reference
       // here to honour.
       if (items && isPolymorphicRefShape(item)) return null;
-      return { collection: fallbackCollection, id };
+      return { collection: fallbackCollection, id, discriminated: false };
     })
-    .filter((ref): ref is { collection: string; id: string } => ref !== null);
+    .filter((ref): ref is RelationshipRef => ref !== null);
 }
 
 /**
@@ -1143,9 +1180,7 @@ export class CollectionRelationshipService extends BaseService {
           .map(e =>
             readRelationshipRef(e[field.name], targetCollection, fieldTargets)
           )
-          .filter(
-            (ref): ref is { collection: string; id: string } => ref !== null
-          );
+          .filter((ref): ref is RelationshipRef => ref !== null);
 
         relationDataMaps[field.name] = await this.batchFetchRefs(
           relatedRefs,
@@ -1210,9 +1245,12 @@ export class CollectionRelationshipService extends BaseService {
               declaredTargets(field)
             );
             expandedEntry[field.name] = refs
-              .map(({ collection, id }) =>
-                dataMap.get(relationKey(collection, id))
-              )
+              .map(ref => {
+                const row = dataMap.get(relationKey(ref.collection, ref.id));
+                return row && !Array.isArray(row)
+                  ? withReferenceIdentity(row, ref)
+                  : row;
+              })
               .filter(Boolean);
           } else {
             const ref = readRelationshipRef(
@@ -1222,7 +1260,10 @@ export class CollectionRelationshipService extends BaseService {
             );
             const row = ref && dataMap.get(relationKey(ref.collection, ref.id));
             if (row) {
-              expandedEntry[field.name] = row;
+              expandedEntry[field.name] =
+                ref && !Array.isArray(row)
+                  ? withReferenceIdentity(row, ref)
+                  : row;
             }
           }
         }
@@ -1315,7 +1356,7 @@ export class CollectionRelationshipService extends BaseService {
    * @returns Map of {@link relationKey} to expanded entry data
    */
   private async batchFetchRefs(
-    refs: { collection: string; id: string }[],
+    refs: RelationshipRef[],
     field: FieldDefinition,
     access: RelatedRowAccess
   ): Promise<Map<string, Record<string, unknown>>> {
@@ -1745,7 +1786,8 @@ export class CollectionRelationshipService extends BaseService {
 
             // Fetch all related entries
             const expandedRelated = await Promise.all(
-              refs.map(async ({ collection: relatedCollection, id }) => {
+              refs.map(async ref => {
+                const { collection: relatedCollection, id } = ref;
                 const relatedEntry = await this.fetchRelatedEntry(
                   relatedCollection,
                   id,
@@ -1780,7 +1822,7 @@ export class CollectionRelationshipService extends BaseService {
                   }
                 }
 
-                return baseExpanded;
+                return withReferenceIdentity(baseExpanded, ref);
               })
             );
 
@@ -1848,7 +1890,9 @@ export class CollectionRelationshipService extends BaseService {
                 }
               }
 
-              expandedEntry[field.name] = expandedRelated;
+              expandedEntry[field.name] = polymorphicRef
+                ? withReferenceIdentity(expandedRelated, polymorphicRef)
+                : expandedRelated;
             }
           }
         }
