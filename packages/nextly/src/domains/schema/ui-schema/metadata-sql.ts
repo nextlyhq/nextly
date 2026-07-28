@@ -36,6 +36,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   toPluralLabel,
   toSingularLabel,
@@ -183,7 +184,7 @@ function buildUpsert(
 
 function tableNameFor(
   slug: string,
-  prefix: "dc_" | "single_" | "comp_"
+  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
 ): string {
   return `${prefix}${slug.replace(/-/g, "_")}`;
 }
@@ -335,7 +336,10 @@ export function buildComponentMetadataUpsert(
     { name: "id", value: sqlStr(deterministicId(entity.slug)) },
     { name: "slug", value: sqlStr(entity.slug) },
     { name: "label", value: sqlStr(singular(entity)), update: true },
-    { name: "table_name", value: sqlStr(tableNameFor(entity.slug, "comp_")) },
+    {
+      name: "table_name",
+      value: sqlStr(tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix)),
+    },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
