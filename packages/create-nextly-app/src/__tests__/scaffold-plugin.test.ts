@@ -83,12 +83,16 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     // (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then refuses to
     // run any script in the scaffold. This test runs with the registry
     // stubbed offline, so every version lookup exercises the fallback path —
-    // exactly where a dist-tag used to leak in. Semver ranges start with a
-    // digit or range operator; dist-tag names start with a letter.
+    // exactly where a dist-tag used to leak in. The generator only ever
+    // emits `^x.y.z(-prerelease)?` or the open `>=x.y.z` fallback, so the
+    // anchored pattern validates the complete spec — partial matches would
+    // wave through hybrids like `^latest` or `>=alpha`.
     for (const [peer, spec] of Object.entries(
       pkg.peerDependencies as Record<string, string>
     )) {
-      expect(spec, `peerDependencies.${peer}`).toMatch(/^[\d^~><=*]/);
+      expect(spec, `peerDependencies.${peer}`).toMatch(
+        /^(?:\^|>=)\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+      );
     }
     // The native-build allowlist lives in pnpm-workspace.yaml, NOT the package.json
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts

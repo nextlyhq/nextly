@@ -105,7 +105,15 @@ export async function createNextly(
 
   const existingProject = await isExistingNextProject(cwd);
 
-  if (existingProject) {
+  // The plugin template always scaffolds a standalone package — it never
+  // installs into an existing app. Running it from inside a Next.js repo
+  // (a natural place to build a plugin for that app) must therefore skip
+  // the install-into-this-project flow, which ignores the directory
+  // argument entirely; plugin runs take the fresh-scaffold path below and
+  // a non-empty target is negotiated by the directory-conflict prompt.
+  const isPluginScaffold = options.projectType === "plugin";
+
+  if (existingProject && !isPluginScaffold) {
     p.log.success(`${pc.green("Next.js")} project detected`);
 
     if (!defaults) {
@@ -216,17 +224,6 @@ export async function createNextly(
 
     // If user selects the disabled "coming soon" hint, fall back to blank
     projectType = isValidTemplateSelection(template) ? template : "blank";
-  }
-
-  // The plugin template scaffolds a standalone publishable package. In an
-  // existing Next.js project the fresh-scaffold path is skipped entirely, so
-  // proceeding would install app dependencies and generate app config while
-  // never copying the plugin source — a broken hybrid. Fail fast instead.
-  if (projectType === "plugin" && !isFreshProject) {
-    p.cancel(
-      "The Plugin template creates a standalone package and cannot be installed into an existing Next.js project. Run create-nextly-app in an empty directory instead."
-    );
-    return;
   }
 
   // --- Step 3: Schema approach (only for content templates with approaches) ---
