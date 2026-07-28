@@ -28,15 +28,11 @@ export function resolveCollectionTableName(
   return base.startsWith("dc_") ? base : `dc_${base}`;
 }
 
-// Mirrors the runtime component table sync (di/register.ts): a custom `dbName`
-// is honored verbatim, otherwise the slug is normalized (lowercased,
-// non-alphanumeric runs collapsed to "_", edges trimmed) and `comp_`-prefixed.
-// Components intentionally differ from collections/singles: a custom dbName is
-// NOT force-prefixed. The CLI must mirror this or `migrate:create` would target
-// a different table than the live app for a component with a custom dbName.
-export function resolveComponentTableName(
-  slug: string,
-  dbName?: string
-): string {
-  return dbName ?? `comp_${normalizeIdentifier(slug)}`;
+// A component's physical table is always derived from its slug. Custom names
+// are not accepted: they can only be validated against storage Nextly knows
+// about, which leaves the host application's own tables claimable, and the
+// identifier-case rules that decide whether two spellings are one table are
+// server configuration rather than anything the config can state.
+export function resolveComponentTableName(slug: string): string {
+  return `comp_${normalizeIdentifier(slug)}`;
 }

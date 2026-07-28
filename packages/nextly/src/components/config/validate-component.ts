@@ -27,6 +27,7 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { NextlyError } from "../../errors";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -369,8 +370,17 @@ export function assertValidComponentConfig(config: ComponentConfig): void {
       .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
       .join("\n");
 
-    throw new Error(
-      `Invalid Component config for '${config.slug || "unknown"}':\n${errorMessages}`
-    );
+    throw NextlyError.validation({
+      errors: result.errors.map(err => ({
+        path: err.path,
+        code: err.code,
+        message: err.message,
+      })),
+      logContext: {
+        reason: "component-config-invalid",
+        slug: config.slug,
+        details: errorMessages,
+      },
+    });
   }
 }

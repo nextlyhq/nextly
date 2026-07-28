@@ -22,6 +22,7 @@ import { z } from "zod";
 import { getService } from "../di";
 import { clampLimit } from "../domains/collections/query/query-parser";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
@@ -182,10 +183,10 @@ export const POST = withErrorHandler(async (request: Request) => {
   assertValidFieldsPayload(validated.fields);
 
   // Generate table name from slug (comp_ prefix added by service)
-  const tableName = validated.slug
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  // Canonical name derivation (comp_ + normalized slug), matching the
+  // registry sync and dispatcher paths, so the stored registry row and the
+  // physical table always agree.
+  const tableName = resolveComponentTableName(validated.slug);
 
   // Validated by assertValidFieldsPayload above; cast through `unknown`
   // to the registry's config type while keeping the payload unstripped.

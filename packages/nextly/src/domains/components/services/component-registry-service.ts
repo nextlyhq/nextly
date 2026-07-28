@@ -25,6 +25,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 import { teardownEntityComponentData } from "./teardown-entity-component-data";
 
@@ -177,7 +178,11 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     const now = this.formatDateForDb();
-    const tableName = this.ensureTableNamePrefix(data.tableName);
+    // Store the caller-resolved physical name verbatim. Callers derive it via
+    // resolveComponentTableName, where a custom dbName is honored as-is
+    // (components intentionally differ from collections/singles); re-prefixing
+    // here would desync the registry from the table the schema layer creates.
+    const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
       slug: data.slug,
@@ -242,7 +247,8 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     const now = this.formatDateForDb();
-    const tableName = this.ensureTableNamePrefix(data.tableName);
+    // Same contract as registerComponent: the caller resolves the physical name.
+    const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
       slug: data.slug,
@@ -340,6 +346,12 @@ export class ComponentRegistryService extends BaseRegistryService<
 
     if (data.configPath !== undefined) {
       updateData.config_path = data.configPath;
+    }
+
+    // Only ever supplied by the legacy-pointer repair, which has verified the
+    // derived table exists and the stored one does not.
+    if (data.tableName !== undefined) {
+      updateData.table_name = data.tableName;
     }
 
     try {
@@ -478,12 +490,65 @@ export class ComponentRegistryService extends BaseRegistryService<
       try {
         const existing = await this.getComponentBySlug(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
+        // Canonical resolution: a custom dbName is honored verbatim, otherwise
+        // comp_ + normalized slug — matching what the runtime schema layer and
+        // migrate:create derive for the same component. Resolved before the
+        // existence check so a stored name that drifted from it is reconciled
+        // rather than left addressing a table the schema layer never created.
+        const desiredTableName = resolveComponentTableName(config.slug);
+        // A component's stored table name is never changed here. Repointing an
+        // existing component at different storage moves no data, and the paths
+        // that generate DDL do not all have the registry available — the
+        // offline migration generator has no database connection at all — so a
+        // divergence between the configured name and the stored one cannot be
+        // honoured consistently. Changing dbName for a component that is
+        // already registered is a migration, not a config edit.
+        //
+        // Reported rather than passed over: registry-backed reads, filters and
+        // teardown all follow the stored name, so a mismatch means they address
+        // a table the schema layer is not maintaining. Recording it as a sync
+        // error surfaces it on every boot until a migration resolves it.
+        let repairedTableName: string | undefined;
+        // Any difference is treated the same way, casing included. Derived
+        // names are always lowercase, so a stored pointer differing only in
+        // case is a legacy or hand-edited row rather than a supported state,
+        // and whether two spellings are one table is server configuration that
+        // cannot be inferred from the catalog: a single listed spelling means
+        // the other does not exist, not that the server folded them.
+        if (existing !== null && existing.tableName !== desiredTableName) {
+          // One mismatch is repairable without moving anything: the stored name
+          // addresses no table while the configured one does. That is a row
+          // written before names resolved canonically — the data has always
+          // been in the configured table — so correcting the pointer converges
+          // the registry onto the config rather than leaving them divergent.
+          const [storedExists, desiredExists] = await Promise.all([
+            this.adapter.tableExists(existing.tableName),
+            this.adapter.tableExists(desiredTableName),
+          ]);
 
+          if (!storedExists && desiredExists) {
+            repairedTableName = desiredTableName;
+            this.logger.warn("Component registry table name repaired", {
+              slug: config.slug,
+              from: existing.tableName,
+              to: desiredTableName,
+            });
+          } else {
+            result.errors.push({
+              slug: config.slug,
+              error:
+                `Registry table '${existing.tableName}' does not match the configured ` +
+                `'${desiredTableName}'. Storage is not repointed automatically; run a ` +
+                `migration to move the data, or restore the previous dbName.`,
+            });
+            continue;
+          }
+        }
         if (!existing) {
           await this.registerComponent({
             slug: config.slug,
             label: config.label,
-            tableName: config.tableName ?? this.generateTableName(config.slug),
+            tableName: desiredTableName,
             description: config.description,
             fields: config.fields,
             admin: config.admin,
@@ -495,6 +560,7 @@ export class ComponentRegistryService extends BaseRegistryService<
           });
           result.created.push(config.slug);
         } else if (
+          repairedTableName !== undefined ||
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
           (config.localized === true) !== (existing.localized === true)
         ) {
@@ -509,6 +575,7 @@ export class ComponentRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               localized: config.localized === true,
+              tableName: repairedTableName,
             },
             { source: "code" }
           );

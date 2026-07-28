@@ -9,6 +9,8 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { assertValidComponentConfig } from "../../components/config/validate-component";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   ComponentDefinition,
@@ -34,8 +36,12 @@ export interface ComponentsNamespace {
   findBySlug(
     args: FindComponentBySlugArgs
   ): Promise<ComponentDefinition | null>;
-  create(args: CreateComponentArgs): Promise<MutationResult<ComponentDefinition>>;
-  update(args: UpdateComponentArgs): Promise<MutationResult<ComponentDefinition>>;
+  create(
+    args: CreateComponentArgs
+  ): Promise<MutationResult<ComponentDefinition>>;
+  update(
+    args: UpdateComponentArgs
+  ): Promise<MutationResult<ComponentDefinition>>;
   delete(args: DeleteComponentArgs): Promise<MutationResult<{ slug: string }>>;
 }
 
@@ -149,14 +155,29 @@ export function createComponentsNamespace(
       const { calculateSchemaHash } = await import(
         "../../domains/schema/services/schema-hash"
       );
-      const fieldsTyped =
-        args.fields as unknown as FieldConfig[];
+      const fieldsTyped = args.fields as unknown as FieldConfig[];
       const schemaHash = calculateSchemaHash(fieldsTyped);
+
+      // Canonical resolution: an explicit tableName is honored verbatim;
+      // otherwise the slug is normalized before the comp_ prefix so a dashed
+      // slug maps to the same table the schema layer creates. The explicit form
+      // goes through the same reserved-storage rules as a code-first dbName,
+      // because a name pointing at framework tables would let a later delete
+      // drop storage this component does not own.
+      // Validated for slug format and reserved names. Two slugs that collapse
+      // to one table are caught by defineConfig for code-first components and
+      // by the unique index on dynamic_components.table_name here.
+      assertValidComponentConfig({
+        slug: args.slug,
+        label: { singular: args.label },
+        fields: fieldsTyped,
+      });
+      const tableName = resolveComponentTableName(args.slug);
 
       const component = await ctx.componentRegistryService.registerComponent({
         slug: args.slug,
         label: args.label,
-        tableName: args.tableName ?? `comp_${args.slug}`,
+        tableName,
         description: args.description,
         fields: fieldsTyped,
         admin: args.admin,

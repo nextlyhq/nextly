@@ -46,6 +46,7 @@ import type { DesiredComponent } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -310,7 +311,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const isLocalized = b.localized === true;
       const schemaHash = calculateSchemaHash(b.fields);
-      const tableName = `comp_${b.slug.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+      // Canonical name derivation, shared with the registry sync and
+      // migrate:create paths, so the created table and the registry row agree.
+      const tableName = resolveComponentTableName(b.slug);
 
       // Use ComponentSchemaService to generate tables with parent
       // reference columns (_parent_id, _parent_table, _parent_field,

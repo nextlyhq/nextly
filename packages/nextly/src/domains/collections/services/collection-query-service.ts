@@ -105,6 +105,7 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -899,7 +900,8 @@ export class CollectionQueryService extends BaseService {
         componentFilters,
         tableName,
         schema.id,
-        dialect
+        dialect,
+        await this.resolveComponentTableNames(componentFilters)
       );
 
       // Apply component field conditions to query
@@ -1714,7 +1716,8 @@ export class CollectionQueryService extends BaseService {
           componentFilters,
           tableName,
           schema.id,
-          dialect
+          dialect,
+          await this.resolveComponentTableNames(componentFilters)
         );
 
         if (componentCondition) {
@@ -2497,12 +2500,54 @@ export class CollectionQueryService extends BaseService {
    * // Generates: EXISTS (SELECT 1 FROM comp_seo WHERE _parent_id = dc_pages.id AND _parent_table = 'dc_pages' AND meta_title ILIKE '%About%')
    * ```
    */
+  /**
+   * Physical table name for every component slug referenced by these filters.
+   *
+   * Resolved through the registry because a component with a custom `dbName`
+   * has a table name that cannot be derived from its slug. Skipped entirely
+   * when no component filter is present, so ordinary queries take no extra
+   * round trip.
+   */
+  private async resolveComponentTableNames(
+    componentFilters: ComponentFieldFilter[]
+  ): Promise<Map<string, string>> {
+    const resolved = new Map<string, string>();
+    if (componentFilters.length === 0 || !this.componentDataService) {
+      return resolved;
+    }
+
+    // Mirror the condition builder's own narrowing: a _componentType filter
+    // pinned to one type queries only that table, so resolving the whole zone
+    // would cost a round trip per unused component choice.
+    const slugs = new Set(
+      componentFilters.flatMap(f =>
+        f.isComponentTypeFilter && typeof f.value === "string"
+          ? [f.value]
+          : f.componentSlugs
+      )
+    );
+
+    // Resolved together rather than in sequence: these are independent point
+    // lookups, and this runs on every list request carrying a component filter.
+    const lookups = await Promise.all(
+      [...slugs].map(async slug => ({
+        slug,
+        tableName: await this.componentDataService?.getComponentTableName(slug),
+      }))
+    );
+    for (const { slug, tableName } of lookups) {
+      if (tableName) resolved.set(slug, tableName);
+    }
+    return resolved;
+  }
+
   private buildComponentFieldConditions(
     componentFilters: ComponentFieldFilter[],
     parentTableName: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column reference
     parentIdColumn: any,
-    dialect: string = "postgresql"
+    dialect: string = "postgresql",
+    componentTableNames: Map<string, string> = new Map()
   ): ReturnType<typeof and> | undefined {
     if (componentFilters.length === 0) {
       return undefined;
@@ -2604,7 +2649,11 @@ export class CollectionQueryService extends BaseService {
       const tableExistsConditions: any[] = [];
 
       for (const slug of slugsToQuery) {
-        const componentTableName = `comp_${slug}`;
+        // The registry records the physical name, which is the only source for
+        // a component with a custom dbName; canonical resolution is the
+        // fallback when the lookup was unavailable.
+        const componentTableName =
+          componentTableNames.get(slug) ?? resolveComponentTableName(slug);
 
         // Build EXISTS subquery:
         // EXISTS (SELECT 1 FROM comp_{slug}

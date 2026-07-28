@@ -37,6 +37,7 @@ import {
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
@@ -395,7 +396,9 @@ function convertToComponentRecords(
     id: component.slug, // Use slug as temporary ID
     slug: component.slug,
     label: component.label?.singular ?? toTitleCase(component.slug),
-    tableName: component.dbName ?? `comp_${component.slug.replace(/-/g, "_")}`,
+    // Canonical resolution keeps generated table names aligned with the
+    // registry and runtime schema for the same component.
+    tableName: resolveComponentTableName(component.slug),
     fields: component.fields,
     description: component.description ?? component.admin?.description,
     admin: component.admin,

@@ -54,6 +54,28 @@ describe("ComponentDataService", () => {
     ctx.registry.registerComponent("cta", ctaComponentMeta());
   });
 
+  describe("getComponentTableName", () => {
+    it("returns the registry's physical name for a custom-named component", async () => {
+      // A component whose dbName is honored verbatim has a table name that
+      // cannot be derived from its slug, so callers addressing its storage
+      // (filter subqueries) must read it from the registry.
+      ctx.registry.registerComponent("legal", {
+        slug: "legal",
+        tableName: "legal_blocks",
+      });
+
+      await expect(ctx.service.getComponentTableName("legal")).resolves.toBe(
+        "legal_blocks"
+      );
+    });
+
+    it("returns null for an unknown component", async () => {
+      await expect(
+        ctx.service.getComponentTableName("ghost")
+      ).resolves.toBeNull();
+    });
+  });
+
   describe("saveComponentData (single component)", () => {
     it("inserts a new instance when none exists", async () => {
       ctx.adapter.select.mockResolvedValue([]); // no existing

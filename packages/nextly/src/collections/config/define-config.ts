@@ -34,6 +34,8 @@
 
 import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-component";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
+import { NextlyError } from "../../errors";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -273,6 +275,7 @@ function validateNextlyConfig(config: NextlyConfig): void {
   }
 
   const components = config.components ?? [];
+  const componentTables = new Map<string, string>();
 
   for (const comp of components) {
     const slug = comp.slug.toLowerCase();
@@ -302,6 +305,33 @@ function validateNextlyConfig(config: NextlyConfig): void {
     }
 
     slugs.add(slug);
+
+    // Distinct slugs can still derive one table: the resolver collapses
+    // separator runs, so `foo-bar` and `foo--bar` both become `comp_foo_bar`.
+    // Caught here rather than at the unique index on `dynamic_components`,
+    // which would surface as an opaque database error on the second write.
+    const tableName = resolveComponentTableName(comp.slug);
+    const collidingSlug = componentTables.get(tableName);
+    if (collidingSlug !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "components",
+            code: "COMPONENT_TABLE_COLLISION",
+            message:
+              `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve ` +
+              `to the table '${tableName}'. Choose slugs that differ by more ` +
+              `than their separators.`,
+          },
+        ],
+        logContext: {
+          reason: "component-table-collision",
+          slugs: [collidingSlug, comp.slug],
+          tableName,
+        },
+      });
+    }
+    componentTables.set(tableName, comp.slug);
   }
 
   if (components.length > 0) {
