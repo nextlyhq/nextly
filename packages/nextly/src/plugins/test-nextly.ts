@@ -245,9 +245,17 @@ async function provisionDatabase(
       url: databaseUrl.toString(),
     });
 
+    // A handle destroyed twice — an explicit cleanup plus an `afterEach` — must
+    // not drop the database a second time through a server adapter the first
+    // call already disconnected. The SQLite path has always tolerated a repeat
+    // destroy, so this one does too.
+    let released = false;
+
     return {
       adapter,
       async release() {
+        if (released) return;
+        released = true;
         // Nested so each step still runs when an earlier one throws. A failed
         // drop must not strand the environment pointing at a database this
         // instance owns, and a failed disconnect must not either — the files
@@ -295,9 +303,8 @@ function resolveServerUrl(
     // The guidance is the whole value of this error, so it goes in the public
     // message: `internal()` would reduce it to "An unexpected error occurred."
     // and the harness has no logger wired up to surface the context instead.
-    throw new NextlyError({
-      code: "INVALID_INPUT",
-      publicMessage:
+    throw NextlyError.invalidInput({
+      message:
         `createTestNextly({ dialect: "${dialect}" }) needs a server to ` +
         `connect to. Set ${envName}, or pass serverUrl. Use ` +
         `getConfiguredTestDialects() to skip when it is not configured.`,
@@ -383,14 +390,18 @@ export async function createTestNextly(
   try {
     return await bootServices(adapter, logger, opts, provisioned);
   } catch (error) {
-    // `registerServices` marks itself registered only on a successful boot, so
-    // `shutdownServices()` no-ops afterwards and none of this is cleaned up by
-    // the next boot's defensive reset.
+    // Two different failures reach here, and each needs a different half.
     //
-    // The container has to be cleared explicitly. `registerSingleton` installs
-    // a factory that keeps any instance already built, so a half-registered
-    // adapter would survive re-registration and the next boot would be handed
-    // this disconnected one — pointing at a database that no longer exists.
+    // If registration SUCCEEDED and a later step failed, the plugins are live
+    // and their `destroy()` callbacks have to run — only `shutdownServices`
+    // does that, and it no-ops harmlessly when registration never completed.
+    await shutdownServices().catch(() => {});
+    // If registration did NOT complete, the flag was never set, so nothing
+    // above cleared the container. It has to be cleared explicitly:
+    // `registerSingleton` installs a factory that keeps any instance already
+    // built, so a half-registered adapter would survive re-registration and
+    // the next boot would be handed this disconnected one — pointing at a
+    // database that no longer exists.
     clearServices();
     // Disconnected before the database is dropped, and regardless of who
     // supplied it: a successful boot's `destroy()` closes the adapter through
@@ -475,11 +486,19 @@ async function bootServices(
     events: getEventBus(),
     adapter,
     async destroy() {
-      // Boot schedules an endpoint-presence read that is deliberately not
-      // awaited. Drained here, while the adapter is still connected: a query
-      // that arrives after the pool closes is raised by mysql2 as an
-      // unhandled exception rather than a rejected promise, which ends the
-      // whole run instead of the one query.
+      // Everything the instance started but did not await has to finish before
+      // the connection goes away. A query that arrives after the pool closes
+      // is raised by mysql2 as an unhandled exception rather than a rejected
+      // promise, which ends the whole run instead of the one query.
+      //
+      // Event handlers first: they are post-commit and asynchronous, and one
+      // still running would otherwise read a closed pool or lose its write
+      // into a database being dropped. Draining them can schedule webhook
+      // work, so the endpoint-presence read boot leaves unawaited is drained
+      // after, not before.
+      await getEventBus()
+        .settle()
+        .catch(() => {});
       await refreshEndpointPresence().catch(() => {});
       // shutdownServices runs plugin destroy() once T9 wires it, then
       // disconnects the adapter and clears the container.
