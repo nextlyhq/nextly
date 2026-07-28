@@ -366,11 +366,12 @@ function validateDbName(
     return;
   }
 
-  // Compared case-insensitively: SQLite, and MySQL on a case-insensitive
-  // installation, resolve `DYNAMIC_COMPONENTS` and `dynamic_components` to the
-  // same physical table, so a case variant would otherwise slip past and let a
-  // later drop reach core storage.
-  const normalized = dbName.toLowerCase();
+  // Compared with surrounding whitespace stripped and case folded: SQLite, and
+  // MySQL on a case-insensitive installation, resolve `DYNAMIC_COMPONENTS` and
+  // `dynamic_components` to the same physical table, and MySQL discards
+  // trailing identifier spaces, so either variant would otherwise slip past and
+  // let a later drop reach core storage.
+  const normalized = dbName.trim().toLowerCase();
 
   // Only names belonging to a different OWNER are rejected: framework core
   // tables, and the namespaces of other entity kinds. The component namespace

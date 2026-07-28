@@ -112,3 +112,20 @@ describe("companion-table shape is reserved", () => {
     expect(result.valid).toBe(false);
   });
 });
+
+describe("reserved-name matching ignores surrounding whitespace", () => {
+  it("rejects a padded core table name", () => {
+    // MySQL discards trailing identifier spaces, so this resolves back onto
+    // core storage once stored verbatim.
+    const result = validateComponentConfig({
+      ...base,
+      dbName: "dynamic_components ",
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects a padded entity namespace", () => {
+    const result = validateComponentConfig({ ...base, dbName: " dc_posts" });
+    expect(result.valid).toBe(false);
+  });
+});
