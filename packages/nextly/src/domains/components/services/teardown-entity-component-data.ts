@@ -207,12 +207,16 @@ async function listRegisteredComponentTables(
   try {
     rows = await adapter.select<Record<string, unknown>>(REGISTRY_TABLE, {});
   } catch (error) {
-    // An executor with no schema registered for the registry can still sweep by
-    // prefix, so degrade to that rather than abort the delete. Every other
-    // failure is real and belongs to the caller: reading it as "nothing
-    // registered" would silently narrow the sweep and strand rows.
-    if (/not found in schema registry/i.test(String(error))) return [];
-    throw error;
+    // The ORM cannot address the registry on this executor, but the table is in
+    // the catalog, so read it directly instead of continuing without it. Giving
+    // up here would silently drop every custom-named component from the sweep —
+    // exactly the rows this lookup exists to find — and strand them. Reading by
+    // statement is how this module already handles tables the ORM cannot
+    // resolve; any other failure is real and belongs to the caller.
+    if (!/not found in schema registry/i.test(String(error))) throw error;
+    rows = await adapter.executeQuery<Record<string, unknown>>(
+      `SELECT ${q("table_name", adapter.dialect)} FROM ${q(REGISTRY_TABLE, adapter.dialect)}`
+    );
   }
 
   const catalog = new Set(discovered);
@@ -254,7 +258,11 @@ export async function teardownEntityComponentData(
       ...discovered.filter(name => name.startsWith("comp_")),
       ...registered,
     ]),
-  ].filter(name => !isCompanionTable(name));
+    // The registry itself is metadata, never component storage. A row whose
+    // dbName names it would otherwise be probed as an instance table, where a
+    // missing `_parent_table` column breaks the delete and a permissive
+    // adapter could damage the metadata.
+  ].filter(name => name !== REGISTRY_TABLE && !isCompanionTable(name));
 
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };

@@ -2516,10 +2516,26 @@ export class CollectionQueryService extends BaseService {
       return resolved;
     }
 
-    const slugs = new Set(componentFilters.flatMap(f => f.componentSlugs));
-    for (const slug of slugs) {
-      const tableName =
-        await this.componentDataService.getComponentTableName(slug);
+    // Mirror the condition builder's own narrowing: a _componentType filter
+    // pinned to one type queries only that table, so resolving the whole zone
+    // would cost a round trip per unused component choice.
+    const slugs = new Set(
+      componentFilters.flatMap(f =>
+        f.isComponentTypeFilter && typeof f.value === "string"
+          ? [f.value]
+          : f.componentSlugs
+      )
+    );
+
+    // Resolved together rather than in sequence: these are independent point
+    // lookups, and this runs on every list request carrying a component filter.
+    const lookups = await Promise.all(
+      [...slugs].map(async slug => ({
+        slug,
+        tableName: await this.componentDataService?.getComponentTableName(slug),
+      }))
+    );
+    for (const { slug, tableName } of lookups) {
       if (tableName) resolved.set(slug, tableName);
     }
     return resolved;

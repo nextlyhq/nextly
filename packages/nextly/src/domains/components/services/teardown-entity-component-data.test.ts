@@ -277,3 +277,71 @@ describe("teardownEntityComponentData unmaterialized components", () => {
     expect(result.skippedTables).not.toContain("comp_pending");
   });
 });
+
+describe("teardownEntityComponentData registry safety", () => {
+  it("never sweeps the registry table even when a row names it", async () => {
+    const probed: string[] = [];
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue(["comp_hero", "dynamic_components"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn().mockResolvedValue(0),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") {
+          // A component whose dbName collides with the registry itself.
+          return [{ slug: "bad", table_name: "dynamic_components" }];
+        }
+        probed.push(table);
+        return [];
+      }),
+    };
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(probed).not.toContain("dynamic_components");
+    expect(result.tablesTouched).not.toContain("dynamic_components");
+  });
+
+  it("reads registered names by statement when the ORM cannot address the registry", async () => {
+    // Losing the registry here would silently drop custom-named components
+    // from the sweep, which is the case this lookup exists to cover.
+    const deleted: string[] = [];
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi.fn().mockResolvedValue(["seo_meta", "dynamic_components"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn(async (sql: string) => {
+        if (/FROM\s+"dynamic_components"/i.test(sql)) {
+          return [{ table_name: "seo_meta" }];
+        }
+        return [{ n: 0 }];
+      }),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") {
+          throw new Error(
+            'Table "dynamic_components" not found in schema registry.'
+          );
+        }
+        return [{ id: `${table}-1` }];
+      }),
+    };
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).toContain("seo_meta");
+    expect(deleted).toContain("seo_meta");
+  });
+});
