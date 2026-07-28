@@ -203,11 +203,15 @@ async function listRegisteredComponentTables(
 ): Promise<string[]> {
   if (!discovered.includes(REGISTRY_TABLE)) return [];
 
-  // Read through the ORM, and let any failure propagate. The registry is a core
-  // table registered at boot, so a read failure here is a genuine fault rather
-  // than a condition to route around — and continuing without it would silently
-  // drop every custom-named component from the sweep, stranding the rows this
-  // lookup exists to find.
+  // Consulted only when the ORM can address it. An executor with no schema
+  // registered for the registry — a hand-built adapter carrying just its own
+  // tables — has no schema for any component table either, so it could not
+  // address a custom-named one even if this read returned it; prefix discovery
+  // stays complete for everything such an executor can reach. Probing rather
+  // than catching keeps genuine read failures propagating instead of being
+  // mistaken for "nothing registered".
+  if (!(await isResolvable(adapter, REGISTRY_TABLE))) return [];
+
   const rows = await adapter.select<Record<string, unknown>>(
     REGISTRY_TABLE,
     {}

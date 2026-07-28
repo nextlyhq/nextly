@@ -277,8 +277,9 @@ describe("teardownEntityComponentData registry read failures", () => {
       tableExists: vi.fn().mockResolvedValue(false),
       delete: vi.fn().mockResolvedValue(0),
       executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
-      select: vi.fn(async (table: string) => {
-        if (table === "dynamic_components") {
+      select: vi.fn(async (table: string, options?: { where?: unknown }) => {
+        // The resolvability probe must succeed so the real read is reached.
+        if (table === "dynamic_components" && !options?.where) {
           throw new Error("connection terminated");
         }
         return [];
