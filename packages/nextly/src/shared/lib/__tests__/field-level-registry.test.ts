@@ -411,6 +411,40 @@ describe("field-level registry", () => {
     expect(sawRestricted).toBe(true);
   });
 
+  it("keeps an array's decorations under their own keys", async () => {
+    // `"01"` and `"1"` both coerce to the number 1, so keying a copy off the
+    // number lets a decoration overwrite a real element. Non-numeric keys are
+    // properties too, and dropping them shows a callback a different array from
+    // the one being authorized.
+    let seen: { one?: unknown; oh1?: unknown; meta?: unknown } | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const items = data.items as unknown[] & Record<string, unknown>;
+            seen = { one: items[1], oh1: items["01"], meta: items.meta };
+            return true;
+          },
+        },
+      },
+    ]);
+    const items = ["a", "b"] as unknown[] & Record<string, unknown>;
+    items["01"] = "decoration";
+    items.meta = "note";
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", items },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toEqual({ one: "b", oh1: "decoration", meta: "note" });
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {

@@ -1404,6 +1404,28 @@ export class SingleQueryService extends BaseService {
         },
       });
 
+      // The response assembly is best-effort, and the decision below is made on
+      // what it produced, so it is held to the same completeness bar as the
+      // authorization view: expansion that succeeded for that earlier pass can
+      // fail here after a hook writes or another writer moves the data.
+      //
+      // Checked HERE, before any response-shaping hook. A hook may legitimately
+      // drop or replace a relationship, and nothing distinguishes that from an
+      // expansion that failed — so a later check would read a deliberate
+      // transformation as a fault and refuse a read that is fine.
+      if (deferCustomRule && !options.overrideAccess) {
+        this.assertRelationshipsExpanded(
+          slug,
+          singleMeta.fields,
+          responseReferences ?? doc,
+          doc,
+          // The response honours the caller's depth, and `0` means "give me
+          // references". The authorization view has already judged the same
+          // relationships at the full read depth.
+          (options.depth ?? DEFAULT_READ_DEPTH) > 0
+        );
+      }
+
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
@@ -1460,21 +1482,6 @@ export class SingleQueryService extends BaseService {
       // callers before those stages run any side effects; this is the decision
       // that governs what is handed back.
       if (deferCustomRule && !options.overrideAccess) {
-        // The response assembly is best-effort, and this decision is made on
-        // it. Expansion that succeeded for the earlier view can fail after a
-        // hook writes or another writer moves the data, which would leave a
-        // reference where the rule expects a row — so the same completeness
-        // guarantee has to hold for the document actually being judged.
-        this.assertRelationshipsExpanded(
-          slug,
-          singleMeta.fields,
-          responseReferences ?? doc,
-          doc,
-          // The response honours the caller's depth, and `0` means "give me
-          // references". The authorization view has already judged the same
-          // relationships at the full read depth.
-          (options.depth ?? DEFAULT_READ_DEPTH) > 0
-        );
         const finalDenial = await this.judgeAssembledDocument({
           slug,
           accessRules: singleMeta.accessRules,

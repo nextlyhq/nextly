@@ -67,9 +67,12 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     // from the array it was given.
     const copy: unknown[] = new Array(value.length) as unknown[];
     seen.set(value, copy);
-    for (const index of Object.keys(value)) {
-      const at = Number(index);
-      if (Number.isInteger(at)) copy[at] = detachValue(value[at], seen);
+    for (const [key, entry] of Object.entries(value)) {
+      // Only a canonical index addresses an element. `"01"` and `"1"` both
+      // coerce to 1, so keying off the number would let a decoration overwrite
+      // a real element; anything else is an own property and is kept as one.
+      const target = copy as unknown as Record<string, unknown>;
+      target[key] = detachValue(entry, seen);
     }
     return copy;
   }

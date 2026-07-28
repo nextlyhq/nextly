@@ -1073,6 +1073,61 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data).toBeUndefined();
   });
 
+  it("lets an afterRead hook drop a relationship without failing the read", async () => {
+    // A hook shapes the response and may legitimately remove or replace a
+    // relationship. Nothing distinguishes that from an expansion that failed,
+    // so checking completeness after hooks run reads a deliberate
+    // transformation as a fault and refuses a read that is fine.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+    current.hooks.register(
+      "afterRead",
+      "single:branding",
+      ({ data }: { data: Record<string, unknown> }) => {
+        const { author: _dropped, ...rest } = data;
+        return rest;
+      }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("author");
+  });
+
   it("leaves a relationship configured not to populate alone", async () => {
     // `maxDepth: 0` asks for the reference itself, so an unexpanded id is the
     // configured outcome. Demanding a row there refuses every read of the
