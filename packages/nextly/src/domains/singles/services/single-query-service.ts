@@ -50,10 +50,12 @@ import type { ComponentDataService } from "../../../services/components/componen
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { detachData } from "../../../shared/lib/detach";
+import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
+import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -90,6 +92,7 @@ import type {
 
 import type { SingleRegistryService } from "./single-registry-service";
 import {
+  assertNoPasswordDefault,
   assertValidBlocksDefault,
   buildSingleErrorResult,
   collectAllMediaIds,
@@ -1317,33 +1320,94 @@ export class SingleQueryService extends BaseService {
         : []
     );
 
+    // A field's `defaultValue` (a function, or a structured value) does not
+    // survive serialization to `dynamic_singles.fields`, so it is absent from
+    // `singleMeta.fields`. Resolve defaults from the live code-first config when
+    // the Single has one; UI-created singles have none and keep the serialized
+    // fields (which can only carry primitive defaults). Keyed by field name.
+    const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
+      singleMeta.slug
+    );
+    const codeFirstFieldByName = codeFirstFields
+      ? new Map(
+          codeFirstFields
+            .filter(field => "name" in field && field.name)
+            .map(field => [(field as { name: string }).name, field])
+        )
+      : undefined;
+
+    // A logical view of the document as it is built, holding structured values as
+    // real objects. Function defaults receive THIS, not `defaults`: `defaults`
+    // stores json-backed values as JSON strings for the DB insert, so a dependent
+    // default reading an earlier group/repeater/JSON field would otherwise see a
+    // string instead of the object.
+    const logicalDefaults: Record<string, unknown> = { ...defaults };
+
+    // The logical form of a DB-ready default value: a json-backed field's type
+    // default (e.g. `getDefaultValue` returning "{}"/"[]") is a string for the
+    // insert, but a later dependent default must see the decoded object/array.
+    const toLogical = (
+      field: Parameters<typeof shouldTreatAsJson>[0],
+      dbValue: unknown
+    ): unknown => {
+      if (shouldTreatAsJson(field) && typeof dbValue === "string") {
+        try {
+          return JSON.parse(dbValue);
+        } catch {
+          return dbValue;
+        }
+      }
+      return dbValue;
+    };
+
     for (const field of singleMeta.fields) {
       if (!("name" in field) || !field.name) continue;
+
+      // Prefer the live code-first field for the declared default: the
+      // serialized `field` has lost any `defaultValue` function/structured value.
+      const defaultSource = codeFirstFieldByName?.get(field.name) ?? field;
 
       // Resolve the field's default (explicit defaultValue, else a required
       // field's type-default) once, regardless of whether it is localized — a
       // localized field's default must reach the companion just the same.
-      if ("defaultValue" in field && field.defaultValue !== undefined) {
+      if (
+        "defaultValue" in defaultSource &&
+        defaultSource.defaultValue !== undefined
+      ) {
         // `defaultValue` may be a function `(data) => value`; evaluate it against
         // the document built so far so the stored default is a real value, not a
         // function object. A raw function would be bound as an SQL parameter for
         // the companion/main upsert and fail or persist its stringified form —
         // localized fields now flow through this block, so it must be resolved.
         const resolved =
-          typeof field.defaultValue === "function"
-            ? field.defaultValue(defaults)
-            : field.defaultValue;
+          typeof defaultSource.defaultValue === "function"
+            ? defaultSource.defaultValue(logicalDefaults)
+            : defaultSource.defaultValue;
         // A blocks default is checked here rather than only at config load,
         // because a function default can only be resolved against real data.
         // This row is inserted directly on first read, without going through
         // the write path, so nothing downstream would catch a document the
         // field's own policy rejects — and the admin control is read-only, so
         // the stored value could not be corrected from the UI.
-        assertValidBlocksDefault(field, resolved, singleMeta.slug);
+        assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
+        // Same direct-insert reasoning for passwords: this path never runs
+        // `hashPasswordFieldValues`, so a resolved password default would persist
+        // in plaintext. Refuse it (a password must be set explicitly to be hashed).
+        assertNoPasswordDefault(field, singleMeta.slug);
+        // Clone before exposing: a live STATIC structured default is the object
+        // stored on the config, so handing that reference to later dependent
+        // defaults (which may sort/mutate it) would corrupt the config itself.
+        const cloned = cloneDefault(resolved);
+        // Keep the value on the logical view for later dependent defaults, and
+        // JSON-encode it for the DB insert when the column is json-backed. Encode
+        // EVERY defined value, not only objects: a json-backed column stores text
+        // (SQLite especially), so a primitive default like `() => true` must be
+        // "true", not a raw boolean that better-sqlite3 cannot bind.
+        logicalDefaults[field.name] = cloned;
         defaults[field.name] =
-          shouldTreatAsJson(field) && typeof resolved === "object"
-            ? JSON.stringify(resolved)
-            : resolved;
+          shouldTreatAsJson(field) && cloned !== undefined
+            ? JSON.stringify(cloned)
+            : cloned;
         continue;
       }
 
@@ -1365,16 +1429,26 @@ export class SingleQueryService extends BaseService {
         }
         if ("required" in field && field.required) {
           defaults[field.name] = getDefaultValue(field);
+          logicalDefaults[field.name] = toLogical(field, defaults[field.name]);
         } else {
           delete defaults[field.name];
+          delete logicalDefaults[field.name];
         }
         continue;
       }
 
       if ("required" in field && field.required) {
         defaults[field.name] = getDefaultValue(field);
+        logicalDefaults[field.name] = toLogical(field, defaults[field.name]);
       }
     }
+
+    // A date default resolves to a string (e.g. `() => new Date().toISOString()`),
+    // but a timestamp column needs a `Date` — the ordinary write path coerces via
+    // `coerceDateFieldsToDate`, and this direct-insert path must do the same or
+    // SQLite stores the string in an integer column and reads back an invalid
+    // date. Idempotent: an existing `Date` passes through untouched.
+    coerceDateFieldsToDate(defaults, singleMeta.fields);
 
     // A field can be translatable/required yet emit NO storage column — a
     // component or other layout-only ("skip") field type. Its default has nowhere

@@ -47,6 +47,7 @@ import {
   type BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import type { SingleConfig } from "../../../singles/config/types";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -170,8 +171,73 @@ export class SingleRegistryService extends BaseRegistryService<
   /** Optional PermissionSeedService for auto-permission management. */
   private permissionSeedService?: PermissionSeedService;
 
+  /**
+   * Live code-first Single configs, kept for their field `defaultValue`s. A
+   * `defaultValue` is a function, which is dropped when field metadata is
+   * JSON-serialized to `dynamic_singles.fields`, so the default resolution on a
+   * first-read auto-create reads defaults from here instead of the serialized
+   * (function-less) registry row. Undefined for UI-created Singles. Set only
+   * AFTER a successful metadata sync (boot and HMR reload) via
+   * {@link setCodeFirstSingles}, never eagerly — otherwise new live fields could
+   * pair with stale serialized metadata for a single whose sync failed.
+   */
+  private codeFirstSingles?: SingleConfig[];
+
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
+  }
+
+  /**
+   * Update the live code-first config snapshot after a metadata sync. Pass
+   * `keepPriorFor` (the slugs whose sync FAILED) to retain their previous
+   * snapshot entry instead of the new config: a failed single's serialized
+   * metadata did not advance, so exposing its new fields would mis-encode a
+   * default against the old type. A failed single with no prior entry is
+   * dropped (it falls back to the serialized fields).
+   */
+  setCodeFirstSingles(
+    singles: SingleConfig[],
+    options?: { keepPriorFor?: ReadonlySet<string> }
+  ): void {
+    const keepPrior = options?.keepPriorFor;
+    if (!keepPrior || keepPrior.size === 0) {
+      this.codeFirstSingles = singles;
+      return;
+    }
+    const priorBySlug = new Map(
+      (this.codeFirstSingles ?? []).map(single => [single.slug, single])
+    );
+    this.codeFirstSingles = singles
+      .map(single =>
+        keepPrior.has(single.slug) ? priorBySlug.get(single.slug) : single
+      )
+      .filter((single): single is SingleConfig => single !== undefined);
+  }
+
+  /**
+   * Drop snapshot entries whose slug is not in `presentSlugs`, leaving the
+   * surviving entries untouched. Used on a config reload to evict a removed
+   * Single's live defaults BEFORE any later `setCodeFirstSingles` call — so a
+   * reload that aborts (introspection failure, deferred schema, apply failure)
+   * after a Single was removed cannot leave its stale function defaults runnable
+   * against the removed-but-still-readable registry row. Remove-only: it never
+   * updates a surviving entry, so it cannot pair new live fields with stale
+   * serialized metadata the way an eager replace could.
+   */
+  pruneCodeFirstSingles(presentSlugs: ReadonlySet<string>): void {
+    if (!this.codeFirstSingles) return;
+    this.codeFirstSingles = this.codeFirstSingles.filter(single =>
+      presentSlugs.has(single.slug)
+    );
+  }
+
+  /**
+   * The live code-first field definitions for a Single (with `defaultValue`
+   * functions intact), or undefined for a UI-created Single. Callers resolving
+   * declared defaults use these instead of the serialized `dynamic_singles.fields`.
+   */
+  getCodeFirstFields(slug: string): SingleConfig["fields"] | undefined {
+    return this.codeFirstSingles?.find(single => single.slug === slug)?.fields;
   }
 
   protected getSearchColumns(): string[] {

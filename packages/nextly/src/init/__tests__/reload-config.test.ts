@@ -118,6 +118,8 @@ describe("reloadNextlyConfig", () => {
     const updateCollectionMigrationStatusSpy = vi
       .fn()
       .mockResolvedValue(undefined);
+    const setCodeFirstSinglesSpy = vi.fn();
+    const pruneCodeFirstSinglesSpy = vi.fn();
     const services: Record<string, unknown> = {
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       // The DI key is "adapter" (renamed from "databaseAdapter" — see the
@@ -144,6 +146,8 @@ describe("reloadNextlyConfig", () => {
       singleRegistryService: {
         syncCodeFirstSingles: vi.fn().mockResolvedValue({}),
         getAllSingles: vi.fn().mockResolvedValue(opts?.allSingles ?? []),
+        setCodeFirstSingles: setCodeFirstSinglesSpy,
+        pruneCodeFirstSingles: pruneCodeFirstSinglesSpy,
       },
       componentRegistryService: {
         syncCodeFirstComponents: syncCodeFirstComponentsSpy,
@@ -158,6 +162,8 @@ describe("reloadNextlyConfig", () => {
       syncCodeFirstComponentsSpy,
       registerDynamicSchemaSpy,
       updateCollectionMigrationStatusSpy,
+      setCodeFirstSinglesSpy,
+      pruneCodeFirstSinglesSpy,
     });
   }
 
@@ -1023,7 +1029,8 @@ describe("reloadNextlyConfig", () => {
       });
 
       const { reloadNextlyConfig } = await import("../reload-config");
-      await reloadNextlyConfig({ resolver: buildResolver() });
+      const resolver = buildResolver();
+      await reloadNextlyConfig({ resolver });
 
       // The removed code-first entities revert to the default (record)...
       expect(isWebhookRecordingEnabled("collection", "leads")).toBe(true);
@@ -1032,6 +1039,9 @@ describe("reloadNextlyConfig", () => {
       expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
         false
       );
+      // The live default snapshot is pruned to the (now empty) present set so a
+      // removed single's function defaults can't run from a stale snapshot.
+      expect(resolver.pruneCodeFirstSinglesSpy).toHaveBeenCalledWith(new Set());
       resetWebhookRecordingPolicy();
     });
 

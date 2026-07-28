@@ -161,6 +161,18 @@ interface CollectionRegistrySurface {
 }
 interface SingleRegistrySurface {
   syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
+  // Refresh the live code-first config snapshot the default resolver reads, so
+  // an HMR-added single or changed function default is honoured. `keepPriorFor`
+  // holds the slugs whose sync failed, so their prior snapshot is retained.
+  // Optional for partial resolver fakes.
+  setCodeFirstSingles?(
+    singles: unknown[],
+    options?: { keepPriorFor?: ReadonlySet<string> }
+  ): void;
+  // Drop removed singles from the live default snapshot BEFORE any reload path
+  // can abort, so a removed-but-readable single can't auto-create from stale
+  // function defaults. Optional for partial resolver fakes.
+  pruneCodeFirstSingles?(presentSlugs: ReadonlySet<string>): void;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created singles. Optional for partial resolver fakes.
@@ -173,6 +185,50 @@ interface SingleRegistrySurface {
     }>
   >;
 }
+/**
+ * The slugs whose single sync failed. `syncCodeFirstSingles` resolves with an
+ * `errors[]` (per-single failures) rather than rejecting, so a partial failure
+ * is read from there; those slugs keep their prior default snapshot.
+ */
+function failedSingleSlugs(syncResult: unknown): Set<string> {
+  const errs = (syncResult as { errors?: Array<{ slug?: string }> } | undefined)
+    ?.errors;
+  const slugs = new Set<string>();
+  if (Array.isArray(errs)) {
+    for (const entry of errs) if (entry?.slug) slugs.add(entry.slug);
+  }
+  return slugs;
+}
+
+/**
+ * Evict removed singles from the live default snapshot, keyed on the slugs the
+ * new config still declares. Runs EARLY on every reload — before the empty-
+ * target return, the metadata-only branch, the DDL apply, and every abort path
+ * (introspection failure, deferred/failed schema apply) — so a removed single's
+ * registry row (which stays readable) can never auto-create from stale function
+ * defaults even when a later `setCodeFirstSingles` never runs. Remove-only, so
+ * it never pairs a surviving single's new fields with stale serialized metadata.
+ * Non-fatal: a missing registry just leaves the snapshot for the next reload.
+ */
+async function pruneRemovedSingleDefaults(
+  resolve: ServiceResolver,
+  presentSingles: SingleDef[]
+): Promise<void> {
+  try {
+    const singleReg = (await resolve(
+      "singleRegistryService"
+    )) as SingleRegistrySurface;
+    const presentSlugs = new Set(
+      presentSingles
+        .map(single => single.slug)
+        .filter((slug): slug is string => typeof slug === "string")
+    );
+    singleReg.pruneCodeFirstSingles?.(presentSlugs);
+  } catch {
+    // DI not initialised or the registry is absent — nothing to prune.
+  }
+}
+
 interface ComponentRegistrySurface {
   syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
@@ -339,7 +395,18 @@ async function syncCodeFirstMetadataOnly(
       "singleRegistryService"
     )) as SingleRegistrySurface;
     const payload = buildSingleSyncPayload(newConfig.singles ?? []);
-    if (payload.length > 0) await singleReg.syncCodeFirstSingles(payload);
+    let failedSlugs = new Set<string>();
+    if (payload.length > 0) {
+      failedSlugs = failedSingleSlugs(
+        await singleReg.syncCodeFirstSingles(payload)
+      );
+    }
+    // Refresh the live default source after the sync: successful singles adopt
+    // the new config; a single whose sync failed keeps its prior snapshot so its
+    // new fields never pair with stale serialized metadata.
+    singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
+      keepPriorFor: failedSlugs,
+    });
   } catch (err) {
     singles = false;
     logger?.warn(
@@ -584,6 +651,13 @@ export async function reloadNextlyConfig(opts?: {
   }
   if (!adapter) return;
 
+  // Evict removed singles from the live default snapshot up front, before any
+  // return/abort below, so a single dropped from the config can never
+  // auto-create from its stale function defaults even if this reload later
+  // aborts (introspection failure, deferred/failed apply) before the
+  // metadata-sync `setCodeFirstSingles` runs.
+  await pruneRemovedSingleDefaults(resolve, newConfig.singles ?? []);
+
   // dialect is an abstract readonly property on DrizzleAdapter, not a
   // method (a previous iteration mistakenly called .getDialect() which
   // would crash at runtime).
@@ -674,6 +748,8 @@ export async function reloadNextlyConfig(opts?: {
     // plugin decisions are preserved). No metadata to sync here, so this is the
     // only reconciliation the empty-target path needs.
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
+    // The live default snapshot was already pruned to the (now empty) present
+    // set above, so a removed single's stale defaults are gone by here.
     return;
   }
 
@@ -1129,8 +1205,14 @@ export async function reloadNextlyConfig(opts?: {
       const codeFirstSingleConfigs = buildSingleSyncPayload(
         newConfig.singles ?? []
       );
+      let failedSlugs = new Set<string>();
       if (codeFirstSingleConfigs.length > 0) {
-        await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs);
+        // syncCodeFirstSingles resolves with an errors[] rather than rejecting;
+        // a per-single failure means its serialized metadata is stale, so that
+        // slug keeps its prior default snapshot below rather than the new fields.
+        failedSlugs = failedSingleSlugs(
+          await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs)
+        );
 
         // registerSingle defaults migration_status to 'pending'. The
         // pipeline above just created any missing physical tables, so
@@ -1147,6 +1229,12 @@ export async function reloadNextlyConfig(opts?: {
           }
         }
       }
+      // Refresh the live default source after the sync: successful singles adopt
+      // the new config; a single whose sync failed keeps its prior snapshot so
+      // its new fields never pair with stale serialized metadata.
+      singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
+        keepPriorFor: failedSlugs,
+      });
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above.
       singleSynced = false;
