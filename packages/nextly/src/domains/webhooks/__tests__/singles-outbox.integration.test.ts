@@ -514,7 +514,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     // the event must not be tagged with a language.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero",
           localized: false,
@@ -552,7 +552,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     // write locale.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero",
           localized: true,
@@ -588,7 +588,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     // config names an allow-list rather than a single component slug.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero_localized",
           localized: true,
@@ -629,7 +629,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     // per-locale even though there is no dynamic-zone `_componentType`.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero_localized",
           localized: true,
@@ -670,7 +670,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     // per-locale even though the component's definition is localized.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero_mixed",
           localized: true,

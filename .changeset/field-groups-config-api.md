@@ -24,4 +24,6 @@
 
 Reusable field structures are now called Field Groups. `defineComponent()` becomes `defineFieldGroup()`, the `component()` field helper becomes `fieldGroup()`, the `components` config key becomes `fieldGroups`, and plugins contribute them via `contributes.fieldGroups`. The old names are removed rather than aliased, so configs must be updated on upgrade.
 
-Stored data is untouched: tables, columns and the JSON written for existing content keep their current names, so this release moves no data and needs no migration. Table names starting with `fg_` are now rejected in `dbName`, reserving them for the storage migration that follows.
+Stored data is untouched: tables, columns and the JSON written for existing content keep their current names, so this release moves no data and needs no migration.
+
+Configs and plugins still using the old key now fail at startup with a message naming the new one, rather than starting up with those definitions silently unregistered.

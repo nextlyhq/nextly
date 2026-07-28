@@ -2665,9 +2665,9 @@ export class CollectionQueryService extends BaseService {
         const existsSubquery = sql`
           EXISTS (
             SELECT 1 FROM ${sql.identifier(componentTableName)}
-            WHERE ${STORAGE_FORMAT.columns.parentId} = ${parentIdColumn}
-            AND ${STORAGE_FORMAT.columns.parentTable} = ${parentTableName}
-            AND ${STORAGE_FORMAT.columns.parentField} = ${filter.fieldName}
+            WHERE ${sql.identifier(STORAGE_FORMAT.columns.parentId)} = ${parentIdColumn}
+            AND ${sql.identifier(STORAGE_FORMAT.columns.parentTable)} = ${parentTableName}
+            AND ${sql.identifier(STORAGE_FORMAT.columns.parentField)} = ${filter.fieldName}
             AND ${valueCondition}
           )
         `;

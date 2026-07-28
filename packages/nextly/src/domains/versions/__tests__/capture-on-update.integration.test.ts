@@ -316,7 +316,7 @@ describe("version capture on update (integration)", () => {
     // the current component state the snapshot would drop the untouched
     // component, silently losing it on a later restore.
     current = await createTestNextly({
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero",
           fields: [text({ name: "heading" })],
@@ -478,7 +478,7 @@ describe("version capture on update (integration)", () => {
         defaultLocale: "en",
         locales: [{ code: "en" }, { code: "de" }],
       },
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero",
           localized: true,
@@ -529,7 +529,7 @@ describe("version capture on update (integration)", () => {
         defaultLocale: "en",
         locales: [{ code: "en" }, { code: "de" }],
       },
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero",
           localized: true,
@@ -573,7 +573,7 @@ describe("version capture on update (integration)", () => {
     // may name a different component by the time it is restored, and the type
     // is the only thing that would reveal the mismatch.
     current = await createTestNextly({
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "hero",
           fields: [text({ name: "heading" })],
@@ -619,7 +619,7 @@ describe("version capture on update (integration)", () => {
     // components map, so the collection path's fix had to be applied here too
     // — the two capture paths are separate code.
     current = await createTestNextly({
-      components: [
+      fieldGroups: [
         defineFieldGroup({ slug: "hero", fields: [text({ name: "heading" })] }),
       ],
       singles: [

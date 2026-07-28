@@ -130,8 +130,8 @@ export interface CreateTestNextlyOptions {
   collections?: CollectionConfig[];
   /** Code-first singles. */
   singles?: SingleConfig[];
-  /** Code-first components. */
-  components?: FieldGroupConfig[];
+  /** Code-first field groups. */
+  fieldGroups?: FieldGroupConfig[];
   /** Content-localization config (i18n). Normalized and wired so localized reads resolve. */
   localization?: LocalizationConfig;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
@@ -567,7 +567,7 @@ async function bootServices(
     plugins: opts.plugins,
     collections: opts.collections,
     singles: opts.singles,
-    fieldGroups: opts.components,
+    fieldGroups: opts.fieldGroups,
     localization: opts.localization
       ? normalizeLocalization(opts.localization)
       : undefined,

@@ -235,7 +235,7 @@ describe("webhook outbox capture (integration)", () => {
     // component unless the reference is expanded first. Without that expansion
     // this value ships in cleartext.
     current = await createTestNextly({
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "profile",
           fields: [
@@ -473,7 +473,7 @@ describe("webhook outbox capture (integration)", () => {
     // create/update events, so a field hidden inside a component must be stripped
     // there too — otherwise a delete would leak what a create never did.
     current = await createTestNextly({
-      components: [
+      fieldGroups: [
         defineFieldGroup({
           slug: "profile",
           fields: [

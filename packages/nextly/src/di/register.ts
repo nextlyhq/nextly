@@ -72,6 +72,7 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
+import { NextlyError } from "../errors";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -365,6 +366,26 @@ export async function registerServices(
     throw new Error(
       "Services are already registered. Call clearServices() first if you need to re-register."
     );
+  }
+
+  // `getNextly()` and `registerServices()` are public entry points, so a
+  // JavaScript caller can hand over a config object the compiler never saw.
+  // Under the old key the boot would succeed while every field group went
+  // unregistered, which is the one outcome this rename must not produce.
+  const legacyFieldGroups = (config as { components?: unknown }).components;
+  if (legacyFieldGroups !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "components",
+          code: "CONFIG_KEY_RENAMED",
+          message:
+            "'components' is now 'fieldGroups'. Rename the key: the old one " +
+            "is no longer read.",
+        },
+      ],
+      logContext: { reason: "service-config-legacy-field-group-key" },
+    });
   }
 
   // ----------------------------------------
