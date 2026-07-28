@@ -224,15 +224,71 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(result.success).toBe(true);
 
     const rows = await t.adapter.select<EventRow>("nextly_events");
-    const publishedLocales = rows
+    const published = rows
       .filter(r => r.type === "entry.published")
-      .map(r => (envelopeOf(r).resource as { locale?: string }).locale);
+      .map(envelopeOf);
+    const byLocale = (loc: string | undefined) =>
+      published.find(
+        e => (e.resource as { locale?: string }).locale === loc
+      );
     // The German companion transitioned draft -> published, so it carries its
     // own locale tag...
-    expect(publishedLocales).toContain("de");
-    // ...and the default locale's transition is the document-wide event, which
-    // carries no locale.
-    expect(publishedLocales).toContain(undefined);
+    const de = byLocale("de");
+    expect(de).toBeDefined();
+    // ...and the German event carries the German content and the locale's own
+    // before/after status, not the main row's.
+    expect(de!.data.heading).toBe("Deutsch");
+    expect(de!.data.status).toBe("published");
+    expect(de!.previous?.status).toBe("draft");
+    // The default locale's transition is the document-wide event, which carries
+    // no locale.
+    expect(byLocale(undefined)).toBeDefined();
+  });
+
+  it("emits the default locale's own published event when its companion transitions under an already-published main row", async () => {
+    // Reconciliation can add per-locale `_status` beneath an entry whose main
+    // row is already published, leaving the default companion draft. A
+    // publish-all then transitions that companion, and because the main row is
+    // not itself transitioning, the default locale needs its own locale-tagged
+    // event rather than being swallowed by an absent document-wide one.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Manufacture the divergence: main row stays published, `en` companion draft.
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+      dialect: string;
+    };
+    const q = (idn: string) =>
+      adapter.dialect === "mysql" ? `\`${idn}\`` : `"${idn}"`;
+    await adapter.executeQuery(
+      `UPDATE ${q("dc_pages_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+    );
+
+    const entries = h.getEntryService() as CollectionEntryService;
+    const result = await entries.publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const enPublished = rows
+      .filter(r => r.type === "entry.published")
+      .map(envelopeOf)
+      .filter(e => (e.resource as { locale?: string }).locale === "en");
+    // The publish-all recorded the default companion's real draft -> published
+    // change as its own `en` event (distinct from the create's `en` published
+    // event, which had no prior state).
+    expect(enPublished.some(e => e.previous?.status === "draft")).toBe(true);
   });
 
   it("reports a brand-new translation as the draft it was written as", async () => {

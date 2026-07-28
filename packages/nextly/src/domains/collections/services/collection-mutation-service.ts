@@ -2777,9 +2777,12 @@ export class CollectionMutationService extends BaseService {
       // post-commit transition event reads it. Defaults to the pre-read value so
       // a companion-only (no main status) publish still has a sane fallback.
       let lockedPreviousStatus = previousStatus;
-      const needsFreshParent =
-        !!versionsConfig?.enabled ||
-        (hasMainStatus && previousStatus !== "published");
+      // Read the fresh post-publish parent whenever the collection captures
+      // versions or carries a status: the pre-transaction `previousStatus` can
+      // be stale (a concurrent writer may commit between it and the lock), so a
+      // transition detected only under the lock still needs the committed row
+      // for its event payload rather than falling back to the stale pre-read.
+      const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
 
       // Bump `updated_at` alongside status so caches / revalidation see the change (a bare
       // status flip left the timestamp stale). On SQLite the dynamic tables store `updated_at`
@@ -2958,6 +2961,10 @@ export class CollectionMutationService extends BaseService {
             existingEntry as Record<string, unknown>,
             fields
           );
+          // The status the publish moves away from, read under the lock: a
+          // concurrent unpublish committed between the pre-transaction read and
+          // the lock is reflected here rather than the stale pre-read status.
+          previousDocument.status = lockedPreviousStatus;
           const publishEventFields = await this.webhookFieldTreeIfRecording(
             params.collectionName,
             fields,
@@ -3001,17 +3008,42 @@ export class CollectionMutationService extends BaseService {
           // watching a single language needs its own `entry.published` — so each
           // companion locale that actually transitioned gets a locale-tagged
           // event, with the locale's own prior `_status` as the transition
-          // `from`. The default locale is skipped when the collection has a main
-          // status column (its transition is the document-wide event above);
-          // without one, the default locale's status lives on the companion and
-          // needs its own event too.
+          // `from`. The default locale is skipped ONLY when the main-row event
+          // above actually represented its transition; if the main row was
+          // already published (or has no status column), the default locale's
+          // real draft->published change lives on the companion and needs its
+          // own event too.
+          const mainEmittedDocumentWide =
+            hasMainStatus && lockedPreviousStatus !== "published";
           const defaultLocale = this.localization?.defaultLocale;
           for (const [
             locale,
             priorLocaleStatus,
           ] of priorCompanionStatuses) {
-            if (hasMainStatus && locale === defaultLocale) continue;
+            if (mainEmittedDocumentWide && locale === defaultLocale) continue;
             if (priorLocaleStatus === "published") continue;
+            // Build this locale's own before/after documents. Publishing changes
+            // only status, so the locale's translatable values are identical on
+            // both sides — overlay them onto the main-row event shape so a
+            // `locale`-tagged event carries that language's content and its own
+            // prior status, not the main row's. Read on the transaction
+            // (read-your-writes).
+            const localeValues = await this.readCompanionLocalizedValues(
+              tx,
+              params.collectionName,
+              params.entryId,
+              locale
+            );
+            const localeData = {
+              ...publishedDocument,
+              ...localeValues,
+              status: "published",
+            };
+            const localePrevious = {
+              ...previousDocument,
+              ...localeValues,
+              status: priorLocaleStatus,
+            };
             const localeRecorded = await this.recordStatusEvents(tx, {
               collection: params.collectionName,
               id: params.entryId,
@@ -3019,8 +3051,8 @@ export class CollectionMutationService extends BaseService {
               from: priorLocaleStatus,
               to: "published",
               isCreate: false,
-              data: publishedDocument,
-              previous: previousDocument,
+              data: localeData,
+              previous: localePrevious,
               fields: publishEventFields,
               actor: publishActor,
             });

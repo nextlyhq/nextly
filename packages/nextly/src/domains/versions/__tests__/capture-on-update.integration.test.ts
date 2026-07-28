@@ -281,11 +281,14 @@ describe("version capture on update (integration)", () => {
 
     const rows = await versions(current, "preferences");
     const v1 = rows[0];
-    const snapshot = v1.snapshot as { siteName?: string; tagline?: string };
+    const snapshot = v1.snapshot as { siteName?: string | null; tagline?: string };
     // The written non-default translation is captured...
     expect(snapshot.tagline).toBe("hallo");
-    // ...but the default-locale seed is NOT leaked into the "de" snapshot.
-    expect(snapshot.siteName).toBeUndefined();
+    // ...and the untranslated `siteName` is recorded as the empty state it is at
+    // "de" (null), NOT the default-locale seed "My Site": the snapshot holds the
+    // locale's real state so a restore resets the field, without leaking the
+    // default-locale value into the wrong language.
+    expect(snapshot.siteName ?? null).toBeNull();
     expect(v1.locale).toBe("de");
   });
 

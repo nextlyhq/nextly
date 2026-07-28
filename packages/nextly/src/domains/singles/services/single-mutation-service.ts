@@ -1504,13 +1504,13 @@ export class SingleMutationService extends BaseService {
               // (`previousCompanionValues`, already read shape). Without that
               // fallback a partial edit that touches only one field would drop
               // the locale's untouched translations from the snapshot and lose
-              // them on restore. The fallback carries only fields that actually
-              // hold a prior translation: a never-translated field reads back as
-              // null, and injecting that null would record an empty translation
-              // where the field was simply absent — leaking a blank into a
-              // non-default first write's snapshot. Keyed by field.name to match
-              // the read shape; mirrors the collection capture, which reads back
-              // the full write-locale companion.
+              // them on restore. A prior value is carried whenever the read
+              // returned the field AT ALL, null included: an untranslated field
+              // is part of the locale's state, so recording it lets a restore
+              // reset a field back to empty rather than leaving a later
+              // translation standing. Keyed by field.name to match the read
+              // shape; mirrors the collection capture, which reads back the full
+              // write-locale companion.
               if (companion) {
                 for (const f of companion.localizedFields) {
                   if (
@@ -1520,7 +1520,12 @@ export class SingleMutationService extends BaseService {
                     )
                   ) {
                     parentRow[f.name] = companionData[f.column];
-                  } else if (previousCompanionValues[f.column] != null) {
+                  } else if (
+                    Object.prototype.hasOwnProperty.call(
+                      previousCompanionValues,
+                      f.column
+                    )
+                  ) {
                     parentRow[f.name] = previousCompanionValues[f.column];
                   }
                 }
