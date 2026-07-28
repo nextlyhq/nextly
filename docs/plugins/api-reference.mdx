@@ -38,7 +38,7 @@ interface PluginDefinition {
 interface PluginContributions {
   collections?: CollectionConfig[];
   singles?:     SingleConfig[];
-  components?:  FieldGroupConfig[];
+  fieldGroups?: FieldGroupConfig[];
   extend?:      Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[];            // { action, resource, label?, description?, group? }
   fieldTypes?:  PluginFieldType[];             // custom field types — see below
