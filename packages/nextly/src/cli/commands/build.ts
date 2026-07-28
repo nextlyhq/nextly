@@ -241,7 +241,26 @@ export async function runBuild(
   result.collectionCount = collectionCount;
   logger.keyValue("Collections", collectionCount);
 
+  // Singles and components answer to the same declaration rules as collections,
+  // and a project can be made entirely of them. Validated before the
+  // no-collections return below, which would otherwise let an invalid
+  // declaration past the only check that would have caught it.
+  const entityValidation = validateSinglesAndComponents(
+    configResult.config.singles ?? [],
+    configResult.config.components ?? [],
+    context
+  );
+  result.errors.push(...entityValidation.errors);
+
   if (collectionCount === 0) {
+    if (entityValidation.errors.length > 0) {
+      reportDeclarationErrors(entityValidation.errors, context);
+      result.success = false;
+      result.durationMs = Date.now() - startTime;
+      logger.error(`Build failed in ${formatDuration(result.durationMs)}`);
+      logger.info("Fix the errors above and run `nextly build` again.");
+      process.exit(1);
+    }
     logger.warn("No collections defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
     return;
@@ -259,16 +278,6 @@ export async function runBuild(
   result.errors.push(...validationResult.errors);
   result.warnings.push(...validationResult.warnings);
 
-  // Singles and components answer to the same declaration rules as collections;
-  // without this a contributed one whose field type rejects its own declaration
-  // built clean and failed later at runtime.
-  const entityValidation = validateSinglesAndComponents(
-    configResult.config.singles ?? [],
-    configResult.config.components ?? [],
-    context
-  );
-  result.errors.push(...entityValidation.errors);
-
   // Reported together: a build is valid only if every entity is, and a single
   // or component error that did not fail the build would be a report the
   // command prints and then ignores.
@@ -279,15 +288,7 @@ export async function runBuild(
 
   if (declarationErrors.length > 0) {
     result.success = false;
-    logger.error(
-      `Validation failed with ${formatCount(declarationErrors.length, "error")}`
-    );
-    for (const error of declarationErrors) {
-      const location = error.field
-        ? `${error.collection}.${error.field}`
-        : error.collection;
-      logger.item(`${location}: ${error.message}`, 1);
-    }
+    reportDeclarationErrors(declarationErrors, context);
   } else {
     logger.success(
       `Validated ${formatCount(collectionCount, "collection")} successfully`
@@ -489,6 +490,21 @@ function validateAllCollections(
   warnings.push(...relationshipValidation.warnings);
 
   return { errors, warnings };
+}
+
+/** Print declaration errors, naming the entity and field each belongs to. */
+function reportDeclarationErrors(
+  errors: BuildError[],
+  context: CommandContext
+): void {
+  const { logger } = context;
+  logger.error(`Validation failed with ${formatCount(errors.length, "error")}`);
+  for (const error of errors) {
+    const location = error.field
+      ? `${error.collection}.${error.field}`
+      : error.collection;
+    logger.item(`${location}: ${error.message}`, 1);
+  }
 }
 
 /**
