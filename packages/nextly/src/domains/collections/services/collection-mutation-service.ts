@@ -436,6 +436,32 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The read-shape parent document a programmatic (tx-API / batch / publish)
+   * write event carries: JSON container fields parsed, then password hashes and
+   * the internal owner column (created_by) stripped — the same server-side
+   * fields the interactive create/update paths remove before building their
+   * event, so a stable user id never leaves in a webhook envelope. Operates on a
+   * shallow copy so the caller's row is not mutated. Many-to-many/component
+   * subtrees are not assembled here (the parent columns are the event payload on
+   * these paths); the full relational assembly rides the version-capture work.
+   */
+  private readShapeEventDocument(
+    row: Record<string, unknown>,
+    fields: readonly unknown[]
+  ): Record<string, unknown> {
+    const doc = this.deserializeJsonFieldsForSnapshot(
+      { ...row },
+      fields as Parameters<typeof this.deserializeJsonFieldsForSnapshot>[1]
+    );
+    stripPasswordFieldValues(
+      doc,
+      fields as Parameters<typeof stripPasswordFieldValues>[1]
+    );
+    stripSystemOwnerField(doc);
+    return doc;
+  }
+
+  /**
    * Assemble a removed entry as the read shape the create/update events carry —
    * JSON container fields parsed, component subtrees and many-to-many id arrays
    * populated, password and system-owner fields stripped — so a delete event
@@ -2652,7 +2678,7 @@ export class CollectionMutationService extends BaseService {
           // status, or the pre-read row so the event still fires when no fresh
           // read was needed). The publish event is gated on a real main-row
           // transition, matching the post-commit `transitionStatus` below.
-          const publishedDocument = this.deserializeJsonFieldsForSnapshot(
+          const publishedDocument = this.readShapeEventDocument(
             {
               ...(publishedParentRow ??
                 (existingEntry as Record<string, unknown>)),
@@ -2660,7 +2686,7 @@ export class CollectionMutationService extends BaseService {
             },
             fields
           );
-          const previousDocument = this.deserializeJsonFieldsForSnapshot(
+          const previousDocument = this.readShapeEventDocument(
             existingEntry as Record<string, unknown>,
             fields
           );
@@ -5283,25 +5309,49 @@ export class CollectionMutationService extends BaseService {
       // freshly-inserted row in read shape; recorded on `tx` so it commits with
       // the entry and never survives a rollback. Carried on the result so the
       // owning caller flushes the drain after IT commits.
-      const eventRecorded = await recordMutationEvent(tx, {
+      const createdDocument = this.readShapeEventDocument(
+        entry as Record<string, unknown>,
+        fields
+      );
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.created",
         resource: {
           kind: "entry",
           collection: params.collectionName,
           id: (entry as Record<string, unknown>).id as string,
         },
-        data: this.deserializeJsonFieldsForSnapshot(
-          entry as Record<string, unknown>,
-          fields
-        ),
+        data: createdDocument,
         previous: null,
-        fields: await this.webhookFieldTreeIfRecording(
-          params.collectionName,
-          fields,
-          tx.getDrizzle()
-        ),
-        actor: actorForWrite(undefined, params.user),
+        fields: eventFields,
+        actor: eventActor,
       });
+      // A create landing directly on `published` is also a publish lifecycle
+      // event, gated on the collection's Draft/Published flag so an ordinary
+      // user `status` field is not mistaken for a lifecycle change. `from` is
+      // null (nothing to transition from), so only `entry.published` is emitted.
+      if ((collection as { status?: boolean }).status === true) {
+        const createdStatusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+          from: null,
+          to: (entry as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: true,
+          data: createdDocument,
+          previous: null,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = createdStatusRecorded || eventRecorded;
+      }
 
       // Compute the intent from the freshly inserted row, before the after-hooks
       // run or redaction can strip the slug.
@@ -5782,11 +5832,11 @@ export class CollectionMutationService extends BaseService {
       // emits its publish/unpublish/status_changed event, gated on the
       // collection's Draft/Published flag so an ordinary user `status` field is
       // not mistaken for a lifecycle change.
-      const updatedDocument = this.deserializeJsonFieldsForSnapshot(
+      const updatedDocument = this.readShapeEventDocument(
         updated as Record<string, unknown>,
         fields
       );
-      const previousDocument = this.deserializeJsonFieldsForSnapshot(
+      const previousDocument = this.readShapeEventDocument(
         existingEntry,
         fields
       );
@@ -6576,25 +6626,49 @@ export class CollectionMutationService extends BaseService {
       // path holds. Recording is NOT a hook, so it runs even under `skipHooks`;
       // built from the freshly-inserted row in read shape and recorded on `tx`
       // so it commits with the entry and never survives a rollback.
-      const eventRecorded = await recordMutationEvent(tx, {
+      const createdDocument = this.readShapeEventDocument(
+        entry as Record<string, unknown>,
+        fields
+      );
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.created",
         resource: {
           kind: "entry",
           collection: params.collectionName,
           id: (entry as Record<string, unknown>).id as string,
         },
-        data: this.deserializeJsonFieldsForSnapshot(
-          entry as Record<string, unknown>,
-          fields
-        ),
+        data: createdDocument,
         previous: null,
-        fields: await this.webhookFieldTreeIfRecording(
-          params.collectionName,
-          fields,
-          tx.getDrizzle()
-        ),
-        actor: actorForWrite(undefined, params.user),
+        fields: eventFields,
+        actor: eventActor,
       });
+      // A create landing directly on `published` is also a publish lifecycle
+      // event, gated on the collection's Draft/Published flag so an ordinary
+      // user `status` field is not mistaken for a lifecycle change. `from` is
+      // null (nothing to transition from), so only `entry.published` is emitted.
+      if ((collection as { status?: boolean }).status === true) {
+        const createdStatusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+          from: null,
+          to: (entry as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: true,
+          data: createdDocument,
+          previous: null,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = createdStatusRecorded || eventRecorded;
+      }
 
       // Compute the intent from the freshly inserted row, before ANY after-hooks
       // run (a throwing afterCreate hook must not lose it) and before redaction
@@ -7149,11 +7223,11 @@ export class CollectionMutationService extends BaseService {
       // update and never survives a rollback. A status-lifecycle transition also
       // emits its publish/unpublish/status_changed event, gated on the
       // collection's Draft/Published flag.
-      const updatedDocument = this.deserializeJsonFieldsForSnapshot(
+      const updatedDocument = this.readShapeEventDocument(
         updated as Record<string, unknown>,
         fields
       );
-      const previousDocument = this.deserializeJsonFieldsForSnapshot(
+      const previousDocument = this.readShapeEventDocument(
         existingEntry,
         fields
       );

@@ -124,6 +124,32 @@ const CASES: PathCase[] = [
     atLeast: { "entry.created": 1 },
   },
   {
+    label: "createEntryInTransaction as published records entry.published",
+    localized: false,
+    run: async (t, e) => {
+      await t.adapter.transaction(tx =>
+        e.createEntryInTransaction(
+          tx as never,
+          { collectionName: COLLECTION, overrideAccess: true },
+          { title: "a", status: "published" }
+        )
+      );
+    },
+    // A create landing directly on published is a create AND a publish.
+    atLeast: { "entry.created": 1, "entry.published": 1 },
+  },
+  {
+    label: "createEntries as published records entry.published per item",
+    localized: false,
+    run: async (_t, e) => {
+      await e.createEntries({ collectionName: COLLECTION, overrideAccess: true }, [
+        { title: "a", status: "published" },
+        { title: "b", status: "published" },
+      ]);
+    },
+    atLeast: { "entry.created": 2, "entry.published": 2 },
+  },
+  {
     label: "updateEntryInTransaction records entry.updated",
     localized: false,
     run: async (t, e) => {
