@@ -198,50 +198,6 @@ describe("teardownEntityComponentData table discovery", () => {
   });
 });
 
-describe("teardownEntityComponentData registry read resilience", () => {
-  function makeAdapter(registrySelectError: unknown) {
-    return {
-      dialect: "postgresql" as const,
-      listTables: vi
-        .fn()
-        .mockResolvedValue(["comp_hero", "dynamic_components"]),
-      tableExists: vi.fn().mockResolvedValue(false),
-      delete: vi.fn().mockResolvedValue(1),
-      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
-      select: vi.fn(async (table: string) => {
-        if (table === "dynamic_components") throw registrySelectError;
-        return [];
-      }),
-    };
-  }
-
-  it("falls back to prefix discovery when the registry has no registered schema", async () => {
-    const adapter = makeAdapter(
-      new Error(
-        'Table "dynamic_components" not found in schema registry. Ensure setTableResolver() has been called during boot.'
-      )
-    );
-
-    const result = await teardownEntityComponentData({
-      adapter: adapter as never,
-      parentTable: "dc_posts",
-    });
-
-    expect(result.instancesDeleted).toBe(0);
-  });
-
-  it("propagates a real database failure from the registry read", async () => {
-    const adapter = makeAdapter(new Error("connection terminated"));
-
-    await expect(
-      teardownEntityComponentData({
-        adapter: adapter as never,
-        parentTable: "dc_posts",
-      })
-    ).rejects.toThrow(/connection terminated/);
-  });
-});
-
 describe("teardownEntityComponentData unmaterialized components", () => {
   it("ignores a registered component whose table was never created", async () => {
     // A pending or failed component: its registry row names a table the
@@ -307,41 +263,33 @@ describe("teardownEntityComponentData registry safety", () => {
     expect(probed).not.toContain("dynamic_components");
     expect(result.tablesTouched).not.toContain("dynamic_components");
   });
+});
 
-  it("reads registered names by statement when the ORM cannot address the registry", async () => {
-    // Losing the registry here would silently drop custom-named components
-    // from the sweep, which is the case this lookup exists to cover.
-    const deleted: string[] = [];
+describe("teardownEntityComponentData registry read failures", () => {
+  it("propagates a registry read failure instead of sweeping without it", async () => {
+    // Continuing here would silently drop every custom-named component from
+    // the sweep, reporting a successful delete while those rows survive.
     const adapter = {
       dialect: "postgresql" as const,
-      listTables: vi.fn().mockResolvedValue(["seo_meta", "dynamic_components"]),
+      listTables: vi
+        .fn()
+        .mockResolvedValue(["comp_hero", "dynamic_components"]),
       tableExists: vi.fn().mockResolvedValue(false),
-      delete: vi.fn(async (table: string) => {
-        deleted.push(table);
-        return 1;
-      }),
-      executeQuery: vi.fn(async (sql: string) => {
-        if (/FROM\s+"dynamic_components"/i.test(sql)) {
-          return [{ table_name: "seo_meta" }];
-        }
-        return [{ n: 0 }];
-      }),
+      delete: vi.fn().mockResolvedValue(0),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
       select: vi.fn(async (table: string) => {
         if (table === "dynamic_components") {
-          throw new Error(
-            'Table "dynamic_components" not found in schema registry.'
-          );
+          throw new Error("connection terminated");
         }
-        return [{ id: `${table}-1` }];
+        return [];
       }),
     };
 
-    const result = await teardownEntityComponentData({
-      adapter: adapter as never,
-      parentTable: "dc_posts",
-    });
-
-    expect(result.tablesTouched).toContain("seo_meta");
-    expect(deleted).toContain("seo_meta");
+    await expect(
+      teardownEntityComponentData({
+        adapter: adapter as never,
+        parentTable: "dc_posts",
+      })
+    ).rejects.toThrow(/connection terminated/);
   });
 });

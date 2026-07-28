@@ -511,10 +511,20 @@ export class ComponentRegistryService extends BaseRegistryService<
         // pointer stays and the mismatch is reported instead.
         let tableNameChanged = false;
         if (existing !== null && existing.tableName !== desiredTableName) {
-          const storedTableExists = await this.adapter.tableExists(
-            existing.tableName
-          );
-          if (storedTableExists) {
+          // Existence alone does not justify keeping the pointer: an empty
+          // table strands nothing, so reconciling to the configured name is
+          // both safe and the outcome the config asked for. Only instances
+          // actually stored there make the move destructive. Bounded to one
+          // row because the question is emptiness, not size.
+          const storedTableHoldsData =
+            (await this.adapter.tableExists(existing.tableName)) &&
+            (
+              await this.adapter.select<Record<string, unknown>>(
+                existing.tableName,
+                { limit: 1 }
+              )
+            ).length > 0;
+          if (storedTableHoldsData) {
             this.logger.warn(
               "Component table name differs from its populated table; keeping the populated one",
               {

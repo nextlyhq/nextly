@@ -578,6 +578,7 @@ describe("ComponentRegistryService", () => {
         });
       });
       ctx.adapter.tableExists.mockResolvedValue(true);
+      ctx.adapter.select.mockResolvedValue([{ id: "instance-1" }]);
 
       const result = await ctx.service.syncCodeFirstComponents([
         { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
@@ -595,6 +596,7 @@ describe("ComponentRegistryService", () => {
       );
       ctx.adapter.update.mockResolvedValue([dbRow()]);
       ctx.adapter.tableExists.mockResolvedValue(true);
+      ctx.adapter.select.mockResolvedValue([{ id: "instance-1" }]);
 
       const result = await ctx.service.syncCodeFirstComponents([
         {
@@ -608,6 +610,31 @@ describe("ComponentRegistryService", () => {
       expect(result.updated).toEqual(["seo"]);
       const [, updateData] = ctx.adapter.update.mock.calls[0];
       expect(updateData).not.toHaveProperty("table_name");
+    });
+
+    it("reconciles when the stored table exists but holds no instances", async () => {
+      // Nothing to strand, so the configured name wins.
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async () => {
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          table_name: "seo_meta",
+        });
+      });
+      ctx.adapter.tableExists.mockResolvedValue(true);
+      ctx.adapter.select.mockResolvedValue([]);
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
+      ]);
+
+      expect(result.updated).toEqual(["seo"]);
+      const [, updateData] = ctx.adapter.update.mock.calls[0];
+      expect(updateData.table_name).toBe("seo_v2");
     });
 
     it("reconciles a stored table name that drifted from canonical resolution", async () => {

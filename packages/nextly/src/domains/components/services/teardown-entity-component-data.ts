@@ -203,21 +203,15 @@ async function listRegisteredComponentTables(
 ): Promise<string[]> {
   if (!discovered.includes(REGISTRY_TABLE)) return [];
 
-  let rows: Array<Record<string, unknown>>;
-  try {
-    rows = await adapter.select<Record<string, unknown>>(REGISTRY_TABLE, {});
-  } catch (error) {
-    // The ORM cannot address the registry on this executor, but the table is in
-    // the catalog, so read it directly instead of continuing without it. Giving
-    // up here would silently drop every custom-named component from the sweep —
-    // exactly the rows this lookup exists to find — and strand them. Reading by
-    // statement is how this module already handles tables the ORM cannot
-    // resolve; any other failure is real and belongs to the caller.
-    if (!/not found in schema registry/i.test(String(error))) throw error;
-    rows = await adapter.executeQuery<Record<string, unknown>>(
-      `SELECT ${q("table_name", adapter.dialect)} FROM ${q(REGISTRY_TABLE, adapter.dialect)}`
-    );
-  }
+  // Read through the ORM, and let any failure propagate. The registry is a core
+  // table registered at boot, so a read failure here is a genuine fault rather
+  // than a condition to route around — and continuing without it would silently
+  // drop every custom-named component from the sweep, stranding the rows this
+  // lookup exists to find.
+  const rows = await adapter.select<Record<string, unknown>>(
+    REGISTRY_TABLE,
+    {}
+  );
 
   const catalog = new Set(discovered);
   return (
