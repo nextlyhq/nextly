@@ -1883,10 +1883,29 @@ export class SingleMutationService extends BaseService {
         fieldConfigs
       );
 
-      // 10.6. Expand relationship fields with full related entry data
+      // 10.6. Expand relationship fields with full related entry data.
+      //
+      // The rows this pulls in belong to another collection and carry that
+      // collection's field rules. A writer supplied a relationship id, not the
+      // related row's protected fields, so returning them here would answer a
+      // question the same caller's GET refuses — the write path is not a way
+      // around the rule.
+      //
+      // Enforced for every caller the access gate applies to, which is what the
+      // read path does. A caller with no identity is judged as one — the same
+      // answer their read would get — and only a trusted write bypasses it,
+      // through `overrideAccess` rather than through an absent user.
       updatedDoc = await this.queryService.expandRelationshipFields(
         updatedDoc,
-        fieldConfigs
+        fieldConfigs,
+        // The write response has no depth option of its own; expansion applies
+        // its own default.
+        undefined,
+        {
+          enforceFieldAccess: true,
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+        }
       );
 
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)
