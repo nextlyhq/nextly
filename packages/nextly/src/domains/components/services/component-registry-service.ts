@@ -564,7 +564,12 @@ export class ComponentRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               localized: config.localized === true,
-              tableName: desiredTableName,
+              // Only carried when the pointer was cleared for reconciliation.
+              // A schema or localization change must not move a pointer that
+              // the populated-table guard just decided to keep, or the update
+              // would send reads and writes to a table holding none of this
+              // component's instances.
+              tableName: tableNameChanged ? desiredTableName : undefined,
             },
             { source: "code" }
           );
