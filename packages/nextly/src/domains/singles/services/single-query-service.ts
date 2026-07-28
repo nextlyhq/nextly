@@ -815,7 +815,12 @@ export class SingleQueryService extends BaseService {
       if (isEmptyValue(before) && isEmptyValue(after)) continue;
       const where = path ? `${path}.${name}` : name;
 
-      if (type === "relationship" || type === "relation" || type === "upload") {
+      // `relation` is deliberately absent: the relationship service matches
+      // `relationship` only, so a field declared with the legacy alias is never
+      // expanded for anyone, and requiring a document for it would refuse every
+      // read of a Single that uses one. A rule reading into such a field sees
+      // the reference — a limitation of the alias, not of this check.
+      if (type === "relationship" || type === "upload") {
         if (type !== "upload" && !expandsRelationships) continue;
         // `maxDepth: 0` asks for the reference itself, so an unexpanded id is
         // the configured outcome rather than a failure to expand. Uploads are
@@ -935,7 +940,7 @@ export class SingleQueryService extends BaseService {
     // rule deciding on translation state has to see it here too, or the two
     // decisions are made about documents that differ in what the rule reads.
     if (params.options.translationStatus) {
-      await this.populateTranslationMeta(
+      await this.attachTranslationOverview(
         params.slug,
         params.singleMeta,
         assembled,
@@ -1467,7 +1472,7 @@ export class SingleQueryService extends BaseService {
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
-        await this.populateTranslationMeta(slug, singleMeta, doc, judgedRead);
+        await this.attachTranslationOverview(slug, singleMeta, doc, judgedRead);
       }
 
       // Redact password hashes BEFORE any afterRead hook runs (a hook could
@@ -1626,6 +1631,36 @@ export class SingleQueryService extends BaseService {
    * pills. No-op when localization is off or the single isn't localized. Mirrors the collection
    * read path's `populateTranslationMeta`.
    */
+  /**
+   * Attach the per-locale overview, converting a strict failure into the
+   * canonical internal error.
+   *
+   * The overview read only throws for a caller that will judge on it, and the
+   * result builder puts a bare Error's own message on the wire — companion
+   * table and column names the caller has no business seeing.
+   */
+  private async attachTranslationOverview(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    doc: Record<string, unknown>,
+    strict: boolean
+  ): Promise<void> {
+    try {
+      await this.populateTranslationMeta(slug, singleMeta, doc, strict);
+    } catch (error) {
+      if (!strict) throw error;
+      throw NextlyError.is(error)
+        ? error
+        : NextlyError.internal({
+            cause: error instanceof Error ? error : undefined,
+            logContext: {
+              single: slug,
+              reason: "translation-overview-failed-during-authorization",
+            },
+          });
+    }
+  }
+
   private async populateTranslationMeta(
     slug: string,
     singleMeta: DynamicSingleRecord,

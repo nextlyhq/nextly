@@ -1180,6 +1180,68 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data).toBeUndefined();
   });
 
+  it("reads a Single whose schema uses the legacy relation alias", async () => {
+    // The relationship service matches `relationship` only, so a field declared
+    // as `relation` is never expanded for anyone. Requiring a document for it
+    // would refuse every read of a Single that uses one.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+    // Rewrite the stored schema to the alias, the shape a UI-created Single
+    // carries.
+    const stored = (await current.adapter.selectOne("dynamic_singles", {
+      and: [{ column: "slug", op: "=", value: "branding" }],
+    })) as { fields: unknown };
+    const fields = (
+      typeof stored.fields === "string"
+        ? (JSON.parse(stored.fields) as Record<string, unknown>[])
+        : (stored.fields as Record<string, unknown>[])
+    ).map(field =>
+      field.name === "author" ? { ...field, type: "relation" } : field
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { fields },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("leaves a relationship configured not to populate alone", async () => {
     // `maxDepth: 0` asks for the reference itself, so an unexpanded id is the
     // configured outcome. Demanding a row there refuses every read of the

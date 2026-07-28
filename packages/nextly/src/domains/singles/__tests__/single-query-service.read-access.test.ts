@@ -530,6 +530,48 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
     expect(expandRelationships).not.toHaveBeenCalled();
   });
 
+  it("hides the underlying failure when a strict overview read throws", async () => {
+    // The overview read only throws for a caller that will judge on it, and the
+    // result builder puts a bare Error's own message on the wire.
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({
+        accessRules: { read: { type: "custom", functionPath: "./rule" } },
+        localized: true,
+      }),
+      fields: [textField("siteName")],
+    });
+    const service = new SingleQueryService(
+      createMockAdapter({
+        selectOne: vi.fn().mockResolvedValue({ id: "doc1" }),
+      }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      undefined,
+      createMockRBACService(true) as unknown as Ctor[5],
+      undefined,
+      {
+        evaluateAccess: vi.fn().mockResolvedValue({ allowed: true }),
+      } as unknown as Ctor[7]
+    );
+    vi.spyOn(
+      service as unknown as {
+        populateTranslationMeta: () => Promise<void>;
+      },
+      "populateTranslationMeta"
+    ).mockRejectedValue(new Error('permission denied for "branding_locales"'));
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+      translationStatus: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).not.toContain("branding_locales");
+  });
+
   it("leaves enforcement off for a caller that supplies no access context", async () => {
     const { service, expandRelationships } = serviceWithRelationshipSpy();
 
