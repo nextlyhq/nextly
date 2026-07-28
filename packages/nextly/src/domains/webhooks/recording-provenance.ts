@@ -28,13 +28,22 @@ interface PluginLike {
     collections?: readonly SluggedEntity[];
     singles?: readonly SluggedEntity[];
   };
+  // A plugin may rename its contributed slugs; the schema fold rewrites the
+  // config entry to the renamed slug, so provenance must key on that same
+  // effective slug (see `collectPluginContributedSlugs`).
+  renameMap?: Record<string, string>;
 }
 
 /**
- * The set of slugs of `kind` contributed by any plugin in `plugins`, reading
- * both the declarative `contributes.<kind>` and the legacy `plugin.<kind>`
- * (mirrors how the admin-meta fold reads them). Used to tag recording
- * provenance so a plugin's opt-out is never pruned by a code-first reconcile.
+ * The set of EFFECTIVE slugs of `kind` contributed by any plugin in `plugins`,
+ * reading both the declarative `contributes.<kind>` and the legacy
+ * `plugin.<kind>` (mirrors how the admin-meta fold reads them). Each declared
+ * slug is resolved through the plugin's `renameMap`, because the schema fold
+ * (`applyPluginSchemaContributionsDeferred`) has already rewritten the config
+ * entry to the renamed slug — every consumer compares this set against the
+ * post-fold `config.<kind>` slug. Used to tag recording provenance so a
+ * plugin's opt-out is never pruned by a code-first reconcile, and to skip a
+ * disabled plugin's runtime hooks.
  */
 export function collectPluginContributedSlugs(
   plugins: readonly unknown[] | undefined,
@@ -43,10 +52,13 @@ export function collectPluginContributedSlugs(
   const slugs = new Set<string>();
   for (const raw of plugins ?? []) {
     const plugin = raw as PluginLike;
+    const renameMap = plugin.renameMap ?? {};
     const declared = plugin.contributes?.[kind] ?? [];
     const legacy = plugin[kind] ?? [];
     for (const entity of [...declared, ...legacy]) {
-      if (entity?.slug) slugs.add(entity.slug);
+      // Resolve the declared slug to its renamed form (identity when the
+      // plugin declares no rename for it), matching the folded config entry.
+      if (entity?.slug) slugs.add(renameMap[entity.slug] ?? entity.slug);
     }
   }
   return slugs;
