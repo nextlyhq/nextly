@@ -89,6 +89,7 @@ import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { companionTableExists as sharedCompanionTableExists } from "../../i18n/runtime/companion-io";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
@@ -875,20 +876,21 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
-  /** Whether the companion `_locales` table physically exists (migration has run). */
+  /**
+   * Whether the companion `_locales` table physically exists (migration has run).
+   *
+   * Delegates to the shared probe, which returns false only for a dialect-verified
+   * missing-table error and rethrows anything else. Catching every exception here
+   * turned a connection timeout or a permission error into "the table is absent",
+   * which the callers below read as a schema state: one refuses the write with a
+   * 409 telling the operator to re-run sync, the other decides the collection has
+   * no publish lifecycle. Both are the wrong answer to "the database is
+   * unreachable", and both hide a failure the caller would otherwise retry.
+   */
   private async companionTableExists(
     companionTableName: string
   ): Promise<boolean> {
-    const q =
-      this.adapter.dialect === "mysql"
-        ? `\`${companionTableName}\``
-        : `"${companionTableName}"`;
-    try {
-      await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
-      return true;
-    } catch {
-      return false;
-    }
+    return sharedCompanionTableExists(this.adapter, companionTableName);
   }
 
   /**

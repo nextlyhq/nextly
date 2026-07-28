@@ -243,11 +243,13 @@ export async function companionHasStatusColumn(
 
 /**
  * Boot/db:sync helper: physically create the companion `<tableName>_locales` table if it does
- * not already exist. Idempotent and safe to run on every boot — a no-op once the table exists (or
- * when the entity has no translatable fields). This is the db:sync/dev-boot counterpart to the
- * migration-owned companion creation (`nextly migrate`), so a code-first localized collection /
- * single / component gets a working companion without a manual migrate step. Best-effort: a
- * failure (e.g. main table not yet created) is swallowed so it retries on the next boot.
+ * not already exist, and seed it from the main table when localization is being turned on for an
+ * entity that already holds content. Idempotent and safe to run on every boot — a no-op once the
+ * table exists and is seeded (or when the entity has no translatable fields). This is the
+ * db:sync/dev-boot counterpart to the migration-owned companion creation (`nextly migrate`), so a
+ * code-first localized collection / single / component gets a working companion without a manual
+ * migrate step. Best-effort: a failure (e.g. main table not yet created) is swallowed so it
+ * retries on the next boot.
  */
 export async function ensureCompanionTable(
   adapter: CompanionWriteAdapter,
@@ -257,6 +259,12 @@ export async function ensureCompanionTable(
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
+    /**
+     * The language existing main-table values belong to. Supplying it enables the seed below;
+     * without it the companion is created empty, which is the pre-existing behaviour and is only
+     * correct for an entity that never held content on main.
+     */
+    defaultLocale?: string;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -266,7 +274,10 @@ export async function ensureCompanionTable(
 ): Promise<void> {
   const companionTableName = `${args.tableName}_locales`;
   try {
-    if (await companionTableExists(adapter, companionTableName)) return;
+    const alreadyExists = await companionTableExists(
+      adapter,
+      companionTableName
+    );
     // Lazy import avoids a cycle (reconcile-companion → migration helpers).
     const { buildCompanionReconcileStatements } = await import(
       "../migration/reconcile-companion"
@@ -274,18 +285,30 @@ export async function ensureCompanionTable(
     const localizedNames = new Set(
       resolveLocalizedFieldNames(args.fields, true)
     );
-    const statements = buildCompanionReconcileStatements({
+    const localizedFields = args.fields.filter(f => localizedNames.has(f.name));
+    if (!alreadyExists) {
+      const statements = buildCompanionReconcileStatements({
+        slug: args.slug,
+        tableName: args.tableName,
+        oldLocalized: [],
+        newLocalized: localizedFields,
+        dialect: args.dialect,
+        status: args.status === true,
+        companionExists: false,
+      });
+      for (const stmt of statements) {
+        await adapter.executeQuery(stmt);
+      }
+    }
+    await seedCompanionFromMain(adapter, {
       slug: args.slug,
       tableName: args.tableName,
-      oldLocalized: [],
-      newLocalized: args.fields.filter(f => localizedNames.has(f.name)),
+      companionTableName,
+      localizedFields,
       dialect: args.dialect,
       status: args.status === true,
-      companionExists: false,
+      defaultLocale: args.defaultLocale,
     });
-    for (const stmt of statements) {
-      await adapter.executeQuery(stmt);
-    }
   } catch (error) {
     // Best-effort: the main table may not exist yet on a very first boot, where the
     // companion is created on the next boot (or by `nextly migrate`). That case is
@@ -296,5 +319,105 @@ export async function ensureCompanionTable(
     // function still resolves, because refusing to boot over a companion is worse
     // than booting with non-default-locale writes refused.
     onError?.(error);
+  }
+}
+
+/**
+ * Copy the main table's existing values into the companion as default-locale rows.
+ *
+ * Creating the companion is not enough on its own. Once the table exists, a read resolves each
+ * localized field through it, finds no row for the default locale, and overlays null — so an
+ * entity that already had content shows empty fields everywhere while the values sit untouched on
+ * the main table. Enabling localization on existing content therefore made that content
+ * invisible, not merely unwritable.
+ *
+ * Deliberately narrow, because this runs unattended on every boot and sync:
+ *
+ *  - only when the companion is EMPTY. A companion with rows has been through a real transition
+ *    (or holds translations), and re-seeding it would resurrect main-table values over them.
+ *  - only for localized columns that are STILL on the main table, probed one by one. After the
+ *    columns are dropped there is nothing to copy, and the probe is the only portable way to ask.
+ *  - it does NOT drop those columns afterwards. That is the destructive half of the transition
+ *    and the schema pipeline gates it behind an explicit confirmation; making the content visible
+ *    again does not require it, and doing it here would route around that gate.
+ */
+async function seedCompanionFromMain(
+  adapter: CompanionWriteAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    companionTableName: string;
+    localizedFields: CompanionFieldLike[];
+    dialect: SupportedDialect;
+    status: boolean;
+    defaultLocale?: string;
+  }
+): Promise<void> {
+  if (!args.defaultLocale || args.localizedFields.length === 0) return;
+
+  const { deriveCompanionSpec } = await import(
+    "../migration/derive-companion-spec"
+  );
+  const spec = deriveCompanionSpec({
+    slug: args.slug,
+    dbName: args.tableName,
+    fields: args.localizedFields,
+    dialect: args.dialect,
+    defaultLocale: args.defaultLocale,
+    collectionLocalized: true,
+    status: args.status,
+  });
+  if (!spec) return;
+
+  if (!(await companionIsEmpty(adapter, args.companionTableName))) return;
+
+  const columnsOnMain: string[] = [];
+  for (const column of spec.columns) {
+    if (await mainHasColumn(adapter, args.tableName, column.name)) {
+      columnsOnMain.push(column.name);
+    }
+  }
+  if (columnsOnMain.length === 0) return;
+
+  const { buildCompanionSeedStatement } = await import(
+    "../migration/generate-up"
+  );
+  const seed = buildCompanionSeedStatement({ ...spec, columnsOnMain });
+  if (seed) await adapter.executeQuery(seed);
+}
+
+/** Whether the companion holds no rows, i.e. nothing a seed could overwrite. */
+async function companionIsEmpty(
+  adapter: CompanionWriteAdapter,
+  companionTableName: string
+): Promise<boolean> {
+  const table =
+    adapter.dialect === "mysql"
+      ? `\`${companionTableName}\``
+      : `"${companionTableName}"`;
+  const rows = await adapter.executeQuery(`SELECT 1 FROM ${table} LIMIT 1`);
+  return rows.length === 0;
+}
+
+/** Whether a physical column is still present on the main table. */
+async function mainHasColumn(
+  adapter: CompanionWriteAdapter,
+  tableName: string,
+  columnName: string
+): Promise<boolean> {
+  const isMysql = adapter.dialect === "mysql";
+  const table = isMysql ? `\`${tableName}\`` : `"${tableName}"`;
+  const column = isMysql ? `\`${columnName}\`` : `"${columnName}"`;
+  try {
+    await adapter.executeQuery(`SELECT ${column} FROM ${table} LIMIT 0`);
+    return true;
+  } catch {
+    // Catching everything is safe HERE, unlike a probe a write gates on: the
+    // caller has already run a query against this connection (the emptiness
+    // check, which does not catch), so an unreachable database has surfaced
+    // before this point. What remains is a question about one column of one
+    // table, and treating any answer but "yes" as "do not seed from it" only
+    // ever narrows the copy — never writes the wrong thing.
+    return false;
   }
 }

@@ -790,27 +790,48 @@ export async function ensureLocalizedCompanions(
   const { ensureCompanionTable } = await import(
     "../../domains/i18n/runtime/companion-io"
   );
-  const { resolveEntityTable } = await import(
-    "../../domains/i18n/migration/resolve-entity-table"
+  // Each entity kind resolves its physical table differently, and a custom
+  // `dbName` is where they diverge: collections and singles force their `dc_` /
+  // `single_` prefix onto it (and singles normalize the identifier), while
+  // components honour it verbatim. A single shared "prefix + slug" rule would
+  // point at a table the runtime never created — `dbName: "forms"` on a
+  // collection lives at `dc_forms`, so the companion would be built as
+  // `forms_locales` with a foreign key to a table that does not exist.
+  const { resolveCollectionTableName, resolveComponentTableName } =
+    await import("../../domains/schema/utils/resolve-table-name");
+  const { resolveSingleTableName } = await import(
+    "../../domains/singles/services/resolve-single-table-name"
   );
 
-  const groups = [
-    config.collections ?? [],
-    config.singles ?? [],
-    config.components ?? [],
+  interface LocalizableEntity {
+    slug?: string;
+    dbName?: string;
+    localized?: boolean;
+    status?: boolean;
+    fields?: { name: string; type: string; localized?: boolean }[];
+  }
+
+  const groups: [LocalizableEntity[], (e: LocalizableEntity) => string][] = [
+    [
+      (config.collections ?? []) as LocalizableEntity[],
+      e => resolveCollectionTableName(e.slug!, e.dbName),
+    ],
+    [
+      (config.singles ?? []) as LocalizableEntity[],
+      e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
+    ],
+    [
+      (config.components ?? []) as LocalizableEntity[],
+      e => resolveComponentTableName(e.slug!, e.dbName),
+    ],
   ];
 
-  for (const group of groups) {
-    for (const raw of group) {
-      const entity = raw as {
-        slug?: string;
-        localized?: boolean;
-        status?: boolean;
-        fields?: { name: string; type: string; localized?: boolean }[];
-      };
+  const defaultLocale = config.localization?.defaultLocale;
+
+  for (const [group, resolveTableName] of groups) {
+    for (const entity of group) {
       if (!entity.slug || entity.localized !== true) continue;
-      const resolved = resolveEntityTable(config, entity.slug);
-      if (!resolved) continue;
+      const tableName = resolveTableName(entity);
       // `ensureCompanionTable` resolves even on failure (a first boot may not have
       // the main table yet), so the reporter — not a try/catch — is what surfaces
       // a real problem.
@@ -822,14 +843,15 @@ export async function ensureLocalizedCompanions(
         adapter as unknown as DrizzleAdapter,
         {
           slug: entity.slug,
-          tableName: resolved.tableName,
+          tableName,
           fields: entity.fields ?? [],
           dialect,
           status: entity.status === true,
+          defaultLocale,
         },
         error => {
           logger.warn(
-            `Could not create the translations table for "${entity.slug}" (${resolved.companionTableName}). ` +
+            `Could not prepare the translations table for "${entity.slug}" (${tableName}_locales). ` +
               `Writes in a non-default locale will be refused until it exists: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );

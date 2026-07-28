@@ -22,6 +22,10 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Enabling localization on a collection that already had content could silently overwrite the default language. `nextly db:sync` flips the collection to localized in its own process, so a running app could believe the collection was localized — showing the language switcher — before its translations table existed. Saving a translation then wrote over the original-language values and changed the entry's URL, while reporting success.
+Turning on localization for a collection that already had content could lose that content in two ways.
 
-`db:sync` and the dev config watcher now create the translations table in the same run, for collections, singles and components alike. If that table is somehow still missing, a write in a non-default language is refused with a clear message instead of overwriting content. Writing the default language before the table exists is unchanged.
+Existing entries could go blank. Once the translations table existed, every localized field was read from it, and nothing had copied the current values across — so titles and body text disappeared from the admin, from lists and from filters, while the values sat untouched in the database. Those values are now copied into the default language when the table is created, so existing content stays exactly as it was. Nothing is deleted: the copy leaves the originals in place.
+
+Saving a translation could overwrite the original language. `nextly db:sync` marks a collection as localized in a separate process from the running app, so the app could show the language switcher before its translations table existed, and saving a translation then wrote over the original-language values and changed the entry's URL while reporting success. `db:sync` and the dev config watcher now prepare that table in the same run, for collections, singles and components alike, and a translation saved before it exists is refused with a clear message instead of overwriting anything. Writing the default language before the table exists is unchanged.
+
+Collections and singles that set a custom `dbName` are now handled correctly here too; previously their translations table could be created against a table name that does not exist. And a database that is unreachable or refusing connections is no longer reported as a missing translations table.

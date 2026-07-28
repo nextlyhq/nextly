@@ -167,6 +167,89 @@ describe("localized write without a companion table (integration)", () => {
   });
 });
 
+describe("enabling localization on existing content (integration)", () => {
+  it("keeps the default language readable once the companion appears", async () => {
+    // Creating the companion is not enough. Once it exists, a read resolves each
+    // localized field through it; with no default-locale row it overlays null, so
+    // the entity's existing content disappears from every read, list and filter
+    // while the values still sit on the main table. The companion has to be
+    // SEEDED from main, which is what the boot/db:sync path skipped.
+    current = await boot(false);
+    const created = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { title: "Original" }
+      );
+    const id = (created.data as { id: string }).id;
+
+    // Two re-boots, because the boot that flips `localized` in the registry is
+    // not the boot that creates the companion: the registry is read before the
+    // code-first sync writes the flag. That lag is exactly the window this branch
+    // closes for `db:sync`; here it just means the companion appears on the boot
+    // after, and the seed has to run then.
+    await current.destroy();
+    current = await boot(true);
+    await current.destroy();
+    current = await boot(true);
+
+    const read = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntry({ collectionName: "posts", entryId: id, overrideAccess: true });
+
+    // Without the seed this is `null`: the companion exists and is empty.
+    expect((read.data as { title?: unknown }).title).toBe("Original");
+    // The values must also still be on main — seeding copies, it does not move.
+    // Dropping those columns is the destructive half of the transition and stays
+    // behind the schema pipeline's confirmation.
+    expect(await physicalTitle(current)).toBe("Original");
+  });
+
+  it("seeds once and does not duplicate rows on later boots", async () => {
+    // The seed runs on every boot and sync, so it must be gated on the companion
+    // being empty. Without that gate each boot would insert another default-locale
+    // row and the composite primary key would start rejecting writes.
+    current = await boot(false);
+    const created = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { title: "Original" }
+      );
+    const id = (created.data as { id: string }).id;
+
+    await current.destroy();
+    current = await boot(true);
+
+    // Translate, so the companion is no longer empty, then re-boot.
+    await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .updateEntry(
+        {
+          collectionName: "posts",
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: "Edited in the companion" }
+      );
+    await current.destroy();
+    current = await boot(true);
+
+    const read = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntry({ collectionName: "posts", entryId: id, overrideAccess: true });
+    expect((read.data as { title?: unknown }).title).toBe(
+      "Edited in the companion"
+    );
+
+    const rows = await current.adapter.executeQuery<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM dc_posts_locales"
+    );
+    expect(Number(rows[0]?.n)).toBe(1);
+  });
+});
+
 /**
  * The guard has to hold on every dialect, and the SQLite cases above cannot show
  * that. What decides whether it fires is `companionTableExists`, which probes

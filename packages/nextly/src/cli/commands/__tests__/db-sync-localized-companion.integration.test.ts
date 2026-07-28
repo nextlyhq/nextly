@@ -154,6 +154,32 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(await tableExists("single_homepage_locales")).toBe(true);
   });
 
+  it("resolves a custom dbName the way the runtime does", async () => {
+    // A collection's `dbName` is force-prefixed with `dc_` by the canonical
+    // resolver, so `dbName: "notes"` lives at `dc_notes`. Deriving the table name
+    // by pasting a prefix onto the slug, or by taking `dbName` verbatim, produces
+    // `notes_locales` with a foreign key to a `notes` table that does not exist —
+    // the create fails, the warning is swallowed, and the entity is left marked
+    // localized with nowhere to put translations.
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "field-notes",
+            dbName: "notes",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    expect(await tableExists("dc_notes")).toBe(true);
+    expect(await tableExists("dc_notes_locales")).toBe(true);
+    expect(await tableExists("notes_locales")).toBe(false);
+  });
+
   it("leaves a non-localized collection with no companion", async () => {
     await runSync(
       defineConfig({
