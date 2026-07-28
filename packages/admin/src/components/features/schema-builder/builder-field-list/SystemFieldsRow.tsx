@@ -40,7 +40,7 @@ export function SystemFieldsRow({ systemFields, onSetVisible }: Props) {
   return (
     <div className="space-y-1">
       {/* PR G: label sits OUTSIDE the box per feedback 2. */}
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="text-xs uppercase tracking-wider text-muted-foreground">
         System Fields
       </div>
 
@@ -50,7 +50,7 @@ export function SystemFieldsRow({ systemFields, onSetVisible }: Props) {
         <button
           type="button"
           onClick={handleHide}
-          className="absolute top-1/2 -translate-y-1/2 right-2 text-[10px] text-muted-foreground hover:text-foreground hover-subtle-row px-1.5 py-0.5 rounded-sm cursor-pointer"
+          className="absolute top-1/2 -translate-y-1/2 right-2 text-xs text-muted-foreground hover:text-foreground hover-subtle-row px-1.5 py-0.5 rounded-sm cursor-pointer"
           title="Hide system fields. Re-enable from Settings."
         >
           Hide

@@ -90,7 +90,7 @@ const DeliveryDetailContent: React.FC<{
   }
 
   if (isLoading || !delivery) {
-    return <Skeleton className="h-130 w-full rounded-none" />;
+    return <Skeleton className="h-130 w-full rounded-lg" />;
   }
 
   // Newest attempt first, without mutating the query cache's array in place.
@@ -139,7 +139,7 @@ const DeliveryDetailContent: React.FC<{
       </div>
 
       <section className="space-y-2">
-        <p className="text-[11px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">
+        <p className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground">
           Delivery
         </p>
         <div className="rounded-md border border-input bg-card px-6">
@@ -198,7 +198,7 @@ const DeliveryDetailContent: React.FC<{
       </section>
 
       <section className="space-y-2">
-        <p className="text-[11px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">
+        <p className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground">
           Attempts
         </p>
         {/* The stored log is capped, so once it is full older attempts are
@@ -241,7 +241,7 @@ const DeliveryDetailContent: React.FC<{
       </section>
 
       <section className="space-y-2">
-        <p className="text-[11px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">
+        <p className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground">
           Last response
         </p>
         {delivery.lastResponseSnippet ? (

@@ -225,7 +225,7 @@ export function DataTable<Row extends object>({
 
       {/* Selection bar */}
       {enableSelection && selectedRows.length > 0 && (
-        <div className="flex items-center justify-between gap-3 rounded-none border border-border bg-muted px-4 py-2 text-sm">
+        <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted px-4 py-2 text-sm">
           <span className="text-foreground">
             {selectedRows.length} {itemLabel}
             {selectedRows.length === 1 ? "" : "s"} selected
@@ -263,7 +263,7 @@ export function DataTable<Row extends object>({
       {/* One bordered surface holds the table and its pagination; the
           pagination supplies its own top border as the divider. Bordering them
           separately would double the outline and open a gap between them. */}
-      <div className="rounded-none border border-border bg-card text-card-foreground">
+      <div className="rounded-md border border-border bg-card text-card-foreground">
         <DataTableView<Row>
           columns={columns}
           rows={rows}

@@ -83,7 +83,7 @@ export function FolderTreeView({
     <div className={cn("flex flex-col h-full pt-1 pb-6", className)}>
       {/* Sidebar Heading */}
       <div className="flex items-center justify-between px-3 mb-2">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3">
+        <span className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3">
           Folders
         </span>
         <Button
@@ -104,7 +104,7 @@ export function FolderTreeView({
           onClick={() => onFolderSelect(null)}
           onKeyDown={e => handleKeyDown(e, null)}
           className={cn(
-            "group flex w-full items-center px-2 py-2 text-sm transition-all duration-200 cursor-pointer rounded-none",
+            "group flex w-full items-center px-2 py-2 text-sm transition-all duration-200 cursor-pointer rounded-md",
             activeFolderId === null
               ? "bg-primary/5 text-primary font-bold"
               : "text-muted-foreground hover:bg-primary/5 font-medium"
@@ -203,7 +203,7 @@ function FolderTreeItem({
     <div>
       <div
         className={cn(
-          "group flex w-full items-center transition-all duration-200 cursor-pointer relative rounded-none mx-0.5",
+          "group flex w-full items-center transition-all duration-200 cursor-pointer relative rounded-md mx-0.5",
           isActive
             ? "bg-primary/5 text-primary font-bold"
             : "text-muted-foreground hover:bg-primary/5 font-medium"
@@ -224,7 +224,7 @@ function FolderTreeItem({
                 onToggle(folder.id);
               }}
               className={cn(
-                "flex h-8 w-6 items-center justify-center transition-colors rounded-none cursor-pointer",
+                "flex h-8 w-6 items-center justify-center transition-colors rounded-md cursor-pointer",
                 // Full-strength primary so the active expander icon meets contrast.
                 isActive
                   ? "text-primary group-hover:text-primary"
@@ -253,7 +253,7 @@ function FolderTreeItem({
           {itemCount > 0 && (
             <span
               className={cn(
-                "shrink-0 w-5 h-5 flex items-center justify-center rounded-none text-[9px] font-bold tabular-nums transition-all duration-200",
+                "shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-xs font-bold tabular-nums transition-all duration-200",
                 isActive
                   ? "bg-primary/20 text-primary"
                   : "bg-primary/5 text-muted-foreground group-hover:bg-primary/5 group-hover:text-primary"
@@ -277,7 +277,7 @@ function FolderTreeItem({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-none transition-colors cursor-pointer"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer"
                 tabIndex={-1}
               >
                 <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
@@ -317,7 +317,7 @@ function FolderTreeItem({
       {isExpanded && (
         <div className="animate-in slide-in-from-top-1 duration-200">
           {!subfolders ? (
-            <div className="py-2 pl-12 text-[10px] text-muted-foreground italic">
+            <div className="py-2 pl-12 text-xs text-muted-foreground italic">
               Loading subfolders...
             </div>
           ) : subfolders.length > 0 ? (
@@ -339,7 +339,7 @@ function FolderTreeItem({
               />
             ))
           ) : (
-            <div className="py-2 pl-12 text-[10px] text-muted-foreground italic">
+            <div className="py-2 pl-12 text-xs text-muted-foreground italic">
               No subfolders
             </div>
           )}

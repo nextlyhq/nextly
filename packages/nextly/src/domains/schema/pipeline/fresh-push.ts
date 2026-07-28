@@ -44,6 +44,7 @@ import {
 } from "../../../database/drizzle-kit-lazy";
 import { NextlyError } from "../../../errors/nextly-error";
 
+import { currentMysqlDatabaseName } from "./database-url";
 import {
   drizzleTableNames,
   filterUnsafeStatements,
@@ -166,7 +167,7 @@ async function pushForDialect(
     }
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
-      const databaseName = await currentMysqlDatabase(db);
+      const databaseName = await currentMysqlDatabaseName(db);
       return withResolverCrashFallback(
         () => kit.pushSchema(schema, db, databaseName),
         async () =>
@@ -241,33 +242,6 @@ async function withResolverCrashFallback(
       ],
     };
   }
-}
-
-async function currentMysqlDatabase(db: unknown): Promise<string> {
-  const { sql: sqlTag } = await import("drizzle-orm");
-  type AsyncExecuteDb = { execute: (q: unknown) => Promise<unknown> };
-  // Tagged `sql` (not sql.raw): the query is static with no interpolation, so
-  // the tagged form is the idiomatic, injection-safe default and keeps drizzle
-  // in charge of parameter handling.
-  const raw = await (db as AsyncExecuteDb).execute(
-    sqlTag`SELECT DATABASE() AS db`
-  );
-  // drizzle-orm/mysql2 execute() resolves to [rows, fields].
-  const rows = Array.isArray(raw) ? raw[0] : raw;
-  const name = Array.isArray(rows)
-    ? (rows[0] as { db?: string } | undefined)?.db
-    : undefined;
-  if (!name) {
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          "freshPushSchema: could not determine the current MySQL database " +
-          "(SELECT DATABASE() returned no name). Connect with a database " +
-          "selected in the connection URL.",
-      },
-    });
-  }
-  return name;
 }
 
 // Executes statements per dialect, swallowing idempotency errors

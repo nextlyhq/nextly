@@ -123,7 +123,7 @@ export function FieldEditorSheet({
             {/* PR H feedback 2.2: Type and Width on separate labeled
                 rows on the right side of the header (was one combined
                 chip "text · 100%"). */}
-            <div className="flex flex-col items-end gap-0.5 text-[10px] text-muted-foreground font-normal shrink-0">
+            <div className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground font-normal shrink-0">
               <span>
                 <span className="opacity-60">Type:</span> {draft.type}
               </span>

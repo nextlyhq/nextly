@@ -49,23 +49,14 @@ export interface ResolvedContext {
  * server component's return, e.g. `ReactNode`) — inferred from `render`, so
  * `nextly` needs no `react` dependency of its own.
  */
-/**
- * A collection to resolve paths against: a bare slug (uses the route's default
- * `statusField`), or an object that overrides the status field for THAT
- * collection — so one catch-all can mix a lifecycle collection (filter by
- * `status: "published"`) with a status-less one (`statusField: false`).
- */
-export type ContentRouteCollection =
-  | string
-  | { slug: string; statusField?: string | false };
-
 export interface ContentRouteConfig<TNode> {
   /**
    * Collections to resolve a path against, in order — the first collection with
-   * a published entry whose slug matches the path wins. Each entry may be a bare
-   * slug or `{ slug, statusField }` to set its status filter independently.
+   * a published entry whose slug matches the path wins. A status-less collection
+   * (no built-in lifecycle) works automatically: the `status` scope is a no-op
+   * there, so it can be mixed freely with lifecycle collections.
    */
-  collections: ContentRouteCollection[];
+  collections: string[];
   /** Render the resolved entry (your server component body). May be async. */
   render: (
     entry: ContentEntry,
@@ -79,15 +70,27 @@ export interface ContentRouteConfig<TNode> {
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
   /**
-   * Field holding the publish status (default `"status"`), matched against
-   * `"published"`. Pass `false` to skip status filtering for status-less
-   * collections (no built-in draft/published lifecycle).
+   * Draft/Published lifecycle scope for the resolved reads (default
+   * `"published"`). Lifecycle- and locale-aware; a no-op on status-less
+   * collections.
    */
-  statusField?: string | false;
+  status?: "published" | "draft" | "all";
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: NextlyContentReader;
+  /**
+   * Whether to bypass the collections' read-access rules. Defaults to `false`
+   * (enforce — the same secure default as `resolveContent`): a rule-less
+   * collection still renders, but a stored member-only/role-based collection is
+   * hidden from ANONYMOUS requests (both the resolved read and the
+   * `generateStaticParams` scan skip it), and `overrideAccess: true` reads
+   * everything trusted. This route always resolves ANONYMOUSLY — its config is
+   * captured once at module scope, so it cannot carry a per-request user. For a
+   * route that renders per-visitor member content, call `resolveContent` with
+   * the request's `user` inside your own page instead.
+   */
+  overrideAccess?: boolean;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
    * collection (a populated author, category, media) can bust the page. The
@@ -180,22 +183,12 @@ export function createContentRoute<TNode>(
   config: ContentRouteConfig<TNode>
 ): ContentRoute<TNode> {
   const slugField = config.slugField ?? "slug";
-  const defaultStatusField = config.statusField ?? "status";
+  const status = config.status ?? "published";
   const depth = config.depth ?? 1;
+  const overrideAccess = config.overrideAccess ?? false;
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
 
-  // Normalize each collection to `{ slug, statusField }` so a bare slug inherits
-  // the route default while an object can set its own filter — deduped by slug.
-  const collections = dedupeBySlug(
-    config.collections.map(entry =>
-      typeof entry === "string"
-        ? { slug: entry, statusField: defaultStatusField }
-        : {
-            slug: entry.slug,
-            statusField: entry.statusField ?? defaultStatusField,
-          }
-    )
-  );
+  const collections = [...new Set(config.collections)];
 
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
@@ -203,15 +196,16 @@ export function createContentRoute<TNode>(
   async function resolve(
     slug: string
   ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
-    for (const { slug: collection, statusField } of collections) {
+    for (const collection of collections) {
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
-        statusField,
+        status,
         depth,
         tags: config.tags,
         revalidate: config.revalidate,
         cacheScope: config.cacheScope,
+        overrideAccess,
       });
       if (entry) return { entry, context: { collection, slug } };
     }
@@ -225,25 +219,36 @@ export function createContentRoute<TNode>(
     if (staticParamsLimit <= 0) return [];
     const nextly = getInstance();
     const params: Array<{ slug: string[] }> = [];
-    for (const { slug: collection, statusField } of collections) {
+    for (const collection of collections) {
       let page = 1;
       let collected = 0;
       for (;;) {
-        const result = await nextly.find({
-          collection,
-          // Filter by `published` unless this collection opted out
-          // (`statusField: false`), which has no such column.
-          ...(statusField === false
-            ? {}
-            : { where: { [statusField]: { equals: "published" } } }),
-          select: { [slugField]: true },
-          // `id` is unique and present on every collection; `createdAt` may be
-          // absent (timestamps off) or non-unique, letting rows shift between
-          // pages and duplicate or vanish across the paginated scan.
-          sort: "id",
-          limit: MAX_STATIC_PARAMS_PER_PAGE,
-          page,
-        });
+        let result;
+        try {
+          result = await nextly.find({
+            collection,
+            // Lifecycle-aware publish scope — a no-op on status-less collections.
+            status,
+            select: { [slugField]: true },
+            // `id` is unique and present on every collection; `createdAt` may be
+            // absent (timestamps off) or non-unique, letting rows shift between
+            // pages and duplicate or vanish across the paginated scan.
+            sort: "id",
+            limit: MAX_STATIC_PARAMS_PER_PAGE,
+            page,
+            overrideAccess,
+            // The build-time scan is anonymous — pass an explicit `undefined`
+            // so it can't inherit a default user configured on the reader.
+            user: undefined,
+          });
+        } catch (error) {
+          // An access-restricted collection has no PUBLIC paths to pre-render —
+          // skip it (its entries render on demand, enforced per request) rather
+          // than fail the build. Any non-access error still surfaces.
+          // `NextlyError.is` matches across bundled package copies.
+          if (NextlyError.is(error) && error.statusCode === 403) break;
+          throw error;
+        }
         for (const item of result.items) {
           const param = slugToStaticParam(item[slugField]);
           if (!param) continue;
@@ -282,18 +287,4 @@ export function createContentRoute<TNode>(
 /** Join the optional-catch-all segments into a slug path (no leading slash). */
 function joinSlug(params: { slug?: string[] }): string {
   return (params.slug ?? []).join("/");
-}
-
-/** Dedupe normalized collections by slug, keeping the first (its status filter). */
-function dedupeBySlug(
-  entries: Array<{ slug: string; statusField: string | false }>
-): Array<{ slug: string; statusField: string | false }> {
-  const seen = new Set<string>();
-  const out: Array<{ slug: string; statusField: string | false }> = [];
-  for (const entry of entries) {
-    if (seen.has(entry.slug)) continue;
-    seen.add(entry.slug);
-    out.push(entry);
-  }
-  return out;
 }

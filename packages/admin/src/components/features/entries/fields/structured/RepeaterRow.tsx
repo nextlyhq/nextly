@@ -208,7 +208,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
               <button
                 type="button"
                 className={cn(
-                  "cursor-grab active:cursor-grabbing p-2 rounded-none",
+                  "cursor-grab active:cursor-grabbing p-2 rounded-md",
                   "focus:outline-none",
                   "touch-none" // Prevent touch scrolling interference
                 )}
@@ -229,7 +229,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
                 type="button"
                 className={cn(
                   "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
-                  "rounded-none px-2 py-3",
+                  "rounded-md px-2 py-3",
                   "focus:outline-none"
                 )}
                 aria-expanded={isOpen}
@@ -303,7 +303,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
                 })()
               ) : (
                 // Default placeholder when no renderField provided
-                <div className="text-sm text-muted-foreground bg-primary/5 rounded-none p-4  border border-border border-dashed">
+                <div className="text-sm text-muted-foreground bg-primary/5 rounded-lg p-4  border border-border border-dashed">
                   <p className="font-medium mb-2">Sub-fields:</p>
                   <ul className="list-disc list-inside space-y-1">
                     {field.fields.map((subField, idx) => {

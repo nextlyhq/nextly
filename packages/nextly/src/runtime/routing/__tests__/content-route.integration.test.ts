@@ -52,9 +52,10 @@ async function seed(nextly: TestNextly["nextly"]) {
 }
 
 describe("createContentRoute (integration)", () => {
-  it("applies per-collection status filtering across mixed collections", async () => {
-    // `pages` has the lifecycle (filter by published); `docs` is status-less
-    // with its OWN `status` field — one global statusField can't serve both.
+  it("mixes a lifecycle collection with a status-less one under one status scope", async () => {
+    // `pages` has the lifecycle (filtered to published); `docs` is status-less
+    // with its OWN `status` field. The lifecycle-aware `status` scope filters
+    // `pages` but is a no-op on `docs`, so both are served correctly by one route.
     current = await createTestNextly({
       collections: [
         pages(),
@@ -82,7 +83,7 @@ describe("createContentRoute (integration)", () => {
     });
 
     const { ContentPage } = createContentRoute({
-      collections: ["pages", { slug: "docs", statusField: false }],
+      collections: ["pages", "docs"],
       nextly: current.nextly,
       render: (entry: ContentEntry) => ({ title: entry.title }),
     });

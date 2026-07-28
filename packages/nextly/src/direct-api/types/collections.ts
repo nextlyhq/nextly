@@ -55,6 +55,16 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   where?: WhereFilter;
 
   /**
+   * Draft/Published lifecycle scope for the read (only effective when the
+   * collection has the built-in `status` lifecycle). Unlike a `where` clause on
+   * the `status` column, this drives the query service's lifecycle-aware filter,
+   * so it ALSO constrains a localized collection's per-locale companion
+   * `_status` — a draft translation under a published main row is not returned.
+   * `"published"` is enforced even for a trusted (`overrideAccess: true`) read.
+   */
+  status?: "published" | "draft" | "all";
+
+  /**
    * Maximum documents per page.
    *
    * @default 10

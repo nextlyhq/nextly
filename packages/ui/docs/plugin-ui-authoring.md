@@ -79,13 +79,61 @@ Colors: `--nx-background` / `--nx-foreground`, `--nx-card` / `--nx-card-foregrou
 `--nx-border`, `--nx-border-strong`, `--nx-input`, `--nx-ring`,
 `--nx-sidebar-background` and the `--nx-sidebar-*` family.
 
-Sizing: `--radius` (the system is square — this is `0`; always route corner radius through
-it so a future rounding is one edit), and the control-height scale `--nx-control-height`,
-`--nx-control-height-sm`, `--nx-control-height-md`, `--nx-control-height-lg` for anything that should
-line up with admin inputs and buttons.
+Sizing: `--radius` (see the radius tiers below), and the control-height scale
+`--nx-control-height`, `--nx-control-height-sm`, `--nx-control-height-md`,
+`--nx-control-height-lg` for anything that should line up with admin inputs and buttons.
 
 Do not hardcode hex, `rgb()`, `rgba()`, or named colors. The only literals allowed are
 `transparent`, `currentColor`, and `inherit`.
+
+### Corner radius: pick a tier, never a value
+
+The admin ships square today (`--radius: 0`), but the whole scale derives from that one
+knob, so an operator who sets `--radius: 12px` re-rounds every surface at once. Your plugin
+keeps up with that only if it picks a **tier by element category** rather than writing a
+length. Hardcoding a corner — `rounded-none` just as much as `rounded-[6px]` or
+`border-radius: 4px` — pins your UI at that value and opts it out of the knob.
+
+The scale is three steps. These are exactly what `@nextlyhq/ui/tailwind-preset` exports, and
+exactly what the shipped components use, so matching a Nextly component means picking the
+tier it picks.
+
+| Tier                         | Use for                                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rounded-lg` / `--radius-lg` | Floating and grouping containers: cards, dialogs, alert dialogs, popovers, tooltips, dropdown / select / command panels, empty-state panels  |
+| `rounded-md` / `--radius-md` | Controls and the inline surfaces among them: buttons, inputs, textareas, select triggers, icon buttons, alerts, table wrappers, image frames |
+| `rounded-sm` / `--radius-sm` | Small controls and adornments: menu and list items, badges, chips, tags, checkboxes, toolbar affordances                                     |
+| `rounded-full`               | Circles and pills, outside the scale — avatars, status dots, spinners, progress tracks, switch tracks and thumbs                             |
+
+Four consequences worth internalising:
+
+- **`rounded-full` is deliberately outside the scale.** It is `9999px`, not a `--radius`
+  step. Those elements are round because of their shape, not because of the theme, so a
+  retheme must never flatten them.
+- **`rounded-xl` and `rounded-2xl` are not tiers of this knob.** The preset exports only
+  `lg`, `md` and `sm`, so a plugin built against it gets Tailwind's fixed `0.75rem` /
+  `1rem` for those two, detached from `--radius`. Inside the admin's own build they are
+  defined, but as `--radius + 4px` and `--radius + 8px`, so at the shipped `--radius: 0`
+  they resolve to `4px` and `8px` — visibly round inside a square admin. Pick from
+  `sm` / `md` / `lg`.
+- **`--radius: 0` is not "every step is zero".** `--radius-lg` is `0`, but `--radius-sm`
+  and `--radius-md` compute to `-4px` and `-2px`. They _render_ square only because
+  `border-radius` clamps a negative length to `0`. The token keeps its negative value, so
+  reading a step for padding, for an inset, or through `getComputedStyle` gives you `-4px`,
+  not `0`. Clamp it yourself if you consume a step as a length rather than as a corner.
+- **A rounded container must handle full-bleed children.** If a child paints a background
+  all the way to the container's edge (a tinted footer, a sticky header, a hover row), give
+  the container `overflow-hidden` or give the child a matching corner with
+  `rounded-b-[inherit]` / `rounded-t-[inherit]`. Otherwise the child's fill paints square
+  across the parent's curve at any nonzero `--radius`.
+
+If a specific element genuinely must stay square, keep `rounded-none` and leave a comment
+saying why (overlapped-border strips, full-bleed fills inside an already-rounded parent,
+underline tabs). Square with a stated reason is a decision; square without one is an element
+nobody wired to the knob. Tabs are square for exactly that reason — the active state is a
+bottom border that has to run the full width of the trigger — which is why they are not in
+the `rounded-sm` tier above. Sheet is the counter-example: it is anchored to the viewport
+edge and carries no radius class at all.
 
 ---
 
@@ -169,7 +217,9 @@ allowlist in the script with a one-line reason — don't silence the whole check
 
 - [ ] Colors come from `var(--token)` — no `hsl()`/`rgb()` wrappers, no hardcoded values.
 - [ ] Alpha uses `color-mix(in srgb, var(--token) N%, transparent)`.
-- [ ] Corner radius routes through `var(--radius)`; control heights use `--nx-control-height*`.
+- [ ] Corner radius picks a tier (`rounded-lg`/`md`/`sm`), never a hardcoded value; circles
+      use `rounded-full`; any `rounded-none` carries a reason; rounded containers clip or
+      match their full-bleed children. Control heights use `--nx-control-height*`.
 - [ ] New UI uses `@nextlyhq/ui` components + Tailwind utilities where practical.
 - [ ] No `@media (prefers-color-scheme)`; dark mode inherited from the admin.
 - [ ] Class names are prefixed/scoped; no bare element selectors.

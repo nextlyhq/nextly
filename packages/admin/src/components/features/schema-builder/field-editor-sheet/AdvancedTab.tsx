@@ -99,7 +99,7 @@ function SwitchRow({
             // PR E1: neutral disabled-chip styling instead of amber.
             // Mirrors the Settings modal's Advanced tab from PR B so the
             // visual language is consistent across the admin.
-            <span className="text-[10px] border border-border bg-muted text-muted-foreground rounded-sm px-1.5 py-0.5">
+            <span className="text-xs border border-border bg-muted text-muted-foreground rounded-sm px-1.5 py-0.5">
               {badge}
             </span>
           )}

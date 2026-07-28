@@ -44,6 +44,9 @@ import type {
   TableSpec,
 } from "./types";
 
+/** The declared types whose sequence default is part of the type itself. */
+const SERIAL_TYPES = new Set(["serial", "bigserial", "smallserial"]);
+
 export function diffSnapshots(
   prev: NextlySchemaSnapshot,
   cur: NextlySchemaSnapshot
@@ -201,7 +204,33 @@ function diffColumns(
       // `'draft'`. See ./normalize-default.ts for the bounded set of
       // equivalences. The emitted op carries the original, un-normalised
       // values so downstream tooling sees what's actually stored.
-      if (normalizeDefault(prevC.default) !== normalizeDefault(curC.default)) {
+      // The column type is passed so a boolean default compares by meaning:
+      // MySQL stores booleans as tinyint(1) and reports 1/0 where the schema
+      // authored true/false.
+      //
+      // A serial column is the other asymmetry: its sequence default belongs
+      // to the type, so the desired side declares no default while PostgreSQL
+      // reports the materialised `nextval('<table>_id_seq'::regclass)`. Read
+      // literally that is a default being removed on every reconcile.
+      //
+      // Two conditions, and both are needed. The live default must be over
+      // the sequence the column OWNS (see ColumnSpec.ownedSequenceDefault) —
+      // a `nextval` over any other sequence was pointed there deliberately
+      // and is a real default. And the DESIRED column must still be declared
+      // serial: moving to a plain integer drops the sequence, which the type
+      // comparison cannot catch because serial and integer share a storage
+      // type, so suppressing it would leave the column drawing from the
+      // sequence forever.
+      const sequenceDefaultUnchanged =
+        curC.default === undefined &&
+        prevC.ownedSequenceDefault === true &&
+        SERIAL_TYPES.has((curC.type ?? "").trim().toLowerCase());
+
+      if (
+        !sequenceDefaultUnchanged &&
+        normalizeDefault(prevC.default, prevC.type) !==
+          normalizeDefault(curC.default, curC.type)
+      ) {
         defaultChanges.push({
           type: "change_column_default",
           tableName,

@@ -256,9 +256,11 @@ function UploadCell({ value }: { value: unknown }) {
   return (
     <div className="flex items-center gap-2">
       {isImage && thumbnailUrl ? (
-        <Avatar size="md">
+        // Avatar is reused here as a media thumbnail, not an identity: the
+        // circular default would crop the image, so it takes a --radius step.
+        <Avatar size="md" className="rounded-md">
           <AvatarImage src={thumbnailUrl} alt={filename} />
-          <AvatarFallback>
+          <AvatarFallback className="rounded-md">
             <Image className="h-4 w-4" />
           </AvatarFallback>
         </Avatar>
@@ -357,7 +359,7 @@ function JsonCell({ value }: { value: unknown }) {
     jsonStr.length > maxLength ? `${jsonStr.slice(0, maxLength)}...` : jsonStr;
 
   return (
-    <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
+    <code className="text-xs bg-muted px-1.5 py-0.5 rounded-sm font-mono">
       {truncated}
     </code>
   );

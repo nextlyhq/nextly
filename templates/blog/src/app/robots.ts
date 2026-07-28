@@ -1,21 +1,14 @@
 /**
  * robots.txt — served at /robots.txt.
  *
- * Blocks `/admin` (Nextly's admin panel) and `/api` routes from being
- * indexed. Points search engines at the sitemap for efficient crawling.
+ * Built with Nextly's `nextlyRobots` helper, which keeps the admin panel
+ * (`/admin`) and API (`/api`) out of the index on a path boundary (so
+ * similarly-prefixed content like `/administration` is not swallowed) and
+ * points crawlers at the sitemap.
  */
 
-import type { MetadataRoute } from "next";
+import { nextlyRobots } from "nextly/runtime";
 
 import { absoluteUrl } from "@/lib/site-url";
 
-export default function robots(): MetadataRoute.Robots {
-  return {
-    rules: {
-      userAgent: "*",
-      allow: "/",
-      disallow: ["/admin", "/api"],
-    },
-    sitemap: absoluteUrl("/sitemap.xml"),
-  };
-}
+export default nextlyRobots({ sitemap: absoluteUrl("/sitemap.xml") });

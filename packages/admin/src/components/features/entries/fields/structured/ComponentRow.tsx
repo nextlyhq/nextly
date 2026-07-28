@@ -241,7 +241,10 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "transition-shadow",
+        // The collapsible header tints itself edge to edge, so without clipping
+        // that fill paints square across the card's rounded top corners at any
+        // nonzero --radius. Matches the other structured-field cards.
+        "overflow-hidden transition-shadow",
         isDragging && "opacity-50 ring-2 ring-primary shadow-lg z-10"
       )}
     >
@@ -256,7 +259,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
               <button
                 type="button"
                 className={cn(
-                  "cursor-grab active:cursor-grabbing p-2 rounded-none",
+                  "cursor-grab active:cursor-grabbing p-2 rounded-md",
                   "focus:outline-none",
                   "touch-none" // Prevent touch scrolling interference
                 )}
@@ -277,7 +280,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
                 type="button"
                 className={cn(
                   "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
-                  "rounded-none px-2 py-3",
+                  "rounded-md px-2 py-3",
                   "focus:outline-none"
                 )}
                 aria-expanded={isOpen}

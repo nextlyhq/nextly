@@ -59,14 +59,14 @@ export async function find<TSlug extends CollectionSlug>(
     page: args.page,
     limit: args.limit,
     where: args.where,
+    // Lifecycle-aware publish scope (also constrains localized companion _status).
+    status: args.status,
     depth: config.depth,
     select: args.select,
     sort: args.sort,
     richTextFormat: config.richTextFormat,
     overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -120,9 +120,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       select: args.select,
       richTextFormat: config.richTextFormat,
       overrideAccess: config.overrideAccess,
-      user: config.user
-        ? { id: config.user.id, role: config.user.role }
-        : undefined,
+      user: config.user,
       // i18n M4: forward the content locale + fallback so localized fields resolve.
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,
@@ -162,9 +160,7 @@ export async function create<TSlug extends CollectionSlug>(
     {
       collectionName: args.collection,
       overrideAccess: config.overrideAccess,
-      user: config.user
-        ? { id: config.user.id, role: config.user.role }
-        : undefined,
+      user: config.user,
       // Forward the content locale so a localized write lands in the requested
       // language's companion row, not the default locale's.
       locale: config.locale,
@@ -210,9 +206,7 @@ export async function update<TSlug extends CollectionSlug>(
         collectionName: args.collection,
         entryId: args.id,
         overrideAccess: config.overrideAccess,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
+        user: config.user,
         // Forward the content locale so a localized update targets the requested
         // language's companion row, not the default locale's.
         locale: config.locale,
@@ -239,9 +233,7 @@ export async function update<TSlug extends CollectionSlug>(
         where: args.where,
         data: args.data,
         overrideAccess: config.overrideAccess,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
+        user: config.user,
         context: config.context,
         disableRevalidate: config.disableRevalidate,
       },
@@ -315,9 +307,7 @@ export async function deleteEntry<
       collectionName: args.collection,
       entryId: args.id,
       overrideAccess: config.overrideAccess,
-      user: config.user
-        ? { id: config.user.id, role: config.user.role }
-        : undefined,
+      user: config.user,
       context: config.context,
       disableRevalidate: config.disableRevalidate,
     });
@@ -338,9 +328,7 @@ export async function deleteEntry<
         collectionName: args.collection,
         where: args.where,
         overrideAccess: config.overrideAccess,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
+        user: config.user,
         context: config.context,
         disableRevalidate: config.disableRevalidate,
       },
@@ -384,9 +372,7 @@ export async function count(
     collectionName: args.collection,
     where: args.where,
     overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     // i18n M4: parity with find() so locale-scoped counts match.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -416,9 +402,7 @@ export async function bulkDelete(
     collectionName: args.collection,
     ids: args.ids,
     overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     context: config.context,
     disableRevalidate: config.disableRevalidate,
   });
@@ -451,9 +435,7 @@ export async function duplicate<TSlug extends CollectionSlug>(
     entryId: args.id,
     overrides: args.overrides,
     overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     context: config.context,
     disableRevalidate: config.disableRevalidate,
   });

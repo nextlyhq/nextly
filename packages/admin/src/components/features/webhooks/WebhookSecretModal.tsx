@@ -60,7 +60,7 @@ const SecretRow: React.FC<{ secret: string }> = ({ secret }) => {
 
   return (
     <div className="flex items-center gap-2">
-      <code className="flex-1 overflow-x-auto rounded-none border border-border bg-primary/5 px-3 py-2 font-mono text-sm break-all">
+      <code className="flex-1 overflow-x-auto rounded-sm border border-border bg-primary/5 px-3 py-2 font-mono text-sm break-all">
         {secret}
       </code>
       <Button

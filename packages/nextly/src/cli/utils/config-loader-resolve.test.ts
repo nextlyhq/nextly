@@ -94,4 +94,25 @@ describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
     // components were dropped by the old whitelist merge-back — must survive now.
     expect((result.components ?? []).map(c => c.slug)).toContain("p-comp");
   });
+
+  it("carries a plugin setup()'s transformed webhookRetention (and audit) over the base value", () => {
+    // A plugin that disables retention in setup() must win: the merge previously
+    // carried webhookAuditEnabled but dropped webhookRetention back to base.
+    const baseCfg = {
+      ...base(),
+      webhookRetention: { eventsMaxAgeMs: 111 },
+      webhookAuditEnabled: false,
+    } as unknown as SanitizedNextlyConfig;
+    const transformed = {
+      ...base(),
+      plugins: [],
+      webhookRetention: null,
+      webhookAuditEnabled: true,
+    } as unknown as SanitizedNextlyConfig;
+
+    const result = mergeSetupResultIntoConfig(baseCfg, transformed, []);
+
+    expect(result.webhookRetention).toBeNull();
+    expect(result.webhookAuditEnabled).toBe(true);
+  });
 });

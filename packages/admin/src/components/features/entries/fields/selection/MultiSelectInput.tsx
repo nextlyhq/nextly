@@ -116,7 +116,7 @@ export function MultiSelectInput<
                 <button
                   type="button"
                   onClick={() => removeValue(optionValue)}
-                  className="ml-0.5 rounded-none p-0.5 hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="ml-0.5 rounded-md p-0.5 hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   aria-label={`Remove ${labelFor(optionValue)}`}
                 >
                   <X className="h-2.5 w-2.5" />

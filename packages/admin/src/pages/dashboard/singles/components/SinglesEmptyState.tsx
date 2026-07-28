@@ -48,7 +48,7 @@ export const SinglesEmptyState: React.FC<SinglesEmptyStateProps> = ({
   isSearching = false,
 }) => {
   return (
-    <div className="rounded-none bg-card  border border-border p-12 text-center">
+    <div className="rounded-lg bg-card  border border-border p-12 text-center">
       {/* Icon */}
       <div className="flex justify-center mb-6">
         <FileText className="h-10 w-10 text-primary/30" aria-hidden="true" />

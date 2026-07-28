@@ -69,7 +69,9 @@ export function PermissionGuard({
         <div className="absolute w-[280px] h-[280px] rounded-full bg-primary/5 dark:bg-primary/10 blur-[80px] pointer-events-none -z-10 animate-brand-pulse" />
 
         {/* Premium glassmorphic container card */}
-        <div className="flex flex-col items-center text-center p-8 md:p-12 rounded-none border border-black/5 dark:border-white/5 bg-card/40 backdrop-blur-xl shadow-soft-primary max-w-sm w-full mx-auto relative overflow-hidden transition-all duration-300">
+        {/* The hairline uses `border`, whose token is already a low-alpha ink
+            that inverts per mode, so the card keeps one edge under any theme. */}
+        <div className="flex flex-col items-center text-center p-8 md:p-12 rounded-lg border border-border bg-card/40 backdrop-blur-xl shadow-soft-primary max-w-sm w-full mx-auto relative overflow-hidden transition-all duration-300">
           {/* Brand Mark Orbiter Loader */}
           <div className="relative w-20 h-20 mb-8 flex items-center justify-center">
             {/* Shared UI Spinner component */}

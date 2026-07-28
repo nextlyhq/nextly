@@ -122,19 +122,19 @@ export function RequestBar({
         // The shortcut is on the label because a control you can only reach
         // with the mouse teaches nobody it has a keyboard.
         title={isLoading ? "Cancel (Esc)" : "Send request (⌘↵)"}
-        className="w-40 shrink-0 gap-2 rounded-none"
+        className="w-40 shrink-0 gap-2 rounded-md"
       >
         {isLoading ? (
           <>
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             Cancel
-            <kbd className="font-mono text-[10px] opacity-60">Esc</kbd>
+            <kbd className="font-mono text-xs opacity-60">Esc</kbd>
           </>
         ) : (
           <>
             <Play className="h-3.5 w-3.5" />
             Send
-            <kbd className="font-mono text-[10px] opacity-60">⌘↵</kbd>
+            <kbd className="font-mono text-xs opacity-60">⌘↵</kbd>
           </>
         )}
       </Button>

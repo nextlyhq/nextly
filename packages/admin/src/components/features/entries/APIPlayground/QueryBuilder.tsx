@@ -425,7 +425,7 @@ export function QueryBuilder({
                     onClick={() => toggleSelected(name)}
                     title={fieldLabel(name, fields)}
                     className={cn(
-                      "cursor-pointer border px-2 py-1 font-mono text-[11px] transition-colors",
+                      "cursor-pointer border px-2 py-1 font-mono text-xs transition-colors",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       on
                         ? "border-primary bg-primary text-primary-foreground"
@@ -470,7 +470,7 @@ export function QueryBuilder({
           </p>
 
           {conditions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center rounded-none border border-dashed border-border bg-muted/30 py-8">
+            <div className="flex flex-col items-center justify-center rounded-md border border-dashed border-border bg-muted/30 py-8">
               <p className="text-xs text-muted-foreground">
                 No conditions. Every entry is returned.
               </p>
@@ -480,7 +480,7 @@ export function QueryBuilder({
               {conditions.map(condition => (
                 <div
                   key={condition.id}
-                  className="flex items-center gap-2 rounded-none border border-border bg-muted/30 p-3"
+                  className="flex items-center gap-2 rounded-md border border-border bg-muted/30 p-3"
                 >
                   <Select
                     value={condition.field}
@@ -579,7 +579,7 @@ export function QueryBuilder({
               <Label className="text-sm font-medium text-foreground">
                 Generated where clause
               </Label>
-              <code className="block break-all rounded-none border border-border bg-muted/30 px-3 py-2 font-mono text-xs text-muted-foreground">
+              <code className="block break-all rounded-sm border border-border bg-muted/30 px-3 py-2 font-mono text-xs text-muted-foreground">
                 {generatedWhere}
               </code>
             </div>

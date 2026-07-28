@@ -26,7 +26,7 @@
  * ```
  *
  * @design-spec
- * - Border-radius: 0px (rounded-none) per design system spec
+ * - Border-radius: `rounded-lg`, the container step of the `--radius` scale
  * - Max-width: 512px (default)
  * - Backdrop: black/80 with blur effect
  * - Padding: 24px (p-6)
@@ -72,6 +72,9 @@ const AlertDialogOverlay = forwardRef<
   <AlertDialogPrimitive.Overlay
     ref={ref}
     className={cn(
+      // A modal scrim: a black wash is the point, so it stays a literal
+      // rather than a surface token. Painting it from `background` would
+      // make it a white veil in light mode and near-invisible in dark.
       "fixed inset-0 z-50 bg-black/80 backdrop-blur-sm transition-opacity duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
@@ -99,7 +102,7 @@ const AlertDialogContent = forwardRef<
       <AlertDialogPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed left-[50%] top-[50%] z-[51] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-none duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
+          "fixed left-[50%] top-[50%] z-[51] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-lg duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
           className
         )}
         {...props}

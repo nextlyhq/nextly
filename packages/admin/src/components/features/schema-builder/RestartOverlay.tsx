@@ -9,6 +9,9 @@ export function RestartOverlay() {
 
   if (!isRestarting) return null;
 
+  // The scrim and its contents stay literal black/white on purpose: this covers
+  // the whole app while the server is down, so it is its own dark surface rather
+  // than a themed one, and the dots and text are read against that scrim.
   return (
     <div
       className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/75 backdrop-blur-sm"
@@ -19,15 +22,15 @@ export function RestartOverlay() {
         {/* Pulsing dots animation */}
         <div className="mb-4 flex items-center justify-center gap-1.5">
           <span
-            className="inline-block h-2 w-2 rounded-none bg-white animate-pulse"
+            className="inline-block h-2 w-2 rounded-full bg-white animate-pulse"
             style={{ animationDelay: "0s" }}
           />
           <span
-            className="inline-block h-2 w-2 rounded-none bg-white animate-pulse"
+            className="inline-block h-2 w-2 rounded-full bg-white animate-pulse"
             style={{ animationDelay: "0.2s" }}
           />
           <span
-            className="inline-block h-2 w-2 rounded-none bg-white animate-pulse"
+            className="inline-block h-2 w-2 rounded-full bg-white animate-pulse"
             style={{ animationDelay: "0.4s" }}
           />
         </div>

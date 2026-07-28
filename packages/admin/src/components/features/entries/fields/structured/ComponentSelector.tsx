@@ -199,7 +199,7 @@ function ComponentCard({ component, onSelect }: ComponentCardProps) {
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex flex-col items-start gap-2 p-3 rounded-none  border border-border",
+        "flex flex-col items-start gap-2 p-3 rounded-md  border border-border",
         "bg-background hover:bg-accent hover:border-accent-foreground/20",
         "transition-colors text-left w-full",
         "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
@@ -352,7 +352,7 @@ export function ComponentSelector({
                   {/* Category Header */}
                   <div className="flex items-center gap-2 mb-3">
                     <div
-                      className="w-2 h-2 shrink-0 rounded-none bg-border-strong"
+                      className="w-2 h-2 shrink-0 rounded-sm bg-border-strong"
                       aria-hidden="true"
                     />
                     <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">

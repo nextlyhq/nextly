@@ -75,13 +75,15 @@ export function MediaBulkActionBar({
       aria-label="Bulk actions for selected media"
       aria-live="polite"
       className={cn(
-        "flex items-center justify-between gap-4 w-full p-3 rounded-none  border border-border bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
+        "flex items-center justify-between gap-4 w-full p-3 rounded-md  border border-border bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
         className
       )}
     >
       <div className="flex items-center gap-3">
         <div className="flex h-8 items-center gap-2 px-3">
-          <span className="text-sm font-semibold text-primary">
+          {/* A count readout, so it takes the page ink; the bar's primary tint
+              already carries the selection signal. */}
+          <span className="text-sm font-semibold text-foreground">
             {selectedCount}
           </span>
           <span className="text-xs text-muted-foreground font-normal">
@@ -123,12 +125,12 @@ export function MediaBulkActionBar({
           size="md"
           onClick={onDelete}
           disabled={isDeleting}
-          className="h-8 text-xs font-normal px-4 rounded-none"
+          className="h-8 text-xs font-normal px-4 rounded-md"
           aria-label={`Delete ${selectedCount} selected ${itemLabel}`}
         >
           {isDeleting ? (
             <>
-              <span className="mr-1.5 h-3 w-3 animate-spin rounded-none border-2 border-current border-t-transparent" />
+              <span className="mr-1.5 h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
               Deleting...
             </>
           ) : (

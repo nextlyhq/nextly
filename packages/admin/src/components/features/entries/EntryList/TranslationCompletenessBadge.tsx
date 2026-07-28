@@ -53,7 +53,7 @@ export function TranslationCompletenessBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold tracking-[0.06em] rounded tabular-nums",
+        "inline-flex items-center gap-1 px-2 py-0.5 text-xs font-bold tracking-[0.06em] rounded tabular-nums",
         complete
           ? "bg-success-100 text-success-800 border border-success-200 dark:bg-success-950/40 dark:text-success-200 dark:border-success-900"
           : "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900"

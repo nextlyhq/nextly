@@ -283,7 +283,7 @@ export function EntrySystemHeader({
           // RTL for a translatable title edited in an RTL language.
           {...(titleRtl ? { dir: "rtl" as const } : {})}
           className={cn(
-            "w-full text-[19px] font-semibold tracking-tight text-foreground",
+            "w-full text-xl font-semibold tracking-tight text-foreground",
             "bg-transparent outline-none placeholder:text-muted-foreground",
             isSubmitting && "opacity-60 cursor-not-allowed",
             lockIdentity && "cursor-default text-foreground/80"

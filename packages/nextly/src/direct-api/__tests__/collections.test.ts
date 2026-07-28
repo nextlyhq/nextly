@@ -98,7 +98,8 @@ describe("Direct API - Collection Operations", () => {
 
       await nextly.find({
         collection: "posts",
-        where: { status: { equals: "published" } },
+        where: { title: { equals: "hi" } },
+        status: "published",
         limit: 5,
         page: 2,
         sort: "-createdAt",
@@ -109,12 +110,45 @@ describe("Direct API - Collection Operations", () => {
       expect(mocks.collectionsHandler.listEntries).toHaveBeenCalledWith(
         expect.objectContaining({
           collectionName: "posts",
-          where: { status: { equals: "published" } },
+          where: { title: { equals: "hi" } },
+          // The lifecycle-aware status scope is forwarded to the service.
+          status: "published",
           limit: 5,
           page: 2,
           sort: "-createdAt",
           depth: 3,
           select: { title: true, content: true },
+        })
+      );
+    });
+
+    it("should forward the user's full role set (not just the primary role)", async () => {
+      mocks.collectionsHandler.listEntries.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "OK",
+        data: { docs: [], totalDocs: 0, limit: 10, page: 1, totalPages: 0 },
+      });
+
+      await nextly.find({
+        collection: "posts",
+        overrideAccess: false,
+        user: {
+          id: "u1",
+          role: "viewer",
+          roles: ["viewer", "editor"],
+          email: "u1@example.com",
+        },
+      });
+
+      expect(mocks.collectionsHandler.listEntries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user: {
+            id: "u1",
+            role: "viewer",
+            roles: ["viewer", "editor"],
+            email: "u1@example.com",
+          },
         })
       );
     });

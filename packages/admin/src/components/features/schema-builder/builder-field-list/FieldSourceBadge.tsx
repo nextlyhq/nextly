@@ -14,7 +14,7 @@ export function FieldSourceBadge({ owner }: { owner?: string }) {
     <span
       data-testid="field-plugin-badge"
       title={`Contributed by ${owner ?? "a plugin"} — manage it in the plugin's code.`}
-      className="text-[10px] border border-border rounded-sm px-1 py-0.5 text-muted-foreground bg-muted/40"
+      className="text-xs border border-border rounded-sm px-1 py-0.5 text-muted-foreground bg-muted/40"
     >
       Plugin · {short}
     </span>

@@ -127,6 +127,8 @@ export function CodeBlock({
         crosshairCursor: false,
         drawSelection: false,
       }}
+      // Square corners: the editor fills its bordered card edge to edge, so
+      // the card is the only surface that may carry a radius.
       className="overflow-hidden rounded-none border-none"
     />
   );

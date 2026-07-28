@@ -91,7 +91,7 @@ export const RingChart: React.FC<RingChartProps> = ({
         <span className="text-3xl font-bold tracking-tight text-foreground leading-none">
           {total.toLocaleString()}
         </span>
-        <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground mt-1">
+        <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground mt-1">
           Total
         </span>
       </div>

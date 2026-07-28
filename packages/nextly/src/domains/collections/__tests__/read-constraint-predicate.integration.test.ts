@@ -262,6 +262,66 @@ describe("stored read constraints are applied in full (integration)", () => {
     ]);
   });
 
+  it("gives the rule the caller's own claims", async () => {
+    // The access context used to be rebuilt from `id`/`role`/`roles`/`email`,
+    // so a rule keyed on a claim of the app's own saw `undefined` and fell to
+    // its else branch. Here that means a caller who should see the acme rows
+    // would be refused outright.
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "claim-aware", tenantId: "acme" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.data!.docs as Row[]).map(r => r.title).sort()).toEqual([
+      "acme-eu-free",
+      "acme-us-paid",
+    ]);
+  });
+
+  it("reads everything when the rule's exclusion list is empty", async () => {
+    // `not_in: []` excludes nothing, so the rule restricts nothing. The
+    // translator drops such a member, and the fail-closed guard on "a
+    // constraint that translated to no condition" would then refuse every
+    // caller — turning an empty blocklist into a total lockout.
+    const handler = await bootWithStoredRule();
+
+    expect(await titlesFor(handler, "empty-exclusion")).toEqual([
+      "acme-eu-free",
+      "acme-us-paid",
+      "other-eu-paid",
+    ]);
+  });
+
+  it("still applies the siblings of an empty exclusion", async () => {
+    // Removing the no-op must not take the rest of the rule with it.
+    const handler = await bootWithStoredRule();
+
+    expect(await titlesFor(handler, "empty-exclusion-with-sibling")).toEqual([
+      "acme-eu-free",
+      "acme-us-paid",
+    ]);
+  });
+
+  it("refuses an empty inclusion list", async () => {
+    // The mirror case, and the reason the two are not treated alike: `in: []`
+    // should match nothing, but the translator drops it, so honouring it would
+    // widen the read to every row rather than narrow it to none.
+    const handler = await bootWithStoredRule();
+
+    const result = await handler.listEntries({
+      collectionName: "docs",
+      user: { id: "empty-inclusion" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
   it("counts the same rows it lists", async () => {
     const handler = await bootWithStoredRule();
 
