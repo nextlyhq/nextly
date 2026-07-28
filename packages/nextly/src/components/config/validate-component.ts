@@ -377,9 +377,16 @@ function validateDbName(
   // is deliberately not policed here — `comp_site_seo` is a documented custom
   // name, and whether some other component generates the same table is a
   // cross-config question this single-config check cannot answer.
+  // `comp_*_locales` is how a localization companion is recognised, so a main
+  // table wearing that shape would be classified as one and pruned as an
+  // orphaned companion whenever its supposed parent is absent.
+  const looksLikeCompanion =
+    normalized.startsWith("comp_") && normalized.endsWith("_locales");
+
   const collides =
     CORE_TABLE_NAMES.some(name => name.toLowerCase() === normalized) ||
-    ENTITY_TABLE_PREFIXES.some(prefix => normalized.startsWith(prefix));
+    ENTITY_TABLE_PREFIXES.some(prefix => normalized.startsWith(prefix)) ||
+    looksLikeCompanion;
 
   if (collides) {
     errors.push({

@@ -92,3 +92,23 @@ describe("reserved-storage matching is case-insensitive", () => {
     expect(result.valid).toBe(false);
   });
 });
+
+describe("companion-table shape is reserved", () => {
+  it("rejects a name that would be read as a localization companion", () => {
+    // `comp_*_locales` is how companions are recognised; a main table wearing
+    // that shape gets pruned as an orphaned companion.
+    const result = validateComponentConfig({
+      ...base,
+      dbName: "comp_seo_locales",
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects it case-insensitively", () => {
+    const result = validateComponentConfig({
+      ...base,
+      dbName: "COMP_SEO_LOCALES",
+    });
+    expect(result.valid).toBe(false);
+  });
+});

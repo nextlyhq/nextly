@@ -511,6 +511,21 @@ export class ComponentRegistryService extends BaseRegistryService<
         // divergence between the configured name and the stored one cannot be
         // honoured consistently. Changing dbName for a component that is
         // already registered is a migration, not a config edit.
+        //
+        // Reported rather than passed over: registry-backed reads, filters and
+        // teardown all follow the stored name, so a mismatch means they address
+        // a table the schema layer is not maintaining. Recording it as a sync
+        // error surfaces it on every boot until a migration resolves it.
+        if (existing !== null && existing.tableName !== desiredTableName) {
+          result.errors.push({
+            slug: config.slug,
+            error:
+              `Registry table '${existing.tableName}' does not match the configured ` +
+              `'${desiredTableName}'. Storage is not repointed automatically; run a ` +
+              `migration to move the data, or restore the previous dbName.`,
+          });
+          continue;
+        }
         if (!existing) {
           await this.registerComponent({
             slug: config.slug,

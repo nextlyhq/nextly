@@ -164,15 +164,17 @@ export function createComponentsNamespace(
       // goes through the same reserved-storage rules as a code-first dbName,
       // because a name pointing at framework tables would let a later delete
       // drop storage this component does not own.
+      // Validated on both paths: an explicit name has to clear the reserved
+      // storage rules, and an implicit one still depends on the slug, which the
+      // resolver normalizes — `foo-bar` and `foo--bar` would otherwise register
+      // as distinct components sharing one physical table.
+      assertValidComponentConfig({
+        slug: args.slug,
+        label: { singular: args.label },
+        fields: fieldsTyped,
+        dbName: args.tableName,
+      });
       const tableName = resolveComponentTableName(args.slug, args.tableName);
-      if (args.tableName !== undefined) {
-        assertValidComponentConfig({
-          slug: args.slug,
-          label: { singular: args.label },
-          fields: fieldsTyped,
-          dbName: args.tableName,
-        });
-      }
 
       const component = await ctx.componentRegistryService.registerComponent({
         slug: args.slug,

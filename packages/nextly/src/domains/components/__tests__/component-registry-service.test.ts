@@ -811,3 +811,31 @@ describe("ComponentRegistryService table ownership", () => {
     expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ComponentRegistryService legacy table mismatch", () => {
+  it("reports a stored name that no longer matches the config", async () => {
+    // Storage is not repointed, but the mismatch must not pass silently:
+    // registry-backed reads follow the stored name.
+    const ctx = createCtx();
+    const fields = [{ name: "metaTitle", type: "text" }];
+    ctx.adapter.selectOne.mockImplementation(async () => {
+      const { calculateSchemaHash } = await import(
+        "../../schema/services/schema-hash"
+      );
+      return dbRow({
+        schema_hash: calculateSchemaHash(fields),
+        table_name: "comp_seo_meta",
+      });
+    });
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+    ]);
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].slug).toBe("seo");
+    expect(result.errors[0].error).toMatch(/migration/i);
+    expect(result.unchanged).toEqual([]);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});
