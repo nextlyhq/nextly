@@ -301,7 +301,7 @@ export async function syncComponents(
       fields: component.fields,
       description: component.description,
       admin: component.admin,
-      configPath: `components/${component.slug}.ts`,
+      configPath: `${STORAGE_FORMAT.configPathDir}/${component.slug}.ts`,
     })
   );
 

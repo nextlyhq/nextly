@@ -365,7 +365,7 @@ export async function teardownEntityComponentData(
           tablesTouched.add(componentTable);
 
           // Localized components keep translations keyed by the instance id.
-          const companion = `${componentTable}_locales`;
+          const companion = `${componentTable}${STORAGE_FORMAT.companionSuffix}`;
           if (
             instanceIds.length > 0 &&
             (await adapter.tableExists(companion))

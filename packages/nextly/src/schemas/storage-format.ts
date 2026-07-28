@@ -24,7 +24,13 @@ export const STORAGE_FORMAT = {
   /** Prefix every generated component table name carries. */
   tablePrefix: "comp_",
 
-  /** Suffix identifying a localization companion of a main table. */
+  /**
+   * Suffix identifying a localization companion of a main table.
+   *
+   * Shared with collection and single tables, like the index prefixes below:
+   * the localization layer applies it to every entity kind, so it names no
+   * concept and does not move when the concept is renamed.
+   */
   companionSuffix: "_locales",
 
   /**

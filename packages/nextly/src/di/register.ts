@@ -1747,7 +1747,7 @@ async function syncCodeFirstComponents(
       fields: comp.fields,
       description: comp.description,
       admin: comp.admin,
-      configPath: `components/${comp.slug}.ts`,
+      configPath: `${STORAGE_FORMAT.configPathDir}/${comp.slug}.ts`,
       // i18n: forward the localized flag from defineComponent so the registry persists
       // it and the companion is provisioned for embedded per-language values.
       localized: (comp as { localized?: boolean }).localized === true,
