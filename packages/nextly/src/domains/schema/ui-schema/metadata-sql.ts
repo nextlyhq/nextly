@@ -32,6 +32,7 @@ import {
   toSingularLabel,
 } from "../../../shared/lib/pluralization";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
+import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
 
@@ -88,6 +89,22 @@ function revalidateLiteral(
   dialect: Dialect
 ): string {
   const resolved = resolveBuilderRevalidate(revalidate);
+  return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
+}
+
+/**
+ * The `webhooks` column value for a manifest entity.
+ *
+ * The column holds the resolved `{ record }` policy boot reads back, so the
+ * manifest's on/off boolean is normalized through the same mapping the
+ * Builder's write paths use: on → NULL (record, the default), off → the
+ * stored opt-out.
+ */
+function webhooksLiteral(
+  webhooks: boolean | undefined,
+  dialect: Dialect
+): string {
+  const resolved = resolveBuilderWebhooks(webhooks);
   return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 
@@ -221,6 +238,14 @@ export function buildCollectionMetadataUpsert(
       value: revalidateLiteral(entity.revalidate, dialect),
       update: true,
     },
+    {
+      // Always written, including when recording is on (same reason as
+      // revalidate): turning it off has to occupy the column, and a column left
+      // out of the upsert is untouched by its DO UPDATE SET.
+      name: "webhooks",
+      value: webhooksLiteral(entity.webhooks, dialect),
+      update: true,
+    },
     { name: "migration_status", value: sqlStr("applied") },
   ];
   if (entity.admin !== undefined) {
@@ -277,6 +302,14 @@ export function buildSingleMetadataUpsert(
       // Mirror the collection upsert: always written so flipping off clears it.
       name: "revalidate",
       value: revalidateLiteral(entity.revalidate, dialect),
+      update: true,
+    },
+    {
+      // Always written, including when recording is on (same reason as
+      // revalidate): turning it off has to occupy the column, and a column left
+      // out of the upsert is untouched by its DO UPDATE SET.
+      name: "webhooks",
+      value: webhooksLiteral(entity.webhooks, dialect),
       update: true,
     },
     { name: "migration_status", value: sqlStr("applied") },

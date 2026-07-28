@@ -111,6 +111,9 @@ export interface CodeFirstSingleConfig {
   /** Cache-revalidation config (or null when the single sets none). */
   revalidate?: DynamicSingleInsert["revalidate"];
 
+  /** Webhook recording policy (or null when the single records, the default). */
+  webhooks?: DynamicSingleInsert["webhooks"];
+
   /** Admin UI configuration */
   admin?: DynamicSingleInsert["admin"];
 
@@ -438,6 +441,12 @@ export class SingleRegistryService extends BaseRegistryService<
         ? JSON.stringify(data.revalidate)
         : null;
     }
+    // Webhook recording policy: same explicit-provide semantics as `revalidate`.
+    if (data.webhooks !== undefined) {
+      updateData.webhooks = data.webhooks
+        ? JSON.stringify(data.webhooks)
+        : null;
+    }
 
     try {
       const results = await this.adapter.update<DynamicSingleRecord>(
@@ -601,6 +610,8 @@ export class SingleRegistryService extends BaseRegistryService<
             versions: config.versions,
             // Forward the cache-revalidation config on first sync.
             revalidate: config.revalidate,
+            // Forward the webhook recording policy on first sync.
+            webhooks: config.webhooks,
             localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
@@ -617,6 +628,9 @@ export class SingleRegistryService extends BaseRegistryService<
           // Re-sync when the cache-revalidation config changed.
           JSON.stringify(config.revalidate ?? null) !==
             JSON.stringify(existing.revalidate ?? null) ||
+          // Re-sync when the webhook recording policy changed.
+          JSON.stringify(config.webhooks ?? null) !==
+            JSON.stringify(existing.webhooks ?? null) ||
           (config.localized === true) !== (existing.localized === true)
         ) {
           // Either fields changed or the status toggle flipped — both warrant
@@ -638,6 +652,10 @@ export class SingleRegistryService extends BaseRegistryService<
               // `revalidate`, so updateSingle actually clears the column instead
               // of leaving the stale config persisted.
               revalidate: config.revalidate ?? null,
+              // Send explicit null (not undefined) when the config removed
+              // `webhooks`, so updateSingle actually clears the column instead
+              // of leaving a stale opt-out suppressing the outbox.
+              webhooks: config.webhooks ?? null,
               localized: config.localized === true,
             },
             { source: "code" }
@@ -691,6 +709,7 @@ export class SingleRegistryService extends BaseRegistryService<
     const admin = r.admin as string | object | null;
     const versions = r.versions as string | object | null;
     const revalidate = r.revalidate as string | object | null;
+    const webhooks = r.webhooks as string | object | null;
     const accessRules = (r.access_rules ?? r.accessRules) as
       | string
       | object
@@ -744,6 +763,14 @@ export class SingleRegistryService extends BaseRegistryService<
         ? typeof revalidate === "string"
           ? JSON.parse(revalidate)
           : revalidate
+        : null,
+      // Parse the webhook recording policy (JSON string on SQLite / raw
+      // inserts; already an object on pg/mysql). null when unset or on rows
+      // written before this column existed, which reads as recording.
+      webhooks: webhooks
+        ? typeof webhooks === "string"
+          ? JSON.parse(webhooks)
+          : webhooks
         : null,
       localized: Boolean(r.localized),
       configPath,
@@ -826,6 +853,8 @@ export class SingleRegistryService extends BaseRegistryService<
       versions: data.versions ? JSON.stringify(data.versions) : null,
       // Persist the cache-revalidation config (JSON-serialized like `versions`).
       revalidate: data.revalidate ? JSON.stringify(data.revalidate) : null,
+      // Persist the webhook recording policy (JSON-serialized like `revalidate`).
+      webhooks: data.webhooks ? JSON.stringify(data.webhooks) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
