@@ -147,6 +147,8 @@ describe("ComponentRegistryService", () => {
 
     it("stores a custom table name verbatim without forcing the comp_ prefix", async () => {
       ctx.adapter.selectOne.mockResolvedValue(null);
+      // A name Nextly will create, not one already owned by something else.
+      ctx.adapter.tableExists.mockResolvedValue(false);
       ctx.adapter.insert.mockResolvedValue(dbRow({ table_name: "seo_meta" }));
 
       // A custom dbName is honored verbatim (components intentionally differ
@@ -916,6 +918,7 @@ describe("ComponentRegistryService table ownership", () => {
   it("allows a custom name the component may own", async () => {
     const ctx = createCtx();
     ctx.adapter.selectOne.mockResolvedValue(null);
+    ctx.adapter.tableExists.mockResolvedValue(false);
     ctx.adapter.insert.mockResolvedValue(
       dbRow({ table_name: "comp_site_seo" })
     );
@@ -924,6 +927,48 @@ describe("ComponentRegistryService table ownership", () => {
       slug: "seo",
       label: "SEO",
       tableName: "comp_site_seo",
+      fields: [],
+      source: "code",
+      schemaHash: "h",
+    });
+
+    expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ComponentRegistryService pre-existing tables", () => {
+  it("refuses a custom name that already exists and belongs to nobody", async () => {
+    // The host application's own table must not be adopted as component
+    // storage: deleting the component would drop it.
+    const ctx = createCtx();
+    ctx.adapter.selectOne.mockResolvedValue(null);
+    ctx.adapter.tableExists.mockResolvedValue(true);
+
+    await expect(
+      ctx.service.registerComponent({
+        slug: "seo",
+        label: "SEO",
+        tableName: "orders",
+        fields: [],
+        source: "code",
+        schemaHash: "h",
+      })
+    ).rejects.toThrow(NextlyError);
+    expect(ctx.adapter.insert).not.toHaveBeenCalled();
+  });
+
+  it("allows a generated name whose table already exists", async () => {
+    // Generated names are this component's by construction, so an existing
+    // table is its own from a previous run.
+    const ctx = createCtx();
+    ctx.adapter.selectOne.mockResolvedValue(null);
+    ctx.adapter.tableExists.mockResolvedValue(true);
+    ctx.adapter.insert.mockResolvedValue(dbRow());
+
+    await ctx.service.registerComponent({
+      slug: "seo",
+      label: "SEO",
+      tableName: "comp_seo",
       fields: [],
       source: "code",
       schemaHash: "h",

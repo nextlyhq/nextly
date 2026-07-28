@@ -161,6 +161,42 @@ export class ComponentRegistryService extends BaseRegistryService<
   }
 
   /**
+   * Refuses a custom table name that already exists and belongs to nobody.
+   *
+   * A generated name is safe by construction, but a custom one can match a
+   * table the host application owns — `orders`, say. Claiming it would make its
+   * rows read as component instances, and deleting the component would drop it.
+   * A pre-existing table is only adopted when a registry row already assigns it
+   * to this same component, which is the re-registration case (a reset registry
+   * against a live database).
+   */
+  private async assertTableIsUnclaimed(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    if (tableName === resolveComponentTableName(slug)) return;
+    if (!(await this.adapter.tableExists(tableName))) return;
+
+    const owner = await this.getComponentBySlug(slug);
+    if (owner?.tableName === tableName) return;
+
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "dbName",
+          code: "DB_NAME_TABLE_EXISTS",
+          message: `Table '${tableName}' already exists and is not registered to this component. Choose a name Nextly can create, or remove the existing table first.`,
+        },
+      ],
+      logContext: {
+        reason: "component-table-already-exists",
+        slug,
+        tableName,
+      },
+    });
+  }
+
+  /**
    * Register a new Component in the registry.
    *
    * @throws NextlyError(DUPLICATE) if a Component with the same slug already exists.
@@ -190,6 +226,7 @@ export class ComponentRegistryService extends BaseRegistryService<
     // — an inline config entry or a plugin contribution — and a name pointing
     // at another owner's storage would make its rows read as instances.
     assertOwnableComponentTable(data.slug, data.tableName);
+    await this.assertTableIsUnclaimed(data.slug, data.tableName);
     const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
@@ -365,6 +402,9 @@ export class ComponentRegistryService extends BaseRegistryService<
     // predates canonical resolution would otherwise keep pointing at a table
     // that was never created.
     if (data.tableName !== undefined) {
+      // Same ownership rules as registration: an update is another way to point
+      // a component at storage, so it must not be a way around them.
+      assertOwnableComponentTable(slug, data.tableName);
       updateData.table_name = data.tableName;
     }
 
