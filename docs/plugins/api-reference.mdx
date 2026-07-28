@@ -41,6 +41,7 @@ interface PluginContributions {
   components?:  ComponentConfig[];
   extend?:      Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[];            // { action, resource, label?, description?, group? }
+  fieldTypes?:  PluginFieldType[];             // custom field types — see below
   events?:      Array<{ name: string }>;
   routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware? }
   admin?: {
@@ -124,6 +125,69 @@ createTestNextly(opts: {
 
 getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
 ```
+
+## Custom field types (`contributes.fieldTypes`)
+
+A plugin can add a field type. It persists as one of the existing storage
+primitives — the plugin never invents DDL — and renders through its own admin
+component.
+
+```ts
+interface PluginFieldType {
+  type: string;                    // field.type value, e.g. "rating". Must not collide with a built-in
+  storage: FieldStoragePrimitive;  // text | longText | boolean | number | timestamp | json
+  component: ComponentPath;        // "<package>/<path>#<Export>"
+  label?: string;                  // picker label; defaults to a title-cased `type`
+  description?: string;
+  icon?: string;                   // Lucide icon name
+  category?: FieldTypeCategory;    // picker grouping; defaults to "Advanced"
+  surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
+  layout?: "takeover";
+  validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;
+}
+```
+
+### `validate` — the type's own rules
+
+Without it a custom type is only ever checked as its storage primitive: a
+`json`-backed type would accept any JSON at all. Declare the rules on the type
+and every instance gets them, rather than each schema author remembering to
+repeat a field-level `validate`.
+
+```ts
+fieldTypes: [
+  {
+    type: "rating",
+    storage: "number",
+    component: "@acme/ratings/admin#RatingInput",
+    validate(value, { field }) {
+      const max = typeof field.max === "number" ? field.max : 5;
+      if (!Number.isInteger(value)) return "Rating must be a whole number";
+      if ((value as number) > max) return `Rating cannot exceed ${max}`;
+      return true;
+    },
+  },
+]
+```
+
+`args` carries `data` (the whole entry, for rules spanning fields), `req`
+(carries `user` when authenticated), `field` (the instance, so you can read the
+options your type declares), and `mode` (`"create"` | `"update"`).
+
+Return `true` to accept, a string for one problem, or an array when one value
+can be wrong in several places at once:
+
+```ts
+return [
+  { path: "content.nodes[2]", code: "DISALLOWED", message: "That block is not allowed here" },
+  { message: "Document exceeds the node limit" },   // path/code default to the field's own
+];
+```
+
+Ordering: built-in rules for the storage primitive run first, then this, then
+the field's own `validate` — so a schema author adds rules on top of yours
+rather than replacing them. An absent value never reaches `validate`; that is
+what `required` is for. Throwing is treated as a refusal, not a server error.
 
 ## Secrets
 

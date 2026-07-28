@@ -27,6 +27,7 @@ import safeRegex from "safe-regex2";
 
 import type { DocumentKind } from "../../collections/fields/types/blocks";
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
+import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
@@ -529,6 +530,21 @@ async function validateFieldValue(
       break;
   }
 
+  // A plugin-contributed type validates through the registry. The switch above
+  // knows only the built-ins, so without this a custom type is checked as its
+  // storage primitive and nothing else — a `json`-backed type would accept any
+  // JSON at all. Before the per-field `validate` below, so a schema author's
+  // own rule composes on top of the type's rather than replacing it.
+  await validatePluginFieldType(
+    field,
+    value,
+    path,
+    label,
+    data,
+    options,
+    issues
+  );
+
   // Custom validate runs after built-in rules (documented contract). A
   // string return is the error message; anything else passes. The cast
   // widens the config's narrowed value parameter back to the runtime
@@ -554,6 +570,69 @@ async function validateFieldValue(
         message: `${label} failed validation.`,
       });
     }
+  }
+}
+
+/** A message the API can show as-is: one sentence, ending in a period. */
+function asSentence(message: string): string {
+  return message.endsWith(".") ? message : `${message}.`;
+}
+
+/**
+ * Run the `validate` a plugin declared for this field's type, if any.
+ *
+ * A failure here is the value's, not the server's: a validator that throws is
+ * reported as a refusal, exactly as the per-field `validate` is, so a defective
+ * plugin cannot turn a rejected write into a 500.
+ */
+async function validatePluginFieldType(
+  field: ValidatableField,
+  value: unknown,
+  path: string,
+  label: string | undefined,
+  data: Record<string, unknown>,
+  options: ValidateEntryOptions,
+  issues: ValidationIssue[]
+): Promise<void> {
+  const custom = getFieldType(field.type);
+  if (!custom?.validate) return;
+
+  try {
+    const result = await custom.validate(value, {
+      data,
+      req: options.req ?? {},
+      // Spread rather than passed by reference: the validator reads its own
+      // options off the instance, and a copy keeps it from editing the schema
+      // the rest of this pass is still walking.
+      field: { ...field },
+      mode: options.mode,
+    });
+
+    if (result === true) return;
+
+    if (typeof result === "string") {
+      issues.push({ path, code: "CUSTOM", message: asSentence(result) });
+      return;
+    }
+
+    if (Array.isArray(result)) {
+      for (const issue of result) {
+        issues.push({
+          // A structured value can be wrong somewhere inside itself, so an
+          // issue may address a position under this field; without one it
+          // belongs to the field as a whole.
+          path: issue.path ?? path,
+          code: issue.code ?? "CUSTOM",
+          message: asSentence(issue.message),
+        });
+      }
+    }
+  } catch {
+    issues.push({
+      path,
+      code: "CUSTOM",
+      message: `${label ?? "This field"} failed validation.`,
+    });
   }
 }
 
