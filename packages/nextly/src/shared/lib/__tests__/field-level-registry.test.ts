@@ -314,6 +314,40 @@ describe("field-level registry", () => {
     expect(sameObject).toBe(true);
   });
 
+  it("passes a Map subclass through instead of rebuilding it", async () => {
+    // Rebuilding it as a plain Map would strip its prototype and whatever it
+    // keeps privately — the same reason any other class instance is passed
+    // through rather than reconstructed.
+    class Tags extends Map<string, string> {
+      describe(): string {
+        return `tags(${this.size})`;
+      }
+    }
+    let described: string | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            described = (data.tags as Tags).describe();
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", tags: new Tags([["a", "1"]]) },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(described).toBe("tags(1)");
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {

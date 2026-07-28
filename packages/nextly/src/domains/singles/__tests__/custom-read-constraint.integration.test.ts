@@ -979,6 +979,54 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.success).toBe(true);
   });
 
+  it("serves a depth-zero read the references it asked for", async () => {
+    // `depth: 0` asks for ids and the response gives them, so holding the
+    // returned document to "every reference became a document" refuses exactly
+    // what was requested. The authorization view has already judged the same
+    // relationships at the full read depth.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    const authorId = (author.data as { id: string }).id;
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: authorId },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 0,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data!.author).toBe(authorId);
+  });
+
   it("leaves a relationship configured not to populate alone", async () => {
     // `maxDepth: 0` asks for the reference itself, so an unexpanded id is the
     // configured outcome. Demanding a row there refuses every read of the

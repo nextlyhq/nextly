@@ -58,7 +58,12 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     return copy;
   }
 
-  if (value instanceof Map) {
+  // Exact prototypes only. A subclass of Map or Set carries behaviour and
+  // private state that rebuilding as the base collection would discard, and the
+  // rule for such a value is the same as for any other class instance: pass it
+  // through untouched.
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (value instanceof Map && prototype === Map.prototype) {
     const copy = new Map<unknown, unknown>();
     seen.set(value, copy);
     // Keys are copied too: a mutable object used as a key is as reachable, and
@@ -69,17 +74,15 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     return copy;
   }
 
-  if (value instanceof Set) {
+  if (value instanceof Set && prototype === Set.prototype) {
     const copy = new Set<unknown>();
     seen.set(value, copy);
     for (const entry of value) copy.add(detachValue(entry, seen));
     return copy;
   }
 
-  // Plain objects only. A class instance carries behaviour that copying would
-  // strip, and it is not the shape a callback mutates its way through.
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return value;
+  // Plain objects only, on the same reasoning.
+  if (prototype !== Object.prototype && prototype !== null) return value;
 
   const out: Record<string, unknown> = {};
   seen.set(value, out);

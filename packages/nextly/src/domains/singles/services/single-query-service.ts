@@ -616,15 +616,30 @@ export class SingleQueryService extends BaseService {
     // so the overlay must land before those transforms run (matching the collection read path).
     // No-op when localization is off or the single isn't localized.
     if (!params.skipLocalizedOverlay) {
-      await this.populateLocalized(
-        slug,
-        singleMeta,
-        doc,
-        options.locale,
-        options.fallbackLocale,
-        statusFilterValue,
-        strict
-      );
+      try {
+        await this.populateLocalized(
+          slug,
+          singleMeta,
+          doc,
+          options.locale,
+          options.fallbackLocale,
+          statusFilterValue,
+          strict
+        );
+      } catch (error) {
+        // Only strict rethrows, and the result builder puts a bare Error's own
+        // message on the wire — companion table and column names.
+        if (!strict) throw error;
+        throw NextlyError.is(error)
+          ? error
+          : NextlyError.internal({
+              cause: error instanceof Error ? error : undefined,
+              logContext: {
+                single: slug,
+                reason: "translation-load-failed-during-authorization",
+              },
+            });
+      }
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
@@ -719,6 +734,13 @@ export class SingleQueryService extends BaseService {
     fields: FieldConfig[],
     stored: Record<string, unknown> | undefined,
     assembled: Record<string, unknown> | undefined,
+    /**
+     * Whether relationships were expanded for this document at all. A read at
+     * `depth: 0` asks for references and gets them, so requiring documents
+     * there refuses a response that is exactly what was requested. Uploads are
+     * unaffected: they populate whatever depth is asked for.
+     */
+    expandsRelationships = true,
     path = ""
   ): void {
     if (!assembled) return;
@@ -735,13 +757,15 @@ export class SingleQueryService extends BaseService {
       const where = path ? `${path}.${name}` : name;
 
       if (type === "relationship" || type === "relation" || type === "upload") {
+        if (type !== "upload" && !expandsRelationships) continue;
         // `maxDepth: 0` asks for the reference itself, so an unexpanded id is
         // the configured outcome rather than a failure to expand.
         if (relationshipMaxDepth(field) === 0) continue;
-        // Neither is a polymorphic reference expanded: it is stored and served
-        // as `{ relationTo, value }`, so demanding a row there refuses every
-        // read of a Single that has one.
-        if (isPolymorphicRelation(field)) continue;
+        // Neither is a polymorphic RELATIONSHIP expanded: it is stored and
+        // served as `{ relationTo, value }`, so demanding a row there refuses
+        // every read of a Single that has one. An upload is populated whatever
+        // it points at, so the same exemption would skip its only check.
+        if (type !== "upload" && isPolymorphicRelation(field)) continue;
         if (!referencesExpanded(before, after)) {
           this.logger.error(
             "Refusing a single read: relationship evidence could not be assembled",
@@ -776,6 +800,7 @@ export class SingleQueryService extends BaseService {
           nested,
           storedRows[index],
           assembledRows[index],
+          expandsRelationships,
           type === "repeater" ? `${where}[${index}]` : where
         );
       }
@@ -1393,7 +1418,11 @@ export class SingleQueryService extends BaseService {
           slug,
           singleMeta.fields,
           responseReferences ?? doc,
-          doc
+          doc,
+          // The response honours the caller's depth, and `0` means "give me
+          // references". The authorization view has already judged the same
+          // relationships at the full read depth.
+          (options.depth ?? DEFAULT_READ_DEPTH) > 0
         );
         const finalDenial = await this.judgeAssembledDocument({
           slug,
