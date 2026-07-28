@@ -1,10 +1,13 @@
 import { afterEach, describe, it, expect } from "vitest";
 
 import {
+  applyStoredRecordingDecisions,
   clearWebhookRecording,
   isWebhookRecordingEnabled,
   pruneRemovedCodeFirstRecording,
   resetWebhookRecordingPolicy,
+  setStoredRecordingClock,
+  setStoredRecordingRefresher,
   setWebhookRecording,
 } from "../recording-policy";
 
@@ -82,5 +85,90 @@ describe("webhook recording policy", () => {
 
     expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(true);
     expect(isWebhookRecordingEnabled("single", "enquiries")).toBe(false);
+  });
+
+  it("swaps the whole db set so an opt-in elsewhere lifts here too", () => {
+    // A refresh that could only ADD opt-outs would never lift one, so a switch
+    // turned back on in another process would stay suppressed here forever.
+    applyStoredRecordingDecisions([
+      { scope: "collection", slug: "enquiries" },
+      { scope: "single", slug: "contact" },
+    ]);
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
+
+    // `enquiries` opted back in; `contact` is still off.
+    applyStoredRecordingDecisions([{ scope: "single", slug: "contact" }]);
+
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(true);
+    expect(isWebhookRecordingEnabled("single", "contact")).toBe(false);
+  });
+
+  it("leaves code and plugin decisions alone when the db set is swapped", () => {
+    setWebhookRecording("collection", "posts", false, "code");
+    setWebhookRecording("collection", "form-submissions", false, "plugin");
+
+    applyStoredRecordingDecisions([]);
+
+    expect(isWebhookRecordingEnabled("collection", "posts")).toBe(false);
+    expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
+      false
+    );
+  });
+
+  it("schedules a background refresh once the stored set goes stale", async () => {
+    // The gate runs inside the content write transaction, so it must return
+    // synchronously and reload out of band — never read the database inline.
+    let clock = 1_000_000;
+    setStoredRecordingClock(() => clock);
+    applyStoredRecordingDecisions([{ scope: "collection", slug: "enquiries" }]);
+
+    let refreshes = 0;
+    setStoredRecordingRefresher(async () => {
+      refreshes += 1;
+    });
+
+    // Fresh: no reload.
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
+    expect(refreshes).toBe(0);
+
+    // Past the TTL: the caller still gets the last known value immediately.
+    clock += 31_000;
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
+    await Promise.resolve();
+    expect(refreshes).toBe(1);
+  });
+
+  it("coalesces a burst of stale reads into one reload", async () => {
+    let clock = 1_000_000;
+    setStoredRecordingClock(() => clock);
+    applyStoredRecordingDecisions([]);
+
+    let refreshes = 0;
+    let release: (() => void) | undefined;
+    setStoredRecordingRefresher(
+      () =>
+        new Promise<void>(resolve => {
+          refreshes += 1;
+          release = resolve;
+        })
+    );
+
+    clock += 31_000;
+    for (let i = 0; i < 5; i += 1) {
+      isWebhookRecordingEnabled("collection", "posts");
+    }
+
+    expect(refreshes).toBe(1);
+    release?.();
+  });
+
+  it("does nothing when no refresher is registered", () => {
+    // Single-instance installs never wire one; the gate must not throw or spin.
+    let clock = 1_000_000;
+    setStoredRecordingClock(() => clock);
+    applyStoredRecordingDecisions([{ scope: "collection", slug: "enquiries" }]);
+    clock += 31_000;
+
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
   });
 });

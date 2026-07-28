@@ -62,6 +62,7 @@ import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
   resetWebhookRecordingPolicy,
+  setStoredRecordingRefresher,
   setWebhookRecording,
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
@@ -485,10 +486,20 @@ export async function registerServices(
   // switch would hold only for the process that set it and every restart would
   // silently resume recording. Runs second and skips config-owned slugs, so live
   // code always outranks a stored row.
-  await publishStoredWebhookRecordingPolicies(adapter, {
+  const configOwnedSlugs = {
     collections: collectSlugs(transformedConfig.collections),
     singles: collectSlugs(transformedConfig.singles),
-  });
+  };
+  await publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs);
+
+  // Register how that read is repeated. The stored decisions are a snapshot, and
+  // a toggle applied on one instance only updates that instance's map; without a
+  // refresher a sibling in a multi-instance deployment would keep recording a
+  // collection someone opted out of elsewhere until it restarted. The gate
+  // schedules this out of band on a stale read, never inline on the write path.
+  setStoredRecordingRefresher(() =>
+    publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs)
+  );
 
   // Belt-and-suspenders: also register every code-first collection and
   // single from the supplied config directly into the resolver. The

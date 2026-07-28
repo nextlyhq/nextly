@@ -26,7 +26,7 @@ import { dynamicSinglesMysql } from "../../schemas/dynamic-singles/mysql";
 import { dynamicSinglesPg } from "../../schemas/dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "../../schemas/dynamic-singles/sqlite";
 
-import { setWebhookRecording } from "./recording-policy";
+import { applyStoredRecordingDecisions } from "./recording-policy";
 import type { WebhookRecordingScope } from "./recording-policy";
 
 /** The three registry columns this read needs, on any dialect's table. */
@@ -139,12 +139,12 @@ function singlesTable(dialect: SupportedDialect): PolicyTable {
   }
 }
 
-async function publishScope(
+async function collectScope(
   db: PolicyQuery,
   scope: WebhookRecordingScope,
   table: PolicyTable,
   configSlugs: Set<string>
-): Promise<void> {
+): Promise<Array<{ scope: WebhookRecordingScope; slug: string }>> {
   // Three named columns rather than a full select, so this read stays
   // independent of every other column the registry may gain. Only rows carrying
   // an override are fetched: recording is the default, so a null column has
@@ -158,14 +158,14 @@ async function publishScope(
     .from(table)
     .where(isNotNull(table.webhooks));
 
+  const optOuts: Array<{ scope: WebhookRecordingScope; slug: string }> = [];
   for (const row of rows) {
     const slug = row.slug;
     if (!slug) continue;
     if (row.source === "code" || configSlugs.has(slug)) continue;
-    if (isStoredOptOut(row.webhooks)) {
-      setWebhookRecording(scope, slug, false, "db");
-    }
+    if (isStoredOptOut(row.webhooks)) optOuts.push({ scope, slug });
   }
+  return optOuts;
 }
 
 /**
@@ -190,18 +190,24 @@ export async function publishStoredWebhookRecordingPolicies(
   const db = adapter.getDrizzle<PolicyQuery>();
 
   try {
-    await publishScope(
-      db,
-      "collection",
-      collectionsTable(dialect),
-      configSlugs.collections
-    );
-    await publishScope(
-      db,
-      "single",
-      singlesTable(dialect),
-      configSlugs.singles
-    );
+    // Both scopes are read BEFORE anything is applied, so a failure part-way
+    // through cannot leave the policy holding half of one snapshot and half of
+    // the previous one.
+    const optOuts = [
+      ...(await collectScope(
+        db,
+        "collection",
+        collectionsTable(dialect),
+        configSlugs.collections
+      )),
+      ...(await collectScope(
+        db,
+        "single",
+        singlesTable(dialect),
+        configSlugs.singles
+      )),
+    ];
+    applyStoredRecordingDecisions(optOuts);
   } catch (error) {
     if (isMissingWebhooksColumn(error)) return;
     throw error;
