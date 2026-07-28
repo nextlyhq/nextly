@@ -28,6 +28,7 @@ import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionMutationService } from "./collection-mutation-service";
+import { isWriteIntegrityFailure } from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type {
   BatchOperationResult,
@@ -1117,6 +1118,12 @@ export class CollectionBulkService extends BaseService {
                 }
               }
             } catch (error: unknown) {
+              // A post-write capture/recording failure is marked to abort the
+              // whole batch: the row is already inserted on this shared
+              // transaction with no per-item savepoint, so continuing would
+              // commit it without its version/event. Re-throw regardless of
+              // stopOnError so the transaction rolls back.
+              if (isWriteIntegrityFailure(error)) throw error;
               // Handle unexpected errors during entry creation
               result.failed++;
               result.errors.push({
@@ -1327,6 +1334,11 @@ export class CollectionBulkService extends BaseService {
             }
           }
         } catch (error: unknown) {
+          // A post-write capture/recording failure is marked to abort the whole
+          // batch: the row is already written on the caller's shared transaction
+          // with no per-item savepoint, so continuing would commit it without its
+          // version/event. Re-throw regardless of stopOnError.
+          if (isWriteIntegrityFailure(error)) throw error;
           result.failed++;
           result.errors.push({
             index: entryIndex,
@@ -1513,6 +1525,12 @@ export class CollectionBulkService extends BaseService {
                 }
               }
             } catch (error: unknown) {
+              // A post-write capture/recording failure is marked to abort the
+              // whole batch: the row is already updated on this shared
+              // transaction with no per-item savepoint, so continuing would
+              // commit it without its version/event. Re-throw regardless of
+              // stopOnError so the transaction rolls back.
+              if (isWriteIntegrityFailure(error)) throw error;
               // Handle unexpected errors during entry update
               result.failed++;
               result.errors.push({
@@ -1718,6 +1736,11 @@ export class CollectionBulkService extends BaseService {
             }
           }
         } catch (error: unknown) {
+          // A post-write capture/recording failure is marked to abort the whole
+          // batch: the row is already written on the caller's shared transaction
+          // with no per-item savepoint, so continuing would commit it without its
+          // version/event. Re-throw regardless of stopOnError.
+          if (isWriteIntegrityFailure(error)) throw error;
           result.failed++;
           result.errors.push({
             index: entryIndex,

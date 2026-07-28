@@ -1933,6 +1933,54 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * Read ONLY the related target ids from the junction table, on the supplied
+   * executor. Unlike {@link fetchManyToManyRelations}, it does not materialize
+   * the target rows through the pool — so a caller building a snapshot inside a
+   * write transaction sees a target created earlier in that same transaction
+   * (whose row is not yet visible on a pooled connection), and a single-
+   * connection pool never stalls waiting for a second connection. The ids are
+   * exactly what the junction stores, so nothing about the targets is needed.
+   *
+   * @param sourceCollectionName - Name of the source collection
+   * @param sourceEntryId - ID of the source entry
+   * @param field - Field definition
+   * @param executor - Transaction-bound executor to read the junction on
+   * @returns The related target ids (empty on any read failure — the caller that
+   *   requires completeness fails the write itself)
+   */
+  async fetchManyToManyTargetIds(
+    sourceCollectionName: string,
+    sourceEntryId: string,
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
+  ): Promise<string[]> {
+    const targetCollectionName = getTargetCollection(field);
+    if (!targetCollectionName) {
+      console.error(
+        `[CollectionRelationshipService] fetchManyToManyTargetIds: cannot determine target for field "${field.name}".`
+      );
+      return [];
+    }
+    const junctionTableName = this.getJunctionTableName(
+      sourceCollectionName,
+      targetCollectionName,
+      field
+    );
+    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
+    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const junctionQuery = sql`
+      SELECT ${targetIdCol} as target_id
+      FROM ${sql.identifier(junctionTableName)}
+      WHERE ${sourceIdCol} = ${sourceEntryId}
+    `;
+    const junctionResults = (await this.selectRawSql(
+      junctionQuery,
+      executor
+    )) as { rows: Array<{ target_id: string }> };
+    return junctionResults.rows.map(row => row.target_id);
+  }
+
+  /**
    * Fetch many-to-many related entries.
    * Optimized with MySQL-compatible IN clause.
    *
