@@ -190,13 +190,6 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * Deletes every component instance owned by `parentTable`, following nesting, and the
- * matching `comp_<slug>_locales` rows.
- *
- * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
- * but running first keeps the entity intact if the sweep fails.
- */
-/**
  * Physical table names recorded in the component registry.
  *
  * Read through the registry rather than inferred from a prefix so components
@@ -210,14 +203,30 @@ async function listRegisteredComponentTables(
 ): Promise<string[]> {
   if (!discovered.includes(REGISTRY_TABLE)) return [];
 
-  const rows = await adapter.select<Record<string, unknown>>(
-    REGISTRY_TABLE,
-    {}
-  );
+  let rows: Array<Record<string, unknown>>;
+  try {
+    rows = await adapter.select<Record<string, unknown>>(REGISTRY_TABLE, {});
+  } catch (error) {
+    // An executor with no schema registered for the registry can still sweep by
+    // prefix, so degrade to that rather than abort the delete. Every other
+    // failure is real and belongs to the caller: reading it as "nothing
+    // registered" would silently narrow the sweep and strand rows.
+    if (/not found in schema registry/i.test(String(error))) return [];
+    throw error;
+  }
+
   return rows
     .map(row => row.table_name ?? row.tableName)
     .filter((name): name is string => typeof name === "string" && name !== "");
 }
+
+/**
+ * Deletes every component instance owned by `parentTable`, following nesting, and the
+ * matching `comp_<slug>_locales` rows.
+ *
+ * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
+ * but running first keeps the entity intact if the sweep fails.
+ */
 
 export async function teardownEntityComponentData(
   args: TeardownEntityComponentDataArgs

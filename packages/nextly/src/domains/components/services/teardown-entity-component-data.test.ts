@@ -197,3 +197,47 @@ describe("teardownEntityComponentData table discovery", () => {
     expect(deleted).not.toContain("dynamic_components");
   });
 });
+
+describe("teardownEntityComponentData registry read resilience", () => {
+  function makeAdapter(registrySelectError: unknown) {
+    return {
+      dialect: "postgresql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue(["comp_hero", "dynamic_components"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn().mockResolvedValue(1),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") throw registrySelectError;
+        return [];
+      }),
+    };
+  }
+
+  it("falls back to prefix discovery when the registry has no registered schema", async () => {
+    const adapter = makeAdapter(
+      new Error(
+        'Table "dynamic_components" not found in schema registry. Ensure setTableResolver() has been called during boot.'
+      )
+    );
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.instancesDeleted).toBe(0);
+  });
+
+  it("propagates a real database failure from the registry read", async () => {
+    const adapter = makeAdapter(new Error("connection terminated"));
+
+    await expect(
+      teardownEntityComponentData({
+        adapter: adapter as never,
+        parentTable: "dc_posts",
+      })
+    ).rejects.toThrow(/connection terminated/);
+  });
+});
