@@ -1304,6 +1304,10 @@ export class CollectionBulkService extends BaseService {
               createResult.revalidationIntent
             );
           }
+          // Aggregate the outbox signal (set even on a committed-but-hook-failed
+          // item) so the caller offers the post-commit fast drain, matching the
+          // update-in-transaction loop; a batch that recorded nothing owes none.
+          if (createResult.eventRecorded) result.eventRecorded = true;
           if (createResult.success && createResult.data) {
             result.successful++;
             result.ids.push(
