@@ -1383,15 +1383,21 @@ export class SingleMutationService extends BaseService {
             let preRestoreComponents: Record<string, unknown> | undefined;
             if (
               options.sourceVersionNo != null &&
-              singleMeta.versions?.enabled &&
-              this.componentDataService
+              singleMeta.versions?.enabled
             ) {
+              // Mark the pre-restore snapshot as needed the moment this is a
+              // versioned restore, independent of the component service: the
+              // "Before restore" capture below is gated on this map existing, so
+              // tying it to `componentDataService` would skip the whole snapshot
+              // in a boot without that service and lose the replaced parent-row
+              // content — the exact data loss this capture exists to prevent.
+              // The component subtrees are read only when the service is present.
               preRestoreComponents = {};
               const preComponentFields = fieldConfigs.filter(
                 (f): f is typeof f & { name: string } =>
                   isComponentField(f) && !!f.name
               );
-              if (preComponentFields.length > 0) {
+              if (this.componentDataService && preComponentFields.length > 0) {
                 const populated =
                   await this.componentDataService.populateComponentData({
                     entry: { id: existingDoc.id },

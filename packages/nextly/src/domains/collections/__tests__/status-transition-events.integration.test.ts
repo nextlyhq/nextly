@@ -16,6 +16,9 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+// The concrete entry-service type: the publish-all test drives
+// `publishAllLocales` directly (it is not on the public handler surface) to
+// assert its per-locale workflow events.
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
 let current: TestNextly | undefined;

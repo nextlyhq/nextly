@@ -16,6 +16,9 @@ import {
 } from "../../../plugins/test-nextly";
 import { NextlyError } from "../../../errors";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+// The concrete entry-service type: the publish-all outbox tests call
+// `publishAllLocales` directly (it is not exposed on the handler) to assert the
+// per-locale events it records.
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
