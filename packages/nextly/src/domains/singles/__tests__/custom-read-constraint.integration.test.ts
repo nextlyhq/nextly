@@ -927,10 +927,10 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data).toBeUndefined();
   });
 
-  it("does not mistake a polymorphic reference for an expanded row", async () => {
-    // A polymorphic reference is stored as `{ relationTo, value }`, so judging
-    // "is this an object" accepts the reference itself as evidence and a rule
-    // reading into it decides on fields that were never fetched.
+  it("reads a Single whose relationship points at several collections", async () => {
+    // A polymorphic reference is stored AND served as `{ relationTo, value }` —
+    // it is never populated on this path — so the reference is the outcome and
+    // demanding a row there would refuse every read of such a Single.
     current = await createTestNextly({
       collections: [
         defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
@@ -958,15 +958,17 @@ describe("Single custom read rules vs the assembled document (integration)", () 
       { and: [{ column: "slug", op: "=", value: "branding" }] }
     );
     const entry = current.getService<SingleEntryService>("singleEntryService");
-    const authorId = (author.data as { id: string }).id;
     await entry.update(
       "branding",
-      { siteName: "Acme", author: { relationTo: "authors", value: authorId } },
+      {
+        siteName: "Acme",
+        author: {
+          relationTo: "authors",
+          value: (author.data as { id: string }).id,
+        },
+      },
       { overrideAccess: true }
     );
-    await current.adapter.delete("dc_authors", {
-      and: [{ column: "id", op: "=", value: authorId }],
-    });
 
     const result = await entry.get("branding", {
       user: { id: "always" },
@@ -974,8 +976,7 @@ describe("Single custom read rules vs the assembled document (integration)", () 
       depth: 1,
     });
 
-    expect(result.success).toBe(false);
-    expect(result.data).toBeUndefined();
+    expect(result.success).toBe(true);
   });
 
   it("leaves a relationship configured not to populate alone", async () => {

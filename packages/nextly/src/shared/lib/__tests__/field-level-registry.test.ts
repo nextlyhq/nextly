@@ -282,6 +282,38 @@ describe("field-level registry", () => {
     expect(data.title).toBe("t");
   });
 
+  it("keeps a shared Date one object in the copy", async () => {
+    // Identity is part of the contract: two paths to one value must stay one
+    // value, or a callback comparing them by reference decides differently
+    // from what the document says.
+    const shared = new Date("2020-01-01T00:00:00.000Z");
+    let sameObject: boolean | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const a = (data.a as { at?: Date }).at;
+            const b = (data.b as { at?: Date }).at;
+            sameObject = a === b;
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", a: { at: shared }, b: { at: shared } },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(sameObject).toBe(true);
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {

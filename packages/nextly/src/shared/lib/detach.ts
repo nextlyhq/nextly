@@ -52,7 +52,11 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     return copy;
   }
 
-  if (value instanceof Date) return new Date(value.getTime());
+  if (value instanceof Date) {
+    const copy = new Date(value.getTime());
+    seen.set(value, copy);
+    return copy;
+  }
 
   if (value instanceof Map) {
     const copy = new Map<unknown, unknown>();

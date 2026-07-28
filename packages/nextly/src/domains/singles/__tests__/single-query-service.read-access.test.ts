@@ -501,7 +501,11 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
       routeAuthorized: true,
     });
 
-    expect(result.success).toBe(false);
+    // Both halves matter: `not.toContain` alone holds for any failure, so the
+    // status pins that this is the strict-component path refusing rather than
+    // some earlier gate the mock happened to trip.
+    expect(result.statusCode).toBe(500);
+    expect(componentDataService.populateComponentData).toHaveBeenCalled();
     expect(result.message).not.toContain("comp_hero");
   });
 

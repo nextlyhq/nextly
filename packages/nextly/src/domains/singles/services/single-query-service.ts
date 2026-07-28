@@ -136,6 +136,24 @@ type DefaultDocumentDraft = {
 const DEFAULT_READ_DEPTH = 2;
 
 /**
+ * Whether a relationship points at more than one collection.
+ *
+ * A polymorphic reference is stored — and returned — as `{ relationTo, value }`
+ * rather than being populated, so the reference IS the outcome for these
+ * fields and there is nothing to verify.
+ */
+function isPolymorphicRelation(field: FieldConfig): boolean {
+  const config = field as {
+    relationTo?: unknown;
+    options?: { relationTo?: unknown };
+  };
+  return (
+    Array.isArray(config.relationTo) ||
+    Array.isArray(config.options?.relationTo)
+  );
+}
+
+/**
  * A relationship field's configured population limit, when it declares one.
  * `0` means the reference is meant to stay a reference.
  */
@@ -568,6 +586,13 @@ export class SingleQueryService extends BaseService {
     /** Skip the companion overlay for a draft that carries its defaults inline. */
     skipLocalizedOverlay?: boolean;
     /**
+     * Called with the document once translations are overlaid and JSON is
+     * decoded, but before anything is expanded — the point at which every
+     * reference the read will try to resolve is visible, and the only place a
+     * LOCALIZED reference appears at all.
+     */
+    captureReferences?: (doc: SingleDocument) => void;
+    /**
      * Fail rather than degrade. The response assembly is best-effort by design
      * — a relationship that cannot be expanded is returned unexpanded, and a
      * component table that cannot be read yields empty values. Neither is safe
@@ -597,11 +622,13 @@ export class SingleQueryService extends BaseService {
         doc,
         options.locale,
         options.fallbackLocale,
-        statusFilterValue
+        statusFilterValue,
+        strict
       );
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
+    params.captureReferences?.(doc);
     doc = await this.expandUploadFields(doc, singleMeta.fields);
     doc = await this.expandRelationshipFields(
       doc,
@@ -707,10 +734,14 @@ export class SingleQueryService extends BaseService {
       if (isEmptyValue(before) && isEmptyValue(after)) continue;
       const where = path ? `${path}.${name}` : name;
 
-      if (type === "relationship" || type === "relation") {
+      if (type === "relationship" || type === "relation" || type === "upload") {
         // `maxDepth: 0` asks for the reference itself, so an unexpanded id is
         // the configured outcome rather than a failure to expand.
         if (relationshipMaxDepth(field) === 0) continue;
+        // Neither is a polymorphic reference expanded: it is stored and served
+        // as `{ relationTo, value }`, so demanding a row there refuses every
+        // read of a Single that has one.
+        if (isPolymorphicRelation(field)) continue;
         if (!referencesExpanded(before, after)) {
           this.logger.error(
             "Refusing a single read: relationship evidence could not be assembled",
@@ -735,7 +766,11 @@ export class SingleQueryService extends BaseService {
 
       const storedRows = containerRows(before, type);
       const assembledRows = containerRows(after, type);
-      for (let index = 0; index < storedRows.length; index += 1) {
+      // Bounded by the longer side: a localized container reaches the document
+      // only through the overlay, so the reference snapshot may hold rows the
+      // stored row never had — and the reverse for one that failed to load.
+      const rowCount = Math.max(storedRows.length, assembledRows.length);
+      for (let index = 0; index < rowCount; index += 1) {
         this.assertRelationshipsExpanded(
           slug,
           nested,
@@ -755,8 +790,15 @@ export class SingleQueryService extends BaseService {
     statusFilterValue: string | undefined;
     skipLocalizedOverlay?: boolean;
   }): Promise<SingleDocument> {
+    let references: SingleDocument | undefined;
     const assembled = await this.assembleStoredDocument({
       ...params,
+      // Every reference the read will resolve, including the localized ones the
+      // stored row never carries. Detached so later stages cannot rewrite the
+      // record of what was supposed to be there.
+      captureReferences: doc => {
+        references = detachData(doc);
+      },
       // Assembled from a copy of the row: the transforms mutate what they are
       // given, and the response is assembled from the same row afterwards.
       doc: { ...params.doc },
@@ -779,7 +821,7 @@ export class SingleQueryService extends BaseService {
     this.assertRelationshipsExpanded(
       params.slug,
       params.singleMeta.fields,
-      params.doc,
+      references ?? params.doc,
       assembled
     );
     // The response carries the per-locale overview when it is asked for, so a
@@ -1270,6 +1312,7 @@ export class SingleQueryService extends BaseService {
       // it was copied into. The rule still sees related fields unredacted: the
       // decision that governs them is the one made before any of this ran, on
       // an unredacted assembly of the stored row.
+      let responseReferences: SingleDocument | undefined;
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
@@ -1277,6 +1320,12 @@ export class SingleQueryService extends BaseService {
         options,
         statusFilterValue: statusFilter ? statusFilter.value : undefined,
         enforceRelatedFieldAccess: true,
+        // Recorded only so the decision below can be held to the same
+        // completeness bar as the earlier one; the response itself stays
+        // best-effort.
+        captureReferences: captured => {
+          responseReferences = detachData(captured);
+        },
       });
 
       // attach the per-locale `_translations` overview for the admin's language pills
@@ -1335,6 +1384,17 @@ export class SingleQueryService extends BaseService {
       // callers before those stages run any side effects; this is the decision
       // that governs what is handed back.
       if (deferCustomRule && !options.overrideAccess) {
+        // The response assembly is best-effort, and this decision is made on
+        // it. Expansion that succeeded for the earlier view can fail after a
+        // hook writes or another writer moves the data, which would leave a
+        // reference where the rule expects a row — so the same completeness
+        // guarantee has to hold for the document actually being judged.
+        this.assertRelationshipsExpanded(
+          slug,
+          singleMeta.fields,
+          responseReferences ?? doc,
+          doc
+        );
         const finalDenial = await this.judgeAssembledDocument({
           slug,
           accessRules: singleMeta.accessRules,
@@ -1395,7 +1455,13 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     locale: string | undefined,
     fallbackLocale: string | false | undefined,
-    statusFilterValue: string | undefined
+    statusFilterValue: string | undefined,
+    /**
+     * Surface companion failures rather than reading through them. A swallowed
+     * error leaves the main row's value in place, which a rule cannot tell
+     * apart from a translation that says so.
+     */
+    strict = false
   ): Promise<void> {
     const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
     if (!localeChain) return;
@@ -1425,6 +1491,7 @@ export class SingleQueryService extends BaseService {
         companion.hasStatus && statusFilterValue
           ? statusFilterValue
           : undefined,
+      strict,
     });
   }
 
