@@ -15,30 +15,40 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearFieldTypes,
   registerFieldType,
+  withoutDisabledBehavior,
 } from "../../../domains/schema/field-types/field-type-registry";
-import type { PluginFieldValidationResult } from "../../../plugins/contributions";
+import type {
+  PluginFieldType,
+  PluginFieldValidateArgs,
+  PluginFieldValidationResult,
+} from "../../../plugins/contributions";
 import { validateEntryData, type ValidatableField } from "../entry-validation";
 
 afterEach(() => {
   clearFieldTypes();
 });
 
+type Validator = (
+  value: unknown,
+  args: PluginFieldValidateArgs
+) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>;
+
 /** Register a custom type whose validate returns whatever the test wants. */
-function registerRating(
-  validate: (
-    value: unknown,
-    args: {
-      data: Record<string, unknown>;
-      req: Record<string, unknown>;
-      field: { type: string; name?: string; readonly [k: string]: unknown };
-      mode: "create" | "update";
-    }
-  ) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>
-): void {
+function registerRating(validate: Validator): void {
   registerFieldType({
     type: "rating",
     storage: "number",
     component: "@acme/ratings/admin#RatingInput",
+    validate,
+  });
+}
+
+/** A `json`-backed type: its primitive imposes no rules, so validate is all it has. */
+function registerDocument(validate: Validator): void {
+  registerFieldType({
+    type: "document",
+    storage: "json",
+    component: "@acme/docs/admin#DocumentInput",
     validate,
   });
 }
@@ -75,27 +85,33 @@ describe("plugin field-type validation", () => {
     // The reason the array shape exists: one structured value can be wrong in
     // several places, and collapsing that into one sentence throws away the
     // only thing the writer needs — where.
-    registerRating(() => [
-      { path: "stars.nodes[0]", code: "TOO_HIGH", message: "6 exceeds max 5" },
-      { message: "Ratings must be whole numbers" },
+    registerDocument((_value, { path }) => [
+      {
+        path: `${path}.nodes[0]`,
+        code: "DISALLOWED",
+        message: "Not allowed here",
+      },
+      { message: "Document exceeds the node limit" },
     ]);
 
-    const issues = await validateEntryData({ stars: 6 }, FIELDS, {
-      mode: "create",
-    });
+    const issues = await validateEntryData(
+      { body: { nodes: [] } },
+      [{ name: "body", type: "document" }],
+      { mode: "create" }
+    );
 
     expect(issues).toEqual([
       {
-        path: "stars.nodes[0]",
-        code: "TOO_HIGH",
-        message: "6 exceeds max 5.",
+        path: "body.nodes[0]",
+        code: "DISALLOWED",
+        message: "Not allowed here.",
       },
       // Path and code fall back to the field's own, so a validator only
       // supplies them when it has something more precise to say.
       {
-        path: "stars",
+        path: "body",
         code: "CUSTOM",
-        message: "Ratings must be whole numbers.",
+        message: "Document exceeds the node limit.",
       },
     ]);
   });
@@ -203,6 +219,113 @@ describe("plugin field-type validation", () => {
     expect(issues.map(i => i.code)).toEqual(["REQUIRED"]);
   });
 
+  it("checks the value against the storage primitive the type declares", async () => {
+    // The switch over built-in types never sees "rating", so without the
+    // storage primitive standing in for it a number-backed type would accept
+    // any string at all on its way to a numeric column.
+    registerRating(() => true);
+
+    const issues = await validateEntryData({ stars: "3" }, FIELDS, {
+      mode: "create",
+    });
+
+    expect(issues).toEqual([
+      {
+        path: "stars",
+        code: "INVALID_TYPE",
+        message: "stars must be a number.",
+      },
+    ]);
+  });
+
+  it("applies the primitive's own rules from the field's options", async () => {
+    registerRating(() => true);
+
+    const issues = await validateEntryData({ stars: 9 }, FIELDS, {
+      mode: "create",
+    });
+
+    expect(issues.map(i => i.code)).toEqual(["TOO_HIGH"]);
+  });
+
+  it("does not run the type's validate on a value the primitive refused", async () => {
+    // A validator reasons about ratings, not about whether it was handed a
+    // string, so it is never asked about a value of the wrong shape.
+    const seen = vi.fn(() => true as const);
+    registerRating(seen);
+
+    await validateEntryData({ stars: "3" }, FIELDS, { mode: "create" });
+
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("refuses a return value outside the documented union", async () => {
+    // A validator that forgets to return yields undefined. Reading that as
+    // consent would turn one plugin bug into no validation at all.
+    registerRating((() => undefined) as unknown as Validator);
+
+    const issues = await validateEntryData({ stars: 3 }, FIELDS, {
+      mode: "create",
+    });
+
+    expect(issues).toEqual([
+      { path: "stars", code: "CUSTOM", message: "stars failed validation." },
+    ]);
+  });
+
+  it("gives a nested instance the whole write and its own path", async () => {
+    // The recursive pass walks each repeater row, so the row is what a nested
+    // field is checked against — but a cross-field rule needs the top-level
+    // siblings, which the row does not carry.
+    const seen = vi.fn(() => true as const);
+    registerRating(seen);
+
+    const fields: ValidatableField[] = [
+      { name: "title", type: "text" },
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [{ name: "stars", type: "rating" }],
+      },
+    ];
+
+    await validateEntryData(
+      { title: "Reviews", rows: [{ stars: 1 }, { stars: 2 }] },
+      fields,
+      { mode: "create" }
+    );
+
+    expect(seen).toHaveBeenNthCalledWith(
+      2,
+      2,
+      expect.objectContaining({
+        data: { title: "Reviews", rows: [{ stars: 1 }, { stars: 2 }] },
+        path: "rows[1].stars",
+      })
+    );
+  });
+
+  it("detaches nested options, not just the field's own keys", async () => {
+    const allow = ["hero", "cta"];
+    registerDocument((_value, args) => {
+      const blocks = args.field.blocks;
+      if (blocks !== null && typeof blocks === "object") {
+        (blocks as { allow: string[] }).allow.push("injected");
+      }
+      return true;
+    });
+
+    const fields: ValidatableField[] = [
+      { name: "body", type: "document", blocks: { allow } },
+    ];
+    await validateEntryData({ body: {} }, fields, { mode: "create" });
+
+    // A shallow copy would have left this array shared with the schema, so one
+    // validator run would have changed what every later write is checked
+    // against.
+    expect(allow).toEqual(["hero", "cta"]);
+  });
+
   it("leaves built-in types alone", async () => {
     // A plugin cannot redefine a built-in (the registry refuses), but the
     // dispatch must also not go looking for one on every field.
@@ -211,6 +334,42 @@ describe("plugin field-type validation", () => {
       [{ name: "title", type: "text" }],
       { mode: "create" }
     );
+
+    expect(issues).toEqual([]);
+  });
+});
+
+describe("a disabled plugin's field type", () => {
+  const rating: PluginFieldType = {
+    type: "rating",
+    storage: "number",
+    component: "@acme/ratings/admin#RatingInput",
+    validate: () => "this must never run",
+  };
+
+  it("keeps its declarative schema but loses its validate", () => {
+    const registrable = withoutDisabledBehavior(rating, { enabled: false });
+
+    expect(registrable.validate).toBeUndefined();
+    // The plugin's collections are retained while it is off, so their fields
+    // still have to map to a column and render.
+    expect(registrable.storage).toBe("number");
+    expect(registrable.component).toBe("@acme/ratings/admin#RatingInput");
+  });
+
+  it("is untouched while the plugin is enabled", () => {
+    expect(withoutDisabledBehavior(rating, {}).validate).toBe(rating.validate);
+    expect(withoutDisabledBehavior(rating, { enabled: true }).validate).toBe(
+      rating.validate
+    );
+  });
+
+  it("does not run on a write once registered", async () => {
+    registerFieldType(withoutDisabledBehavior(rating, { enabled: false }));
+
+    const issues = await validateEntryData({ stars: 3 }, FIELDS, {
+      mode: "create",
+    });
 
     expect(issues).toEqual([]);
   });

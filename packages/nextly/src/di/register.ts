@@ -49,6 +49,7 @@ import type { MetaService } from "../domains/meta";
 import {
   clearFieldTypes,
   registerFieldType,
+  withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
@@ -419,7 +420,7 @@ export async function registerServices(
   clearFieldTypes();
   for (const fieldTypePlugin of resolvedPlugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
-      registerFieldType(fieldType);
+      registerFieldType(withoutDisabledBehavior(fieldType, fieldTypePlugin));
     }
   }
 

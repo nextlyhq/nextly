@@ -22,4 +22,6 @@
 "nextly": patch
 ---
 
-Plugin-contributed field types can now validate what they store. `PluginFieldType.validate(value, { data, req, field, mode })` returns `true`, a message, or a list of issues with their own paths. It runs after the built-in rules for the storage primitive and before the field's own `validate`, so a schema author adds rules on top rather than replacing them. Previously a custom type was only ever checked as its storage primitive, so a plugin could invent a field type but state nothing about what belonged in it. `contributes.fieldTypes` is documented for the first time.
+Plugin-contributed field types can now validate what they store. `PluginFieldType.validate(value, { data, req, field, path, mode })` returns `true`, a message, or a list of issues with their own paths. Previously a custom type could be invented but say nothing about what belonged in it.
+
+Values of a custom type are now also checked against the storage primitive the type declares. A `number`-backed type used to accept the string `"3"` on its way to a numeric column, because the built-in rules only ever matched built-in type names; they now run first, then the type's `validate`, then the field's own. A disabled plugin's field types keep their schema but no longer run their `validate`, matching how every other plugin behavior is skipped. `contributes.fieldTypes` is documented for the first time.

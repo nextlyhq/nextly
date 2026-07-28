@@ -143,7 +143,7 @@ interface PluginFieldType {
   category?: FieldTypeCategory;    // picker grouping; defaults to "Advanced"
   surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
   layout?: "takeover";
-  validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;
+  validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
 }
 ```
 
@@ -161,33 +161,54 @@ fieldTypes: [
     storage: "number",
     component: "@acme/ratings/admin#RatingInput",
     validate(value, { field }) {
+      // Already a number: the `number` primitive's rules ran first.
+      if (typeof value !== "number" || !Number.isInteger(value)) {
+        return "Rating must be a whole number";
+      }
       const max = typeof field.max === "number" ? field.max : 5;
-      if (!Number.isInteger(value)) return "Rating must be a whole number";
-      if ((value as number) > max) return `Rating cannot exceed ${max}`;
+      if (value > max) return `Rating cannot exceed ${max}`;
       return true;
     },
   },
 ]
 ```
 
-`args` carries `data` (the whole entry, for rules spanning fields), `req`
-(carries `user` when authenticated), `field` (the instance, so you can read the
-options your type declares), and `mode` (`"create"` | `"update"`).
+`args` carries:
+
+| Key | What it is |
+|---|---|
+| `data` | The write payload, for rules spanning fields. On update this is the patch, not the merged stored entry. Always the top-level payload, even for a field nested in a repeater row. |
+| `req` | Request context; carries `user` when authenticated. Empty for a field inside a component instance. |
+| `field` | The instance, so you can read the options your type declares. A detached copy, all the way down. |
+| `path` | Where this field sits in the write (`"stars"`, `"rows[1].stars"`). |
+| `mode` | `"create"` or `"update"`. |
 
 Return `true` to accept, a string for one problem, or an array when one value
-can be wrong in several places at once:
+can be wrong in several places at once. Issue paths are used as given, so build
+them from `args.path` or they will be wrong for a nested instance:
 
 ```ts
 return [
-  { path: "content.nodes[2]", code: "DISALLOWED", message: "That block is not allowed here" },
+  { path: `${path}.nodes[2]`, code: "DISALLOWED", message: "That block is not allowed here" },
   { message: "Document exceeds the node limit" },   // path/code default to the field's own
 ];
 ```
 
-Ordering: built-in rules for the storage primitive run first, then this, then
-the field's own `validate` — so a schema author adds rules on top of yours
-rather than replacing them. An absent value never reaches `validate`; that is
-what `required` is for. Throwing is treated as a refusal, not a server error.
+Ordering: the built-in rules for your `storage` primitive run first, then this,
+then the field's own `validate` — so a schema author adds rules on top of yours
+rather than replacing them. Two values never reach `validate`: an absent one
+(that is what `required` is for) and one the storage primitive already refused,
+so you never have to re-check that you were handed the shape your type stores.
+
+Anything you return outside `true | string | PluginFieldIssue[]` is a refusal,
+as is throwing — a validator that forgets to return fails the write rather than
+silently accepting everything.
+
+**Where it runs.** The entry, single, and component write paths. A type offered
+on the `users`, `forms`, or `blocks` surface does **not** run it yet: those
+surfaces validate through their own paths. A disabled plugin keeps its field
+types registered (its collections are retained) but its `validate` does not
+run — that is behavior, and a disabled plugin contributes none.
 
 ## Secrets
 
