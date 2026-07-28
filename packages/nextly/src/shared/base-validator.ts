@@ -400,7 +400,11 @@ export function validatePluginFieldOptionsShared(
       // the plugin knows its options by name and cannot know its own index.
       path: issue.path ? `${path}.${issue.path}` : path,
       message: issue.message,
-      code: issue.code ?? "FIELD_TYPE_INVALID",
+      // Always the canonical member. Each domain's error-code union is closed
+      // and public, so emitting a plugin-defined string here would hand a
+      // consumer exhaustively handling those members a value none of them
+      // covers — and the cast at every call site would hide it.
+      code: "FIELD_TYPE_INVALID",
     });
   }
 }

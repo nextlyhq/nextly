@@ -18,12 +18,19 @@ import { getFieldType } from "../../domains/schema/field-types/field-type-regist
 
 import { detachedField } from "./detached-field";
 
-/** One problem with a field's declaration, located relative to that field. */
+/**
+ * One problem with a field's declaration, located relative to that field.
+ *
+ * Carries no code. A returned `PluginFieldIssue.code` is dropped here on
+ * purpose: the config validators report through error-code unions that are
+ * closed and public, so a plugin-defined string would reach a consumer
+ * exhaustively handling the declared members and be a value none of them
+ * expects. The message keeps whatever specificity the plugin wanted to convey.
+ */
 export interface PluginFieldOptionIssue {
   /** Option this concerns (`"blocks.kinds"`), or absent for the field itself. */
   path?: string;
   message: string;
-  code?: string;
 }
 
 /**
@@ -62,7 +69,6 @@ export function pluginFieldOptionIssues(field: {
       return result.map(issue => ({
         path: issue.path,
         message: asSentence(issue.message),
-        code: issue.code,
       }));
     }
 

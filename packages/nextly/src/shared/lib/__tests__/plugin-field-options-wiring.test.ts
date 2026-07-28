@@ -7,6 +7,7 @@
  */
 import { describe, expect, it, afterEach } from "vitest";
 
+import { defineCollection } from "../../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import type { CollectionConfig } from "../../../collections/config/define-collection";
 import { validateComponentConfig } from "../../../components/config/validate-component";
@@ -77,10 +78,27 @@ describe("declaration checks reach every authoring path", () => {
     expect(result.errors).toContainEqual(
       expect.objectContaining({
         path: "fields[0].policy.kinds",
-        code: "EMPTY_POLICY",
+        // The canonical member, not the plugin's `EMPTY_POLICY`: this result's
+        // `code` is a closed union that consumers switch on exhaustively.
+        code: "FIELD_TYPE_INVALID",
         message: "policy.kinds cannot be empty.",
       })
     );
+  });
+
+  it("refuses the declaration through defineCollection itself", () => {
+    // The validator is reached through the define call, which is where a
+    // code-first config is actually checked. Registration has to have happened
+    // by the time the config module evaluates — the same condition the field
+    // type is already under, since an unregistered type is refused outright.
+    registerDocument();
+
+    expect(() =>
+      defineCollection({
+        slug: "posts",
+        fields: [badField],
+      } as unknown as CollectionConfig)
+    ).toThrow(/policy\.kinds cannot be empty/);
   });
 
   it("refuses a code-first single field", () => {

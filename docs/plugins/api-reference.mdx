@@ -242,18 +242,28 @@ validateOptions(field) {
 ```
 
 Synchronous on purpose: a declaration is checked against itself, and a
-config-time rule that needed I/O would make boot depend on something that can be
-down. Issue paths are **relative** and get appended to the field's own, so
+config-time rule that needed I/O would make startup depend on something that can
+be down. Issue paths are **relative** and get appended to the field's own, so
 `"policy.kinds"` reports against `fields[2].policy.kinds` — unlike `validate`,
 whose paths are absolute, because this one only ever names an option it already
 knows and has no way to learn its own index. Throwing is a rejected declaration,
-not a failed boot.
+not a crash. A returned `code` is **not** carried: config errors report through
+closed, public code unions, so the canonical member is used and your message
+carries the detail.
 
-**Where it runs.** Code-first collection, single, and component configs, and
-Schema Builder saves. One caveat on the Builder path: the stored manifest
-declares its option keys and strips the rest, so a plugin type's own options do
-not currently survive a Builder save and there is nothing there for the check to
-read. Options the manifest already declares are checked normally.
+**Where it runs.** Wherever a config is validated — `defineCollection`,
+`defineSingle`, `defineComponent`, and Schema Builder saves. Two caveats worth
+knowing:
+
+- A `define*` call validates when its module is evaluated, so your type must
+  already be registered by then. This is not a new constraint: an unregistered
+  type is refused outright as an unknown field type. Boot does not re-validate
+  configs after registering field types, so a config that was never validated is
+  not validated later either.
+- The stored manifest declares its option keys and strips the rest, so a plugin
+  type's own options do not currently survive a Schema Builder save and there is
+  nothing there for the check to read. Options the manifest already declares are
+  checked normally.
 
 ## Secrets
 

@@ -60,18 +60,13 @@ describe("plugin field-type option validation", () => {
       { message: "the field accepts nothing" },
     ]);
 
+    // No code survives: the config validators report through closed, public
+    // code unions, so a plugin-defined string would reach a consumer handling
+    // the declared members exhaustively and be one none of them covers.
     expect(pluginFieldOptionIssues({ name: "body", type: "document" })).toEqual(
       [
-        {
-          path: "blocks.kinds",
-          code: "EMPTY_POLICY",
-          message: "kinds cannot be empty.",
-        },
-        {
-          path: undefined,
-          code: undefined,
-          message: "the field accepts nothing.",
-        },
+        { path: "blocks.kinds", message: "kinds cannot be empty." },
+        { path: undefined, message: "the field accepts nothing." },
       ]
     );
   });

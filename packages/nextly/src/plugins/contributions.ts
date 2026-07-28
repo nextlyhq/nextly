@@ -205,15 +205,23 @@ export interface PluginFieldType {
    * writer cannot fix it, and it fails every write until whoever declared the
    * field notices.
    *
-   * Runs for a code-first config at boot and for a Schema Builder save before
-   * it is stored, so both authoring paths refuse the same declaration. It is
-   * synchronous on purpose: a declaration is checked against itself, and a
-   * config-time rule that needed I/O would make boot depend on something that
-   * can be down.
+   * Runs wherever a config is validated: `defineCollection`/`defineSingle`/
+   * `defineComponent`, and a Schema Builder save before it is stored. Note that
+   * a define call validates when the config module is evaluated, so the type
+   * must already be registered by then — the same condition the field type
+   * itself is under, since an unregistered type is refused outright. Boot does
+   * not re-validate configs after registering field types.
+   *
+   * Synchronous on purpose: a declaration is checked against itself, and a
+   * config-time rule that needed I/O would make startup depend on something
+   * that can be down.
    *
    * Return `true` to accept, a string for one problem, or an array to point at
    * individual options — a path is appended to the field's own, so `"allow"`
-   * reports against `fields[2].allow`. Throwing is treated as a refusal.
+   * reports against `fields[2].allow`. A `code` is not carried: these are
+   * reported through error-code unions that are closed and public, so the
+   * canonical member is used and the message carries the detail. Throwing is
+   * treated as a refusal.
    *
    * Paths here are RELATIVE, where `validate`'s are absolute. The difference is
    * deliberate: a value validator may address a position deep inside a stored
