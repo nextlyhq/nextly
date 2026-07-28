@@ -15,6 +15,7 @@ import { toDbError } from "../../../database/errors";
 // so any error type travelling through the shim is preserved.
 import { NextlyError } from "../../../errors";
 import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
@@ -596,7 +597,7 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
+          updateData[STORAGE_FORMAT.columns.order] = i;
           updateData.updated_at = this.formatDateForDb();
 
           await this.adapter.update(
@@ -710,7 +711,7 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
+          updateData[STORAGE_FORMAT.columns.order] = i;
           updateData.updated_at = this.formatDateForDb();
 
           await tx.update(
@@ -877,8 +878,8 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
-          updateData._component_type = componentType;
+          updateData[STORAGE_FORMAT.columns.order] = i;
+          updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
           const existingEntry = globalExistingMap.get(instanceId)!;
@@ -1031,8 +1032,8 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
-          updateData._component_type = componentType;
+          updateData[STORAGE_FORMAT.columns.order] = i;
+          updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
           const existingEntry = globalExistingMap.get(instanceId)!;
@@ -1103,9 +1104,9 @@ export class ComponentMutationService extends BaseService {
         await this.adapter.delete(
           meta.tableName,
           this.whereAnd({
-            _parent_id: parentId,
-            _parent_table: parentTable,
-            _parent_field: fieldName,
+            [STORAGE_FORMAT.columns.parentId]: parentId,
+            [STORAGE_FORMAT.columns.parentTable]: parentTable,
+            [STORAGE_FORMAT.columns.parentField]: fieldName,
           })
         );
       } catch (error) {
@@ -1139,9 +1140,9 @@ export class ComponentMutationService extends BaseService {
         await tx.delete(
           meta.tableName,
           this.whereAnd({
-            _parent_id: parentId,
-            _parent_table: parentTable,
-            _parent_field: fieldName,
+            [STORAGE_FORMAT.columns.parentId]: parentId,
+            [STORAGE_FORMAT.columns.parentTable]: parentTable,
+            [STORAGE_FORMAT.columns.parentField]: fieldName,
           })
         );
       } catch (error) {
@@ -1163,11 +1164,11 @@ export class ComponentMutationService extends BaseService {
     try {
       return await this.adapter.select<ComponentRow>(tableName, {
         where: this.whereAnd({
-          _parent_id: parentId,
-          _parent_table: parentTable,
-          _parent_field: fieldName,
+          [STORAGE_FORMAT.columns.parentId]: parentId,
+          [STORAGE_FORMAT.columns.parentTable]: parentTable,
+          [STORAGE_FORMAT.columns.parentField]: fieldName,
         }),
-        orderBy: [{ column: "_order", direction: "asc" }],
+        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
       });
     } catch (error) {
       this.logger.debug("Could not query component table", {
@@ -1188,11 +1189,11 @@ export class ComponentMutationService extends BaseService {
     try {
       return await tx.select<ComponentRow>(tableName, {
         where: this.whereAnd({
-          _parent_id: parentId,
-          _parent_table: parentTable,
-          _parent_field: fieldName,
+          [STORAGE_FORMAT.columns.parentId]: parentId,
+          [STORAGE_FORMAT.columns.parentTable]: parentTable,
+          [STORAGE_FORMAT.columns.parentField]: fieldName,
         }),
-        orderBy: [{ column: "_order", direction: "asc" }],
+        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
       });
     } catch (error) {
       this.logger.debug("Could not query component table in tx", {
@@ -1227,11 +1228,11 @@ export class ComponentMutationService extends BaseService {
 
     return {
       id: crypto.randomUUID(),
-      _parent_id: parentId,
-      _parent_table: parentTable,
-      _parent_field: fieldName,
-      _order: order,
-      _component_type: componentType,
+      [STORAGE_FORMAT.columns.parentId]: parentId,
+      [STORAGE_FORMAT.columns.parentTable]: parentTable,
+      [STORAGE_FORMAT.columns.parentField]: fieldName,
+      [STORAGE_FORMAT.columns.order]: order,
+      [STORAGE_FORMAT.columns.type]: componentType,
       ...serializedFields,
       created_at: now,
       updated_at: now,

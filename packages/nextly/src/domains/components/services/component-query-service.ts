@@ -3,6 +3,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
 import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
@@ -673,7 +674,11 @@ export class ComponentQueryService extends BaseService {
       }
     }
 
-    allRows.sort((a, b) => (a.row._order ?? 0) - (b.row._order ?? 0));
+    allRows.sort(
+      (a, b) =>
+        (a.row[STORAGE_FORMAT.columns.order] ?? 0) -
+        (b.row[STORAGE_FORMAT.columns.order] ?? 0)
+    );
 
     const results: Record<string, unknown>[] = [];
     for (const { row, fields, slug } of allRows) {
@@ -729,7 +734,7 @@ export class ComponentQueryService extends BaseService {
     // because expand may return a new object, breaking the mutate-in-place reference.
     const collected: { parentId: string; data: Record<string, unknown> }[] = [];
     for (const row of rows) {
-      const parentId = row._parent_id;
+      const parentId = row[STORAGE_FORMAT.columns.parentId];
       if (!collected.some(c => c.parentId === parentId)) {
         collected.push({
           parentId,
@@ -786,7 +791,7 @@ export class ComponentQueryService extends BaseService {
     // batch once, then expand — same ordering constraint as batchPopulateSingleField.
     const entries: { parentId: string; data: Record<string, unknown> }[] =
       rows.map(row => ({
-        parentId: row._parent_id,
+        parentId: row[STORAGE_FORMAT.columns.parentId],
         data: this.deserializeComponentRow(row, componentFields, false),
       }));
     await this.overlayLocalizedComponent(
@@ -843,7 +848,7 @@ export class ComponentQueryService extends BaseService {
           fieldName
         );
         for (const row of rows) {
-          const parentId = row._parent_id;
+          const parentId = row[STORAGE_FORMAT.columns.parentId];
           if (!groupedByParent.has(parentId)) {
             groupedByParent.set(parentId, []);
           }
@@ -863,7 +868,11 @@ export class ComponentQueryService extends BaseService {
 
     const result = new Map<string, unknown>();
     for (const [parentId, items] of groupedByParent) {
-      items.sort((a, b) => (a.row._order ?? 0) - (b.row._order ?? 0));
+      items.sort(
+        (a, b) =>
+          (a.row[STORAGE_FORMAT.columns.order] ?? 0) -
+          (b.row[STORAGE_FORMAT.columns.order] ?? 0)
+      );
 
       const expandedItems: Record<string, unknown>[] = [];
       for (const { row, fields, slug } of items) {
@@ -914,11 +923,11 @@ export class ComponentQueryService extends BaseService {
         tableName,
         {
           where: this.whereAnd({
-            _parent_id: parentId,
-            _parent_table: parentTable,
-            _parent_field: fieldName,
+            [STORAGE_FORMAT.columns.parentId]: parentId,
+            [STORAGE_FORMAT.columns.parentTable]: parentTable,
+            [STORAGE_FORMAT.columns.parentField]: fieldName,
           }),
-          orderBy: [{ column: "_order", direction: "asc" }],
+          orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
         },
         executor
       );
@@ -951,14 +960,26 @@ export class ComponentQueryService extends BaseService {
       return await this.adapter.select<ComponentRow>(tableName, {
         where: {
           and: [
-            { column: "_parent_id", op: "IN", value: parentIds },
-            { column: "_parent_table", op: "=", value: parentTable },
-            { column: "_parent_field", op: "=", value: fieldName },
+            {
+              column: STORAGE_FORMAT.columns.parentId,
+              op: "IN",
+              value: parentIds,
+            },
+            {
+              column: STORAGE_FORMAT.columns.parentTable,
+              op: "=",
+              value: parentTable,
+            },
+            {
+              column: STORAGE_FORMAT.columns.parentField,
+              op: "=",
+              value: fieldName,
+            },
           ],
         },
         orderBy: [
-          { column: "_parent_id", direction: "asc" },
-          { column: "_order", direction: "asc" },
+          { column: STORAGE_FORMAT.columns.parentId, direction: "asc" },
+          { column: STORAGE_FORMAT.columns.order, direction: "asc" },
         ],
       });
     } catch (error) {
@@ -979,8 +1000,8 @@ export class ComponentQueryService extends BaseService {
 
     result.id = row.id;
 
-    if (includeComponentType && row._component_type) {
-      result._componentType = row._component_type;
+    if (includeComponentType && row[STORAGE_FORMAT.columns.type]) {
+      result._componentType = row[STORAGE_FORMAT.columns.type];
     }
 
     const fieldByColumn = new Map<string, FieldConfig>();

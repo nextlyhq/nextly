@@ -1,4 +1,5 @@
 import type { FieldConfig } from "../../../collections/fields/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
 /**
  * Default relationship expansion depth for component data.
@@ -9,11 +10,11 @@ export const DEFAULT_COMPONENT_DEPTH = 2;
  * Internal/system columns that are stripped during deserialization.
  */
 export const POPULATE_INTERNAL_COLUMNS: ReadonlySet<string> = new Set([
-  "_parent_id",
-  "_parent_table",
-  "_parent_field",
-  "_order",
-  "_component_type",
+  STORAGE_FORMAT.columns.parentId,
+  STORAGE_FORMAT.columns.parentTable,
+  STORAGE_FORMAT.columns.parentField,
+  STORAGE_FORMAT.columns.order,
+  STORAGE_FORMAT.columns.type,
 ]);
 
 /**
@@ -22,11 +23,11 @@ export const POPULATE_INTERNAL_COLUMNS: ReadonlySet<string> = new Set([
 export const COMPONENT_META_KEYS: ReadonlySet<string> = new Set([
   "id",
   "_componentType",
-  "_order",
-  "_parent_id",
-  "_parent_table",
-  "_parent_field",
-  "_component_type",
+  STORAGE_FORMAT.columns.order,
+  STORAGE_FORMAT.columns.parentId,
+  STORAGE_FORMAT.columns.parentTable,
+  STORAGE_FORMAT.columns.parentField,
+  STORAGE_FORMAT.columns.type,
   "createdAt",
   "updatedAt",
   "created_at",
