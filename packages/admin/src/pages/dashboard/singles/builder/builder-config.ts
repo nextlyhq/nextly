@@ -21,6 +21,7 @@ export const SINGLE_BUILDER_CONFIG: BuilderConfig = {
     "i18n",
     "versions",
     "revalidate",
+    "webhooks",
     "showSystemFields",
   ],
   toolbar: { previewSchemaChange: false },

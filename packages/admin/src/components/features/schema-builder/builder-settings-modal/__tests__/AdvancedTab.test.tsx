@@ -140,6 +140,32 @@ describe("AdvancedTab -- cache revalidation", () => {
     const sw = screen.getByRole("switch", { name: /cache revalidation/i });
     expect(sw.getAttribute("data-state")).toBe("unchecked");
   });
+
+  it("renders webhook recording checked by default because recording is on", () => {
+    // Like revalidation, an absent value means ON. Showing it unchecked would
+    // tell an operator their content is already being kept out of the outbox
+    // when it is in fact being delivered.
+    render(<Controlled fields={["webhooks"]} />);
+    const sw = screen.getByRole("switch", { name: /webhook recording/i });
+    expect(sw.getAttribute("data-state")).toBe("checked");
+  });
+
+  it("sets webhooks to false when toggled off", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled fields={["webhooks"]} onChange={onChange} />);
+    await user.click(
+      screen.getByRole("switch", { name: /webhook recording/i })
+    );
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.webhooks).toBe(false);
+  });
+
+  it("renders unchecked when webhook recording was turned off", () => {
+    render(<Controlled fields={["webhooks"]} initial={{ webhooks: false }} />);
+    const sw = screen.getByRole("switch", { name: /webhook recording/i });
+    expect(sw.getAttribute("data-state")).toBe("unchecked");
+  });
 });
 
 describe("AdvancedTab -- showSystemFields", () => {
