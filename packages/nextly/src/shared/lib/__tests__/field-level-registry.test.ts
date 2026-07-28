@@ -520,6 +520,46 @@ describe("field-level registry", () => {
     expect(seen).toEqual({ size: 99, proto: true });
   });
 
+  it("copies an array's metadata without repointing its prototype", async () => {
+    // `__proto__` is an inherited setter, so assigning that key would change
+    // the copy's prototype rather than land on it as a property — and the copy
+    // would lose the array methods a callback expects.
+    const items = ["a", "b"];
+    Object.defineProperty(items, "__proto__", {
+      value: { spoofed: true },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    let seen: { isArray?: boolean; proto?: unknown } | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const copy = data.items as unknown[];
+            seen = {
+              isArray: Array.isArray(copy) && typeof copy.map === "function",
+              proto: Object.getPrototypeOf(copy) === Array.prototype,
+            };
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", items },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toEqual({ isArray: true, proto: true });
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {
