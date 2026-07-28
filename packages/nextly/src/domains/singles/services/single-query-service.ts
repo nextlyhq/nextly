@@ -139,24 +139,6 @@ type DefaultDocumentDraft = {
 const DEFAULT_READ_DEPTH = 2;
 
 /**
- * Whether a relationship points at more than one collection.
- *
- * A polymorphic reference is stored — and returned — as `{ relationTo, value }`
- * rather than being populated, so the reference IS the outcome for these
- * fields and there is nothing to verify.
- */
-function isPolymorphicRelation(field: FieldConfig): boolean {
-  const config = field as {
-    relationTo?: unknown;
-    options?: { relationTo?: unknown };
-  };
-  return (
-    Array.isArray(config.relationTo) ||
-    Array.isArray(config.options?.relationTo)
-  );
-}
-
-/**
  * A relationship field's configured population limit, when it declares one.
  * `0` means the reference is meant to stay a reference.
  */
@@ -841,11 +823,6 @@ export class SingleQueryService extends BaseService {
         // populated whatever depth is configured, so the same exemption would
         // skip their only check.
         if (type !== "upload" && relationshipMaxDepth(field) === 0) continue;
-        // Neither is a polymorphic RELATIONSHIP expanded: it is stored and
-        // served as `{ relationTo, value }`, so demanding a row there refuses
-        // every read of a Single that has one. An upload is populated whatever
-        // it points at, so the same exemption would skip its only check.
-        if (type !== "upload" && isPolymorphicRelation(field)) continue;
         if (!referencesExpanded(before, after)) {
           this.logger.error(
             "Refusing a single read: relationship evidence could not be assembled",

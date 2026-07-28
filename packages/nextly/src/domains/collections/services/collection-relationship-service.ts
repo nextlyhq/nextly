@@ -180,20 +180,38 @@ function extractRelationshipId(value: unknown): unknown {
 }
 
 /**
+ * The collections a relationship field is allowed to point at.
+ *
+ * A many-to-many field keeps its target under `options.target`, matching how
+ * {@link getTargetCollection} resolves one.
+ */
+function declaredTargets(field: FieldDefinition): string[] {
+  if (field.options?.relationType === "manyToMany" && field.options.target) {
+    return [field.options.target];
+  }
+  if (Array.isArray(field.relationTo)) return field.relationTo;
+  if (typeof field.relationTo === "string") return [field.relationTo];
+  const target = field.options?.target;
+  return typeof target === "string" ? [target] : [];
+}
+
+/**
  * Reads a relationship value that carries its own target collection.
  *
  * A field declaring several targets cannot store a bare id, because the id
  * alone does not say which table it belongs to; it stores a
- * `{ relationTo, value }` pair instead. That stored collection is
- * authoritative — the field's declared list says only which targets are
- * allowed, so resolving against it picks the wrong table for every value that
- * does not point at the first one.
+ * `{ relationTo, value }` pair instead. The stored collection decides which
+ * table the id is read from, so it is only honoured when the field declares
+ * it: nothing validates the slug on the way in, and trusting it as written
+ * would let a writer name any collection and have the row read back out of it,
+ * bypassing that collection's own read rules.
  *
  * Returns null for any other shape, leaving the caller on the single-target
  * path where the field's own target is the right answer.
  */
 function readPolymorphicRef(
-  value: unknown
+  value: unknown,
+  allowedTargets: string[]
 ): { collection: string; id: string } | null {
   // Dialects without a native object column hand the pair back as the JSON
   // text it was stored as. Only a value that actually parses to the pair is
@@ -213,7 +231,30 @@ function readPolymorphicRef(
   }
   const { relationTo, value: id } = candidate as Record<string, unknown>;
   if (typeof relationTo !== "string" || typeof id !== "string") return null;
+  if (!allowedTargets.includes(relationTo)) return null;
   return { collection: relationTo, id };
+}
+
+/**
+ * Whether a value is stored as a `{ relationTo, value }` pair, regardless of
+ * which collection it names. Distinguishes "not a pair" from "a pair naming a
+ * collection this field never declared", so the second can be left alone
+ * rather than treated as an id and sent to the wrong table.
+ */
+function isPolymorphicRefShape(value: unknown): boolean {
+  const candidate =
+    typeof value === "string" && value.startsWith("{")
+      ? parseJsonObject(value)
+      : value;
+  if (
+    candidate === null ||
+    typeof candidate !== "object" ||
+    Array.isArray(candidate)
+  ) {
+    return false;
+  }
+  const { relationTo, value: id } = candidate as Record<string, unknown>;
+  return typeof relationTo === "string" && typeof id === "string";
 }
 
 /** Parses JSON text to an object, or null when it is not one. */
@@ -587,11 +628,15 @@ function readItemArray(value: unknown): unknown[] | null {
  */
 function readRelationshipRef(
   value: unknown,
-  fallbackCollection: string
+  fallbackCollection: string,
+  allowedTargets: string[]
 ): { collection: string; id: string } | null {
   if (value == null) return null;
-  const polymorphic = readPolymorphicRef(value);
+  const polymorphic = readPolymorphicRef(value, allowedTargets);
   if (polymorphic) return polymorphic;
+  // A pair naming an undeclared collection is not an id — reading it as one
+  // would send the whole object to the loader as a bound parameter.
+  if (isPolymorphicRefShape(value)) return null;
   const id = extractRelationshipId(value);
   return typeof id === "string" ? { collection: fallbackCollection, id } : null;
 }
@@ -614,18 +659,30 @@ function relationKey(collection: string, id: string): string {
  * and each may name a different collection, so a single target resolved from
  * the field would send most of them to the wrong table.
  *
- * Indices line up with {@link normalizeToIdArray}, which maps list values
- * one-to-one, so the id and the collection always describe the same entry.
+ * Reads each id against its own item from {@link normalizeToIdArray}, which
+ * maps list values one-to-one, so the id and the collection always describe
+ * the same entry. Entries naming an undeclared collection are dropped, so the
+ * result may be shorter than the stored list; the fetch and the lookup derive
+ * it the same way, so they stay consistent.
  */
 function normalizeToRelationshipRefs(
   value: unknown,
-  fallbackCollection: string
+  fallbackCollection: string,
+  allowedTargets: string[]
 ): { collection: string; id: string }[] {
   const items = readItemArray(value);
-  return normalizeToIdArray(value).map((id, index) => {
-    const ref = items ? readPolymorphicRef(items[index]) : null;
-    return ref ?? { collection: fallbackCollection, id };
-  });
+  return normalizeToIdArray(value)
+    .map((id, index) => {
+      const item = items ? items[index] : undefined;
+      const ref = items ? readPolymorphicRef(item, allowedTargets) : null;
+      if (ref) return ref;
+      // Dropped rather than resolved against the field's own target: the value
+      // names a collection this field never declared, so there is no reference
+      // here to honour.
+      if (items && isPolymorphicRefShape(item)) return null;
+      return { collection: fallbackCollection, id };
+    })
+    .filter((ref): ref is { collection: string; id: string } => ref !== null);
 }
 
 /**
@@ -1044,6 +1101,7 @@ export class CollectionRelationshipService extends BaseService {
       const relationType = field.options?.relationType || "manyToOne";
       const targetCollection = getTargetCollection(field);
       const hasMany = isHasManyRelationship(field);
+      const fieldTargets = declaredTargets(field);
 
       if (!targetCollection) continue;
 
@@ -1068,7 +1126,11 @@ export class CollectionRelationshipService extends BaseService {
         // format. Each carries its own collection when the field declares
         // several targets.
         const allRefs = entries.flatMap(entry =>
-          normalizeToRelationshipRefs(entry[field.name], targetCollection)
+          normalizeToRelationshipRefs(
+            entry[field.name],
+            targetCollection,
+            fieldTargets
+          )
         );
         relationDataMaps[field.name] = await this.batchFetchRefs(
           allRefs,
@@ -1078,7 +1140,9 @@ export class CollectionRelationshipService extends BaseService {
       } else {
         // Batch fetch all referenced IDs for oneToOne/manyToOne/oneToMany
         const relatedRefs = entries
-          .map(e => readRelationshipRef(e[field.name], targetCollection))
+          .map(e =>
+            readRelationshipRef(e[field.name], targetCollection, fieldTargets)
+          )
           .filter(
             (ref): ref is { collection: string; id: string } => ref !== null
           );
@@ -1142,7 +1206,8 @@ export class CollectionRelationshipService extends BaseService {
             // Handle hasMany relationships - expand array of IDs
             const refs = normalizeToRelationshipRefs(
               entry[field.name],
-              fieldTarget
+              fieldTarget,
+              declaredTargets(field)
             );
             expandedEntry[field.name] = refs
               .map(({ collection, id }) =>
@@ -1150,7 +1215,11 @@ export class CollectionRelationshipService extends BaseService {
               )
               .filter(Boolean);
           } else {
-            const ref = readRelationshipRef(entry[field.name], fieldTarget);
+            const ref = readRelationshipRef(
+              entry[field.name],
+              fieldTarget,
+              declaredTargets(field)
+            );
             const row = ref && dataMap.get(relationKey(ref.collection, ref.id));
             if (row) {
               expandedEntry[field.name] = row;
@@ -1654,7 +1723,8 @@ export class CollectionRelationshipService extends BaseService {
           // for the whole field.
           const refs = normalizeToRelationshipRefs(
             entry[field.name],
-            targetCollection
+            targetCollection,
+            declaredTargets(field)
           );
 
           if (refs.length > 0) {
@@ -1724,7 +1794,15 @@ export class CollectionRelationshipService extends BaseService {
           // A multi-target field stores the collection next to the id. Passing
           // the whole pair to the row loader binds an object where the driver
           // expects a string, so the query throws and the value never expands.
-          const polymorphicRef = readPolymorphicRef(storedValue);
+          const polymorphicRef = readPolymorphicRef(
+            storedValue,
+            declaredTargets(field)
+          );
+          // A pair naming a collection the field never declared is left as it
+          // is stored: reading it as an id would send the object to the loader,
+          // and honouring the collection would read a row out of a table this
+          // field was never allowed to reach.
+          if (!polymorphicRef && isPolymorphicRefShape(storedValue)) continue;
           const relatedCollection =
             polymorphicRef?.collection ?? targetCollection;
           const relatedId = polymorphicRef

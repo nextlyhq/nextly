@@ -987,6 +987,64 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     });
   });
 
+  // Population can fail — a deleted target, a transient error — and the value
+  // then stays the reference it was stored as. A rule reading into it would
+  // decide on evidence that never arrived, and an absence-tolerant rule reads
+  // that absence as permission, so the read is refused instead.
+  it("refuses a judged read when a multi-target reference did not populate", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        // No such row, so nothing can be populated from it.
+        author: {
+          relationTo: "authors",
+          value: "11111111-1111-4111-8111-111111111111",
+        },
+      },
+      { overrideAccess: true }
+    );
+
+    // Read once WITHOUT a stored rule: the check only runs for a judged read,
+    // so an ordinary read of the same document must still be served. Without
+    // this the test would pass just as well if the read were broken outright.
+    const unjudged = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+    expect(unjudged.success).toBe(true);
+
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const judged = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+    expect(judged.success).toBe(false);
+  });
+
   it("serves a depth-zero read the references it asked for", async () => {
     // `depth: 0` asks for ids and the response gives them, so holding the
     // returned document to "every reference became a document" refuses exactly

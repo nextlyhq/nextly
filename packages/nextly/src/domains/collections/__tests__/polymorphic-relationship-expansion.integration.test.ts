@@ -218,6 +218,58 @@ describe("polymorphic relationship expansion (integration)", () => {
     ).toHaveProperty("hidden");
   });
 
+  // Nothing validates the stored slug on the way in, so the value cannot be
+  // trusted to name a collection the field ever declared. Honouring it as
+  // written turns any writable relationship into a reader for any table.
+  it("refuses to populate from a collection the field never declared", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+        defineCollection({ slug: "pages", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "secrets",
+          fields: [text({ name: "title" }), text({ name: "apiKey" })],
+        }),
+        defineCollection({
+          slug: "refs",
+          fields: [
+            text({ name: "name" }),
+            relationship({ name: "target", relationTo: ["posts", "pages"] }),
+          ],
+        }),
+      ],
+    });
+
+    const handler = current.getService<Handler>("collectionsHandler");
+    const secret = await handler.createEntry(
+      { collectionName: "secrets", overrideAccess: true },
+      { title: "Confidential", apiKey: "sk-live-XXXX" }
+    );
+    const ref = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      {
+        name: "smuggled",
+        target: {
+          relationTo: "secrets",
+          value: (secret.data as { id: string }).id,
+        },
+      }
+    );
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: (ref.data as { id: string }).id,
+      depth: 1,
+      overrideAccess: true,
+    });
+
+    // Left exactly as stored: not populated, and above all not carrying a row
+    // from a table this field was never pointed at.
+    const target = (result.data as { target?: Record<string, unknown> }).target;
+    expect(target).toMatchObject({ relationTo: "secrets" });
+    expect(target).not.toHaveProperty("apiKey");
+  });
+
   it("keeps the pair intact when no expansion was asked for", async () => {
     const { handler, postRefId } = await bootPolymorphic();
 
