@@ -449,9 +449,11 @@ export class CollectionMutationService extends BaseService {
     row: Record<string, unknown>,
     fields: readonly unknown[]
   ): Record<string, unknown> {
-    const doc = this.deserializeJsonFieldsForSnapshot(
-      { ...row },
-      fields as Parameters<typeof this.deserializeJsonFieldsForSnapshot>[1]
+    const doc = convertTimestampsToCamelCase(
+      this.deserializeJsonFieldsForSnapshot(
+        { ...row },
+        fields as Parameters<typeof this.deserializeJsonFieldsForSnapshot>[1]
+      )
     );
     stripPasswordFieldValues(
       doc,
@@ -2683,6 +2685,12 @@ export class CollectionMutationService extends BaseService {
               ...(publishedParentRow ??
                 (existingEntry as Record<string, unknown>)),
               status: "published",
+              // `publishedParentRow` is a pooled read that excludes this tx's own
+              // uncommitted `updated_at` write, and `existingEntry` is older
+              // still, so overlay the committed publish instant — the same value
+              // the transaction's `SET updated_at = now()` wrote — or the event
+              // reports the pre-publish timestamp and omits it from changedFields.
+              updated_at: new Date(),
             },
             fields
           );

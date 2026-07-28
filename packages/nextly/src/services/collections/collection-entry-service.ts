@@ -381,15 +381,26 @@ export class CollectionEntryService extends BaseService {
    * a revalidator fault never turns a committed write into a failure.
    */
   /**
-   * Offer the fast outbox drain once, for the `CollectionService.withTransaction`
-   * wrapper to call after a tx-API write commits. The wrappers return only the
-   * entry, so — like `flushRevalidationIntents` — the drain cannot be scheduled
-   * from the wrapper's own result; withTransaction schedules it after commit when
-   * any collected `*InTransaction` write recorded an outbox event. No-op when no
-   * scheduler is wired.
+   * Run the write-path maintenance the automatic paths run, for the
+   * `CollectionService.withTransaction` wrapper to call after a tx-API write
+   * commits. The wrappers return only the entry, so — like
+   * `flushRevalidationIntents` — these cannot be triggered from the wrapper's own
+   * result. Mirrors `afterWriteIfRecorded`: a committed write offers the
+   * opportunistic retention pass (the write path is the only prune trigger for an
+   * install with no drain, so tx-API writes must offer it too, or `nextly_events`
+   * grows unbounded), and a recorded event schedules the fast drain. No-ops when
+   * the respective runner/scheduler is unwired.
    */
-  scheduleFastDrain(): void {
-    this.fastDrainScheduler?.offer();
+  async offerPostCommitTxMaintenance(opts: {
+    committedWrite: boolean;
+    recordedEvent: boolean;
+  }): Promise<void> {
+    if (opts.committedWrite) {
+      await this.offerRetentionPass();
+    }
+    if (opts.recordedEvent) {
+      this.fastDrainScheduler?.offer();
+    }
   }
 
   async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {

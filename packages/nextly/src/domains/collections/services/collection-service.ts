@@ -242,14 +242,21 @@ export class CollectionService extends BaseService {
     });
     // Reached only on a successful commit; a rejected transaction throws above
     // and flushes nothing. The captured `collector` outlives the map binding.
-    if (ownsFlush && collector && collector.length > 0) {
-      await this.entryService.flushRevalidationIntents(collector);
+    const collectedIntents = collector ?? [];
+    if (ownsFlush && collectedIntents.length > 0) {
+      await this.entryService.flushRevalidationIntents(collectedIntents);
     }
-    // A committed transaction that recorded any outbox event schedules the fast
-    // drain once, so tx-API writes deliver as promptly as the non-transaction
-    // paths instead of waiting for an unrelated operation to trigger a drain.
-    if (ownsFlush && sawEvent) {
-      this.entryService.scheduleFastDrain();
+    // A committed transaction runs the same post-write maintenance the automatic
+    // paths run: the opportunistic retention pass for any committed write (a
+    // collected intent or a recorded event both signal one), and the fast drain
+    // once when an outbox event was recorded — so tx-API writes deliver, and
+    // prune, as promptly as the non-transaction paths instead of waiting for an
+    // unrelated operation.
+    if (ownsFlush && (collectedIntents.length > 0 || sawEvent)) {
+      await this.entryService.offerPostCommitTxMaintenance({
+        committedWrite: true,
+        recordedEvent: sawEvent,
+      });
     }
     return result;
   }
