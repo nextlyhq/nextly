@@ -33,6 +33,7 @@ import type { NextlyServiceConfig } from "../../di/register";
 import {
   clearFieldTypes,
   registerFieldType,
+  withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
@@ -388,7 +389,9 @@ async function loadConfigInternal(
       clearFieldTypes();
       for (const fieldTypePlugin of plugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
-          registerFieldType(fieldType);
+          registerFieldType(
+            withoutDisabledBehavior(fieldType, fieldTypePlugin)
+          );
         }
       }
 

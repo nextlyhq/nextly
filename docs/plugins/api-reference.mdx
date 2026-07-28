@@ -41,6 +41,7 @@ interface PluginContributions {
   components?:  ComponentConfig[];
   extend?:      Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[];            // { action, resource, label?, description?, group? }
+  fieldTypes?:  PluginFieldType[];             // custom field types — see below
   events?:      Array<{ name: string }>;
   routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware? }
   admin?: {
@@ -124,6 +125,93 @@ createTestNextly(opts: {
 
 getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
 ```
+
+## Custom field types (`contributes.fieldTypes`)
+
+A plugin can add a field type. It persists as one of the existing storage
+primitives — the plugin never invents DDL — and renders through its own admin
+component.
+
+```ts
+interface PluginFieldType {
+  type: string;                    // field.type value, e.g. "rating". Must not collide with a built-in
+  storage: FieldStoragePrimitive;  // text | longText | boolean | number | timestamp | json
+  component: ComponentPath;        // "<package>/<path>#<Export>"
+  label?: string;                  // picker label; defaults to a title-cased `type`
+  description?: string;
+  icon?: string;                   // Lucide icon name
+  category?: FieldTypeCategory;    // picker grouping; defaults to "Advanced"
+  surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
+  layout?: "takeover";
+  validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
+}
+```
+
+### `validate` — the type's own rules
+
+Without it a custom type is only ever checked as its storage primitive: a
+`json`-backed type would accept any JSON at all. Declare the rules on the type
+and every instance gets them, rather than each schema author remembering to
+repeat a field-level `validate`.
+
+```ts
+fieldTypes: [
+  {
+    type: "rating",
+    storage: "number",
+    component: "@acme/ratings/admin#RatingInput",
+    validate(value, { field }) {
+      // Already a number: the `number` primitive's rules ran first.
+      if (typeof value !== "number" || !Number.isInteger(value)) {
+        return "Rating must be a whole number";
+      }
+      const max = typeof field.max === "number" ? field.max : 5;
+      if (value > max) return `Rating cannot exceed ${max}`;
+      return true;
+    },
+  },
+]
+```
+
+`args` carries:
+
+| Key | What it is |
+|---|---|
+| `data` | The write payload, for rules spanning fields. On update this is the patch, not the merged stored entry. Always the top-level payload, even for a field nested in a repeater row. |
+| `req` | Request context; carries `user` when authenticated. Empty for a field inside a component instance. |
+| `field` | The instance, so you can read the options your type declares. A detached copy: records, arrays, dates, sets and maps are rebuilt, so editing them changes nothing. Functions and class instances stay shared — treat it as read-only. |
+| `path` | Where this field sits in the write (`"stars"`, `"rows[1].stars"`). |
+| `mode` | `"create"` or `"update"`. |
+
+Return `true` to accept, a string for one problem, or an array when one value
+can be wrong in several places at once. Issue paths are used as given, so build
+them from `args.path` or they will be wrong for a nested instance:
+
+```ts
+return [
+  { path: `${path}.nodes[2]`, code: "DISALLOWED", message: "That block is not allowed here" },
+  { message: "Document exceeds the node limit" },   // path/code default to the field's own
+];
+```
+
+Ordering: the built-in rules for your `storage` primitive run first, then this,
+then the field's own `validate` — so a schema author adds rules on top of yours
+rather than replacing them. Two values never reach `validate`: an absent one
+(that is what `required` is for) and one the storage primitive already refused,
+so you never have to re-check that you were handed the shape your type stores.
+For `json` that check is representability — a cycle or a `BigInt` is rejected
+before you see it — and nothing more, so the shape of the document is yours to
+define.
+
+Anything you return outside `true | string | PluginFieldIssue[]` is a refusal,
+as is throwing — a validator that forgets to return fails the write rather than
+silently accepting everything.
+
+**Where it runs.** The entry, single, and component write paths. A type offered
+on the `users`, `forms`, or `blocks` surface does **not** run it yet: those
+surfaces validate through their own paths. A disabled plugin keeps its field
+types registered (its collections are retained) but its `validate` does not
+run — that is behavior, and a disabled plugin contributes none.
 
 ## Secrets
 
