@@ -1495,12 +1495,22 @@ export class SingleMutationService extends BaseService {
                 ...(rows[0] as Record<string, unknown>),
               });
               // i18n: a localized single's main row omits translatable columns
-              // (split to the companion above), so overlay this locale's written
-              // translatable values back onto the snapshot — otherwise the version
-              // records blank translations. Keyed by field.name to match the read
-              // shape; the JSON-parse pass below then normalizes any JSON-backed
-              // localized values (companionData holds serialized strings). Mirrors
-              // the collection capture path.
+              // (split to the companion above), so overlay this locale's FULL
+              // post-write translatable state onto the snapshot — otherwise the
+              // version records blank translations. This write's own values
+              // (`companionData`, serialized strings the JSON-parse pass below
+              // normalizes) take precedence; every OTHER field of the write
+              // locale falls back to its prior stored translation
+              // (`previousCompanionValues`, already read shape). Without that
+              // fallback a partial edit that touches only one field would drop
+              // the locale's untouched translations from the snapshot and lose
+              // them on restore. The fallback carries only fields that actually
+              // hold a prior translation: a never-translated field reads back as
+              // null, and injecting that null would record an empty translation
+              // where the field was simply absent — leaking a blank into a
+              // non-default first write's snapshot. Keyed by field.name to match
+              // the read shape; mirrors the collection capture, which reads back
+              // the full write-locale companion.
               if (companion) {
                 for (const f of companion.localizedFields) {
                   if (
@@ -1510,6 +1520,8 @@ export class SingleMutationService extends BaseService {
                     )
                   ) {
                     parentRow[f.name] = companionData[f.column];
+                  } else if (previousCompanionValues[f.column] != null) {
+                    parentRow[f.name] = previousCompanionValues[f.column];
                   }
                 }
               }

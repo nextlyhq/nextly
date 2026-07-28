@@ -158,6 +158,53 @@ describe("version capture on update (integration)", () => {
     expect(v1.locale).toBe("en");
   });
 
+  it("preserves an untouched translation of the write locale in a partial single update snapshot", async () => {
+    // A partial update to a non-default locale that touches only one
+    // translatable field must still snapshot the locale's OTHER, untouched
+    // translation — otherwise the version drops content that is still persisted
+    // and restoring it would blank the field.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({ name: "siteName", localized: true }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // Establish both German translations.
+    await singles.update(
+      "preferences",
+      { siteName: "Meine Seite", tagline: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+    // Partial German edit: touch only `siteName`, leaving `tagline` untouched.
+    await singles.update(
+      "preferences",
+      { siteName: "Meine Seite 2" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const latest = rows[rows.length - 1];
+    const snapshot = latest.snapshot as {
+      siteName?: string;
+      tagline?: string;
+    };
+    expect(latest.locale).toBe("de");
+    expect(snapshot.siteName).toBe("Meine Seite 2");
+    // The untouched German translation survives into the latest snapshot.
+    expect(snapshot.tagline).toBe("hallo");
+  });
+
   it("tags v1 with the default locale when a shared-only first update seeds localized defaults", async () => {
     // The first update touches only a SHARED field, so no localized field is
     // written and `companionData` is empty. Without forcing the tag, the capture
