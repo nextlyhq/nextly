@@ -164,9 +164,9 @@ export function createComponentsNamespace(
       // goes through the same reserved-storage rules as a code-first dbName,
       // because a name pointing at framework tables would let a later delete
       // drop storage this component does not own.
-      // Validated because the table name derives from the slug, which the
-      // resolver normalizes: `foo-bar` and `foo--bar` would otherwise register
-      // as distinct components sharing one physical table.
+      // Validated for slug format and reserved names. Two slugs that collapse
+      // to one table are caught by defineConfig for code-first components and
+      // by the unique index on dynamic_components.table_name here.
       assertValidComponentConfig({
         slug: args.slug,
         label: { singular: args.label },
