@@ -929,9 +929,9 @@ describe("Single custom read rules vs the assembled document (integration)", () 
   });
 
   it("reads a Single whose relationship points at several collections", async () => {
-    // A polymorphic reference is stored AND served as `{ relationTo, value }` —
-    // it is never populated on this path — so the reference is the outcome and
-    // demanding a row there would refuse every read of such a Single.
+    // A reference naming its own collection is stored as `{ relationTo, value }`
+    // and populated from the collection it names. The read must not be refused
+    // for the shape it arrives in, whether or not the row could be loaded.
     current = await createTestNextly({
       collections: [
         defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
@@ -978,11 +978,12 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     });
 
     expect(result.success).toBe(true);
-    // The reference IS the outcome here, so pin the shape: expanding or
-    // reshaping it would still satisfy a bare success assertion.
-    expect(result.data!.author).toEqual({
-      relationTo: "authors",
-      value: (author.data as { id: string }).id,
+    // Pin the shape, not just the success: the row has to come from the
+    // collection the value named, and a bare success assertion would be
+    // satisfied by the unexpanded reference just as well.
+    expect(result.data!.author).toMatchObject({
+      id: (author.data as { id: string }).id,
+      name: "A",
     });
   });
 

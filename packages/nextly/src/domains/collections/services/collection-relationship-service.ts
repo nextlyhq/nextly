@@ -180,6 +180,57 @@ function extractRelationshipId(value: unknown): unknown {
 }
 
 /**
+ * Reads a relationship value that carries its own target collection.
+ *
+ * A field declaring several targets cannot store a bare id, because the id
+ * alone does not say which table it belongs to; it stores a
+ * `{ relationTo, value }` pair instead. That stored collection is
+ * authoritative — the field's declared list says only which targets are
+ * allowed, so resolving against it picks the wrong table for every value that
+ * does not point at the first one.
+ *
+ * Returns null for any other shape, leaving the caller on the single-target
+ * path where the field's own target is the right answer.
+ */
+function readPolymorphicRef(
+  value: unknown
+): { collection: string; id: string } | null {
+  // Dialects without a native object column hand the pair back as the JSON
+  // text it was stored as. Only a value that actually parses to the pair is
+  // treated as one: an ordinary id is a bare string, and a Postgres array
+  // literal opens with the same brace but is not JSON, so both fall through
+  // to the single-target path rather than being mistaken for a reference.
+  const candidate =
+    typeof value === "string" && value.startsWith("{")
+      ? parseJsonObject(value)
+      : value;
+  if (
+    candidate === null ||
+    typeof candidate !== "object" ||
+    Array.isArray(candidate)
+  ) {
+    return null;
+  }
+  const { relationTo, value: id } = candidate as Record<string, unknown>;
+  if (typeof relationTo !== "string" || typeof id !== "string") return null;
+  return { collection: relationTo, id };
+}
+
+/** Parses JSON text to an object, or null when it is not one. */
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Strips expanded relationship objects in a data row down to just their IDs.
  * Used when depth=0 to ensure no nested relationships are returned as full objects.
  * Recursively handles nested repeater/group fields.
@@ -508,6 +559,73 @@ function parsePostgresArray(value: unknown): string[] | null {
     return items;
   }
   return null;
+}
+
+/**
+ * Returns the stored values as their original items when the field holds a
+ * list, so a caller can read each one's own target collection. Null for every
+ * other shape, including a Postgres array literal — that format carries bare
+ * ids, which have no collection to read.
+ */
+function readItemArray(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Reads a single relationship value as the collection and id it refers to.
+ * Falls back to the field's own target for the ordinary single-target case,
+ * where the stored value is just an id.
+ */
+function readRelationshipRef(
+  value: unknown,
+  fallbackCollection: string
+): { collection: string; id: string } | null {
+  if (value == null) return null;
+  const polymorphic = readPolymorphicRef(value);
+  if (polymorphic) return polymorphic;
+  const id = extractRelationshipId(value);
+  return typeof id === "string" ? { collection: fallbackCollection, id } : null;
+}
+
+/**
+ * Identifies a related row by collection AND id, because an id is only unique
+ * within its own collection. A field naming several targets can hold the same
+ * id for two of them, and a lookup keyed on the id alone would hand back
+ * whichever row was fetched last.
+ */
+function relationKey(collection: string, id: string): string {
+  // A NUL separator cannot appear in a slug or an id, so no two distinct
+  // pairs can collapse to the same key.
+  return `${collection}\u0000${id}`;
+}
+
+/**
+ * Pairs every id in a list-valued relationship with the collection it belongs
+ * to. A multi-target field stores one `{ relationTo, value }` pair per entry,
+ * and each may name a different collection, so a single target resolved from
+ * the field would send most of them to the wrong table.
+ *
+ * Indices line up with {@link normalizeToIdArray}, which maps list values
+ * one-to-one, so the id and the collection always describe the same entry.
+ */
+function normalizeToRelationshipRefs(
+  value: unknown,
+  fallbackCollection: string
+): { collection: string; id: string }[] {
+  const items = readItemArray(value);
+  return normalizeToIdArray(value).map((id, index) => {
+    const ref = items ? readPolymorphicRef(items[index]) : null;
+    return ref ?? { collection: fallbackCollection, id };
+  });
 }
 
 /**
@@ -946,42 +1064,30 @@ export class CollectionRelationshipService extends BaseService {
         relationDataMaps[field.name] = dataMap;
       } else if (hasMany) {
         // Handle hasMany relationships (arrays of IDs stored directly)
-        // Collect all IDs from all entries, handling PostgreSQL array format
-        const allRelatedIds: string[] = [];
-        for (const entry of entries) {
-          const ids = normalizeToIdArray(entry[field.name]);
-          allRelatedIds.push(...ids);
-        }
-
-        if (allRelatedIds.length > 0) {
-          const uniqueIds = [...new Set(allRelatedIds)];
-          const dataMap = await this.batchFetchRelatedEntries(
-            targetCollection,
-            uniqueIds,
-            field,
-            access
-          );
-          relationDataMaps[field.name] = dataMap;
-        } else {
-          relationDataMaps[field.name] = new Map();
-        }
+        // Collect all references from all entries, handling PostgreSQL array
+        // format. Each carries its own collection when the field declares
+        // several targets.
+        const allRefs = entries.flatMap(entry =>
+          normalizeToRelationshipRefs(entry[field.name], targetCollection)
+        );
+        relationDataMaps[field.name] = await this.batchFetchRefs(
+          allRefs,
+          field,
+          access
+        );
       } else {
         // Batch fetch all referenced IDs for oneToOne/manyToOne/oneToMany
-        const relatedIds = entries
-          .map(e => e[field.name])
-          .filter(id => id != null) as string[];
-
-        if (relatedIds.length > 0) {
-          const dataMap = await this.batchFetchRelatedEntries(
-            targetCollection,
-            relatedIds,
-            field,
-            access
+        const relatedRefs = entries
+          .map(e => readRelationshipRef(e[field.name], targetCollection))
+          .filter(
+            (ref): ref is { collection: string; id: string } => ref !== null
           );
-          relationDataMaps[field.name] = dataMap;
-        } else {
-          relationDataMaps[field.name] = new Map();
-        }
+
+        relationDataMaps[field.name] = await this.batchFetchRefs(
+          relatedRefs,
+          field,
+          access
+        );
       }
     }
 
@@ -1024,16 +1130,30 @@ export class CollectionRelationshipService extends BaseService {
 
           if (relationType === "manyToMany") {
             expandedEntry[field.name] = dataMap.get(entry.id as string) || [];
-          } else if (hasMany) {
+            continue;
+          }
+
+          // Resolved the same way the fetch above resolved it, so a value that
+          // names its own collection is looked up under that collection.
+          const fieldTarget = getTargetCollection(field);
+          if (!fieldTarget) continue;
+
+          if (hasMany) {
             // Handle hasMany relationships - expand array of IDs
-            const ids = normalizeToIdArray(entry[field.name]);
-            expandedEntry[field.name] = ids
-              .map(id => dataMap.get(id))
+            const refs = normalizeToRelationshipRefs(
+              entry[field.name],
+              fieldTarget
+            );
+            expandedEntry[field.name] = refs
+              .map(({ collection, id }) =>
+                dataMap.get(relationKey(collection, id))
+              )
               .filter(Boolean);
           } else {
-            const relatedId = entry[field.name] as string;
-            if (relatedId && dataMap.has(relatedId)) {
-              expandedEntry[field.name] = dataMap.get(relatedId);
+            const ref = readRelationshipRef(entry[field.name], fieldTarget);
+            const row = ref && dataMap.get(relationKey(ref.collection, ref.id));
+            if (row) {
+              expandedEntry[field.name] = row;
             }
           }
         }
@@ -1109,6 +1229,50 @@ export class CollectionRelationshipService extends BaseService {
         return fullyExpandedEntry;
       })
     );
+  }
+
+  /**
+   * Batch fetch references that may span several collections, one query per
+   * collection. A field declaring several targets holds values from more than
+   * one of them, so a single fetch against the field's first target would miss
+   * every value pointing anywhere else.
+   *
+   * Keys the result by collection and id together, since the caller resolves a
+   * row from the reference it started with and an id alone does not identify
+   * one across collections.
+   *
+   * @param refs - References to load, duplicates allowed
+   * @param field - Field definition, for label resolution
+   * @returns Map of {@link relationKey} to expanded entry data
+   */
+  private async batchFetchRefs(
+    refs: { collection: string; id: string }[],
+    field: FieldDefinition,
+    access: RelatedRowAccess
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const idsByCollection = new Map<string, Set<string>>();
+    for (const { collection, id } of refs) {
+      const ids = idsByCollection.get(collection);
+      if (ids) {
+        ids.add(id);
+      } else {
+        idsByCollection.set(collection, new Set([id]));
+      }
+    }
+
+    const merged = new Map<string, Record<string, unknown>>();
+    for (const [collection, ids] of idsByCollection) {
+      const dataMap = await this.batchFetchRelatedEntries(
+        collection,
+        [...ids],
+        field,
+        access
+      );
+      for (const [id, row] of dataMap) {
+        merged.set(relationKey(collection, id), row);
+      }
+    }
+    return merged;
   }
 
   /**
@@ -1484,25 +1648,43 @@ export class CollectionRelationshipService extends BaseService {
 
           expandedEntry[field.name] = expandedRelated;
         } else if (hasMany) {
-          // Handle hasMany relationships - array of IDs stored directly
-          const ids = normalizeToIdArray(entry[field.name]);
+          // Handle hasMany relationships - array of IDs stored directly.
+          // Each entry carries its own collection when the field declares
+          // several targets, so they are resolved per value rather than once
+          // for the whole field.
+          const refs = normalizeToRelationshipRefs(
+            entry[field.name],
+            targetCollection
+          );
 
-          if (ids.length > 0) {
-            const labelField = await this.getBestLabelField(
-              targetCollection,
-              targetLabelField
-            );
+          if (refs.length > 0) {
+            // Two values in the same field can come from different
+            // collections, and each names its own label field — so the lookup
+            // is per collection, resolved once each rather than once per row.
+            const labelFields = new Map<string, Promise<string>>();
+            const labelFieldFor = (collection: string): Promise<string> => {
+              const cached = labelFields.get(collection);
+              if (cached) return cached;
+              const pending = this.getBestLabelField(
+                collection,
+                targetLabelField
+              );
+              labelFields.set(collection, pending);
+              return pending;
+            };
 
             // Fetch all related entries
             const expandedRelated = await Promise.all(
-              ids.map(async (id: string) => {
+              refs.map(async ({ collection: relatedCollection, id }) => {
                 const relatedEntry = await this.fetchRelatedEntry(
-                  targetCollection,
+                  relatedCollection,
                   id,
                   access
                 );
 
                 if (!relatedEntry) return null;
+
+                const labelField = await labelFieldFor(relatedCollection);
 
                 let baseExpanded: Record<string, unknown> = {
                   id: relatedEntry.id,
@@ -1513,11 +1695,11 @@ export class CollectionRelationshipService extends BaseService {
                 // Recursively expand nested relationships if we have depth remaining
                 if (currentDepth + 1 < effectiveDepth) {
                   const targetFields =
-                    await this.getCollectionFields(targetCollection);
+                    await this.getCollectionFields(relatedCollection);
                   if (targetFields.length > 0) {
                     baseExpanded = await this.expandRelationships(
                       baseExpanded,
-                      targetCollection,
+                      relatedCollection,
                       targetFields,
                       {
                         depth: effectiveDepth,
@@ -1538,18 +1720,27 @@ export class CollectionRelationshipService extends BaseService {
           }
         } else {
           // oneToOne, manyToOne, oneToMany - already have the ID
-          const relatedId = entry[field.name] as string;
+          const storedValue = entry[field.name];
+          // A multi-target field stores the collection next to the id. Passing
+          // the whole pair to the row loader binds an object where the driver
+          // expects a string, so the query throws and the value never expands.
+          const polymorphicRef = readPolymorphicRef(storedValue);
+          const relatedCollection =
+            polymorphicRef?.collection ?? targetCollection;
+          const relatedId = polymorphicRef
+            ? polymorphicRef.id
+            : (storedValue as string);
 
           if (relatedId) {
             const relatedEntry = await this.fetchRelatedEntry(
-              targetCollection,
+              relatedCollection,
               relatedId,
               access
             );
 
             if (relatedEntry) {
               const labelField = await this.getBestLabelField(
-                targetCollection,
+                relatedCollection,
                 targetLabelField
               );
 
@@ -1561,12 +1752,14 @@ export class CollectionRelationshipService extends BaseService {
 
               // Recursively expand nested relationships if we have depth remaining
               if (currentDepth + 1 < effectiveDepth) {
+                // The row came from the collection the value named, so its own
+                // fields are the ones to walk for the next hop.
                 const targetFields =
-                  await this.getCollectionFields(targetCollection);
+                  await this.getCollectionFields(relatedCollection);
                 if (targetFields.length > 0) {
                   expandedRelated = await this.expandRelationships(
                     expandedRelated,
-                    targetCollection,
+                    relatedCollection,
                     targetFields,
                     {
                       depth: effectiveDepth,
