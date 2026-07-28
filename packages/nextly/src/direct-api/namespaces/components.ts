@@ -9,6 +9,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { assertValidComponentConfig } from "../../components/config/validate-component";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
@@ -157,13 +158,26 @@ export function createComponentsNamespace(
       const fieldsTyped = args.fields as unknown as FieldConfig[];
       const schemaHash = calculateSchemaHash(fieldsTyped);
 
+      // Canonical resolution: an explicit tableName is honored verbatim;
+      // otherwise the slug is normalized before the comp_ prefix so a dashed
+      // slug maps to the same table the schema layer creates. The explicit form
+      // goes through the same reserved-storage rules as a code-first dbName,
+      // because a name pointing at framework tables would let a later delete
+      // drop storage this component does not own.
+      const tableName = resolveComponentTableName(args.slug, args.tableName);
+      if (args.tableName !== undefined) {
+        assertValidComponentConfig({
+          slug: args.slug,
+          label: { singular: args.label },
+          fields: fieldsTyped,
+          dbName: args.tableName,
+        });
+      }
+
       const component = await ctx.componentRegistryService.registerComponent({
         slug: args.slug,
         label: args.label,
-        // Canonical resolution: an explicit tableName is honored verbatim;
-        // otherwise the slug is normalized before the comp_ prefix so a
-        // dashed slug maps to the same table the schema layer creates.
-        tableName: resolveComponentTableName(args.slug, args.tableName),
+        tableName,
         description: args.description,
         fields: fieldsTyped,
         admin: args.admin,

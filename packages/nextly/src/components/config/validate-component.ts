@@ -27,6 +27,8 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
+import { NextlyError } from "../../errors";
 import { CORE_TABLE_NAMES, CORE_TABLE_PREFIXES } from "../../schemas/index";
 import {
   type BaseValidationError,
@@ -328,6 +330,7 @@ function validateFields(
  */
 function validateDbName(
   dbName: unknown,
+  slug: unknown,
   errors: ComponentValidationError[]
 ): void {
   if (dbName === undefined) return;
@@ -348,6 +351,12 @@ function validateDbName(
         "dbName must be lowercase and contain only letters, digits and underscores, starting with a letter or underscore.",
       code: "DB_NAME_INVALID_FORMAT",
     });
+    return;
+  }
+
+  // Spelling out the name this component would get anyway is not a collision:
+  // it addresses the very table it owns, and was valid before this check.
+  if (typeof slug === "string" && dbName === resolveComponentTableName(slug)) {
     return;
   }
 
@@ -402,7 +411,7 @@ export function validateComponentConfig(
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
 
-  validateDbName(config.dbName, errors);
+  validateDbName(config.dbName, config.slug, errors);
 
   validateFields(config.fields, errors);
 
@@ -425,8 +434,17 @@ export function assertValidComponentConfig(config: ComponentConfig): void {
       .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
       .join("\n");
 
-    throw new Error(
-      `Invalid Component config for '${config.slug || "unknown"}':\n${errorMessages}`
-    );
+    throw NextlyError.validation({
+      errors: result.errors.map(err => ({
+        path: err.path,
+        code: err.code,
+        message: err.message,
+      })),
+      logContext: {
+        reason: "component-config-invalid",
+        slug: config.slug,
+        details: errorMessages,
+      },
+    });
   }
 }

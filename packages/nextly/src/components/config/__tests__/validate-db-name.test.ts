@@ -37,8 +37,34 @@ describe("component dbName validation", () => {
     expect(result.errors.map(e => e.code)).toContain("DB_NAME_INVALID_FORMAT");
   });
 
+  it("accepts the component's own canonical table name spelled out", () => {
+    // Identical to the name generated when dbName is omitted, so it addresses
+    // the table this component owns and must stay valid.
+    const result = validateComponentConfig({ ...base, dbName: "comp_seo" });
+    expect(result.valid).toBe(true);
+  });
+
+  it("still rejects another component's generated name", () => {
+    const result = validateComponentConfig({ ...base, dbName: "comp_hero" });
+    expect(result.valid).toBe(false);
+    expect(result.errors.map(e => e.code)).toContain("DB_NAME_RESERVED");
+  });
+
   it("leaves components without a dbName untouched", () => {
     const result = validateComponentConfig(base);
     expect(result.valid).toBe(true);
+  });
+});
+
+describe("component config assertion errors", () => {
+  it("throws the package's typed validation error", async () => {
+    const { assertValidComponentConfig } = await import(
+      "../validate-component"
+    );
+    const { NextlyError } = await import("../../../errors");
+
+    expect(() =>
+      assertValidComponentConfig({ ...base, dbName: "users" })
+    ).toThrow(NextlyError);
   });
 });

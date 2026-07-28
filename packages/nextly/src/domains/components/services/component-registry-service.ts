@@ -477,7 +477,8 @@ export class ComponentRegistryService extends BaseRegistryService<
    * Sync code-first Components with the registry.
    */
   async syncCodeFirstComponents(
-    configs: CodeFirstComponentConfig[]
+    configs: CodeFirstComponentConfig[],
+    options?: { reconcileTableNames?: boolean }
   ): Promise<SyncComponentResult> {
     this.logger.info("Syncing code-first Components", {
       count: configs.length,
@@ -509,8 +510,16 @@ export class ComponentRegistryService extends BaseRegistryService<
         // stored table does exist it holds this component's instances, and
         // pointing elsewhere would leave them behind an empty table, so the
         // pointer stays and the mismatch is reported instead.
+        // A metadata-only sync carries no DDL, so it must not move a storage
+        // pointer: the destination it would choose may not exist, and any diff
+        // for this reload has already run against the current one.
+        const mayReconcile = options?.reconcileTableNames !== false;
         let tableNameChanged = false;
-        if (existing !== null && existing.tableName !== desiredTableName) {
+        if (
+          mayReconcile &&
+          existing !== null &&
+          existing.tableName !== desiredTableName
+        ) {
           // Existence alone does not justify keeping the pointer: an empty
           // table strands nothing, so reconciling to the configured name is
           // both safe and the outcome the config asked for. Only instances

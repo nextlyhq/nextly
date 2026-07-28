@@ -179,7 +179,10 @@ interface SingleRegistrySurface {
   >;
 }
 interface ComponentRegistrySurface {
-  syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
+  syncCodeFirstComponents(
+    configs: unknown[],
+    options?: { reconcileTableNames?: boolean }
+  ): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created components (components have no status column). Optional.
   getAllComponents?(): Promise<
@@ -364,7 +367,13 @@ async function syncCodeFirstMetadataOnly(
       "componentRegistryService"
     )) as ComponentRegistrySurface;
     const payload = buildComponentSyncPayload(newConfig.components ?? []);
-    if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
+    // Metadata only: this path applies no DDL, so it must not repoint a
+    // component at storage it has not created.
+    if (payload.length > 0) {
+      await compReg.syncCodeFirstComponents(payload, {
+        reconcileTableNames: false,
+      });
+    }
   } catch (err) {
     components = false;
     logger?.warn(
