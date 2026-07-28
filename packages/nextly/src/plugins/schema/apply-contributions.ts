@@ -23,6 +23,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors";
+import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
@@ -300,7 +301,7 @@ function renameEntity<T extends Fielded>(
  * word. Failing here turns a silent loss of schema into a startup error naming
  * the plugin.
  */
-function assertNoLegacyFieldGroupKey(
+function assertNoLegacyContributesKey(
   pluginName: string,
   contributes: PluginDefinition["contributes"]
 ): void {
@@ -326,7 +327,7 @@ function assertNoLegacyFieldGroupKey(
 
 function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
   const contributes = plugin.contributes;
-  assertNoLegacyFieldGroupKey(plugin.name, contributes);
+  assertNoLegacyContributesKey(plugin.name, contributes);
   const map = plugin.renameMap;
   if (!contributes || !map || Object.keys(map).length === 0) {
     return {
@@ -408,6 +409,9 @@ export function applyPluginSchemaContributions(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): NextlyServiceConfig {
+  // The fold is the one point every runtime and CLI path reaches, including
+  // after a plugin setup transformer has returned a new config object.
+  assertNoLegacyFieldGroupKey(config, "pluginFold");
   const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
@@ -433,6 +437,9 @@ export function applyPluginSchemaContributionsDeferred(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): FoldResult {
+  // The fold is the one point every runtime and CLI path reaches, including
+  // after a plugin setup transformer has returned a new config object.
+  assertNoLegacyFieldGroupKey(config, "pluginFold");
   const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
   const r = applyExtendClauses(
     collections,

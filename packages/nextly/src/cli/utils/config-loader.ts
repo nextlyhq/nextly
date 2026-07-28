@@ -53,7 +53,6 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
-import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -114,9 +113,6 @@ export function mergeSetupResultIntoConfig(
   transformed: SanitizedNextlyConfig,
   plugins: PluginDefinition[]
 ): SanitizedNextlyConfig {
-  // The CLI's post-transformer boundary, mirroring the runtime check in
-  // register.ts: a plugin compiled against the old API can return `components`.
-  assertNoLegacyFieldGroupKey(transformed, "cliSetupTransformer");
   const { config: folded } = applyPluginSchemaContributionsDeferred(
     transformed as unknown as NextlyServiceConfig,
     plugins

@@ -12,6 +12,7 @@
 
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import type { NextlyServiceConfig } from "../di/register";
+import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { getImageProcessor } from "../storage/image-processor";
 
 /**
@@ -88,6 +89,10 @@ export function buildServiceConfig(
         );
       }
     }
+
+    // Validated before flattening: the nested config is destructured away
+    // here, so a legacy key on it would never reach the boot-time guard.
+    assertNoLegacyFieldGroupKey(nextlyConfig, "buildServiceConfig");
 
     // If singles not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.singles && nextlyConfig?.singles) {

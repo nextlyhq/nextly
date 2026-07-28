@@ -389,9 +389,6 @@ export async function registerServices(
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
   const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
-  // A transformer returns a NEW config object, so the pre-transform check
-  // above does not cover a plugin compiled against the old API.
-  assertNoLegacyFieldGroupKey(setupConfig, "pluginSetupTransformer");
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)

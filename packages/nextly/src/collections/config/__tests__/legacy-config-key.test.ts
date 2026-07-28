@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
-import { mergeSetupResultIntoConfig } from "../../../cli/utils/config-loader";
+import {
+  applyPluginSchemaContributions,
+  applyPluginSchemaContributionsDeferred,
+} from "../../../plugins/schema/apply-contributions";
+import { buildServiceConfig } from "../../../init/build-service-config";
 import { defineConfig } from "../define-config";
 
 const field = { type: "text" as const, name: "title" };
@@ -54,26 +58,54 @@ describe("legacy top-level config key", () => {
 });
 
 // A plugin's setup() transformer returns a NEW config object, so a boundary that
-// only checks its input leaves that path unguarded — a plugin compiled against
-// the old API could reintroduce the key after every earlier check has passed.
-describe("legacy key at the post-transform boundary", () => {
-  it("rejects a transformed config carrying the old key", () => {
+// only checks its input leaves that path unguarded. The check therefore lives on
+// the FOLD — the one function every runtime and CLI path calls — rather than on
+// any single caller, which is how the previous placement came to sit in a helper
+// only tests invoked.
+describe("legacy key at the plugin fold", () => {
+  const svc = (partial: Record<string, unknown>) =>
+    ({ imageProcessor: {}, ...partial }) as never;
+
+  it("rejects a folded config carrying the old key", () => {
     expect(() =>
-      mergeSetupResultIntoConfig(
-        { collections: [], singles: [], fieldGroups: [] } as never,
-        { collections: [], singles: [], components: [group("seo")] } as never,
+      applyPluginSchemaContributions(
+        svc({ collections: [], singles: [], components: [group("seo")] }),
         []
       )
     ).toThrow(NextlyError);
   });
 
-  it("accepts a transformed config using the current key", () => {
+  it("rejects it on the deferring fold used by the CLI loader", () => {
     expect(() =>
-      mergeSetupResultIntoConfig(
-        { collections: [], singles: [], fieldGroups: [] } as never,
-        { collections: [], singles: [], fieldGroups: [group("seo")] } as never,
+      applyPluginSchemaContributionsDeferred(
+        svc({ collections: [], singles: [], components: [group("seo")] }),
         []
       )
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts a folded config using the current key", () => {
+    expect(() =>
+      applyPluginSchemaContributionsDeferred(
+        svc({ collections: [], singles: [], fieldGroups: [group("seo")] }),
+        []
+      )
+    ).not.toThrow();
+  });
+});
+
+// `buildServiceConfig()` destructures the nested config away before boot, so a
+// legacy key on it would never reach the boot-time guard.
+describe("legacy key on the nested config", () => {
+  it("rejects a nextly config carrying the old key", () => {
+    expect(() =>
+      buildServiceConfig({ config: { components: [group("seo")] } } as never)
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts a nextly config using the current key", () => {
+    expect(() =>
+      buildServiceConfig({ config: { fieldGroups: [group("seo")] } } as never)
     ).not.toThrow();
   });
 });
