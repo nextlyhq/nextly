@@ -124,6 +124,13 @@ code-first entities.
 The plugin-provided `form-submissions` collection ships opted out, because
 submissions carry visitor-entered content plus `ipAddress` and `userAgent`.
 
+> **Deploying a Builder-set opt-out:** turning the switch off is a metadata-only
+> change, and `migrate:create` only emits a migration when a table's schema
+> changes. The setting therefore applies to the database you are working against
+> but does not reach another environment until a schema change ships with it. If
+> you need the opt-out in production now, set `webhooks: false` in code-first
+> config instead: it is republished on every boot and needs no migration.
+
 > **Upgrading:** the switch is stored in a registry column added in this release.
 > An existing install must run `nextly migrate` before the setting can persist;
 > until then `nextly migrate` reports the column as core-schema drift and

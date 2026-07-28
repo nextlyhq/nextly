@@ -16,17 +16,57 @@ afterEach(() => {
   resetWebhookRecordingPolicy();
 });
 
-/** A reader that answers each registry table from a fixture. */
-function adapterReturning(rows: {
-  collections?: unknown[];
-  singles?: unknown[];
-}) {
+interface Row {
+  slug: string | null;
+  source: string | null;
+  webhooks: unknown;
+}
+
+/**
+ * A Drizzle stub that answers each registry table from a fixture. The table is
+ * identified by the object the query is built `from`, which is the real dialect
+ * table, so the stub cannot drift from the column names the code selects.
+ */
+function readerReturning(rows: { collections?: Row[]; singles?: Row[] }) {
   return {
-    executeQuery: vi.fn(async (sql: string) =>
-      sql.includes("dynamic_collections")
-        ? (rows.collections ?? [])
-        : (rows.singles ?? [])
-    ),
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+    getDrizzle: <T>() =>
+      ({
+        select: () => ({
+          from: (
+            table: { slug: { name?: string } } & Record<string, unknown>
+          ) => ({
+            where: async () => {
+              // Both registry tables declare a `slug` column; the table name
+              // lives on Drizzle's internal symbol, so match on the object
+              // identity the caller passed instead.
+              const isSingles = String(
+                (table as { _?: { name?: string } })._?.name ?? ""
+              ).includes("singles");
+              return isSingles
+                ? (rows.singles ?? [])
+                : (rows.collections ?? []);
+            },
+          }),
+        }),
+      }) as T,
+  };
+}
+
+/** A reader whose registry read fails with the given error. */
+function readerThrowing(error: Error) {
+  return {
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+    getDrizzle: <T>() =>
+      ({
+        select: () => ({
+          from: () => ({
+            where: vi.fn(async () => {
+              throw error;
+            }),
+          }),
+        }),
+      }) as T,
   };
 }
 
@@ -37,25 +77,25 @@ const noConfigSlugs = {
 
 describe("publishStoredWebhookRecordingPolicies", () => {
   it("applies a stored opt-out for a builder-authored collection", async () => {
-    const adapter = adapterReturning({
+    const reader = readerReturning({
       collections: [
         { slug: "enquiries", source: "ui", webhooks: '{"record":false}' },
       ],
     });
 
-    await publishStoredWebhookRecordingPolicies(adapter, noConfigSlugs);
+    await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
 
     expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
   });
 
   it("ignores a code-first row so live config keeps precedence", async () => {
-    const adapter = adapterReturning({
+    const reader = readerReturning({
       collections: [
         { slug: "posts", source: "code", webhooks: '{"record":false}' },
       ],
     });
 
-    await publishStoredWebhookRecordingPolicies(adapter, {
+    await publishStoredWebhookRecordingPolicies(reader, {
       collections: new Set(["posts"]),
       singles: new Set(),
     });
@@ -65,13 +105,13 @@ describe("publishStoredWebhookRecordingPolicies", () => {
 
   it("ignores a row whose slug the live config owns even when it is not marked code", async () => {
     // A config entity whose row has not been reconciled still belongs to code.
-    const adapter = adapterReturning({
+    const reader = readerReturning({
       collections: [
         { slug: "posts", source: "ui", webhooks: '{"record":false}' },
       ],
     });
 
-    await publishStoredWebhookRecordingPolicies(adapter, {
+    await publishStoredWebhookRecordingPolicies(reader, {
       collections: new Set(["posts"]),
       singles: new Set(),
     });
@@ -80,69 +120,97 @@ describe("publishStoredWebhookRecordingPolicies", () => {
   });
 
   it("accepts an already-parsed object, as the json dialects return", async () => {
-    const adapter = adapterReturning({
-      singles: [{ slug: "contact", source: "ui", webhooks: { record: false } }],
+    const reader = readerReturning({
+      collections: [
+        { slug: "contact", source: "ui", webhooks: { record: false } },
+      ],
     });
 
-    await publishStoredWebhookRecordingPolicies(adapter, noConfigSlugs);
+    await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
 
-    expect(isWebhookRecordingEnabled("single", "contact")).toBe(false);
+    expect(isWebhookRecordingEnabled("collection", "contact")).toBe(false);
   });
 
   it("leaves recording on for a row that stored no opt-out", async () => {
-    const adapter = adapterReturning({
+    const reader = readerReturning({
       collections: [{ slug: "posts", source: "ui", webhooks: null }],
     });
 
-    await publishStoredWebhookRecordingPolicies(adapter, noConfigSlugs);
+    await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
 
     expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
   });
 
   it("leaves recording on when the column does not exist yet", async () => {
     // An install that has not run `nextly migrate` since upgrading has no
-    // `webhooks` column. The select throws and boot must continue recording
-    // rather than fail, because the column is additive.
-    const adapter = {
-      executeQuery: vi.fn(async () => {
-        throw new Error('column "webhooks" does not exist');
-      }),
-    };
+    // `webhooks` column. That one case fails open: the column is additive, so
+    // recording everything is the correct previous behavior. A driver error is
+    // used deliberately — the classification reads the driver's message, so a
+    // NextlyError here would stop exercising what the guard actually inspects.
+    const reader = readerThrowing(
+      new Error('column "webhooks" does not exist')
+    );
 
     await expect(
-      publishStoredWebhookRecordingPolicies(adapter, noConfigSlugs)
+      publishStoredWebhookRecordingPolicies(reader, noConfigSlugs)
     ).resolves.toBeUndefined();
     expect(isWebhookRecordingEnabled("collection", "anything")).toBe(true);
   });
 
-  it("keeps collection opt-outs when the singles registry is unreadable", async () => {
-    // The two scopes are read independently so one unreadable table cannot
-    // discard decisions the other just published.
-    const adapter = {
-      executeQuery: vi.fn(async (sql: string) => {
-        if (sql.includes("dynamic_collections")) {
-          return [
-            { slug: "enquiries", source: "ui", webhooks: '{"record":false}' },
-          ];
-        }
-        throw new Error("no such table: dynamic_singles");
-      }),
-    };
-
-    await publishStoredWebhookRecordingPolicies(adapter, noConfigSlugs);
-
-    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
-  });
-
-  it("never overrides an opt-out already published by code or plugin", async () => {
-    // The stored publisher only ever writes opt-outs, and skips config-owned
-    // slugs, so a plugin's decision cannot be undone by a stale row.
-    setWebhookRecording("collection", "form-submissions", false, "plugin");
-    const adapter = adapterReturning({
-      collections: [{ slug: "form-submissions", source: "ui", webhooks: null }],
+  it("recognises the missing column through Drizzle's wrapper error", async () => {
+    // Drizzle reports `Failed query: ...` and hangs the driver's real message
+    // off `cause`. Inspecting only the wrapper would misread a pre-migration
+    // database as a hard failure and refuse to boot.
+    const wrapped = new Error("Failed query: select `webhooks` from ...", {
+      cause: new Error("Unknown column 'webhooks' in 'field list'"),
     });
 
-    await publishStoredWebhookRecordingPolicies(adapter, noConfigSlugs);
+    await expect(
+      publishStoredWebhookRecordingPolicies(
+        readerThrowing(wrapped),
+        noConfigSlugs
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("still fails closed when a wrapped error is not a missing column", async () => {
+    const wrapped = new Error("Failed query: select `webhooks` from ...", {
+      cause: new Error("Table 'nextly_test.dynamic_collections' doesn't exist"),
+    });
+
+    await expect(
+      publishStoredWebhookRecordingPolicies(
+        readerThrowing(wrapped),
+        noConfigSlugs
+      )
+    ).rejects.toThrow("Failed query");
+  });
+
+  it("fails closed when the registry read fails for any other reason", async () => {
+    // A transient failure is indistinguishable from "no opt-outs" to this
+    // function. Swallowing it would boot with recording enabled and deliver
+    // exactly the content an operator asked to withhold, so it must propagate.
+    const reader = readerThrowing(new Error("connection terminated"));
+
+    await expect(
+      publishStoredWebhookRecordingPolicies(reader, noConfigSlugs)
+    ).rejects.toThrow("connection terminated");
+  });
+
+  it("never overrides a decision the config publisher already made", async () => {
+    // A stale row carrying a CONFLICTING opt-in must not undo a plugin opt-out:
+    // config-owned slugs are skipped outright, and only opt-outs are published.
+    setWebhookRecording("collection", "form-submissions", false, "plugin");
+    const reader = readerReturning({
+      collections: [
+        { slug: "form-submissions", source: "ui", webhooks: '{"record":true}' },
+      ],
+    });
+
+    await publishStoredWebhookRecordingPolicies(reader, {
+      collections: new Set(["form-submissions"]),
+      singles: new Set(),
+    });
 
     expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
       false
@@ -150,11 +218,11 @@ describe("publishStoredWebhookRecordingPolicies", () => {
   });
 
   it("tolerates a malformed stored value instead of throwing at boot", async () => {
-    const adapter = adapterReturning({
+    const reader = readerReturning({
       collections: [{ slug: "posts", source: "ui", webhooks: "not json" }],
     });
 
-    await publishStoredWebhookRecordingPolicies(adapter, noConfigSlugs);
+    await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
 
     expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
   });

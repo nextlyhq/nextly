@@ -275,18 +275,16 @@ export class DynamicCollectionRegistryService extends BaseService {
       .where(eq(this.dynamicCollections.slug, collectionSlug));
 
     // Mirror the stored change into the live policy so turning the switch off
-    // takes effect on the next write rather than the next restart. A rename
-    // moves the decision to the new slug and drops the old one.
+    // takes effect on the next write rather than the next restart. Keyed on the
+    // slug the row is stored under rather than a requested rename target, so the
+    // policy key and the persisted row can never disagree.
     if (updates.webhooks !== undefined && existing[0].source !== "code") {
       setWebhookRecording(
         "collection",
-        targetSlug,
+        collectionSlug,
         updates.webhooks?.record !== false,
         "db"
       );
-      if (targetSlug !== collectionSlug) {
-        clearWebhookRecording("collection", collectionSlug);
-      }
     }
 
     return this.getCollection(collectionSlug);
@@ -438,5 +436,11 @@ export class DynamicCollectionRegistryService extends BaseService {
     await this.db
       .delete(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, slug));
+
+    // Drop the in-process recording decision with the row: this is the path the
+    // Builder's delete takes, and a later collection created under the same slug
+    // must start from the recording default rather than inherit a suppression
+    // whose row no longer exists.
+    clearWebhookRecording("collection", slug);
   }
 }

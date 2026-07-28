@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // Seeded at module load, before any import can read the lazily-cached `env`
 // proxy: webhook signing secrets are encrypted under NEXTLY_SECRET, so
@@ -25,6 +25,9 @@ process.env.NEXTLY_SECRET ??= "integration-test-application-secret";
 // The Builder's create path only APPLIES its generated migration in
 // development; under the default test env the table is never created and every
 // entry write would fail, making a zero-event assertion pass vacuously.
+// Restored below: integration files in this package share one fork, so leaving
+// it set would change dev-only behaviour in every suite that runs after this.
+const originalNodeEnv = process.env.NODE_ENV;
 process.env.NODE_ENV = "development";
 
 import { createAdapter } from "../../../database/factory";
@@ -80,6 +83,21 @@ afterEach(async () => {
   current = undefined;
   rmSync(dir, { recursive: true, force: true });
 });
+
+afterAll(() => {
+  process.env.NODE_ENV = originalNodeEnv;
+});
+
+/**
+ * Shut the running instance down and boot a fresh one against the same file, as
+ * a restart would. Destroying first matters: two live connections to one SQLite
+ * file is a resource leak and a source of lock flakiness.
+ */
+async function restart(): Promise<TestNextly> {
+  await current?.destroy();
+  current = undefined;
+  return boot();
+}
 
 /** Boot against the shared file database, as a fresh process would. */
 async function boot(): Promise<TestNextly> {
@@ -162,7 +180,7 @@ describe("builder webhook opt-out persistence (integration)", () => {
 
     // Restart. The policy registry starts empty, so anything still in force
     // after this can only have come from the stored column.
-    current = await boot();
+    current = await restart();
     const afterRestart =
       current.getService<CollectionsHandler>("collectionsHandler");
 
@@ -198,7 +216,7 @@ describe("builder webhook opt-out persistence (integration)", () => {
 
     // Restart so the decision is re-read from the column rather than left over
     // in the process that performed the update.
-    current = await boot();
+    current = await restart();
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
 

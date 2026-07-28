@@ -14,12 +14,51 @@
  * @module domains/webhooks/stored-recording-policy
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { isNotNull } from "drizzle-orm";
+import type { AnyColumn, SQL } from "drizzle-orm";
+
+import { dynamicCollectionsMysql } from "../../schemas/dynamic-collections/mysql";
+import { dynamicCollectionsPg } from "../../schemas/dynamic-collections/postgres";
+import { dynamicCollectionsSqlite } from "../../schemas/dynamic-collections/sqlite";
+import type { StoredWebhookRecording } from "../../schemas/dynamic-collections/types";
+import { dynamicSinglesMysql } from "../../schemas/dynamic-singles/mysql";
+import { dynamicSinglesPg } from "../../schemas/dynamic-singles/postgres";
+import { dynamicSinglesSqlite } from "../../schemas/dynamic-singles/sqlite";
+
 import { setWebhookRecording } from "./recording-policy";
 import type { WebhookRecordingScope } from "./recording-policy";
 
-/** The minimal adapter surface this needs; narrow so tests can fake it. */
-interface RecordingPolicyReader {
-  executeQuery<T>(sql: string): Promise<T[]>;
+/** The three registry columns this read needs, on any dialect's table. */
+interface PolicyTable {
+  slug: AnyColumn;
+  source: AnyColumn;
+  webhooks: AnyColumn;
+}
+
+interface StoredPolicyRow {
+  slug: string | null;
+  source: string | null;
+  webhooks: StoredWebhookRecording | string | null;
+}
+
+/**
+ * The slice of the Drizzle query builder this uses. `getDrizzle` is generic so a
+ * caller can name the surface it needs instead of depending on one dialect's
+ * full builder type.
+ */
+interface PolicyQuery {
+  select(fields: Record<string, AnyColumn>): {
+    from(table: PolicyTable): {
+      where(condition: SQL): Promise<StoredPolicyRow[]>;
+    };
+  };
+}
+
+/** The adapter surface this needs; narrow so tests can supply a stub. */
+export interface RecordingPolicyReader {
+  getDrizzle<T>(): T;
+  getCapabilities(): { dialect: SupportedDialect };
 }
 
 /** Slugs the live code-first config owns, per scope. */
@@ -28,17 +67,38 @@ export interface ConfigOwnedSlugs {
   singles: Set<string>;
 }
 
-interface StoredPolicyRow {
-  slug?: string | null;
-  source?: string | null;
-  webhooks?: string | Record<string, unknown> | null;
+/**
+ * A registry table lacking the `webhooks` column — what a database upgraded but
+ * not yet migrated looks like. The column is additive, so this one case may fail
+ * open (keep recording, the previous behavior); no other failure may be mistaken
+ * for it. Matches the classification `loadDynamicTables` already applies to the
+ * same registry tables.
+ */
+function isMissingWebhooksColumn(error: unknown): boolean {
+  // Drizzle wraps driver failures, so the recognizable text is on the cause, not
+  // the wrapper ("Failed query: ..."). Both are searched, mirroring
+  // `isMissingCompanionTableError`. Matching only the missing-COLUMN wordings
+  // keeps a missing table — a genuinely broken registry — on the fail-closed
+  // path: SQLite says `no such column`, Postgres `column "x" does not exist`,
+  // MySQL `Unknown column`.
+  const message = [
+    error instanceof Error ? error.message : String(error),
+    error instanceof Error && error.cause instanceof Error
+      ? error.cause.message
+      : "",
+  ].join(" ");
+  return (
+    /no such column/i.test(message) ||
+    /unknown column/i.test(message) ||
+    (/column/i.test(message) && /does not exist/i.test(message))
+  );
 }
 
 /**
  * Whether a stored column value is an explicit opt-out. Tolerates both shapes
- * the dialects return — SQLite hands back raw JSON text while Postgres and
- * MySQL parse it — and treats a malformed value as "no opt-out" rather than
- * throwing during boot.
+ * the dialects return — SQLite hands back raw JSON text while Postgres and MySQL
+ * parse it — and treats a malformed value as "no opt-out" rather than throwing
+ * during boot.
  */
 function isStoredOptOut(value: StoredPolicyRow["webhooks"]): boolean {
   if (value === null || value === undefined) return false;
@@ -57,19 +117,47 @@ function isStoredOptOut(value: StoredPolicyRow["webhooks"]): boolean {
   );
 }
 
+function collectionsTable(dialect: SupportedDialect): PolicyTable {
+  switch (dialect) {
+    case "mysql":
+      return dynamicCollectionsMysql;
+    case "sqlite":
+      return dynamicCollectionsSqlite;
+    case "postgresql":
+      return dynamicCollectionsPg;
+  }
+}
+
+function singlesTable(dialect: SupportedDialect): PolicyTable {
+  switch (dialect) {
+    case "mysql":
+      return dynamicSinglesMysql;
+    case "sqlite":
+      return dynamicSinglesSqlite;
+    case "postgresql":
+      return dynamicSinglesPg;
+  }
+}
+
 async function publishScope(
-  adapter: RecordingPolicyReader,
+  db: PolicyQuery,
   scope: WebhookRecordingScope,
-  table: string,
+  table: PolicyTable,
   configSlugs: Set<string>
 ): Promise<void> {
-  // Raw select rather than a typed Drizzle query: this has to run against a
-  // database that may predate the column, where a typed select throws and boot
-  // must continue. `loadDynamicTables` reads the same registry the same way for
-  // the same reason.
-  const rows = await adapter.executeQuery<StoredPolicyRow>(
-    `SELECT slug, source, webhooks FROM ${table}`
-  );
+  // Three named columns rather than a full select, so this read stays
+  // independent of every other column the registry may gain. Only rows carrying
+  // an override are fetched: recording is the default, so a null column has
+  // nothing to publish.
+  const rows = await db
+    .select({
+      slug: table.slug,
+      source: table.source,
+      webhooks: table.webhooks,
+    })
+    .from(table)
+    .where(isNotNull(table.webhooks));
+
   for (const row of rows) {
     const slug = row.slug;
     if (!slug) continue;
@@ -84,37 +172,38 @@ async function publishScope(
  * Publish every registry-stored opt-out that the code-first config does not
  * already own.
  *
- * Only opt-OUTs are published. An absent decision already defaults to
- * recording, so writing opt-ins would add nothing while risking the override of
- * a code or plugin decision that arrived first.
+ * Only opt-OUTs are published. An absent decision already defaults to recording,
+ * so writing opt-ins would add nothing while risking the override of a code or
+ * plugin decision that arrived first.
  *
- * Never throws. A database not migrated since upgrading has no `webhooks`
- * column, and refusing to boot over an additive column would be a worse failure
- * than continuing with the previous behavior of recording everything.
+ * Fails open ONLY for a database predating the `webhooks` column, where there is
+ * nothing to read and recording everything is the correct previous behavior.
+ * Every other read failure is rethrown: a transient error is indistinguishable
+ * from "no opt-outs" here, and booting on regardless would deliver exactly the
+ * content an operator asked to withhold.
  */
 export async function publishStoredWebhookRecordingPolicies(
   adapter: RecordingPolicyReader,
   configSlugs: ConfigOwnedSlugs
 ): Promise<void> {
+  const dialect = adapter.getCapabilities().dialect;
+  const db = adapter.getDrizzle<PolicyQuery>();
+
   try {
     await publishScope(
-      adapter,
+      db,
       "collection",
-      "dynamic_collections",
+      collectionsTable(dialect),
       configSlugs.collections
     );
-  } catch {
-    // Missing column or unreadable registry: keep the recording default.
-  }
-  try {
     await publishScope(
-      adapter,
+      db,
       "single",
-      "dynamic_singles",
+      singlesTable(dialect),
       configSlugs.singles
     );
-  } catch {
-    // Caught separately so an unreadable singles registry cannot discard the
-    // collection opt-outs published above.
+  } catch (error) {
+    if (isMissingWebhooksColumn(error)) return;
+    throw error;
   }
 }

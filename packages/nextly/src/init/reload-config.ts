@@ -59,6 +59,7 @@ import { resolveCollectionTableName } from "../domains/schema/utils/resolve-tabl
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { setWebhookAuditEnabled } from "../domains/webhooks/recording-activation";
 import {
   pruneRemovedCodeFirstRecording,
@@ -238,6 +239,11 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
       // Forward the cache-revalidation config verbatim (no resolver — the
       // authored `{ tags?, disable? }` shape is persisted as-is).
       revalidate: c.revalidate,
+      // Mirror the recording opt-out onto the registry row. The live policy is
+      // published separately from config, but without this the row stays null
+      // and the read-only Builder shows recording enabled for a collection
+      // whose writes are actually suppressed.
+      webhooks: storedWebhookRecording(c.webhooks),
     }));
 }
 
@@ -266,6 +272,9 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
         versions: resolveVersionsConfig(s.versions, s.status),
         // Forward the cache-revalidation config verbatim (no resolver).
         revalidate: s.revalidate,
+        // Mirror the recording opt-out onto the registry row (same reason as
+        // collections above).
+        webhooks: storedWebhookRecording(s.webhooks),
       };
     });
 }

@@ -275,19 +275,7 @@ export class SingleRegistryService extends BaseRegistryService<
         { returning: "*" }
       );
 
-      // Publish the decision into the live policy as well as the column, for
-      // the same reason as collections: the boot-time read only runs at
-      // startup, so a Builder-created single would otherwise keep recording
-      // until the next restart. Code-first singles are already published from
-      // their config, which stays the source of truth.
-      if (data.source !== "code") {
-        setWebhookRecording(
-          "single",
-          data.slug,
-          data.webhooks?.record !== false,
-          "db"
-        );
-      }
+      this.publishRegisteredRecording(data);
 
       this.logger.info("Single registered", {
         slug: data.slug,
@@ -341,7 +329,30 @@ export class SingleRegistryService extends BaseRegistryService<
       { returning: "*" }
     );
 
+    this.publishRegisteredRecording(data);
+
     return this.deserializeRecord(result);
+  }
+
+  /**
+   * Publish a newly registered Single's recording decision into the live
+   * policy. Shared by both registration paths so a Single created inside a
+   * caller's transaction is not left recording until the next restart.
+   *
+   * Code-first Singles are skipped: their config is the source of truth and the
+   * config publisher has already applied it. On the transactional path this runs
+   * before the caller's transaction commits, which is safe in both directions —
+   * a rolled-back Single has no rows to record, and the next boot republishes
+   * from whatever the registry actually contains.
+   */
+  private publishRegisteredRecording(data: DynamicSingleInsert): void {
+    if (data.source === "code") return;
+    setWebhookRecording(
+      "single",
+      data.slug,
+      data.webhooks?.record !== false,
+      "db"
+    );
   }
 
   // ============================================================
@@ -480,15 +491,18 @@ export class SingleRegistryService extends BaseRegistryService<
       }
 
       // Mirror the stored change into the live policy so turning the switch
-      // off takes effect on the next write rather than the next restart.
-      if (data.webhooks !== undefined) {
+      // off takes effect on the next write rather than the next restart. Keyed
+      // on the slug the row is stored under (this method validates a rename but
+      // never writes it), and skipped for code-first sync so the entry keeps its
+      // `code` provenance — a `db` entry survives the reconcile that prunes
+      // removed code-first slugs, which would strand a stale opt-out.
+      if (data.webhooks !== undefined && options?.source !== "code") {
         setWebhookRecording(
           "single",
-          targetSlug,
+          slug,
           data.webhooks?.record !== false,
           "db"
         );
-        if (targetSlug !== slug) clearWebhookRecording("single", slug);
       }
 
       this.logger.info("Single updated", { slug });

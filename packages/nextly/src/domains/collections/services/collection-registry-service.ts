@@ -445,16 +445,18 @@ export class CollectionRegistryService extends BaseRegistryService<
       }
 
       // Mirror the stored change into the live policy so turning the switch
-      // off takes effect on the next write, not the next restart. Scoped to the
-      // target slug, which a rename moves the decision to.
+      // off takes effect on the next write, not the next restart. Keyed on the
+      // slug the row is actually stored under: this method validates a
+      // `data.slug` rename but never writes it, so keying on the requested new
+      // slug would publish under a name nothing reads and clear the only entry
+      // that matters.
       if (data.webhooks !== undefined && options?.source !== "code") {
         setWebhookRecording(
           "collection",
-          targetSlug,
+          slug,
           data.webhooks?.record !== false,
           "db"
         );
-        if (targetSlug !== slug) clearWebhookRecording("collection", slug);
       }
 
       this.logger.info("Collection updated", { slug });

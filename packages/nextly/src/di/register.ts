@@ -58,6 +58,7 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
   resetWebhookRecordingPolicy,
@@ -1376,6 +1377,10 @@ async function syncCodeFirstCollections(
       // dynamic_collections.revalidate; the write path reads it to honor
       // `disable` and merge extra `tags`.
       revalidate: collection.revalidate,
+      // Mirror the recording opt-out onto the registry row so a code-first
+      // `webhooks: false` is visible to anything reading the row, not only to
+      // the in-process policy the config publisher populates.
+      webhooks: storedWebhookRecording(collection.webhooks),
       // Forward the i18n master switch (mirrors status) so the boot sync persists
       // dynamic_collections.localized — the read path keys companion resolution off it.
       localized: collection.localized === true,
@@ -1938,6 +1943,9 @@ async function syncCodeFirstSingles(
       // dynamic_singles.revalidate; the write path reads it to honor `disable`
       // and merge extra `tags`.
       revalidate: single.revalidate,
+      // Mirror the recording opt-out onto the registry row (same reason as
+      // collections).
+      webhooks: storedWebhookRecording(single.webhooks),
     }));
 
   try {

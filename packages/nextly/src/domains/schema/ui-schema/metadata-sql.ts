@@ -14,9 +14,18 @@
  *
  * KNOWN LIMITATION (v1): metadata-only edits produce no DDL operation, so no
  * migration is generated and the change is not propagated until a schema
- * change co-occurs. This covers labels, and equally the `status`, `localized`
- * and `versions` flags: flipping one alone leaves the deployed registry row on
- * its previous value until the next migration for that table.
+ * change co-occurs. This covers labels, and equally the `status`, `localized`,
+ * `versions`, `revalidate` and `webhooks` flags: flipping one alone leaves the
+ * deployed registry row on its previous value until the next migration for that
+ * table.
+ *
+ * `webhooks` carries the sharpest consequence of that limitation, because the
+ * flag governs whether content reaches the outbox: turning recording off in the
+ * Builder opts the development database out while a deployed environment keeps
+ * recording and delivering until a schema change ships alongside it. Until
+ * metadata-only edits generate their own migration, an operator who needs the
+ * opt-out in production should set `webhooks: false` in code-first config, which
+ * is republished on every boot and needs no migration.
  *
  * @module domains/schema/ui-schema/metadata-sql
  * @since v0.0.3-alpha (Plan D2b)

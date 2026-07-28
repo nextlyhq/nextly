@@ -11,6 +11,8 @@
 
 import type { StoredWebhookRecording } from "../../schemas/dynamic-collections/types";
 
+import { resolveWebhookRecording } from "./resolve-recording-config";
+
 /**
  * Resolve the switch into the value the registry column holds.
  *
@@ -23,4 +25,20 @@ export function resolveBuilderWebhooks(
   enabled: boolean | undefined
 ): StoredWebhookRecording | null {
   return enabled === false ? { record: false } : null;
+}
+
+/**
+ * Resolve the CODE-FIRST `webhooks` option into the value the registry column
+ * holds. The authored option is a `boolean | { record?: boolean }` union rather
+ * than the Builder's plain on/off, so it is normalized through
+ * `resolveWebhookRecording` first and then mapped by the same rule: recording
+ * (the default) stores null, an opt-out stores `{ record: false }`.
+ *
+ * Used by the code-first sync payload builders so a `webhooks: false` in config
+ * is mirrored onto the row, not just published to the in-process policy.
+ */
+export function storedWebhookRecording(
+  webhooks: boolean | { record?: boolean } | undefined
+): StoredWebhookRecording | null {
+  return resolveBuilderWebhooks(resolveWebhookRecording(webhooks).record);
 }
