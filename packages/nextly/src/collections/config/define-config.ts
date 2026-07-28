@@ -36,10 +36,8 @@ import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../components/config/validate-
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
-import {
-  FIELD_GROUP_RESERVED_TABLE_PREFIX,
-  STORAGE_FORMAT,
-} from "../../schemas/storage-format";
+import { assertNoReservedTablePrefix } from "../../schemas/reserved-table-prefix";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -278,35 +276,7 @@ function validateNextlyConfig(config: NextlyConfig): void {
     slugs.add(slug);
   }
 
-  // A collection or single may set an explicit table name. `fg_` is the prefix
-  // the field-group storage migration will claim, so a config that takes it now
-  // would leave the migration renaming onto a table it does not own. Rejected
-  // before that becomes unrecoverable rather than at migration time, when the
-  // data already exists.
-  for (const entity of [...collections, ...singles]) {
-    const dbName = (entity as { dbName?: unknown }).dbName;
-    if (typeof dbName !== "string") continue;
-    if (!dbName.toLowerCase().startsWith(FIELD_GROUP_RESERVED_TABLE_PREFIX)) {
-      continue;
-    }
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "dbName",
-          code: "RESERVED_TABLE_PREFIX",
-          message:
-            `Table name '${dbName}' starts with the reserved prefix ` +
-            `'${FIELD_GROUP_RESERVED_TABLE_PREFIX}', which is reserved for field-group storage. ` +
-            `Choose a different 'dbName'.`,
-        },
-      ],
-      logContext: {
-        reason: "reserved-table-prefix",
-        slug: entity.slug,
-        dbName,
-      },
-    });
-  }
+  assertNoReservedTablePrefix([...collections, ...singles], "config");
 
   const components = config.fieldGroups ?? [];
   const componentTables = new Map<string, string>();
@@ -350,7 +320,7 @@ function validateNextlyConfig(config: NextlyConfig): void {
       throw NextlyError.validation({
         errors: [
           {
-            path: "components",
+            path: "fieldGroups",
             code: "COMPONENT_TABLE_COLLISION",
             message:
               `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve ` +

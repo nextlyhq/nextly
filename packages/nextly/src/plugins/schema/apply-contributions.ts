@@ -22,6 +22,8 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { NextlyServiceConfig } from "../../di/register";
+import { NextlyError } from "../../errors";
+import { assertNoReservedTablePrefix } from "../../schemas/reserved-table-prefix";
 import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
@@ -291,8 +293,41 @@ function renameEntity<T extends Fielded>(
  * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
  * the plugin's declared contributes unchanged when there is no rename map.
  */
+/**
+ * Rejects a plugin still contributing under the pre-rename key.
+ *
+ * The key was renamed rather than aliased, so a plugin compiled against the old
+ * name would otherwise load cleanly and have its entities dropped without a
+ * word. Failing here turns a silent loss of schema into a startup error naming
+ * the plugin.
+ */
+function assertNoLegacyFieldGroupKey(
+  pluginName: string,
+  contributes: PluginDefinition["contributes"]
+): void {
+  if (!contributes) return;
+  const legacy = (contributes as { components?: unknown }).components;
+  if (legacy === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "contributes.components",
+        code: "PLUGIN_CONTRIBUTES_RENAMED",
+        message:
+          `Plugin '${pluginName}' contributes 'components', which is now ` +
+          `'fieldGroups'. Rename the key: the old one is no longer read.`,
+      },
+    ],
+    logContext: {
+      reason: "plugin-contributes-legacy-field-group-key",
+      plugin: pluginName,
+    },
+  });
+}
+
 function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
   const contributes = plugin.contributes;
+  assertNoLegacyFieldGroupKey(plugin.name, contributes);
   const map = plugin.renameMap;
   if (!contributes || !map || Object.keys(map).length === 0) {
     return {
@@ -375,6 +410,11 @@ export function applyPluginSchemaContributions(
   plugins: PluginDefinition[]
 ): NextlyServiceConfig {
   const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
+  // Plugin-contributed entities never pass through defineConfig's validation.
+  assertNoReservedTablePrefix(
+    [...(collections ?? []), ...(singles ?? [])],
+    "plugin"
+  );
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
   // extend a code, own, or earlier-plugin entity). `extend[].target` is matched
@@ -400,6 +440,11 @@ export function applyPluginSchemaContributionsDeferred(
   plugins: PluginDefinition[]
 ): FoldResult {
   const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
+  // Plugin-contributed entities never pass through defineConfig's validation.
+  assertNoReservedTablePrefix(
+    [...(collections ?? []), ...(singles ?? [])],
+    "plugin"
+  );
   const r = applyExtendClauses(
     collections,
     singles,

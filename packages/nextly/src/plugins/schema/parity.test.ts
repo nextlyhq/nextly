@@ -45,7 +45,7 @@ const baseConfig = () =>
   ({
     collections: [coll("code-posts")],
     singles: [single("code-settings")],
-    components: [comp("code-hero")],
+    fieldGroups: [comp("code-hero")],
   }) as unknown as SanitizedNextlyConfig & NextlyServiceConfig;
 
 const slugSet = (entities: { slug: string }[] | undefined): string[] =>
@@ -56,7 +56,7 @@ describe("CLI↔runtime schema fold parity", () => {
     plugin("@t/a", {
       collections: [coll("a-forms")],
       singles: [single("a-single")],
-      components: [comp("a-comp")],
+      fieldGroups: [comp("a-comp")],
     }),
     plugin("@t/b", { collections: [coll("b-submissions")] }),
   ];
@@ -68,7 +68,7 @@ describe("CLI↔runtime schema fold parity", () => {
 
     expect(slugSet(cli.collections)).toEqual(slugSet(runtime.collections));
     expect(slugSet(cli.singles)).toEqual(slugSet(runtime.singles));
-    expect(slugSet(cli.components)).toEqual(slugSet(runtime.components));
+    expect(slugSet(cli.fieldGroups)).toEqual(slugSet(runtime.fieldGroups));
     // And the merged set actually contains code + every plugin's entities.
     expect(slugSet(cli.collections)).toEqual([
       "a-forms",
