@@ -110,16 +110,29 @@ export async function installDependencies(
         ]),
       ];
 
-      // Step 1: Install non-@nextlyhq packages
-      await execa(pm, ["install"], { cwd });
+      if (projectType === "plugin") {
+        // Plugin scaffolds declare Nextly peers with open ranges, and pnpm
+        // auto-installs unmet peers — an install before yalc-add would pull
+        // the PUBLISHED packages from the registry only to replace them.
+        // yalc-add first (it only copies files and edits package.json, so it
+        // needs no node_modules), then one install resolves everything
+        // against the local store.
+        for (const pkg of yalcPackages) {
+          await execa("yalc", ["add", pkg], { cwd });
+        }
+        await execa(pm, ["install"], { cwd });
+      } else {
+        // Step 1: Install non-@nextlyhq packages
+        await execa(pm, ["install"], { cwd });
 
-      // Step 2: Add @nextlyhq/* packages from local yalc store
-      for (const pkg of yalcPackages) {
-        await execa("yalc", ["add", pkg], { cwd });
+        // Step 2: Add @nextlyhq/* packages from local yalc store
+        for (const pkg of yalcPackages) {
+          await execa("yalc", ["add", pkg], { cwd });
+        }
+
+        // Step 3: Install again to resolve yalc transitive dependencies
+        await execa(pm, ["install"], { cwd });
       }
-
-      // Step 3: Install again to resolve yalc transitive dependencies
-      await execa(pm, ["install"], { cwd });
     } else {
       // Plain install - all deps are already in package.json
       await execa(pm, ["install"], { cwd });

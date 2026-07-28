@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,15 +78,17 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(pkg.keywords).toContain("nextly-plugin");
     expect(pkg.scripts.dev).toContain("next dev dev");
 
-    // peerDependencies must never carry the "latest" dist-tag: pnpm 11
-    // rejects it (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then
-    // refuses to run any script in the scaffold. This test runs with the
-    // registry stubbed offline, so every version lookup exercises the
-    // fallback path — exactly where the dist-tag used to leak in.
+    // peerDependencies must never carry a dist-tag name (latest, alpha, …):
+    // pnpm 11 rejects non-semver peer specs
+    // (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then refuses to
+    // run any script in the scaffold. This test runs with the registry
+    // stubbed offline, so every version lookup exercises the fallback path —
+    // exactly where a dist-tag used to leak in. Semver ranges start with a
+    // digit or range operator; dist-tag names start with a letter.
     for (const [peer, spec] of Object.entries(
       pkg.peerDependencies as Record<string, string>
     )) {
-      expect(spec, `peerDependencies.${peer}`).not.toBe("latest");
+      expect(spec, `peerDependencies.${peer}`).toMatch(/^[\d^~><=*]/);
     }
     // The native-build allowlist lives in pnpm-workspace.yaml, NOT the package.json
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
@@ -107,6 +109,10 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(await exists(path.join(target, "dev/.env"))).toBe(true);
     const devEnv = await readFile(path.join(target, "dev/.env"), "utf-8");
     expect(devEnv).toContain("DB_DIALECT=sqlite");
+
+    // The ignore rules must land — the materialized dev/.env (dev
+    // credentials) is only safe because .gitignore excludes it.
+    expect(await exists(path.join(target, ".gitignore"))).toBe(true);
 
     // /admin must render through QueryProvider — the admin's data hooks
     // resolve their QueryClient from it, and mounting RootLayout without it
@@ -159,5 +165,40 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     );
     expect(devConfig).toContain('"@acme/nextly-plugin-test"');
     expect(devConfig).not.toMatch(/\{\{\s*\w+\s*\}\}/);
+  });
+
+  it("restores .gitignore from the publish-safe bundled name", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-packed-"));
+    target = path.join(workdir, "my-plugin");
+
+    // Simulate the layout the PUBLISHED CLI carries: npm's packer strips
+    // dotted .gitignore files from tarballs, so the build stores them as
+    // `gitignore` (see tsup.config.ts) and the scaffolder renames them back.
+    const packedTemplate = path.join(workdir, "packed-template");
+    await cp(path.join(templatesRoot, "plugin"), packedTemplate, {
+      recursive: true,
+    });
+    await rename(
+      path.join(packedTemplate, ".gitignore"),
+      path.join(packedTemplate, "gitignore")
+    );
+
+    await copyTemplate({
+      projectName: "packed-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: { type: "sqlite" } as unknown as DatabaseConfig,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: packedTemplate,
+      },
+    });
+
+    // The dotted file is restored with its rules intact, and the transport
+    // name does not leak into the scaffold.
+    const gitignore = await readFile(path.join(target, ".gitignore"), "utf-8");
+    expect(gitignore).toContain("node_modules");
+    expect(gitignore).toContain(".env");
+    expect(await exists(path.join(target, "gitignore"))).toBe(false);
   });
 });
