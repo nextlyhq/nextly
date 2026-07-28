@@ -23,6 +23,8 @@ import { defineCollection, text } from "../../../config";
 import { NextlyError } from "../../../errors";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -50,8 +52,15 @@ interface VersionRow {
 
 const COLLECTION = "posts";
 
-async function boot(localized: boolean): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  localized: boolean
+): Promise<TestNextly> {
   current = await createTestNextly({
+    // Boot against each configured dialect (SQLite plus Postgres/MySQL when
+    // their server URL is set), so the per-dialect SQL and JSON paths the write
+    // methods use are all exercised, not just SQLite.
+    dialect,
     collections: [
       defineCollection({
         slug: COLLECTION,
@@ -261,32 +270,36 @@ const CASES: PathCase[] = [
   },
 ];
 
-describe("webhook write-path event matrix — programmatic writes (integration)", () => {
-  it.each(CASES)("$label", async pathCase => {
-    const t = await boot(pathCase.localized);
-    if (pathCase.localized) await migrate(t);
-    const e = entriesOf(t);
+describe.each(getConfiguredTestDialects())(
+  "webhook write-path event matrix — programmatic writes (%s, integration)",
+  dialect => {
+    it.each(CASES)("$label", async pathCase => {
+      const t = await boot(dialect, pathCase.localized);
+      if (pathCase.localized) await migrate(t);
+      const e = entriesOf(t);
 
-    const writtenIds = await pathCase.run(t, e);
+      const writtenIds = await pathCase.run(t, e);
 
-    const rows = await t.adapter.select<EventRow>("nextly_events");
-    for (const [type, min] of Object.entries(pathCase.atLeast)) {
-      const count = rows.filter(r => r.type === type).length;
-      expect(count, `${pathCase.label}: expected >=${min} ${type}`).toBeGreaterThanOrEqual(
-        min
-      );
-    }
+      const rows = await t.adapter.select<EventRow>("nextly_events");
+      for (const [type, min] of Object.entries(pathCase.atLeast)) {
+        const count = rows.filter(r => r.type === type).length;
+        expect(
+          count,
+          `${pathCase.label}: expected >=${min} ${type}`
+        ).toBeGreaterThanOrEqual(min);
+      }
 
-    // Every write path must also leave a durable version behind. Scoped to each
-    // written entry's own id so the shared nextly_versions table cannot leak a
-    // count in from a sibling case in the sequential run.
-    expect(writtenIds.length).toBeGreaterThan(0);
-    for (const id of writtenIds) {
-      const versions = await versionsForEntry(t, id);
-      expect(
-        versions,
-        `${pathCase.label}: expected >=${pathCase.minVersionsPerEntry} versions for entry ${id}`
-      ).toBeGreaterThanOrEqual(pathCase.minVersionsPerEntry);
-    }
-  });
-});
+      // Every write path must also leave a durable version behind. Scoped to each
+      // written entry's own id so the shared nextly_versions table cannot leak a
+      // count in from a sibling case in the sequential run.
+      expect(writtenIds.length).toBeGreaterThan(0);
+      for (const id of writtenIds) {
+        const versions = await versionsForEntry(t, id);
+        expect(
+          versions,
+          `${pathCase.label}: expected >=${pathCase.minVersionsPerEntry} versions for entry ${id}`
+        ).toBeGreaterThanOrEqual(pathCase.minVersionsPerEntry);
+      }
+    });
+  }
+);

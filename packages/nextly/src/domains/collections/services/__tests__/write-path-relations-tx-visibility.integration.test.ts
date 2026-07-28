@@ -23,6 +23,7 @@ import { clearServices } from "../../../../di/register";
 import { seedBuilderCollection } from "../../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
+  type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
@@ -40,8 +41,12 @@ interface EventRow {
   payload: unknown;
 }
 
-async function seedTagsAndPosts(): Promise<CollectionEntryService> {
-  handle = await createTestNextly({});
+async function seedTagsAndPosts(
+  dialect: TestDialect
+): Promise<CollectionEntryService> {
+  // Boot against the given dialect (SQLite plus Postgres/MySQL when configured),
+  // so the per-dialect junction read path in fetchManyToManyTargetIds is covered.
+  handle = await createTestNextly({ dialect });
   const adapter = handle.adapter;
 
   await seedBuilderCollection(adapter, {
@@ -75,9 +80,26 @@ function envelopeOf(row: EventRow): Record<string, unknown> {
     : row.payload;
 }
 
+/** Quote an identifier for a raw DDL statement per dialect. */
+function quoteIdent(dialect: TestDialect, name: string): string {
+  return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+}
+
+// SQLite only: a many-to-many junction requires the Schema-Builder (dynamic
+// collection) seed plus a DI reboot on the same adapter, which the harness
+// supports on the in-memory SQLite adapter but not the server dialects (their
+// dynamic-collection service validates an app env the harness does not provide).
+// The behaviour proven here — that the junction is read on the caller's
+// transaction, so an uncommitted same-transaction target is visible — is
+// dialect-independent, and `fetchManyToManyTargetIds`' SQL is the junction
+// subset of `fetchManyToManyRelations`, which the
+// collection-relationship-service-{pg,mysql} suites cover on Postgres and MySQL.
+// The write-path capture+event matrix runs on every configured dialect.
+const dialect: TestDialect = "sqlite";
+
 describe("tx-API m2m relations read from the caller's transaction (integration)", () => {
   it("lists a target created earlier in the same transaction", async () => {
-    const entries = await seedTagsAndPosts();
+    const entries = await seedTagsAndPosts(dialect);
     const adapter = handle!.adapter;
 
     // Create the target AND the referencing source in ONE transaction, so the
@@ -117,14 +139,16 @@ describe("tx-API m2m relations read from the caller's transaction (integration)"
   });
 
   it("aborts the whole batch when the post-write relation read fails", async () => {
-    const entries = await seedTagsAndPosts();
+    const entries = await seedTagsAndPosts(dialect);
     const adapter = handle!.adapter;
 
     // Drop the junction so every item's post-write relational assembly throws
     // from inside the shared batch transaction. That failure is raised AFTER the
     // row is inserted, so it must abort the transaction rather than be swallowed
     // into a soft per-item failure that commits an unversioned row.
-    await adapter.executeQuery(`DROP TABLE "dc_posts_dc_tags_tags"`);
+    await adapter.executeQuery(
+      `DROP TABLE ${quoteIdent(dialect, "dc_posts_dc_tags_tags")}`
+    );
 
     const result = await entries.createEntries(
       { collectionName: "posts", overrideAccess: true },
@@ -132,6 +156,9 @@ describe("tx-API m2m relations read from the caller's transaction (integration)"
     );
 
     expect(result.successful).toBe(0);
+    // The forced rollback is reported, not swallowed to a zero-failure result.
+    expect(result.failed).toBeGreaterThan(0);
+    expect(result.errors.length).toBeGreaterThan(0);
     // Post-fix: the marked failure aborts the batch, so NEITHER row commits.
     // Pre-fix the worker swallowed it to success:false and the rows committed.
     const rows = await adapter.executeQuery<{ id: string }>(

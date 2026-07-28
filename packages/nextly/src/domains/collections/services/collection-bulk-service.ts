@@ -1063,6 +1063,11 @@ export class CollectionBulkService extends BaseService {
     // The revalidation intents of every committed create, applied to the result
     // only after the shared transaction commits — a rollback undoes every insert.
     const collectedIntents: RevalidationIntent[] = [];
+    // Set inside the transaction when a marked capture/recording failure forced
+    // the rollback. Tracked on a flag rather than re-checked on the caught error
+    // because the adapter re-wraps the error as it aborts the transaction, so the
+    // integrity mark (by object identity) is not visible on the outer catch.
+    let integrityRollback = false;
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1122,8 +1127,12 @@ export class CollectionBulkService extends BaseService {
               // whole batch: the row is already inserted on this shared
               // transaction with no per-item savepoint, so continuing would
               // commit it without its version/event. Re-throw regardless of
-              // stopOnError so the transaction rolls back.
-              if (isWriteIntegrityFailure(error)) throw error;
+              // stopOnError so the transaction rolls back; record it on a flag
+              // the outer catch reads (the error is re-wrapped by then).
+              if (isWriteIntegrityFailure(error)) {
+                integrityRollback = true;
+                throw error;
+              }
               // Handle unexpected errors during entry creation
               result.failed++;
               result.errors.push({
@@ -1153,9 +1162,13 @@ export class CollectionBulkService extends BaseService {
       // aborted before ANY item was counted successful, so the wrapper never
       // drains for events that never committed.
       result.eventRecorded = false;
+      // A marked capture/recording failure forces a full rollback even under the
+      // default stopOnError:false, so its committed-result fields are just as
+      // stale as the stopOnError case and must be cleared the same way.
+      const forcedIntegrityRollback = integrityRollback;
       // Reset successful count since transaction rolled back
-      if (stopOnError && result.successful > 0) {
-        this.logger.warn("Bulk create rolled back due to stopOnError", {
+      if ((stopOnError || forcedIntegrityRollback) && result.successful > 0) {
+        this.logger.warn("Bulk create rolled back", {
           collectionName: params.collectionName,
           successfulBeforeRollback: result.successful,
           error: error instanceof Error ? error.message : String(error),
@@ -1168,6 +1181,19 @@ export class CollectionBulkService extends BaseService {
         if (result.errors.length > 0) {
           result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
         }
+      }
+      // The item that forced the rollback re-threw before its failure was
+      // counted, so record it: a fully rolled-back batch must never report zero
+      // failures alongside its now-cleared successes.
+      if (forcedIntegrityRollback) {
+        result.failed += 1;
+        result.errors.push({
+          index: -1,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Write integrity failure rolled back the batch",
+        });
       }
     }
 
@@ -1471,6 +1497,11 @@ export class CollectionBulkService extends BaseService {
     // The revalidation intents of every committed update, applied only after the
     // shared transaction commits — a rollback undoes every update.
     const collectedIntents: RevalidationIntent[] = [];
+    // Set inside the transaction when a marked capture/recording failure forced
+    // the rollback. Tracked on a flag rather than re-checked on the caught error
+    // because the adapter re-wraps the error as it aborts the transaction, so the
+    // integrity mark (by object identity) is not visible on the outer catch.
+    let integrityRollback = false;
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1529,8 +1560,12 @@ export class CollectionBulkService extends BaseService {
               // whole batch: the row is already updated on this shared
               // transaction with no per-item savepoint, so continuing would
               // commit it without its version/event. Re-throw regardless of
-              // stopOnError so the transaction rolls back.
-              if (isWriteIntegrityFailure(error)) throw error;
+              // stopOnError so the transaction rolls back; record it on a flag
+              // the outer catch reads (the error is re-wrapped by then).
+              if (isWriteIntegrityFailure(error)) {
+                integrityRollback = true;
+                throw error;
+              }
               // Handle unexpected errors during entry update
               result.failed++;
               result.errors.push({
@@ -1559,9 +1594,13 @@ export class CollectionBulkService extends BaseService {
       // when none is counted successful — so the wrapper never drains for events
       // that never committed.
       result.eventRecorded = false;
+      // A marked capture/recording failure forces a full rollback even under the
+      // default stopOnError:false, so its committed-result fields are just as
+      // stale as the stopOnError case and must be cleared the same way.
+      const forcedIntegrityRollback = integrityRollback;
       // Reset successful count since transaction rolled back
-      if (stopOnError && result.successful > 0) {
-        this.logger.warn("Bulk update rolled back due to stopOnError", {
+      if ((stopOnError || forcedIntegrityRollback) && result.successful > 0) {
+        this.logger.warn("Bulk update rolled back", {
           collectionName: params.collectionName,
           successfulBeforeRollback: result.successful,
           error: error instanceof Error ? error.message : String(error),
@@ -1574,6 +1613,19 @@ export class CollectionBulkService extends BaseService {
         if (result.errors.length > 0) {
           result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
         }
+      }
+      // The item that forced the rollback re-threw before its failure was
+      // counted, so record it: a fully rolled-back batch must never report zero
+      // failures alongside its now-cleared successes.
+      if (forcedIntegrityRollback) {
+        result.failed += 1;
+        result.errors.push({
+          index: -1,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Write integrity failure rolled back the batch",
+        });
       }
     }
 
