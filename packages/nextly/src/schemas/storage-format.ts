@@ -80,6 +80,38 @@ export const STORAGE_FORMAT = {
    * spell the concept differently and are migrated separately.
    */
   wireTypeKey: "_componentType",
+
+  /**
+   * Property names a stored field definition uses to reference components.
+   *
+   * `single` embeds one named component; `many` is the whitelist a dynamic
+   * zone accepts. `legacy` predates both and is still read from rows written
+   * by older versions, so it is a read-only compatibility spelling — nothing
+   * writes it.
+   */
+  refKeys: {
+    single: "component",
+    many: "components",
+    legacy: "componentSlug",
+  },
+
+  /**
+   * The `ui-schema.json` manifest contract.
+   *
+   * `key` is the top-level array of component definitions and `entityKind` is
+   * how one entity announces itself inside that file. Both are read by the
+   * Schema Builder and by every CLI path that diffs a manifest, so they change
+   * only in lockstep with the file's `version`.
+   */
+  manifest: {
+    key: "components",
+    entityKind: "component",
+    version: 1,
+    schemaUrl: "https://nextlyhq.com/schemas/ui-schema.v1.json",
+  },
+
+  /** Scope kind a schema event carries when it concerns a component. */
+  schemaEventScope: "component",
 } as const;
 
 /** The on-disk spelling of a component's type discriminator column. */

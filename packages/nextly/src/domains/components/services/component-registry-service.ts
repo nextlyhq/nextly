@@ -746,7 +746,7 @@ export class ComponentRegistryService extends BaseRegistryService<
     for (const field of fields) {
       const fieldType = field.type as string;
 
-      if (fieldType === "component") {
+      if (fieldType === STORAGE_FORMAT.fieldType) {
         const componentSlug = field.component as string | undefined;
         if (componentSlug) {
           slugs.add(componentSlug);
@@ -823,7 +823,7 @@ export class ComponentRegistryService extends BaseRegistryService<
       const fieldType = field.type as string;
       const enrichedField: EnrichedFieldConfig = { ...field };
 
-      if (fieldType === "component") {
+      if (fieldType === STORAGE_FORMAT.fieldType) {
         const componentSlug = field.component as string | undefined;
         if (componentSlug) {
           const component = componentMap.get(componentSlug);
@@ -960,7 +960,7 @@ export class ComponentRegistryService extends BaseRegistryService<
       const fieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
       const fieldType = field.type as string;
 
-      if (fieldType === "component") {
+      if (fieldType === STORAGE_FORMAT.fieldType) {
         if (field.component === targetSlug) {
           references.push({ entityType, entitySlug, fieldName, fieldPath });
         }

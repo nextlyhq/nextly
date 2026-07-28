@@ -333,14 +333,18 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             code: z.ZodIssueCode.custom,
             message:
               "component fields require either a `component` slug or a `components[]` list, but not both",
-            path: [hasSingle ? "components" : "component"],
+            path: [
+              hasSingle
+                ? STORAGE_FORMAT.refKeys.many
+                : STORAGE_FORMAT.refKeys.single,
+            ],
           });
         } else if (hasSingle) {
           if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: "component must be a valid component slug",
-              path: ["component"],
+              path: [STORAGE_FORMAT.refKeys.single],
             });
           }
         } else if (
@@ -352,7 +356,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             code: z.ZodIssueCode.custom,
             message:
               "components must be a non-empty list of valid component slugs",
-            path: ["components"],
+            path: [STORAGE_FORMAT.refKeys.many],
           });
         }
       }
@@ -466,7 +470,10 @@ function entity(kind?: "collection" | "single" | "component") {
       // collection or single, whose versioning covers them. Accepting the key
       // here would persist a setting nothing reads and the Builder never
       // offers.
-      if (kind === "component" && e.versions !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.versions !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'versions' is not supported on components",
@@ -476,7 +483,10 @@ function entity(kind?: "collection" | "single" | "component") {
       // Components have no entries and no registry row of their own, so a
       // revalidation switch would persist a setting nothing reads and the
       // Builder never offers (same rationale as `versions` above).
-      if (kind === "component" && e.revalidate !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.revalidate !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'revalidate' is not supported on components",
@@ -487,7 +497,10 @@ function entity(kind?: "collection" | "single" | "component") {
       // recorded against the collection or single that embeds it, whose own
       // switch already governs them. Accepting the key here would persist a
       // setting nothing reads (same rationale as `revalidate` above).
-      if (kind === "component" && e.webhooks !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.webhooks !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'webhooks' is not supported on components",
@@ -552,7 +565,7 @@ export const uiSchemaManifest = z
   .superRefine((m, ctx) => {
     uniqueSlugs(m.collections, ctx, "collections");
     uniqueSlugs(m.singles, ctx, "singles");
-    uniqueSlugs(m.components, ctx, "components");
+    uniqueSlugs(m.components, ctx, STORAGE_FORMAT.manifest.key);
   });
 
 export type UiSchemaManifest = z.infer<typeof uiSchemaManifest>;

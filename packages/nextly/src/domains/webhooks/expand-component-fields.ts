@@ -42,11 +42,15 @@ function referencedSlugs(field: SensitiveFieldSource): string[] {
   };
 
   const slugs: string[] = [];
-  if (typeof candidate.componentSlug === "string")
-    slugs.push(candidate.componentSlug);
-  if (typeof candidate.component === "string") slugs.push(candidate.component);
-  if (Array.isArray(candidate.components)) {
-    for (const slug of candidate.components) {
+  // Read into a local: narrowing an indexed access does not carry to a second
+  // lookup, so the pushed value would widen back to `unknown`.
+  const legacySlug = candidate[STORAGE_FORMAT.refKeys.legacy];
+  if (typeof legacySlug === "string") slugs.push(legacySlug);
+  const singleSlug = candidate[STORAGE_FORMAT.refKeys.single];
+  if (typeof singleSlug === "string") slugs.push(singleSlug);
+  const manySlugs = candidate[STORAGE_FORMAT.refKeys.many];
+  if (Array.isArray(manySlugs)) {
+    for (const slug of manySlugs) {
       if (typeof slug === "string") slugs.push(slug);
     }
   }
