@@ -509,29 +509,13 @@ export class ComponentRegistryService extends BaseRegistryService<
         // a table the schema layer is not maintaining. Recording it as a sync
         // error surfaces it on every boot until a migration resolves it.
         let repairedTableName: string | undefined;
-        // Whether a casing-only difference is the same storage depends on the
-        // server, not the dialect name: `lower_case_table_names` decides it for
-        // MySQL, and quoted PostgreSQL names are always distinct. The catalog
-        // answers it directly — if it reports both spellings they are separate
-        // tables and this is a real mismatch; if it reports one, the server
-        // folded them and they are the same table.
-        let sameStorageDespiteCase = false;
-        if (
-          existing !== null &&
-          existing.tableName !== desiredTableName &&
-          existing.tableName.toLowerCase() === desiredTableName.toLowerCase()
-        ) {
-          const catalog = new Set(await this.adapter.listTables());
-          sameStorageDespiteCase = !(
-            catalog.has(existing.tableName) && catalog.has(desiredTableName)
-          );
-        }
-
-        if (
-          existing !== null &&
-          existing.tableName !== desiredTableName &&
-          !sameStorageDespiteCase
-        ) {
+        // Any difference is treated the same way, casing included. Derived
+        // names are always lowercase, so a stored pointer differing only in
+        // case is a legacy or hand-edited row rather than a supported state,
+        // and whether two spellings are one table is server configuration that
+        // cannot be inferred from the catalog: a single listed spelling means
+        // the other does not exist, not that the server folded them.
+        if (existing !== null && existing.tableName !== desiredTableName) {
           // One mismatch is repairable without moving anything: the stored name
           // addresses no table while the configured one does. That is a row
           // written before names resolved canonically — the data has always

@@ -35,6 +35,7 @@
 import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-component";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
+import { NextlyError } from "../../errors";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -312,11 +313,23 @@ function validateNextlyConfig(config: NextlyConfig): void {
     const tableName = resolveComponentTableName(comp.slug);
     const collidingSlug = componentTables.get(tableName);
     if (collidingSlug !== undefined) {
-      throw new Error(
-        `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve to ` +
-          `the table '${tableName}'. Choose slugs that differ by more than ` +
-          `their separators.`
-      );
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "components",
+            code: "COMPONENT_TABLE_COLLISION",
+            message:
+              `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve ` +
+              `to the table '${tableName}'. Choose slugs that differ by more ` +
+              `than their separators.`,
+          },
+        ],
+        logContext: {
+          reason: "component-table-collision",
+          slugs: [collidingSlug, comp.slug],
+          tableName,
+        },
+      });
     }
     componentTables.set(tableName, comp.slug);
   }

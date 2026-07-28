@@ -825,3 +825,25 @@ describe("ComponentRegistryService legacy pointer repair", () => {
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });
+
+describe("ComponentRegistryService case-differing pointers", () => {
+  it("reports a pointer that differs only in case when its table exists", async () => {
+    // PostgreSQL keeps `Comp_SEO` and `comp_seo` distinct, so a single listed
+    // spelling says the other is absent — not that the server folded them.
+    const ctx = createCtx();
+    const fields = [{ name: "metaTitle", type: "text" }];
+    ctx.adapter.selectOne.mockImplementation(async () =>
+      dbRow({ schema_hash: "stale", table_name: "Comp_SEO" })
+    );
+    ctx.adapter.tableExists.mockImplementation(
+      async (name: string) => name === "Comp_SEO"
+    );
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields },
+    ]);
+
+    expect(result.errors).toHaveLength(1);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});
