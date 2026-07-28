@@ -37,13 +37,20 @@ interface PluginLike {
 /**
  * The set of EFFECTIVE slugs of `kind` contributed by any plugin in `plugins`,
  * reading both the declarative `contributes.<kind>` and the legacy
- * `plugin.<kind>` (mirrors how the admin-meta fold reads them). Each declared
- * slug is resolved through the plugin's `renameMap`, because the schema fold
- * (`applyPluginSchemaContributionsDeferred`) has already rewritten the config
- * entry to the renamed slug — every consumer compares this set against the
- * post-fold `config.<kind>` slug. Used to tag recording provenance so a
- * plugin's opt-out is never pruned by a code-first reconcile, and to skip a
- * disabled plugin's runtime hooks.
+ * `plugin.<kind>` (mirrors how the admin-meta fold reads them). Every consumer
+ * compares this set against the post-fold `config.<kind>` slug, so each source
+ * is resolved to the slug that actually lands in the config:
+ *
+ * - `contributes.<kind>` entries are folded by
+ *   `applyPluginSchemaContributionsDeferred`, which applies the plugin's
+ *   `renameMap`, so they are recorded under the RENAMED slug.
+ * - legacy `plugin.<kind>` entries are NOT renamed by that fold (only
+ *   `contributes` is); they reach the config through the plugin's own
+ *   `setup()`/manual merge under their DECLARED slug, so they are recorded
+ *   as-declared.
+ *
+ * Used to tag recording provenance so a plugin's opt-out is never pruned by a
+ * code-first reconcile, and to skip a disabled plugin's runtime hooks.
  */
 export function collectPluginContributedSlugs(
   plugins: readonly unknown[] | undefined,
@@ -53,12 +60,15 @@ export function collectPluginContributedSlugs(
   for (const raw of plugins ?? []) {
     const plugin = raw as PluginLike;
     const renameMap = plugin.renameMap ?? {};
-    const declared = plugin.contributes?.[kind] ?? [];
-    const legacy = plugin[kind] ?? [];
-    for (const entity of [...declared, ...legacy]) {
-      // Resolve the declared slug to its renamed form (identity when the
-      // plugin declares no rename for it), matching the folded config entry.
+    // `contributes` entries are rewritten to their renamed form by the schema
+    // fold (identity when the plugin declares no rename for the slug).
+    for (const entity of plugin.contributes?.[kind] ?? []) {
       if (entity?.slug) slugs.add(renameMap[entity.slug] ?? entity.slug);
+    }
+    // Legacy top-level entries keep their declared slug: the fold never renames
+    // them, so the config carries the declared slug regardless of `renameMap`.
+    for (const entity of plugin[kind] ?? []) {
+      if (entity?.slug) slugs.add(entity.slug);
     }
   }
   return slugs;

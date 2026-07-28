@@ -41,7 +41,7 @@ describe("collectPluginContributedSlugs", () => {
     ).toBe(true);
   });
 
-  it("resolves a renamed slug through the plugin renameMap", () => {
+  it("resolves a renamed CONTRIBUTES slug through the plugin renameMap", () => {
     // The schema fold rewrites the contributed entry to the renamed slug, so
     // the effective slug (not the declared one) must be reported — otherwise a
     // renamed plugin's opt-out is mistagged `code` and pruned, and a disabled
@@ -58,7 +58,11 @@ describe("collectPluginContributedSlugs", () => {
     expect(singles.has("settings")).toBe(false);
   });
 
-  it("applies the renameMap to the legacy plugin.<kind> shape too", () => {
+  it("does NOT rename a legacy plugin.<kind> entry (the fold leaves it declared)", () => {
+    // The schema fold only renames `contributes`; a legacy top-level entry
+    // reaches the config through the plugin's own setup merge under its
+    // declared slug, so provenance must key on the declared slug — renaming it
+    // would mistag the folded collection as code-owned.
     const plugins = [
       {
         name: "legacy",
@@ -67,8 +71,8 @@ describe("collectPluginContributedSlugs", () => {
       },
     ];
     const collections = collectPluginContributedSlugs(plugins, "collections");
-    expect(collections.has("contacts")).toBe(true);
-    expect(collections.has("leads")).toBe(false);
+    expect(collections.has("leads")).toBe(true);
+    expect(collections.has("contacts")).toBe(false);
   });
 
   it("leaves a slug the renameMap does not mention untouched", () => {

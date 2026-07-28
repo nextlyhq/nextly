@@ -196,6 +196,26 @@ function failedSingleSlugs(syncResult: unknown): Set<string> {
   return slugs;
 }
 
+/**
+ * Drop the single registry's live default source. Used on the empty-target
+ * reload path where the last managed single was removed: its registry row and
+ * table stay readable, so an unclear snapshot would still run the removed
+ * single's function/structured defaults on a later auto-create read. Non-fatal:
+ * the snapshot also clears on the next successful reload or on restart.
+ */
+async function clearSingleDefaultSource(
+  resolve: ServiceResolver
+): Promise<void> {
+  try {
+    const singleReg = (await resolve(
+      "singleRegistryService"
+    )) as SingleRegistrySurface;
+    singleReg.setCodeFirstSingles?.([]);
+  } catch {
+    // DI not initialised or the registry is absent — nothing to clear.
+  }
+}
+
 interface ComponentRegistrySurface {
   syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
@@ -708,6 +728,10 @@ export async function reloadNextlyConfig(opts?: {
     // plugin decisions are preserved). No metadata to sync here, so this is the
     // only reconciliation the empty-target path needs.
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
+    // The removed Single's row/table also stay readable, so clear the live
+    // default source too — otherwise a later auto-create read would still run
+    // the removed single's function/structured defaults from the stale snapshot.
+    await clearSingleDefaultSource(resolve);
     return;
   }
 
