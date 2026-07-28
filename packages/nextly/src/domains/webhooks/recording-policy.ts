@@ -21,9 +21,12 @@ export type WebhookRecordingScope = "collection" | "single";
  * Who set a decision. `code` decisions come from the code-first config and are
  * reconciled on every reload (a slug removed from config is pruned). `plugin`
  * decisions come from a plugin's contributed config, which is NOT re-evaluated
- * on HMR, so they must survive a code-first reconcile.
+ * on HMR. `db` decisions come from the registry's `webhooks` column and belong
+ * to Builder-authored entities, which never appear in the code-first config.
+ * Only `code` decisions are pruned by a reconcile; the other two must survive
+ * it or a plugin's or an operator's opt-out would lapse on the first reload.
  */
-export type WebhookRecordingSource = "code" | "plugin";
+export type WebhookRecordingSource = "code" | "plugin" | "db";
 
 interface PolicyEntry {
   record: boolean;
@@ -103,6 +106,19 @@ export function pruneRemovedCodeFirstRecording(
       policy.delete(key);
     }
   }
+}
+
+/**
+ * Drop one entity's decision, reverting it to the recording default. Used when
+ * the Builder deletes a collection/single: the stored opt-out must not outlive
+ * the row, or a later entity created under the same slug would silently inherit
+ * a suppression nobody chose for it.
+ */
+export function clearWebhookRecording(
+  scope: WebhookRecordingScope,
+  slug: string
+): void {
+  policy.delete(keyFor(scope, slug));
 }
 
 /** Clear every registered decision (boot/test reset). */

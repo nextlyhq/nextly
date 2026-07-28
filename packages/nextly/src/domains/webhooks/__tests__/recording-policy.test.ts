@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect } from "vitest";
 
 import {
+  clearWebhookRecording,
   isWebhookRecordingEnabled,
   pruneRemovedCodeFirstRecording,
   resetWebhookRecordingPolicy,
@@ -57,5 +58,29 @@ describe("webhook recording policy", () => {
       false
     );
     expect(isWebhookRecordingEnabled("single", "leads")).toBe(false);
+  });
+
+  it("keeps a db-sourced decision when a code-first reconcile prunes", () => {
+    // A Builder-authored collection never appears in the code-first config, so
+    // the reconcile that clears removed code entities must not touch it —
+    // otherwise its opt-out would lapse on the first HMR reload and the
+    // collection would resume recording without anyone changing the switch.
+    setWebhookRecording("collection", "enquiries", false, "db");
+    setWebhookRecording("collection", "posts", false, "code");
+
+    pruneRemovedCodeFirstRecording("collection", new Set<string>());
+
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
+    expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
+  });
+
+  it("clears a single stored decision without disturbing the others", () => {
+    setWebhookRecording("collection", "enquiries", false, "db");
+    setWebhookRecording("single", "enquiries", false, "db");
+
+    clearWebhookRecording("collection", "enquiries");
+
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(true);
+    expect(isWebhookRecordingEnabled("single", "enquiries")).toBe(false);
   });
 });
