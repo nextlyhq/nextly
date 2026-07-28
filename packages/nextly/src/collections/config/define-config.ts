@@ -36,7 +36,6 @@ import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../components/config/validate-
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
-import { assertNoReservedTablePrefix } from "../../schemas/reserved-table-prefix";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import {
   sanitizeConfig,
@@ -276,7 +275,25 @@ function validateNextlyConfig(config: NextlyConfig): void {
     slugs.add(slug);
   }
 
-  assertNoReservedTablePrefix([...collections, ...singles], "config");
+  // The key was renamed rather than aliased. TypeScript rejects the old spelling
+  // for `.ts` configs, but the loader also supports `.js`/`.mjs`, where an
+  // unrenamed key would simply read as absent and every field group would go
+  // unregistered without a word.
+  const legacyKey = (config as { components?: unknown }).components;
+  if (legacyKey !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "components",
+          code: "CONFIG_KEY_RENAMED",
+          message:
+            "'components' is now 'fieldGroups'. Rename the key: the old one " +
+            "is no longer read.",
+        },
+      ],
+      logContext: { reason: "config-legacy-field-group-key" },
+    });
+  }
 
   const components = config.fieldGroups ?? [];
   const componentTables = new Map<string, string>();

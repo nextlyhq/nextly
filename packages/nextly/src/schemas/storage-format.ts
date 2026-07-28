@@ -113,15 +113,3 @@ export const STORAGE_FORMAT = {
   /** Scope kind a schema event carries when it concerns a component. */
   schemaEventScope: "component",
 } as const;
-
-/**
- * Table prefix the field-group storage migration will claim.
- *
- * Not part of `STORAGE_FORMAT`: nothing is stored under it yet. It is reserved
- * ahead of the migration so no configuration can take the name in the meantime,
- * which would leave the migration renaming onto a table it does not own.
- */
-export const FIELD_GROUP_RESERVED_TABLE_PREFIX = "fg_";
-
-/** The on-disk spelling of a component's type discriminator column. */
-export type ComponentTypeColumn = typeof STORAGE_FORMAT.columns.type;

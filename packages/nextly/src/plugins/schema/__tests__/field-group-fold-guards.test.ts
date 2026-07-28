@@ -13,54 +13,15 @@ const cfg = (partial: Partial<NextlyServiceConfig>): NextlyServiceConfig =>
 const plugin = (name: string, contributes: unknown): PluginDefinition =>
   ({ name, contributes }) as unknown as PluginDefinition;
 
-const entity = (slug: string, dbName?: string) => ({
+const entity = (slug: string) => ({
   slug,
   label: { singular: slug, plural: slug },
-  ...(dbName === undefined ? {} : { dbName }),
   fields: [field],
 });
 
-// A plugin's entities never pass through defineConfig, so the guards that
-// protect the app's own config have to run again once contributions are folded
-// in — otherwise a plugin is simply exempt from them.
+// The contribution key was renamed rather than aliased, so a plugin built
+// against the old name must fail rather than load with its schema dropped.
 describe("plugin fold guards", () => {
-  describe("reserved field-group table prefix", () => {
-    it("rejects a plugin-contributed collection claiming the prefix", () => {
-      expect(() =>
-        applyPluginSchemaContributions(cfg({ collections: [] }), [
-          plugin("@t/p", { collections: [entity("widgets", "fg_widgets")] }),
-        ])
-      ).toThrow(NextlyError);
-    });
-
-    it("rejects a plugin-contributed single claiming the prefix", () => {
-      expect(() =>
-        applyPluginSchemaContributions(cfg({ singles: [] }), [
-          plugin("@t/p", { singles: [entity("settings", "fg_settings")] }),
-        ])
-      ).toThrow(NextlyError);
-    });
-
-    it("records that the claim came from a plugin", () => {
-      try {
-        applyPluginSchemaContributions(cfg({ collections: [] }), [
-          plugin("@t/p", { collections: [entity("widgets", "fg_widgets")] }),
-        ]);
-        expect.unreachable("expected a reserved-prefix failure");
-      } catch (error) {
-        expect(JSON.stringify(error)).toContain("fg_widgets");
-      }
-    });
-
-    it("allows a plugin-contributed entity with an unrelated dbName", () => {
-      expect(() =>
-        applyPluginSchemaContributions(cfg({ collections: [] }), [
-          plugin("@t/p", { collections: [entity("widgets", "dc_widgets")] }),
-        ])
-      ).not.toThrow();
-    });
-  });
-
   describe("legacy contribution key", () => {
     it("fails instead of silently dropping entities under the old key", () => {
       // The key was renamed rather than aliased. A plugin built against the old

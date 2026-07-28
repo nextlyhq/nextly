@@ -23,7 +23,6 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors";
-import { assertNoReservedTablePrefix } from "../../schemas/reserved-table-prefix";
 import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
@@ -410,11 +409,6 @@ export function applyPluginSchemaContributions(
   plugins: PluginDefinition[]
 ): NextlyServiceConfig {
   const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
-  // Plugin-contributed entities never pass through defineConfig's validation.
-  assertNoReservedTablePrefix(
-    [...(collections ?? []), ...(singles ?? [])],
-    "plugin"
-  );
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
   // extend a code, own, or earlier-plugin entity). `extend[].target` is matched
@@ -440,11 +434,6 @@ export function applyPluginSchemaContributionsDeferred(
   plugins: PluginDefinition[]
 ): FoldResult {
   const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
-  // Plugin-contributed entities never pass through defineConfig's validation.
-  assertNoReservedTablePrefix(
-    [...(collections ?? []), ...(singles ?? [])],
-    "plugin"
-  );
   const r = applyExtendClauses(
     collections,
     singles,
