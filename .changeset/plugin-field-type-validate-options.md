@@ -25,3 +25,5 @@
 Plugin-contributed field types can now state rules about their own declaration, not just about stored values. `PluginFieldType.validateOptions(field)` runs when a schema is registered — for code-first collection, single, and component configs, and for Schema Builder saves — and returns `true`, a message, or a list of issues naming the options at fault.
 
 Without it a custom type's options were accepted unread, so a declaration that no value could ever satisfy was only discovered per write, which reports a schema defect to the writer who cannot fix it. A disabled plugin's declaration checks no longer run, matching its `validate`.
+
+`nextly build` now runs the comprehensive config validators over singles and components, not collections alone. A single or component whose declaration was invalid previously reported a clean build and failed later at runtime.
