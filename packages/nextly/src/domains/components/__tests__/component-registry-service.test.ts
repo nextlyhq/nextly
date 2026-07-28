@@ -564,6 +564,51 @@ describe("ComponentRegistryService", () => {
       expect(result.created).toEqual([]);
     });
 
+    it("reconciles a stored table name that drifted from canonical resolution", async () => {
+      // A row written before canonical resolution: the config declares
+      // dbName "seo_meta" but the registry stored the prefixed form, so it
+      // addresses a table the schema layer never created.
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async () => {
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          table_name: "comp_seo_meta",
+        });
+      });
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+      ]);
+
+      expect(result.updated).toEqual(["seo"]);
+      const [, updateData] = ctx.adapter.update.mock.calls[0];
+      expect(updateData.table_name).toBe("seo_meta");
+    });
+
+    it("leaves an already-canonical table name unchanged", async () => {
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async () => {
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          table_name: "comp_seo",
+        });
+      });
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields },
+      ]);
+
+      expect(result.unchanged).toEqual(["seo"]);
+      expect(ctx.adapter.update).not.toHaveBeenCalled();
+    });
+
     it("marks components as unchanged when schema hash matches", async () => {
       // Use calculateSchemaHash to get the actual hash for empty fields array
       // Easier: mock selectOne to return whatever hash the service computes

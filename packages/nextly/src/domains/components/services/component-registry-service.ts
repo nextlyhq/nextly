@@ -349,6 +349,15 @@ export class ComponentRegistryService extends BaseRegistryService<
       updateData.config_path = data.configPath;
     }
 
+    // The registry row is what runtime reads and writes address, so it has to
+    // track the physical name the schema layer resolves for this component.
+    // Only rewritten when the caller passes one explicitly; a row whose name
+    // predates canonical resolution would otherwise keep pointing at a table
+    // that was never created.
+    if (data.tableName !== undefined) {
+      updateData.table_name = data.tableName;
+    }
+
     try {
       const results = await this.adapter.update<DynamicComponentRecord>(
         this.registryTableName,
@@ -485,15 +494,33 @@ export class ComponentRegistryService extends BaseRegistryService<
       try {
         const existing = await this.getComponentBySlug(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
+        // Canonical resolution: a custom dbName is honored verbatim, otherwise
+        // comp_ + normalized slug — matching what the runtime schema layer and
+        // migrate:create derive for the same component. Resolved before the
+        // existence check so a stored name that drifted from it is reconciled
+        // rather than left addressing a table the schema layer never created.
+        const desiredTableName = resolveComponentTableName(
+          config.slug,
+          config.tableName
+        );
+        const tableNameChanged =
+          existing !== null && existing.tableName !== desiredTableName;
+
+        if (tableNameChanged) {
+          // Reconciling the pointer does not move data: the rows still live in
+          // whichever table was populated under the previous name.
+          this.logger.warn("Component table name reconciled", {
+            slug: config.slug,
+            from: existing.tableName,
+            to: desiredTableName,
+          });
+        }
 
         if (!existing) {
           await this.registerComponent({
             slug: config.slug,
             label: config.label,
-            // Canonical resolution: a custom dbName is honored verbatim,
-            // otherwise comp_ + normalized slug — matching what the runtime
-            // schema layer and migrate:create derive for the same component.
-            tableName: resolveComponentTableName(config.slug, config.tableName),
+            tableName: desiredTableName,
             description: config.description,
             fields: config.fields,
             admin: config.admin,
@@ -506,7 +533,8 @@ export class ComponentRegistryService extends BaseRegistryService<
           result.created.push(config.slug);
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.localized === true) !== (existing.localized === true)
+          (config.localized === true) !== (existing.localized === true) ||
+          tableNameChanged
         ) {
           await this.updateComponent(
             config.slug,
@@ -519,6 +547,7 @@ export class ComponentRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               localized: config.localized === true,
+              tableName: desiredTableName,
             },
             { source: "code" }
           );

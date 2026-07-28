@@ -139,3 +139,61 @@ describe("teardownEntityComponentData failure handling", () => {
     expect(ghostProbes).toHaveLength(1);
   });
 });
+
+describe("teardownEntityComponentData table discovery", () => {
+  /**
+   * Adapter whose catalog and registry disagree: the registry holds a component
+   * stored under a custom, unprefixed name that prefix discovery cannot match.
+   */
+  function makeCustomNameAdapter() {
+    const deleted: string[] = [];
+    return {
+      deleted,
+      adapter: {
+        dialect: "postgresql" as const,
+        listTables: vi
+          .fn()
+          .mockResolvedValue(["comp_hero", "seo_meta", "dynamic_components"]),
+        tableExists: vi.fn().mockResolvedValue(false),
+        delete: vi.fn(async (table: string) => {
+          deleted.push(table);
+          return 1;
+        }),
+        executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+        select: vi.fn(async (table: string) => {
+          if (table === "dynamic_components") {
+            return [
+              { slug: "hero", table_name: "comp_hero" },
+              { slug: "seo", table_name: "seo_meta" },
+            ];
+          }
+          // One instance of each component belongs to the entity being deleted.
+          return [{ id: `${table}-1` }];
+        }),
+      },
+    };
+  }
+
+  it("visits a registered component table that carries no comp_ prefix", async () => {
+    const { adapter, deleted } = makeCustomNameAdapter();
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).toContain("seo_meta");
+    expect(deleted).toContain("seo_meta");
+  });
+
+  it("does not treat the registry table itself as component storage", async () => {
+    const { adapter, deleted } = makeCustomNameAdapter();
+
+    await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(deleted).not.toContain("dynamic_components");
+  });
+});

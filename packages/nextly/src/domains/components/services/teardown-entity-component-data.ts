@@ -19,8 +19,9 @@
  *   - A localized component keeps its translations in `comp_<slug>_locales`, keyed by the
  *     instance id, so those rows have to go with their instance.
  *
- * Component tables are discovered from the live catalog rather than the registry, so the
- * sweep still works when a component's registry row was already removed.
+ * Component tables are discovered from the live catalog UNION the registry: the catalog
+ * covers `comp_`-prefixed tables whose registry row was already removed, and the registry
+ * covers components with a custom `dbName`, whose table carries no prefix to match on.
  *
  * @module domains/components/services/teardown-entity-component-data
  */
@@ -36,6 +37,9 @@ import { isCompanionTable } from "../../schema/pipeline/managed-tables";
 
 /** Bound on how deep component nesting is followed; mirrors MAX_COMPONENT_NESTING_DEPTH. */
 const DEFAULT_MAX_DEPTH = 10;
+
+/** Registry table holding one row per component, including its physical table name. */
+const REGISTRY_TABLE = "dynamic_components";
 
 /**
  * Chunk size for `IN (...)` lists. Keeps a very large entity from exceeding a driver's
@@ -192,16 +196,48 @@ function chunk<T>(items: T[], size: number): T[][] {
  * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
  * but running first keeps the entity intact if the sweep fails.
  */
+/**
+ * Physical table names recorded in the component registry.
+ *
+ * Read through the registry rather than inferred from a prefix so components
+ * with a custom `dbName` are visited too. Returns an empty list when the
+ * registry table is absent (a database that predates it, or a teardown running
+ * before system tables exist), leaving prefix discovery as the only source.
+ */
+async function listRegisteredComponentTables(
+  adapter: TeardownComponentDataAdapter,
+  discovered: string[]
+): Promise<string[]> {
+  if (!discovered.includes(REGISTRY_TABLE)) return [];
+
+  const rows = await adapter.select<Record<string, unknown>>(
+    REGISTRY_TABLE,
+    {}
+  );
+  return rows
+    .map(row => row.table_name ?? row.tableName)
+    .filter((name): name is string => typeof name === "string" && name !== "");
+}
+
 export async function teardownEntityComponentData(
   args: TeardownEntityComponentDataArgs
 ): Promise<TeardownEntityComponentDataResult> {
   const { adapter, parentTable, maxDepth = DEFAULT_MAX_DEPTH } = args;
 
-  // Component data tables only: `comp_` prefixed, excluding their `_locales` companions
-  // (those are reached through their owning instance, never scanned as parents).
-  const componentTables = (await adapter.listTables()).filter(
-    name => name.startsWith("comp_") && !isCompanionTable(name)
-  );
+  // Component data tables: `comp_` prefixed by convention, plus every table the
+  // registry has registered — a component with a custom dbName is stored under a
+  // name that carries no prefix, so prefix discovery alone would leave its rows
+  // orphaned with `_parent_table` pointing at the deleted entity. Companions are
+  // excluded either way (they are reached through their owning instance, never
+  // scanned as parents).
+  const discovered = await adapter.listTables();
+  const registered = await listRegisteredComponentTables(adapter, discovered);
+  const componentTables = [
+    ...new Set([
+      ...discovered.filter(name => name.startsWith("comp_")),
+      ...registered,
+    ]),
+  ].filter(name => !isCompanionTable(name));
 
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };

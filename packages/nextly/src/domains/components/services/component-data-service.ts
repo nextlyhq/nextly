@@ -96,6 +96,26 @@ export class ComponentDataService {
     return record?.localized === true;
   }
 
+  /**
+   * The component's physical table name as recorded in the registry.
+   *
+   * Callers that need to address a component's storage directly (a filter
+   * subquery, for instance) must go through this rather than re-deriving the
+   * name, because a component with a custom `dbName` is stored under a name
+   * that cannot be reconstructed from its slug. Returns null when the
+   * component is unknown.
+   */
+  async getComponentTableName(
+    slug: string,
+    executor?: unknown
+  ): Promise<string | null> {
+    const record = await this.registryService.getComponentBySlug(
+      slug,
+      executor
+    );
+    return record?.tableName ?? null;
+  }
+
   setRelationshipService(service: CollectionRelationshipService): void {
     this.queryService.setRelationshipService(service);
   }
