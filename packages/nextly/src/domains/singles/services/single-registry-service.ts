@@ -51,6 +51,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { clearWebhookRecording } from "../../webhooks/recording-policy";
 
 import { resolveSingleTableName } from "./resolve-single-table-name";
 
@@ -522,6 +523,11 @@ export class SingleRegistryService extends BaseRegistryService<
         // §13.8: generic "Not found." — slug in logContext only.
         throw NextlyError.notFound({ logContext: { slug } });
       }
+
+      // Drop the in-process recording decision with the row, for the same
+      // reason as collections: a slug reused later must start from the
+      // recording default.
+      clearWebhookRecording("single", slug);
 
       this.logger.info("Single deleted", { slug, force: true });
 

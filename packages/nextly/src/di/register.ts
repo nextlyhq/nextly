@@ -68,6 +68,7 @@ import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-c
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
+import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -477,6 +478,16 @@ export async function registerServices(
   // `webhooks: false` collection (e.g. form submissions) would silently record
   // PII-bearing events despite the opt-out.
   publishWebhookRecordingPolicies(transformedConfig);
+
+  // Then layer in the registry-stored opt-outs. Builder-authored collections and
+  // singles have no code-first config to publish from, so without this read their
+  // switch would hold only for the process that set it and every restart would
+  // silently resume recording. Runs second and skips config-owned slugs, so live
+  // code always outranks a stored row.
+  await publishStoredWebhookRecordingPolicies(adapter, {
+    collections: collectSlugs(transformedConfig.collections),
+    singles: collectSlugs(transformedConfig.singles),
+  });
 
   // Belt-and-suspenders: also register every code-first collection and
   // single from the supplied config directly into the resolver. The
@@ -1104,6 +1115,21 @@ async function initializeSchemaRegistry(
  * registry fails to initialize, where `registerConfigTablesInResolver` never
  * runs.
  */
+/**
+ * The slugs a list of config entities declares, skipping any malformed entry
+ * without a slug. Used to tell the stored-policy publisher which slugs the
+ * code-first config owns.
+ */
+function collectSlugs(
+  entities: Array<{ slug?: string }> | undefined
+): Set<string> {
+  const slugs = new Set<string>();
+  for (const entity of entities ?? []) {
+    if (entity.slug) slugs.add(entity.slug);
+  }
+  return slugs;
+}
+
 function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
   // Provenance comes from the plugin contribution list, not the optional
   // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a

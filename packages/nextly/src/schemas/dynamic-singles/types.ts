@@ -27,9 +27,9 @@ import type { SingleAdminOptions } from "../../singles/config/types";
 // once alongside the collections registry types so both tables store the
 // identical shape and the recording policy has one thing to parse.
 import type { StoredWebhookRecording } from "../dynamic-collections/types";
-
 // Registry-facing resolved versioning config shape for the `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
+
 // Re-exported so the dialect schema files in this folder resolve the shape from
 // their sibling `./types` like every other column type, rather than reaching
 // across into the collections folder.

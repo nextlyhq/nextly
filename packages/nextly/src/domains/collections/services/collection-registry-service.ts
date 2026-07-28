@@ -38,6 +38,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { clearWebhookRecording } from "../../webhooks/recording-policy";
 
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
@@ -463,6 +464,11 @@ export class CollectionRegistryService extends BaseRegistryService<
       if (count === 0) {
         throw NextlyError.notFound({ logContext: { slug } });
       }
+
+      // Drop the in-process recording decision with the row: a later
+      // collection created under this slug must start from the recording
+      // default rather than inherit a suppression whose row no longer exists.
+      clearWebhookRecording("collection", slug);
 
       this.logger.info("Collection deleted", { slug });
     } catch (error) {
