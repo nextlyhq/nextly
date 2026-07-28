@@ -50,8 +50,20 @@ function copyOwnProperties(
   target: object,
   seen: WeakMap<object, unknown>
 ): void {
-  for (const [key, entry] of Object.entries(source)) {
-    (target as Record<string, unknown>)[key] = detachValue(entry, seen);
+  const record = source as Record<string | symbol, unknown>;
+  // Symbol keys too: metadata is often attached under one, and dropping it
+  // shows a rule a collection without the state it was meant to decide on.
+  const keys: (string | symbol)[] = [
+    ...Object.keys(source),
+    ...Object.getOwnPropertySymbols(source).filter(
+      symbol => Object.getOwnPropertyDescriptor(source, symbol)?.enumerable
+    ),
+  ];
+  for (const key of keys) {
+    (target as Record<string | symbol, unknown>)[key] = detachValue(
+      record[key],
+      seen
+    );
   }
 }
 

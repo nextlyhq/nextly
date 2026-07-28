@@ -509,6 +509,27 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
     expect(result.message).not.toContain("comp_hero");
   });
 
+  it("leaves relationships inside containers alone for a caller with no context", async () => {
+    // Expansion copies whole related rows in, and a caller that threads no user
+    // cannot have the target collection's field rules evaluated for them — the
+    // mutation response path is exactly that caller. Reaching into containers
+    // for it would hand over rows nothing downstream can redact.
+    const { service, expandRelationships } = serviceWithRelationshipSpy();
+
+    await service.expandRelationshipFields(
+      { id: "doc1" } as never,
+      [
+        {
+          name: "meta",
+          type: "group",
+          fields: [{ name: "author", type: "relationship" }],
+        },
+      ] as never
+    );
+
+    expect(expandRelationships).not.toHaveBeenCalled();
+  });
+
   it("leaves enforcement off for a caller that supplies no access context", async () => {
     const { service, expandRelationships } = serviceWithRelationshipSpy();
 

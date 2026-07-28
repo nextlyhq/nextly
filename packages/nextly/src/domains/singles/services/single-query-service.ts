@@ -278,15 +278,20 @@ function referencesExpanded(stored: unknown, assembled: unknown): boolean {
   return isExpandedRow(assembled);
 }
 
-/** Whether these fields hold a relationship at any depth. */
-function containsRelationField(fields: FieldConfig[]): boolean {
+/** Whether these fields hold a relationship, optionally looking inside containers. */
+function containsRelationField(
+  fields: FieldConfig[],
+  includeNested: boolean
+): boolean {
   return fields.some(field => {
     if (!("name" in field) || !field.name) return false;
     const type = field.type as string;
     if (type === "relationship" || type === "relation") return true;
-    if (type !== "group" && type !== "repeater") return false;
+    if (!includeNested || (type !== "group" && type !== "repeater")) {
+      return false;
+    }
     const nested = "fields" in field ? (field.fields as FieldConfig[]) : [];
-    return Array.isArray(nested) && containsRelationField(nested);
+    return Array.isArray(nested) && containsRelationField(nested, true);
   });
 }
 
@@ -683,7 +688,10 @@ export class SingleQueryService extends BaseService {
         user: options.user,
         overrideAccess: options.overrideAccess,
       },
-      strict
+      strict,
+      // The read path threads a caller, so the target collection's field rules
+      // can be evaluated for the rows this pulls in.
+      true
     );
 
     if (this.componentDataService) {
@@ -2159,7 +2167,17 @@ export class SingleQueryService extends BaseService {
      * a transient failure removed decides on its absence, and an
      * absence-tolerant rule reads that as permission.
      */
-    strict = false
+    strict = false,
+    /**
+     * Whether to expand relationships nested inside a group or repeater.
+     *
+     * Off by default, and deliberately: expansion copies whole related rows in,
+     * and a caller that threads no user cannot have the target collection's
+     * field rules evaluated for them — so widening what gets expanded would
+     * hand those rows to a response that has no way to redact them. The read
+     * path, which does thread a caller, opts in.
+     */
+    expandNested = false
   ): Promise<SingleDocument> {
     const relationshipService = this.resolveRelationshipService();
     if (!relationshipService) {
@@ -2170,10 +2188,11 @@ export class SingleQueryService extends BaseService {
     }
 
     // FieldConfig uses "relationship"; FieldDefinition (UI-created) uses "relation".
-    // Nested relationships count: expansion reaches into groups and repeaters,
-    // so a Single whose only relationships live inside one would otherwise be
-    // skipped here and returned with its references unexpanded.
-    if (!containsRelationField(fields)) {
+    // Nested relationships count only for callers that asked for them:
+    // expansion reaches into groups and repeaters, so a Single whose only
+    // relationships live inside one would otherwise be returned with its
+    // references unexpanded.
+    if (!containsRelationField(fields, expandNested)) {
       return doc;
     }
 

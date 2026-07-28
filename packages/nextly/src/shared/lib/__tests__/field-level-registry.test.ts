@@ -445,6 +445,40 @@ describe("field-level registry", () => {
     expect(seen).toEqual({ one: "b", oh1: "decoration", meta: "note" });
   });
 
+  it("carries symbol-keyed metadata into the copy", async () => {
+    // Metadata is often attached under a symbol, and `Object.entries` does not
+    // see one — so a rule reading it would be shown a collection without the
+    // state it was meant to decide on.
+    const RESTRICTED = Symbol("restricted");
+    const flags = new Map<string, string>();
+    (flags as unknown as Record<symbol, unknown>)[RESTRICTED] = true;
+    let seen: unknown;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            seen = (data.flags as unknown as Record<symbol, unknown>)[
+              RESTRICTED
+            ];
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", flags },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toBe(true);
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {
