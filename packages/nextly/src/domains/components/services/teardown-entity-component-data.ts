@@ -215,9 +215,17 @@ async function listRegisteredComponentTables(
     throw error;
   }
 
-  return rows
-    .map(row => row.table_name ?? row.tableName)
-    .filter((name): name is string => typeof name === "string" && name !== "");
+  const catalog = new Set(discovered);
+  return (
+    rows
+      .map(row => row.table_name ?? row.tableName)
+      .filter((name): name is string => typeof name === "string" && name !== "")
+      // A registry row can name a table that was never created — a component
+      // whose migration is pending or failed. Probing one raises a missing-table
+      // error, and because this sweep precedes every entity delete, a single
+      // unmaterialized component would block all of them.
+      .filter(name => catalog.has(name))
+  );
 }
 
 /**

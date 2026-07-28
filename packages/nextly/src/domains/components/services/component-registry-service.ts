@@ -503,17 +503,34 @@ export class ComponentRegistryService extends BaseRegistryService<
           config.slug,
           config.tableName
         );
-        const tableNameChanged =
-          existing !== null && existing.tableName !== desiredTableName;
-
-        if (tableNameChanged) {
-          // Reconciling the pointer does not move data: the rows still live in
-          // whichever table was populated under the previous name.
-          this.logger.warn("Component table name reconciled", {
-            slug: config.slug,
-            from: existing.tableName,
-            to: desiredTableName,
-          });
+        // Repointing the registry moves no data, so it is only safe when the
+        // stored name addresses nothing: a row whose name drifted from
+        // canonical resolution and never had a table of its own. When the
+        // stored table does exist it holds this component's instances, and
+        // pointing elsewhere would leave them behind an empty table, so the
+        // pointer stays and the mismatch is reported instead.
+        let tableNameChanged = false;
+        if (existing !== null && existing.tableName !== desiredTableName) {
+          const storedTableExists = await this.adapter.tableExists(
+            existing.tableName
+          );
+          if (storedTableExists) {
+            this.logger.warn(
+              "Component table name differs from its populated table; keeping the populated one",
+              {
+                slug: config.slug,
+                stored: existing.tableName,
+                requested: desiredTableName,
+              }
+            );
+          } else {
+            tableNameChanged = true;
+            this.logger.warn("Component table name reconciled", {
+              slug: config.slug,
+              from: existing.tableName,
+              to: desiredTableName,
+            });
+          }
         }
 
         if (!existing) {

@@ -564,6 +564,29 @@ describe("ComponentRegistryService", () => {
       expect(result.created).toEqual([]);
     });
 
+    it("keeps the pointer when the stored table exists and holds data", async () => {
+      // An intentional dbName change: the stored table is populated, so
+      // repointing would leave those instances behind an empty table.
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async () => {
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          table_name: "seo_meta",
+        });
+      });
+      ctx.adapter.tableExists.mockResolvedValue(true);
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
+      ]);
+
+      expect(result.unchanged).toEqual(["seo"]);
+      expect(ctx.adapter.update).not.toHaveBeenCalled();
+    });
+
     it("reconciles a stored table name that drifted from canonical resolution", async () => {
       // A row written before canonical resolution: the config declares
       // dbName "seo_meta" but the registry stored the prefixed form, so it
@@ -579,6 +602,8 @@ describe("ComponentRegistryService", () => {
         });
       });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
+      // The drifted name never had a table of its own.
+      ctx.adapter.tableExists.mockResolvedValue(false);
 
       const result = await ctx.service.syncCodeFirstComponents([
         { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },

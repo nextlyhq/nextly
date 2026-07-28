@@ -241,3 +241,39 @@ describe("teardownEntityComponentData registry read resilience", () => {
     ).rejects.toThrow(/connection terminated/);
   });
 });
+
+describe("teardownEntityComponentData unmaterialized components", () => {
+  it("ignores a registered component whose table was never created", async () => {
+    // A pending or failed component: its registry row names a table the
+    // catalog does not have. Probing it would raise a missing-table error and
+    // block the entity delete entirely.
+    const probed: string[] = [];
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue(["comp_hero", "dynamic_components"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn().mockResolvedValue(0),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") {
+          return [
+            { slug: "hero", table_name: "comp_hero" },
+            { slug: "pending", table_name: "comp_pending" },
+          ];
+        }
+        probed.push(table);
+        return [];
+      }),
+    };
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(probed).not.toContain("comp_pending");
+    expect(result.skippedTables).not.toContain("comp_pending");
+  });
+});
