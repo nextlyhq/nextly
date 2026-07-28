@@ -246,6 +246,45 @@ export async function readCompanionLocaleStatus(
   }
 }
 
+/**
+ * Read every locale's per-locale `_status` for one entry, keyed by locale.
+ *
+ * The all-locales companion of {@link readCompanionLocaleStatus}: one query over
+ * the Drizzle companion table returns every stored translation's status, so a
+ * publish-all can tell which locales actually transition from the single flip.
+ * Only locales that have a companion row appear. Goes through the typed query
+ * builder rather than raw SQL, and tolerates a missing companion table the same
+ * way the single-locale read and the populate helpers do.
+ */
+export async function readCompanionLocaleStatusAll(
+  db: SelectableDb,
+  companionTable: unknown,
+  parentId: string | number
+): Promise<Map<string, string | null>> {
+  const table = companionTable as CompanionTable;
+  const byLocale = new Map<string, string | null>();
+  try {
+    const rows = await db
+      .select()
+      .from(companionTable)
+      .where(eq(table._parent as never, parentId));
+    for (const row of rows) {
+      const locale = row._locale;
+      if (typeof locale !== "string") continue;
+      byLocale.set(
+        locale,
+        typeof row._status === "string" ? row._status : null
+      );
+    }
+    return byLocale;
+  } catch (err) {
+    // Tolerate ONLY a companion table that has not been migrated yet; any other
+    // failure propagates, since this drives which locales emit a transition.
+    if (isMissingCompanionTableError(err)) return byLocale;
+    throw err;
+  }
+}
+
 export interface PopulateCompanionAllArgs {
   db: SelectableDb;
   companionTable: unknown;

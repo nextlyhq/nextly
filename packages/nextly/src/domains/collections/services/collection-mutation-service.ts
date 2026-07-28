@@ -77,6 +77,7 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
@@ -1031,7 +1032,13 @@ export class CollectionMutationService extends BaseService {
     tx: { getDrizzle<T = unknown>(): T },
     collectionName: string,
     entryId: string,
-    locale: string
+    locale: string,
+    // When set, only a missing companion table is tolerated; any other read
+    // failure propagates. Callers whose result feeds a DURABLE record (the
+    // outbox `previous` payload, a "Before restore" version snapshot) pass this
+    // so a real companion failure aborts the write rather than persisting a
+    // preimage that silently drops a translation.
+    strict = false
   ): Promise<Record<string, unknown>> {
     // Bound to the transaction connection so the companion metadata read does not
     // re-enter the pool from inside the caller's transaction.
@@ -1048,6 +1055,7 @@ export class CollectionMutationService extends BaseService {
       localizedFields: companion.localizedFields,
       rows: [row],
       localeChain: [locale],
+      strict,
     });
 
     const values: Record<string, unknown> = {};
@@ -1153,39 +1161,6 @@ export class CollectionMutationService extends BaseService {
     );
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
-  }
-
-  /**
-   * Every locale's committed per-locale `_status` for one entry, keyed by
-   * locale. Read with raw `tx.execute` for the same reason as
-   * {@link readCompanionStatus}: the companion `_locales` table is not in the
-   * Drizzle schema and the CRUD helpers would camelCase `_status`/`_locale`.
-   * Only locales that actually have a companion row appear — a never-translated
-   * locale has no row and so no per-locale status to transition.
-   */
-  private async readCompanionStatusAllLocales(
-    tx: TransactionContext,
-    companionTableName: string,
-    entryId: string
-  ): Promise<Map<string, string | null>> {
-    const isMysqlDialect = this.dialect === "mysql";
-    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
-    const placeholder = (i: number) =>
-      this.dialect === "postgresql" ? `$${i}` : "?";
-    const rows = await tx.execute<{ _locale?: unknown; _status?: unknown }>(
-      `SELECT ${quote("_locale")}, ${quote("_status")} FROM ${quote(companionTableName)} ` +
-        `WHERE ${quote("_parent")} = ${placeholder(1)}`,
-      [entryId]
-    );
-    const byLocale = new Map<string, string | null>();
-    for (const row of rows) {
-      if (typeof row._locale !== "string") continue;
-      byLocale.set(
-        row._locale,
-        typeof row._status === "string" ? row._status : null
-      );
-    }
-    return byLocale;
   }
 
   /**
@@ -2777,6 +2752,15 @@ export class CollectionMutationService extends BaseService {
       // post-commit transition event reads it. Defaults to the pre-read value so
       // a companion-only (no main status) publish still has a sane fallback.
       let lockedPreviousStatus = previousStatus;
+      // The per-locale publish transitions recorded to the outbox inside the
+      // transaction, replayed to the in-process workflow subscribers after it
+      // commits — the durable event and the reaction event must not diverge on
+      // which locales published. The closure rebuilds it each attempt.
+      let perLocaleTransitions: {
+        locale: string;
+        from: string | null;
+        data: Record<string, unknown>;
+      }[] = [];
       // Read the fresh post-publish parent whenever the collection captures
       // versions or carries a status: the pre-transaction `previousStatus` can
       // be stale (a concurrent writer may commit between it and the lock), so a
@@ -2804,6 +2788,7 @@ export class CollectionMutationService extends BaseService {
           // Reset per attempt because the conflict retry re-runs this closure.
           entryVanished = false;
           lockedPreviousStatus = previousStatus;
+          perLocaleTransitions = [];
           const lockedRow = await tx.selectOne<Record<string, unknown>>(
             tableName,
             { where: this.whereEq("id", params.entryId), forUpdate: true }
@@ -2816,6 +2801,21 @@ export class CollectionMutationService extends BaseService {
           const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
           lockedPreviousStatus =
             typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
+
+          // The committed pre-publish row in the main-table schema shape, read on
+          // the TRANSACTION connection (never the pool: the transaction already
+          // holds a connection, and a pooled read would wait on itself against a
+          // one-connection pool and deadlock). This is the concurrency-correct
+          // event pre-image; publishing changes only status, so its non-status
+          // columns are the post-publish columns too. Read after the lock, so on
+          // a retry it reflects the concurrent winner just like the pre-read did.
+          const [lockedSchemaRow] = (await tx
+            .getDrizzle<typeof this.db>()
+            .select()
+            .from(schema)
+            .where(eq(schema.id, params.entryId))
+            .limit(1)) as (Record<string, unknown> | undefined)[];
+          const preImageRow = lockedSchemaRow ?? existingEntry;
 
           // Re-check a deferred document-dependent (owner-only/custom) publish
           // rule against the row read UNDER the lock, before the status write, so
@@ -2842,9 +2842,11 @@ export class CollectionMutationService extends BaseService {
           // retry so it reflects the state this publish actually overwrites.
           const priorCompanionStatuses =
             companion && companionPublishable
-              ? await this.readCompanionStatusAllLocales(
-                  tx,
-                  companion.companionTableName,
+              ? await readCompanionLocaleStatusAll(
+                  tx.getDrizzle<
+                    Parameters<typeof readCompanionLocaleStatusAll>[0]
+                  >(),
+                  companion.table,
                   params.entryId
                 )
               : new Map<string, string | null>();
@@ -2863,20 +2865,15 @@ export class CollectionMutationService extends BaseService {
           }
 
           if (needsFreshParent) {
-            // Pool read, so it excludes this tx's own uncommitted status write —
-            // publish only mutates status, so overlaying "published" onto the
-            // fresh non-status columns reconstructs the committed post-publish
-            // state. On retry this re-reads a concurrent winner's columns.
-            const freshRows = await this.db
-              .select()
-              .from(schema)
-              .where(eq(schema.id, params.entryId))
-              .limit(1);
-            const currentRow = freshRows[0] as
-              | Record<string, unknown>
-              | undefined;
-            publishedParentRow = currentRow
-              ? { ...currentRow, status: "published" }
+            // The committed post-publish parent, built from the pre-image read on
+            // the transaction connection above: publish only mutates status, so
+            // its non-status columns are already the post-publish ones — overlay
+            // the new status rather than taking a second pooled connection while
+            // this transaction holds one (which would deadlock a one-connection
+            // pool). Undefined only if the row vanished, which the lock above
+            // already rules out.
+            publishedParentRow = lockedSchemaRow
+              ? { ...lockedSchemaRow, status: "published" }
               : undefined;
 
             // Record a version snapshot for the publish: publishing changes the
@@ -2944,8 +2941,7 @@ export class CollectionMutationService extends BaseService {
           // transition, matching the post-commit `transitionStatus` below.
           const publishedDocument = this.readShapeEventDocument(
             {
-              ...(publishedParentRow ??
-                (existingEntry as Record<string, unknown>)),
+              ...(publishedParentRow ?? preImageRow),
               status: "published",
             },
             fields
@@ -2957,14 +2953,14 @@ export class CollectionMutationService extends BaseService {
           // existing camelCase value. Without this the event reports the stale
           // timestamp and omits `updatedAt` from changedFields.
           publishedDocument.updatedAt = new Date();
+          // Built from the pre-image read under the lock, so a concurrent write
+          // committed between the pre-transaction read and the lock is reflected
+          // rather than the stale pre-read (its non-status fields and its own
+          // prior status).
           const previousDocument = this.readShapeEventDocument(
-            existingEntry as Record<string, unknown>,
+            preImageRow as Record<string, unknown>,
             fields
           );
-          // The status the publish moves away from, read under the lock: a
-          // concurrent unpublish committed between the pre-transaction read and
-          // the lock is reflected here rather than the stale pre-read status.
-          previousDocument.status = lockedPreviousStatus;
           const publishEventFields = await this.webhookFieldTreeIfRecording(
             params.collectionName,
             fields,
@@ -3057,6 +3053,15 @@ export class CollectionMutationService extends BaseService {
               actor: publishActor,
             });
             eventRecorded = localeRecorded || eventRecorded;
+            // Remember the transition so the same locale is replayed to the
+            // in-process workflow subscribers post-commit, the way the localized
+            // update path does — otherwise `statusTransition`/`published`
+            // listeners never observe a companion locale going live.
+            perLocaleTransitions.push({
+              locale,
+              from: priorLocaleStatus,
+              data: localeData,
+            });
           }
         })
       );
@@ -3090,6 +3095,22 @@ export class CollectionMutationService extends BaseService {
           previousStatus: lockedPreviousStatus,
           status: "published",
           emitStatusChanged: true,
+        });
+      }
+      // Each companion locale that went live, replayed to the in-process
+      // workflow subscribers with its own `locale` — mirroring the localized
+      // update path — so `statusTransition`/`statusChanged`/`published`
+      // listeners observe every published translation, not only the main row.
+      for (const transition of perLocaleTransitions) {
+        this.transitionStatus({
+          collection: params.collectionName,
+          id: params.entryId,
+          data: transition.data,
+          user: params.user,
+          previousStatus: transition.from,
+          status: "published",
+          emitStatusChanged: true,
+          locale: transition.locale,
         });
       }
 
@@ -4142,7 +4163,12 @@ export class CollectionMutationService extends BaseService {
                   tx,
                   params.collectionName,
                   params.entryId,
-                  localizedUpdate.writeLocale
+                  localizedUpdate.writeLocale,
+                  // This preimage feeds the durable `previous` event and, on a
+                  // restore, the "Before restore" snapshot, so a real companion
+                  // read failure must abort rather than silently drop a
+                  // translation from a record the user cannot tell is incomplete.
+                  true
                 )
               : {};
             // The locale's committed status, read before the write. Gated on
