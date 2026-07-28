@@ -380,6 +380,18 @@ export class CollectionEntryService extends BaseService {
    * a no-op when no cache adapter is registered, and self-absorbing on error so
    * a revalidator fault never turns a committed write into a failure.
    */
+  /**
+   * Offer the fast outbox drain once, for the `CollectionService.withTransaction`
+   * wrapper to call after a tx-API write commits. The wrappers return only the
+   * entry, so — like `flushRevalidationIntents` — the drain cannot be scheduled
+   * from the wrapper's own result; withTransaction schedules it after commit when
+   * any collected `*InTransaction` write recorded an outbox event. No-op when no
+   * scheduler is wired.
+   */
+  scheduleFastDrain(): void {
+    this.fastDrainScheduler?.offer();
+  }
+
   async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
     if (intents.length === 0) return;
     // Resolve at flush time so a Next cache adapter registered after this

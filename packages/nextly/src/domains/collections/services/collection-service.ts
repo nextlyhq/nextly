@@ -184,6 +184,14 @@ export class CollectionService extends BaseService {
   private readonly pendingTxIntents = new Map<unknown, RevalidationIntent[]>();
 
   /**
+   * Transaction handles whose `*InTransaction` wrappers recorded at least one
+   * outbox event, so `withTransaction` can offer the fast drain once after the
+   * owning transaction commits — the tx-API wrappers return only the entry, so
+   * the event signal (like the revalidation intent) has nowhere else to go.
+   */
+  private readonly pendingTxEvents = new Set<unknown>();
+
+  /**
    * Run work inside a database transaction, then flush the cache-revalidation
    * intents produced by any createEntryInTransaction / updateEntryInTransaction /
    * deleteEntryInTransaction calls made against the same `tx`. The flush happens
@@ -208,6 +216,7 @@ export class CollectionService extends BaseService {
   ): Promise<T> {
     let ownsFlush = false;
     let collector: RevalidationIntent[] | undefined;
+    let sawEvent = false;
     const result = await this.adapter.transaction(async tx => {
       collector = this.pendingTxIntents.get(tx);
       if (!collector) {
@@ -218,18 +227,29 @@ export class CollectionService extends BaseService {
       try {
         return await work(tx);
       } finally {
-        // Drop the per-tx binding on both commit and rollback, so a throwing or
+        // Drop the per-tx bindings on both commit and rollback, so a throwing or
         // failed-to-commit transaction never leaks its collector in
         // pendingTxIntents. Only the frame that created the collector removes
         // it, so a nested withTransaction sharing the handle leaves the outer's
-        // binding intact.
-        if (ownsFlush) this.pendingTxIntents.delete(tx);
+        // binding intact. Capture the event signal before dropping it so the
+        // post-commit drain below can see it.
+        if (ownsFlush) {
+          sawEvent = this.pendingTxEvents.has(tx);
+          this.pendingTxIntents.delete(tx);
+          this.pendingTxEvents.delete(tx);
+        }
       }
     });
     // Reached only on a successful commit; a rejected transaction throws above
     // and flushes nothing. The captured `collector` outlives the map binding.
     if (ownsFlush && collector && collector.length > 0) {
       await this.entryService.flushRevalidationIntents(collector);
+    }
+    // A committed transaction that recorded any outbox event schedules the fast
+    // drain once, so tx-API writes deliver as promptly as the non-transaction
+    // paths instead of waiting for an unrelated operation to trigger a drain.
+    if (ownsFlush && sawEvent) {
+      this.entryService.scheduleFastDrain();
     }
     return result;
   }
@@ -247,6 +267,21 @@ export class CollectionService extends BaseService {
   ): void {
     if (!intent) return;
     this.pendingTxIntents.get(tx)?.push(intent);
+  }
+
+  /**
+   * Record that a wrapper's `*InTransaction` write appended an outbox event
+   * against the active owned transaction, so `withTransaction` offers the fast
+   * drain once after commit. Only tracked when a collector exists for this `tx`
+   * (a `withTransaction` frame owns it); a caller that obtained `tx` some other
+   * way owns the drain, exactly as it owns the revalidation flush.
+   */
+  private collectTxEvent(
+    tx: TransactionContext,
+    eventRecorded: boolean | undefined
+  ): void {
+    if (!eventRecorded) return;
+    if (this.pendingTxIntents.has(tx)) this.pendingTxEvents.add(tx);
   }
 
   /**
@@ -824,6 +859,7 @@ export class CollectionService extends BaseService {
     // rollback drops the collector unflushed, so collecting here is always safe.
     // withTransaction flushes what was collected once the transaction commits.
     this.collectTxIntent(tx, result.revalidationIntent);
+    this.collectTxEvent(tx, result.eventRecorded);
 
     if (!result.success) {
       this.logger.warn("Entry creation in transaction failed", {
@@ -878,6 +914,7 @@ export class CollectionService extends BaseService {
     // Collect before the success check, so a caller that commits despite a
     // post-write hook failure still busts the tags (see createEntryInTransaction).
     this.collectTxIntent(tx, result.revalidationIntent);
+    this.collectTxEvent(tx, result.eventRecorded);
 
     if (!result.success) {
       if (result.statusCode === 404) {
@@ -950,6 +987,7 @@ export class CollectionService extends BaseService {
     // Collect before the success check, so a caller that commits despite a
     // post-delete hook failure still busts the tags (see createEntryInTransaction).
     this.collectTxIntent(tx, result.revalidationIntent);
+    this.collectTxEvent(tx, result.eventRecorded);
 
     if (!result.success) {
       if (result.statusCode === 404) {
