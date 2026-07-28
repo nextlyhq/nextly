@@ -887,3 +887,24 @@ describe("ComponentRegistryService legacy pointer repair", () => {
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });
+
+describe("ComponentRegistryService case-only table names", () => {
+  it("does not treat a casing difference as a storage mismatch", async () => {
+    // Both spellings address one table where the dialect folds identifiers;
+    // reporting a mismatch would skip metadata updates on every boot.
+    const ctx = createCtx();
+    const fields = [{ name: "metaTitle", type: "text" }];
+    ctx.adapter.selectOne.mockImplementation(async () =>
+      dbRow({ schema_hash: "stale", table_name: "SEO_META" })
+    );
+    ctx.adapter.tableExists.mockResolvedValue(true);
+    ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.updated).toEqual(["seo"]);
+  });
+});

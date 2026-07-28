@@ -325,3 +325,39 @@ describe("teardownEntityComponentData catalog case folding", () => {
     expect(deleted).toContain("seo_meta");
   });
 });
+
+describe("teardownEntityComponentData case-distinct catalogs", () => {
+  it("keeps case-distinct tables separate when both exist", async () => {
+    // PostgreSQL, and MySQL with lower_case_table_names=0, can hold both.
+    const deleted: string[] = [];
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue(["SEO_META", "seo_meta", "dynamic_components"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") {
+          return [
+            { slug: "upper", table_name: "SEO_META" },
+            { slug: "lower", table_name: "seo_meta" },
+          ];
+        }
+        return [{ id: `${table}-1` }];
+      }),
+    };
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).toContain("SEO_META");
+    expect(result.tablesTouched).toContain("seo_meta");
+  });
+});

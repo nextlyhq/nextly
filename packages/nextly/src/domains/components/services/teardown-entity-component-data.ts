@@ -217,12 +217,24 @@ async function listRegisteredComponentTables(
     {}
   );
 
-  // MySQL with `lower_case_table_names` reports a verbatim `SEO_META` as
-  // `seo_meta`, so an exact match would discard the registered table — and an
-  // unprefixed custom name is not recovered by the prefix scan either, leaving
-  // its rows orphaned. Matching folds case and resolves back to the name the
-  // catalog actually reported, which is what later statements must address.
-  const catalog = new Map(discovered.map(name => [name.toLowerCase(), name]));
+  // Resolved exactly first, then case-insensitively. MySQL with
+  // `lower_case_table_names` reports a verbatim `SEO_META` as `seo_meta`, so an
+  // exact-only match would discard the registered table and orphan its rows.
+  // Folding unconditionally is equally wrong: PostgreSQL, and MySQL with
+  // `lower_case_table_names=0`, can hold `SEO_META` and `seo_meta` as distinct
+  // quoted tables, and collapsing them would sweep only one. Preferring the
+  // exact hit keeps those distinct, while the fallback still finds a folded
+  // catalog entry — and either way the resolved value is the name the catalog
+  // reported, which is what later statements must address.
+  const catalog = new Set(discovered);
+  const foldedCatalog = new Map<string, string>();
+  for (const name of discovered) {
+    const key = name.toLowerCase();
+    // First writer wins so an ambiguous fold cannot silently retarget a table.
+    if (!foldedCatalog.has(key)) foldedCatalog.set(key, name);
+  }
+  const resolveCatalogName = (name: string): string | undefined =>
+    catalog.has(name) ? name : foldedCatalog.get(name.toLowerCase());
   return (
     rows
       .map(row => row.table_name ?? row.tableName)
@@ -231,7 +243,7 @@ async function listRegisteredComponentTables(
       // whose migration is pending or failed. Probing one raises a missing-table
       // error, and because this sweep precedes every entity delete, a single
       // unmaterialized component would block all of them.
-      .map(name => catalog.get(name.toLowerCase()))
+      .map(name => resolveCatalogName(name))
       .filter((name): name is string => name !== undefined)
   );
 }

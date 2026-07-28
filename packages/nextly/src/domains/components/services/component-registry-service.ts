@@ -526,7 +526,16 @@ export class ComponentRegistryService extends BaseRegistryService<
         // a table the schema layer is not maintaining. Recording it as a sync
         // error surfaces it on every boot until a migration resolves it.
         let repairedTableName: string | undefined;
-        if (existing !== null && existing.tableName !== desiredTableName) {
+        // A difference in casing alone is not a storage move. Where the dialect
+        // folds identifiers both spellings are the same table, and where it does
+        // not, the repair below still refuses to act unless the configured table
+        // exists and the stored one does not — so treating this as a mismatch
+        // would only strand the component, skipping its field, localization and
+        // admin updates on every boot.
+        const nameDiffersBeyondCase =
+          existing !== null &&
+          existing.tableName.toLowerCase() !== desiredTableName.toLowerCase();
+        if (existing !== null && nameDiffersBeyondCase) {
           // One mismatch is repairable without moving anything: the stored name
           // addresses no table while the configured one does. That is a row
           // written before names resolved canonically — the data has always
