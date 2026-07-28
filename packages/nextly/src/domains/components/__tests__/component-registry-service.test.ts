@@ -168,30 +168,6 @@ describe("ComponentRegistryService", () => {
       const row = ctx.adapter.insert.mock.calls[0][1];
       expect(row.table_name).toBe("seo_meta");
     });
-
-    it("stores the table name verbatim in registerComponentInTransaction", async () => {
-      const tx = {
-        selectOne: vi.fn().mockResolvedValue(null),
-        insert: vi.fn().mockResolvedValue(dbRow({ table_name: "seo_meta" })),
-      };
-
-      await ctx.service.registerComponentInTransaction(
-        tx as unknown as Parameters<
-          typeof ctx.service.registerComponentInTransaction
-        >[0],
-        {
-          slug: "seo",
-          label: "SEO",
-          tableName: "seo_meta",
-          fields: [],
-          source: "code",
-          schemaHash: "h",
-        }
-      );
-
-      const row = tx.insert.mock.calls[0][1] as Record<string, unknown>;
-      expect(row.table_name).toBe("seo_meta");
-    });
   });
 
   describe("getComponentBySlug", () => {
@@ -564,106 +540,6 @@ describe("ComponentRegistryService", () => {
 
       expect(result.updated).toEqual(["seo"]);
       expect(result.created).toEqual([]);
-    });
-
-    it("keeps the pointer when the stored table exists and holds data", async () => {
-      // An intentional dbName change: the stored table is populated, so
-      // repointing would leave those instances behind an empty table.
-      const fields = [{ name: "metaTitle", type: "text" }];
-      ctx.adapter.selectOne.mockImplementation(async () => {
-        const { calculateSchemaHash } = await import(
-          "../../schema/services/schema-hash"
-        );
-        return dbRow({
-          schema_hash: calculateSchemaHash(fields),
-          table_name: "seo_meta",
-        });
-      });
-      ctx.adapter.tableExists.mockResolvedValue(true);
-      ctx.adapter.select.mockResolvedValue([{ id: "instance-1" }]);
-
-      const result = await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
-      ]);
-
-      expect(result.unchanged).toEqual(["seo"]);
-      expect(ctx.adapter.update).not.toHaveBeenCalled();
-    });
-
-    it("does not repoint a populated table when the schema also changed", async () => {
-      // The populated-table guard keeps the pointer; a concurrent fields change
-      // must not smuggle the new name through the update path.
-      ctx.adapter.selectOne.mockResolvedValue(
-        dbRow({ schema_hash: "stale-hash", table_name: "seo_meta" })
-      );
-      ctx.adapter.update.mockResolvedValue([dbRow()]);
-      ctx.adapter.tableExists.mockResolvedValue(true);
-      ctx.adapter.select.mockResolvedValue([{ id: "instance-1" }]);
-
-      const result = await ctx.service.syncCodeFirstComponents([
-        {
-          slug: "seo",
-          label: "SEO",
-          fields: [{ name: "metaTitle", type: "text" }],
-          tableName: "seo_v2",
-        },
-      ]);
-
-      expect(result.updated).toEqual(["seo"]);
-      const [, updateData] = ctx.adapter.update.mock.calls[0];
-      expect(updateData).not.toHaveProperty("table_name");
-    });
-
-    it("never repoints when reconciliation is disabled", async () => {
-      // The metadata-only sync path applies no DDL, so it must leave storage
-      // pointers alone even when the stored name has drifted.
-      const fields = [{ name: "metaTitle", type: "text" }];
-      ctx.adapter.selectOne.mockImplementation(async () => {
-        const { calculateSchemaHash } = await import(
-          "../../schema/services/schema-hash"
-        );
-        return dbRow({
-          schema_hash: calculateSchemaHash(fields),
-          table_name: "comp_seo_meta",
-        });
-      });
-      ctx.adapter.tableExists.mockResolvedValue(false);
-      ctx.adapter.update.mockResolvedValue([dbRow()]);
-
-      const result = await ctx.service.syncCodeFirstComponents(
-        [{ slug: "seo", label: "SEO", fields, tableName: "seo_meta" }],
-        { reconcileTableNames: false }
-      );
-
-      expect(result.unchanged).toEqual(["seo"]);
-      expect(ctx.adapter.update).not.toHaveBeenCalled();
-    });
-
-    it("reconciles a stored table name that drifted from canonical resolution", async () => {
-      // A row written before canonical resolution: the config declares
-      // dbName "seo_meta" but the registry stored the prefixed form, so it
-      // addresses a table the schema layer never created.
-      const fields = [{ name: "metaTitle", type: "text" }];
-      ctx.adapter.selectOne.mockImplementation(async () => {
-        const { calculateSchemaHash } = await import(
-          "../../schema/services/schema-hash"
-        );
-        return dbRow({
-          schema_hash: calculateSchemaHash(fields),
-          table_name: "comp_seo_meta",
-        });
-      });
-      ctx.adapter.update.mockResolvedValue([dbRow()]);
-      // The drifted name never had a table of its own.
-      ctx.adapter.tableExists.mockResolvedValue(false);
-
-      const result = await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
-      ]);
-
-      expect(result.updated).toEqual(["seo"]);
-      const [, updateData] = ctx.adapter.update.mock.calls[0];
-      expect(updateData.table_name).toBe("seo_meta");
     });
 
     it("leaves an already-canonical table name unchanged", async () => {

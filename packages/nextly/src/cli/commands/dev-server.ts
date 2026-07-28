@@ -900,14 +900,8 @@ export async function performComponentsAutoSync(
       continue;
     }
 
-    // The registry records where this component's data actually lives, and the
-    // sync may have retained a stored name that differs from the configured
-    // dbName. Following it keeps DDL on the table runtime reads; the configured
-    // name is only used for a component the registry has not seen.
-    const registered = await componentRegistry.getComponentBySlug(slug);
-    const tableName =
-      registered?.tableName ??
-      resolveComponentTableName(slug, componentConfig.dbName);
+    // Canonical resolution: custom dbName verbatim, else comp_ + normalized slug.
+    const tableName = resolveComponentTableName(slug, componentConfig.dbName);
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);

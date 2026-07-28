@@ -359,18 +359,6 @@ export class ComponentRegistryService extends BaseRegistryService<
       updateData.config_path = data.configPath;
     }
 
-    // The registry row is what runtime reads and writes address, so it has to
-    // track the physical name the schema layer resolves for this component.
-    // Only rewritten when the caller passes one explicitly; a row whose name
-    // predates canonical resolution would otherwise keep pointing at a table
-    // that was never created.
-    if (data.tableName !== undefined) {
-      // Same ownership rules as registration: an update is another way to point
-      // a component at storage, so it must not be a way around them.
-      assertOwnableComponentTable(slug, data.tableName);
-      updateData.table_name = data.tableName;
-    }
-
     try {
       const results = await this.adapter.update<DynamicComponentRecord>(
         this.registryTableName,
@@ -490,8 +478,7 @@ export class ComponentRegistryService extends BaseRegistryService<
    * Sync code-first Components with the registry.
    */
   async syncCodeFirstComponents(
-    configs: CodeFirstComponentConfig[],
-    options?: { reconcileTableNames?: boolean }
+    configs: CodeFirstComponentConfig[]
   ): Promise<SyncComponentResult> {
     this.logger.info("Syncing code-first Components", {
       count: configs.length,
@@ -517,55 +504,13 @@ export class ComponentRegistryService extends BaseRegistryService<
           config.slug,
           config.tableName
         );
-        // Repointing the registry moves no data, so it is only safe when the
-        // stored name addresses nothing: a row whose name drifted from
-        // canonical resolution and never had a table of its own. When the
-        // stored table does exist it holds this component's instances, and
-        // pointing elsewhere would leave them behind an empty table, so the
-        // pointer stays and the mismatch is reported instead.
-        // A metadata-only sync carries no DDL, so it must not move a storage
-        // pointer: the destination it would choose may not exist, and any diff
-        // for this reload has already run against the current one.
-        const mayReconcile = options?.reconcileTableNames !== false;
-        let tableNameChanged = false;
-        if (
-          mayReconcile &&
-          existing !== null &&
-          existing.tableName !== desiredTableName
-        ) {
-          // Existence alone does not justify keeping the pointer: an empty
-          // table strands nothing, so reconciling to the configured name is
-          // both safe and the outcome the config asked for. Only instances
-          // actually stored there make the move destructive. Bounded to one
-          // row because the question is emptiness, not size.
-          // An existing table keeps its pointer, without inspecting whether
-          // it holds rows. A concurrent write could land between such a probe
-          // and the update, stranding a freshly committed instance in the old
-          // table, and no lock here is shared with the write path. Abandoning
-          // an existing table is therefore an explicit migration, never an
-          // automatic consequence of a config edit.
-          const keepStoredPointer = await this.adapter.tableExists(
-            existing.tableName
-          );
-          if (keepStoredPointer) {
-            this.logger.warn(
-              "Component table name differs from its populated table; keeping the populated one",
-              {
-                slug: config.slug,
-                stored: existing.tableName,
-                requested: desiredTableName,
-              }
-            );
-          } else {
-            tableNameChanged = true;
-            this.logger.warn("Component table name reconciled", {
-              slug: config.slug,
-              from: existing.tableName,
-              to: desiredTableName,
-            });
-          }
-        }
-
+        // A component's stored table name is never changed here. Repointing an
+        // existing component at different storage moves no data, and the paths
+        // that generate DDL do not all have the registry available — the
+        // offline migration generator has no database connection at all — so a
+        // divergence between the configured name and the stored one cannot be
+        // honoured consistently. Changing dbName for a component that is
+        // already registered is a migration, not a config edit.
         if (!existing) {
           await this.registerComponent({
             slug: config.slug,
@@ -583,8 +528,7 @@ export class ComponentRegistryService extends BaseRegistryService<
           result.created.push(config.slug);
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.localized === true) !== (existing.localized === true) ||
-          tableNameChanged
+          (config.localized === true) !== (existing.localized === true)
         ) {
           await this.updateComponent(
             config.slug,
@@ -597,12 +541,6 @@ export class ComponentRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               localized: config.localized === true,
-              // Only carried when the pointer was cleared for reconciliation.
-              // A schema or localization change must not move a pointer that
-              // the populated-table guard just decided to keep, or the update
-              // would send reads and writes to a table holding none of this
-              // component's instances.
-              tableName: tableNameChanged ? desiredTableName : undefined,
             },
             { source: "code" }
           );
