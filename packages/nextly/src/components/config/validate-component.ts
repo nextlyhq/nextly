@@ -366,14 +366,20 @@ function validateDbName(
     return;
   }
 
+  // Compared case-insensitively: SQLite, and MySQL on a case-insensitive
+  // installation, resolve `DYNAMIC_COMPONENTS` and `dynamic_components` to the
+  // same physical table, so a case variant would otherwise slip past and let a
+  // later drop reach core storage.
+  const normalized = dbName.toLowerCase();
+
   // Only names belonging to a different OWNER are rejected: framework core
   // tables, and the namespaces of other entity kinds. The component namespace
   // is deliberately not policed here — `comp_site_seo` is a documented custom
   // name, and whether some other component generates the same table is a
   // cross-config question this single-config check cannot answer.
   const collides =
-    CORE_TABLE_NAMES.includes(dbName) ||
-    ENTITY_TABLE_PREFIXES.some(prefix => dbName.startsWith(prefix));
+    CORE_TABLE_NAMES.some(name => name.toLowerCase() === normalized) ||
+    ENTITY_TABLE_PREFIXES.some(prefix => normalized.startsWith(prefix));
 
   if (collides) {
     errors.push({

@@ -76,3 +76,19 @@ describe("component config assertion errors", () => {
     ).toThrow(NextlyError);
   });
 });
+
+describe("reserved-storage matching is case-insensitive", () => {
+  it("rejects an upper-case core table alias", () => {
+    // SQLite and case-insensitive MySQL resolve this to the same table.
+    const result = validateComponentConfig({
+      ...base,
+      dbName: "DYNAMIC_COMPONENTS",
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects an upper-case entity namespace alias", () => {
+    const result = validateComponentConfig({ ...base, dbName: "DC_POSTS" });
+    expect(result.valid).toBe(false);
+  });
+});
