@@ -76,6 +76,8 @@ describe("collectPluginContributedSlugs", () => {
   });
 
   it("leaves a slug the renameMap does not mention untouched", () => {
+    // A renameMap entry for an unrelated slug must not alter the contributed
+    // slug it does not name.
     const plugins = [
       {
         name: "forms",

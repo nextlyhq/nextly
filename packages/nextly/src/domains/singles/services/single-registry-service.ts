@@ -215,6 +215,23 @@ export class SingleRegistryService extends BaseRegistryService<
   }
 
   /**
+   * Drop snapshot entries whose slug is not in `presentSlugs`, leaving the
+   * surviving entries untouched. Used on a config reload to evict a removed
+   * Single's live defaults BEFORE any later `setCodeFirstSingles` call — so a
+   * reload that aborts (introspection failure, deferred schema, apply failure)
+   * after a Single was removed cannot leave its stale function defaults runnable
+   * against the removed-but-still-readable registry row. Remove-only: it never
+   * updates a surviving entry, so it cannot pair new live fields with stale
+   * serialized metadata the way an eager replace could.
+   */
+  pruneCodeFirstSingles(presentSlugs: ReadonlySet<string>): void {
+    if (!this.codeFirstSingles) return;
+    this.codeFirstSingles = this.codeFirstSingles.filter(single =>
+      presentSlugs.has(single.slug)
+    );
+  }
+
+  /**
    * The live code-first field definitions for a Single (with `defaultValue`
    * functions intact), or undefined for a UI-created Single. Callers resolving
    * declared defaults use these instead of the serialized `dynamic_singles.fields`.

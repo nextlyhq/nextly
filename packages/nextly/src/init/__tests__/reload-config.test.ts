@@ -119,6 +119,7 @@ describe("reloadNextlyConfig", () => {
       .fn()
       .mockResolvedValue(undefined);
     const setCodeFirstSinglesSpy = vi.fn();
+    const pruneCodeFirstSinglesSpy = vi.fn();
     const services: Record<string, unknown> = {
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       // The DI key is "adapter" (renamed from "databaseAdapter" — see the
@@ -146,6 +147,7 @@ describe("reloadNextlyConfig", () => {
         syncCodeFirstSingles: vi.fn().mockResolvedValue({}),
         getAllSingles: vi.fn().mockResolvedValue(opts?.allSingles ?? []),
         setCodeFirstSingles: setCodeFirstSinglesSpy,
+        pruneCodeFirstSingles: pruneCodeFirstSinglesSpy,
       },
       componentRegistryService: {
         syncCodeFirstComponents: syncCodeFirstComponentsSpy,
@@ -161,6 +163,7 @@ describe("reloadNextlyConfig", () => {
       registerDynamicSchemaSpy,
       updateCollectionMigrationStatusSpy,
       setCodeFirstSinglesSpy,
+      pruneCodeFirstSinglesSpy,
     });
   }
 
@@ -1036,9 +1039,9 @@ describe("reloadNextlyConfig", () => {
       expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
         false
       );
-      // The live default source is also cleared on the empty-target path so a
+      // The live default snapshot is pruned to the (now empty) present set so a
       // removed single's function defaults can't run from a stale snapshot.
-      expect(resolver.setCodeFirstSinglesSpy).toHaveBeenCalledWith([]);
+      expect(resolver.pruneCodeFirstSinglesSpy).toHaveBeenCalledWith(new Set());
       resetWebhookRecordingPolicy();
     });
 

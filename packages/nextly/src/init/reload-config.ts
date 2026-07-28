@@ -169,6 +169,10 @@ interface SingleRegistrySurface {
     singles: unknown[],
     options?: { keepPriorFor?: ReadonlySet<string> }
   ): void;
+  // Drop removed singles from the live default snapshot BEFORE any reload path
+  // can abort, so a removed-but-readable single can't auto-create from stale
+  // function defaults. Optional for partial resolver fakes.
+  pruneCodeFirstSingles?(presentSlugs: ReadonlySet<string>): void;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created singles. Optional for partial resolver fakes.
@@ -197,22 +201,31 @@ function failedSingleSlugs(syncResult: unknown): Set<string> {
 }
 
 /**
- * Drop the single registry's live default source. Used on the empty-target
- * reload path where the last managed single was removed: its registry row and
- * table stay readable, so an unclear snapshot would still run the removed
- * single's function/structured defaults on a later auto-create read. Non-fatal:
- * the snapshot also clears on the next successful reload or on restart.
+ * Evict removed singles from the live default snapshot, keyed on the slugs the
+ * new config still declares. Runs EARLY on every reload — before the empty-
+ * target return, the metadata-only branch, the DDL apply, and every abort path
+ * (introspection failure, deferred/failed schema apply) — so a removed single's
+ * registry row (which stays readable) can never auto-create from stale function
+ * defaults even when a later `setCodeFirstSingles` never runs. Remove-only, so
+ * it never pairs a surviving single's new fields with stale serialized metadata.
+ * Non-fatal: a missing registry just leaves the snapshot for the next reload.
  */
-async function clearSingleDefaultSource(
-  resolve: ServiceResolver
+async function pruneRemovedSingleDefaults(
+  resolve: ServiceResolver,
+  presentSingles: SingleDef[]
 ): Promise<void> {
   try {
     const singleReg = (await resolve(
       "singleRegistryService"
     )) as SingleRegistrySurface;
-    singleReg.setCodeFirstSingles?.([]);
+    const presentSlugs = new Set(
+      presentSingles
+        .map(single => single.slug)
+        .filter((slug): slug is string => typeof slug === "string")
+    );
+    singleReg.pruneCodeFirstSingles?.(presentSlugs);
   } catch {
-    // DI not initialised or the registry is absent — nothing to clear.
+    // DI not initialised or the registry is absent — nothing to prune.
   }
 }
 
@@ -638,6 +651,13 @@ export async function reloadNextlyConfig(opts?: {
   }
   if (!adapter) return;
 
+  // Evict removed singles from the live default snapshot up front, before any
+  // return/abort below, so a single dropped from the config can never
+  // auto-create from its stale function defaults even if this reload later
+  // aborts (introspection failure, deferred/failed apply) before the
+  // metadata-sync `setCodeFirstSingles` runs.
+  await pruneRemovedSingleDefaults(resolve, newConfig.singles ?? []);
+
   // dialect is an abstract readonly property on DrizzleAdapter, not a
   // method (a previous iteration mistakenly called .getDialect() which
   // would crash at runtime).
@@ -728,10 +748,8 @@ export async function reloadNextlyConfig(opts?: {
     // plugin decisions are preserved). No metadata to sync here, so this is the
     // only reconciliation the empty-target path needs.
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
-    // The removed Single's row/table also stay readable, so clear the live
-    // default source too — otherwise a later auto-create read would still run
-    // the removed single's function/structured defaults from the stale snapshot.
-    await clearSingleDefaultSource(resolve);
+    // The live default snapshot was already pruned to the (now empty) present
+    // set above, so a removed single's stale defaults are gone by here.
     return;
   }
 
