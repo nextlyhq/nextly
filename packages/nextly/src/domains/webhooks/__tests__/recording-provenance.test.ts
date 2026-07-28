@@ -91,6 +91,8 @@ describe("collectPluginContributedSlugs", () => {
   });
 
   it("ignores entries without a slug and tolerates missing plugins", () => {
+    // A slugless or empty-slug entry contributes nothing, and an undefined
+    // plugin list yields an empty set rather than throwing.
     const plugins = [
       { name: "x", contributes: { collections: [{}, { slug: "" }] } },
     ];
