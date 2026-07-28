@@ -14,6 +14,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../../../domains/schema/field-types/field-type-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginFieldType } from "../../../plugins/contributions";
 import { pluginFieldOptionIssues } from "../plugin-field-options";
 
@@ -113,11 +114,23 @@ describe("plugin field-type option validation", () => {
 
   it("treats a throwing check as a rejected declaration, not a failed boot", () => {
     registerDocument(() => {
-      throw new Error("plugin is confused");
+      throw NextlyError.internal("plugin is confused");
     });
 
     // One defective plugin must not stop the app from starting with a stack
     // trace: the field it declared is refused, and the message says which.
+    expect(pluginFieldOptionIssues({ name: "body", type: "document" })).toEqual(
+      [{ message: "document field is not declared correctly." }]
+    );
+  });
+
+  it("treats a check that throws a non-Error the same way", () => {
+    // Nothing constrains what a plugin throws, so the catch cannot assume it
+    // is handed an Error at all.
+    registerDocument(() => {
+      throw "plugin is confused";
+    });
+
     expect(pluginFieldOptionIssues({ name: "body", type: "document" })).toEqual(
       [{ message: "document field is not declared correctly." }]
     );

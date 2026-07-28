@@ -17,6 +17,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../../../domains/schema/field-types/field-type-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 import type {
   PluginFieldType,
   PluginFieldValidateArgs,
@@ -161,10 +162,8 @@ describe("plugin field-type validation", () => {
   });
 
   it("treats a throwing validator as a refusal, not a crash", async () => {
-    // Deliberately a bare Error: this stands in for third-party plugin code,
-    // which throws whatever it likes and is not bound by core's conventions.
     registerRating(() => {
-      throw new Error("registry unreachable");
+      throw NextlyError.internal("registry unreachable");
     });
 
     const issues = await validateEntryData({ stars: 3 }, FIELDS, {
