@@ -162,16 +162,28 @@ function groupByHeading(entries) {
 
 /**
  * Trims a body to `maxLength` at a block boundary, appending `marker` so the
- * reader knows detail is missing. The final hard slice is a backstop for the
- * degenerate case where a single block is larger than the whole budget: the
- * step must never hand GitHub a body it will reject.
+ * reader knows detail is missing.
+ *
+ * `tail` is the part of the body that must outlive truncation, so its rendered
+ * size and the separator that attaches it are reserved out of the budget before
+ * a single `block` is measured. Dropping blocks from the end without that
+ * reservation would take the tail with them, since it sits after every block
+ * that can be dropped.
+ *
+ * The final hard slice is a backstop for the degenerate case where the marker
+ * and the tail together already exceed the whole budget: the step must never
+ * hand GitHub a body it will reject, and a bounded slice terminates where
+ * shedding more blocks cannot.
  */
-function fitWithinLimit(blocks, marker, maxLength) {
-  const joined = blocks.join("\n\n");
+function fitWithinLimit(blocks, tail, marker, maxLength) {
+  const separator = "\n\n";
+  const joined = [...blocks, ...tail].join(separator);
   if (joined.length <= maxLength) return joined;
 
-  const separator = "\n\n";
-  const budget = maxLength - marker.length - separator.length;
+  const tailText = tail.join(separator);
+  const reserved =
+    tailText.length === 0 ? 0 : tailText.length + separator.length;
+  const budget = maxLength - reserved - marker.length - separator.length;
   const kept = [];
   let used = 0;
 
@@ -183,7 +195,11 @@ function fitWithinLimit(blocks, marker, maxLength) {
     used += cost;
   }
 
-  const truncated = [...kept, marker].join(separator);
+  const truncated = [
+    ...kept,
+    marker,
+    ...(tailText.length === 0 ? [] : [tailText]),
+  ].join(separator);
   return truncated.length <= maxLength
     ? truncated
     : truncated.slice(0, maxLength);
@@ -224,15 +240,20 @@ export function buildReleaseNotes({
     }
   }
 
-  blocks.push("## Packages");
-  blocks.push(packages.map(pkg => `- \`${pkg.name}\``).join("\n"));
+  // The inventory is the one section a reader cannot rebuild from the entries,
+  // and the intro promises it, so it is held apart from the blocks truncation
+  // may drop and is instead reserved out of the budget.
+  const tail = [
+    "## Packages",
+    packages.map(pkg => `- \`${pkg.name}\``).join("\n"),
+  ];
 
   const marker =
     `> Notes truncated to stay within GitHub's release body limit. ` +
     `The complete changelog for every package is in its \`CHANGELOG.md\` at ` +
     `[${tag}](${tagUrl}).`;
 
-  return fitWithinLimit(blocks, marker, maxLength);
+  return fitWithinLimit(blocks, tail, marker, maxLength);
 }
 
 /**

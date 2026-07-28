@@ -303,6 +303,137 @@ describe("buildReleaseNotes", () => {
     expect(notes.length).toBeLessThanOrEqual(500);
   });
 
+  it("keeps the whole package list when entries are truncated", () => {
+    const bulky = Array.from(
+      { length: 400 },
+      (_, index) =>
+        `- [#${index}](${REPO_URL}/pull/${index}) Thanks [@author](https://github.com/author)! - ${"x".repeat(2000)}`
+    );
+    const packages = lockstepPackages.map(pkg => ({
+      ...pkg,
+      changelog: changelogFor(pkg.name, bulky),
+    }));
+
+    const notes = buildReleaseNotes({
+      version: VERSION,
+      packages,
+      repoUrl: REPO_URL,
+    });
+
+    expect(notes.length).toBeLessThanOrEqual(MAX_BODY_LENGTH);
+    expect(notes).toContain("Notes truncated");
+    expect(notes).toContain("## Packages");
+    for (const pkg of packages) {
+      expect(notes).toContain(`- \`${pkg.name}\``);
+    }
+  });
+
+  it("keeps the package list when one entry is larger than the budget", () => {
+    const packages = lockstepPackages.map(pkg => ({
+      ...pkg,
+      changelog: changelogFor(pkg.name, [`- ${"x".repeat(5000)}`]),
+    }));
+
+    const notes = buildReleaseNotes({
+      version: VERSION,
+      packages,
+      repoUrl: REPO_URL,
+      maxLength: 1000,
+    });
+
+    expect(notes.length).toBeLessThanOrEqual(1000);
+    expect(notes).toContain("Notes truncated");
+    expect(notes).toContain("## Packages");
+    for (const pkg of packages) {
+      expect(notes).toContain(`- \`${pkg.name}\``);
+    }
+    expect(notes).not.toContain("xxxxx");
+  });
+
+  it("puts the truncation marker before the package list", () => {
+    const packages = lockstepPackages.map(pkg => ({
+      ...pkg,
+      changelog: changelogFor(pkg.name, [`- ${"x".repeat(5000)}`]),
+    }));
+
+    const notes = buildReleaseNotes({
+      version: VERSION,
+      packages,
+      repoUrl: REPO_URL,
+      maxLength: 1000,
+    });
+
+    expect(notes.indexOf("Notes truncated")).toBeGreaterThan(-1);
+    expect(notes.indexOf("Notes truncated")).toBeLessThan(
+      notes.indexOf("## Packages")
+    );
+  });
+
+  // The intro tells the reader every package is listed below it. That sentence
+  // and the list have to survive or fall together, at any cap.
+  it("lists every package whenever the intro promises the list", () => {
+    const packages = lockstepPackages.map(pkg => ({
+      ...pkg,
+      changelog: changelogFor(pkg.name, [`- ${"x".repeat(4000)}`]),
+    }));
+
+    for (const maxLength of [200, 400, 700, 1200, 5000, 20000]) {
+      const notes = buildReleaseNotes({
+        version: VERSION,
+        packages,
+        repoUrl: REPO_URL,
+        maxLength,
+      });
+
+      expect(notes.length).toBeLessThanOrEqual(maxLength);
+      if (!notes.includes("Every package below ships at this version.")) {
+        continue;
+      }
+      for (const pkg of packages) {
+        expect(notes).toContain(`- \`${pkg.name}\``);
+      }
+    }
+  });
+
+  // A cap smaller than the inventory itself cannot happen with a real train,
+  // but the builder still has to return a bounded body rather than throw, loop,
+  // or hand GitHub something it will reject.
+  it("returns a bounded body when the package list alone exceeds the cap", () => {
+    const packages = Array.from({ length: 17 }, (_, index) => ({
+      name: `@nextlyhq/package-with-a-long-name-${index}`,
+      changelog: changelogFor(`pkg-${index}`, [MIGRATE_ENTRY]),
+    }));
+
+    for (const maxLength of [1, 40, 120, 300]) {
+      const notes = buildReleaseNotes({
+        version: VERSION,
+        packages,
+        repoUrl: REPO_URL,
+        maxLength,
+      });
+
+      expect(notes.length).toBeGreaterThan(0);
+      expect(notes.length).toBeLessThanOrEqual(maxLength);
+    }
+  });
+
+  it("keeps the package list last in an untruncated release", () => {
+    const notes = buildReleaseNotes({
+      version: VERSION,
+      packages: lockstepPackages,
+      repoUrl: REPO_URL,
+    });
+
+    expect(notes).not.toContain("Notes truncated");
+    expect(notes.indexOf("## What's changed")).toBeLessThan(
+      notes.indexOf("## Packages")
+    );
+    expect(notes.indexOf("design tokens")).toBeLessThan(
+      notes.indexOf("## Packages")
+    );
+    expect(notes.trimEnd().endsWith("- `@nextlyhq/adapter-sqlite`")).toBe(true);
+  });
+
   it("still names the version when no entries were recorded", () => {
     const packages = [{ name: "nextly", changelog: "# nextly\n" }];
 
