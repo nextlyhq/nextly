@@ -7,12 +7,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { restoreVersion } from "../restore-version";
 import type { VersionsService } from "../versions-service";
 
@@ -256,5 +257,58 @@ describe("restoreVersion (integration)", () => {
     // replaced and the restore itself. Two restores → six versions, history
     // grown rather than rewritten.
     expect(history.length).toBe(6);
+  });
+
+  it("snapshots a Single's live content as 'Before restore' before restoring it", async () => {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    await singles.update(
+      "preferences",
+      { title: "First" },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      "preferences",
+      { title: "Second" },
+      { overrideAccess: true }
+    );
+
+    interface VRow {
+      scopeSlug: string;
+      entryId: string;
+      label: string | null;
+      snapshot: { title?: string };
+    }
+    const rowsForSlug = async () =>
+      (await current!.adapter.select<VRow>("nextly_versions")).filter(
+        r => r.scopeSlug === "preferences"
+      );
+    const entryId = (await rowsForSlug())[0].entryId;
+
+    await restoreVersion({
+      scopeKind: "single",
+      slug: "preferences",
+      entryId,
+      versionNo: 1,
+      user: superAdmin,
+    });
+
+    // The pre-restore snapshot holds the content that was live at the restore
+    // ("Second"), so a Single restore never destroys content in no other version.
+    const beforeRestore = (await rowsForSlug()).find(
+      r => r.label === "Before restore"
+    );
+    expect(beforeRestore).toBeDefined();
+    expect(beforeRestore?.snapshot.title).toBe("Second");
   });
 });

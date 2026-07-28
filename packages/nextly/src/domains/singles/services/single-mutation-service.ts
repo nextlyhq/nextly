@@ -1374,6 +1374,46 @@ export class SingleMutationService extends BaseService {
                   )
                 : null;
 
+            // On a restore, read the CURRENT component subtrees before the save
+            // below overwrites them, so the "Before restore" snapshot captured
+            // with the version below holds the components the restore replaces.
+            // Only for a restore into a versioned single; the common write path
+            // never runs this read. Strict, so a real read failure fails the
+            // write rather than snapshotting incomplete component data.
+            let preRestoreComponents: Record<string, unknown> | undefined;
+            if (
+              options.sourceVersionNo != null &&
+              singleMeta.versions?.enabled &&
+              this.componentDataService
+            ) {
+              preRestoreComponents = {};
+              const preComponentFields = fieldConfigs.filter(
+                (f): f is typeof f & { name: string } =>
+                  isComponentField(f) && !!f.name
+              );
+              if (preComponentFields.length > 0) {
+                const populated =
+                  await this.componentDataService.populateComponentData({
+                    entry: { id: existingDoc.id },
+                    parentTable: singleMeta.tableName,
+                    fields: fieldConfigs,
+                    executor: tx.getDrizzle(),
+                    strict: true,
+                    ...(snapshotLocale !== undefined
+                      ? {
+                          locale: snapshotLocale,
+                          fallbackLocale: false as const,
+                        }
+                      : {}),
+                  });
+                for (const f of preComponentFields) {
+                  if (populated[f.name] !== undefined) {
+                    preRestoreComponents[f.name] = populated[f.name];
+                  }
+                }
+              }
+            }
+
             // Clone per attempt: saveComponentDataInTransaction mutates the data
             // in place (hashing passwords, assigning ids), so a conflict retry
             // must start from the user's original values, and the snapshot below
@@ -1620,6 +1660,76 @@ export class SingleMutationService extends BaseService {
                 : new Map<string, (typeof fieldConfigs)[number][]>();
               const snapshotComponentResolver = (slug: string) =>
                 snapshotComponentSchemas.get(slug);
+
+              // On a restore, snapshot the single AS IT IS NOW — before this
+              // write overwrites it — so a restore never destroys content
+              // written while versioning was off (held in no version). Captured
+              // just below the number the restore's own capture takes, which the
+              // retention pass already protects as "the content the restore
+              // replaced"; it runs no retention itself, so it never trims the
+              // version being restored FROM. Built from the pre-write main row,
+              // its prior translations, and the components read before the save,
+              // tagged like every other snapshot.
+              if (options.sourceVersionNo != null && preRestoreComponents) {
+                const prevParentRow = convertTimestampsToCamelCase({
+                  ...(preRow as Record<string, unknown>),
+                });
+                if (companion) {
+                  for (const f of companion.localizedFields) {
+                    if (
+                      Object.prototype.hasOwnProperty.call(
+                        previousCompanionValues,
+                        f.column
+                      )
+                    ) {
+                      prevParentRow[f.name] = previousCompanionValues[f.column];
+                    }
+                  }
+                }
+                stripPasswordFieldValues(prevParentRow, fieldConfigs);
+                stripSystemOwnerField(prevParentRow);
+                for (const field of fieldConfigs) {
+                  if (!("name" in field) || !field.name) continue;
+                  const v = prevParentRow[field.name];
+                  if (shouldTreatAsJson(field) && typeof v === "string") {
+                    try {
+                      prevParentRow[field.name] = JSON.parse(v);
+                    } catch {
+                      // Not valid JSON — keep the raw string.
+                    }
+                  }
+                }
+                await captureInTx(tx, this.versionCapture, {
+                  ref: {
+                    scopeKind: "single",
+                    scopeSlug: slug,
+                    entryId: existingDoc.id,
+                  },
+                  contentStatus: previousLocaleStatus,
+                  parts: {
+                    parentRow: tagNestedComponentTypes(
+                      prevParentRow,
+                      fieldConfigs,
+                      snapshotComponentResolver
+                    ) as Record<string, unknown>,
+                    components: tagComponentTypes(
+                      preRestoreComponents,
+                      fieldConfigs,
+                      snapshotComponentResolver
+                    ),
+                  },
+                  createdBy: options.user?.id ?? null,
+                  // Labelled with a locale only when the prior state actually
+                  // held locale-specific values — see the post-write capture.
+                  locale:
+                    Object.keys(previousCompanionValues).length > 0 ||
+                    previousCompanionStatus !== null ||
+                    Object.keys(preRestoreComponents).length > 0
+                      ? (snapshotLocale ?? null)
+                      : null,
+                  label: "Before restore",
+                });
+              }
 
               const capturedLocalizedComponents =
                 snapshotLocale !== undefined &&
