@@ -26,6 +26,7 @@ import type { FieldConfig } from "@nextly/collections";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
+import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -222,6 +223,12 @@ export const PATCH = withErrorHandler(
       updateData.revalidate = resolveBuilderRevalidate(
         body.revalidate === true
       );
+    }
+
+    // Webhook recording toggle, normalized to the resolved policy boot reads;
+    // on writes null (record), off writes the stored opt-out.
+    if (body.webhooks !== undefined) {
+      updateData.webhooks = resolveBuilderWebhooks(body.webhooks === true);
     }
 
     // Admin fields: support both nested admin object and flat top-level

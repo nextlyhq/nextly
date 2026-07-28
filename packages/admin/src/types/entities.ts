@@ -314,6 +314,14 @@ export interface ApiSingle {
    */
   revalidate?: { disable?: boolean; tags?: string[] } | null;
 
+  /**
+   * Resolved webhook recording policy, or null/absent when recording is on
+   * (the default). The server normalizes the Schema Builder's on/off into this
+   * shape (off → `{ record: false }`), so reads carry the object while writes
+   * send a boolean — see `UpdateSinglePayload`.
+   */
+  webhooks?: { record?: boolean } | null;
+
   /** Current migration status */
   migrationStatus?: SingleMigrationStatus;
 
@@ -327,16 +335,18 @@ export interface ApiSingle {
 /**
  * What a Single schema update may send.
  *
- * Most keys mirror the read shape, but `versions` and `revalidate` do not: the
+ * Most keys mirror the read shape, but `versions`, `revalidate` and `webhooks`
+ * do not: the
  * Schema Builder offers on/off and the server resolves each into the config
  * `ApiSingle` carries back.
  */
 export type UpdateSinglePayload = Omit<
   Partial<ApiSingle>,
-  "versions" | "revalidate"
+  "versions" | "revalidate" | "webhooks"
 > & {
   versions?: boolean;
   revalidate?: boolean;
+  webhooks?: boolean;
 };
 
 // ==================== COMPONENT TYPES ====================

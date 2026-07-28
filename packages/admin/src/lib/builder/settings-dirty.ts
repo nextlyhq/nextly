@@ -19,6 +19,7 @@ const COMPARED_KEYS = [
   "i18n",
   "versions",
   "revalidate",
+  "webhooks",
 ] as const;
 
 type ComparedKey = (typeof COMPARED_KEYS)[number];

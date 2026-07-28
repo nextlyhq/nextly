@@ -424,6 +424,13 @@ function entity(kind?: "collection" | "single" | "component") {
        * absent key means revalidation on; false persists `{ disable: true }`.
        */
       revalidate: z.boolean().optional(),
+      /**
+       * Whether writes to this entity are recorded to the webhook outbox.
+       * Recording is the default, so an absent key means recording on; false
+       * persists `{ record: false }`, keeping content that holds personal data
+       * out of the outbox and therefore out of every delivery.
+       */
+      webhooks: z.boolean().optional(),
       fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {
@@ -473,6 +480,17 @@ function entity(kind?: "collection" | "single" | "component") {
           code: z.ZodIssueCode.custom,
           message: "'revalidate' is not supported on components",
           path: ["revalidate"],
+        });
+      }
+      // Components emit no outbox events of their own: a component's writes are
+      // recorded against the collection or single that embeds it, whose own
+      // switch already governs them. Accepting the key here would persist a
+      // setting nothing reads (same rationale as `revalidate` above).
+      if (kind === "component" && e.webhooks !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'webhooks' is not supported on components",
+          path: ["webhooks"],
         });
       }
       // `status` reserved as a field name only when the lifecycle column is on.

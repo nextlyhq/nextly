@@ -42,6 +42,7 @@ describe("settingsAreDirty", () => {
     i18n: { ...base, i18n: true },
     versions: { ...base, versions: true },
     revalidate: { ...base, revalidate: false },
+    webhooks: { ...base, webhooks: false },
   };
 
   for (const [key, next] of Object.entries(changed)) {
