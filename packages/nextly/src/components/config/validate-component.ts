@@ -85,7 +85,6 @@ export type ComponentValidationErrorCode =
   | "SLUG_SQL_KEYWORD"
   // Custom table-name errors
   | "DB_NAME_INVALID_TYPE"
-  | "DB_NAME_INVALID_FORMAT"
   | "DB_NAME_RESERVED"
   // Field errors
   | "FIELDS_REQUIRED"
@@ -363,16 +362,6 @@ function validateDbName(
       path: "dbName",
       message: "dbName must be a non-empty string when provided.",
       code: "DB_NAME_INVALID_TYPE",
-    });
-    return;
-  }
-
-  if (!/^[a-z_][a-z0-9_]*$/.test(dbName)) {
-    errors.push({
-      path: "dbName",
-      message:
-        "dbName must be lowercase and contain only letters, digits and underscores, starting with a letter or underscore.",
-      code: "DB_NAME_INVALID_FORMAT",
     });
     return;
   }

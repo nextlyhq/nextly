@@ -31,10 +31,14 @@ describe("component dbName validation", () => {
     expect(result.errors.map(e => e.code)).toContain("DB_NAME_RESERVED");
   });
 
-  it("rejects an identifier that is not a safe table name", () => {
-    const result = validateComponentConfig({ ...base, dbName: "Seo Meta!" });
-    expect(result.valid).toBe(false);
-    expect(result.errors.map(e => e.code)).toContain("DB_NAME_INVALID_FORMAT");
+  it("accepts a quoted-identifier custom name", () => {
+    // DDL quotes identifiers on every dialect, so a hyphenated name was always
+    // legal and must keep loading after an upgrade.
+    const result = validateComponentConfig({
+      ...base,
+      dbName: "comp_site-seo",
+    });
+    expect(result.valid).toBe(true);
   });
 
   it("accepts the component's own canonical table name spelled out", () => {
