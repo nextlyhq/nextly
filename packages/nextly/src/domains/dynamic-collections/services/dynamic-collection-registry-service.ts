@@ -246,6 +246,9 @@ export class DynamicCollectionRegistryService extends BaseService {
       .select({
         id: this.dynamicCollections.id,
         slug: this.dynamicCollections.slug,
+        // Needed to keep code-first config outranking the stored row when the
+        // recording switch is mirrored into the live policy below.
+        source: this.dynamicCollections.source,
       })
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, collectionSlug))
@@ -274,7 +277,7 @@ export class DynamicCollectionRegistryService extends BaseService {
     // Mirror the stored change into the live policy so turning the switch off
     // takes effect on the next write rather than the next restart. A rename
     // moves the decision to the new slug and drops the old one.
-    if (updates.webhooks !== undefined) {
+    if (updates.webhooks !== undefined && existing[0].source !== "code") {
       setWebhookRecording(
         "collection",
         targetSlug,
