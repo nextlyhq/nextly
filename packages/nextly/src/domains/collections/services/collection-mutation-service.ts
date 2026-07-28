@@ -2685,15 +2685,16 @@ export class CollectionMutationService extends BaseService {
               ...(publishedParentRow ??
                 (existingEntry as Record<string, unknown>)),
               status: "published",
-              // `publishedParentRow` is a pooled read that excludes this tx's own
-              // uncommitted `updated_at` write, and `existingEntry` is older
-              // still, so overlay the committed publish instant — the same value
-              // the transaction's `SET updated_at = now()` wrote — or the event
-              // reports the pre-publish timestamp and omits it from changedFields.
-              updated_at: new Date(),
             },
             fields
           );
+          // Overlay the committed publish instant AFTER camelCasing: the source
+          // rows carry the pre-publish `updatedAt` (the pooled/pre-read excludes
+          // this tx's own `SET updated_at = now()`), and a snake-case overlay
+          // would be dropped because `convertTimestampsToCamelCase` keeps the
+          // existing camelCase value. Without this the event reports the stale
+          // timestamp and omits `updatedAt` from changedFields.
+          publishedDocument.updatedAt = new Date();
           const previousDocument = this.readShapeEventDocument(
             existingEntry as Record<string, unknown>,
             fields
