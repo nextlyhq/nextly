@@ -213,8 +213,13 @@ export interface PluginFieldValidateArgs {
   req: Record<string, unknown>;
   /**
    * The field instance, so a validator can read the options its own type
-   * declares (a `rating`'s `max`, a `blocks`' `allow`). A detached copy:
-   * editing it changes nothing.
+   * declares (a `rating`'s `max`, a `blocks`' `allow`).
+   *
+   * A detached copy: records, arrays, dates, sets and maps are all rebuilt, so
+   * editing them changes nothing the next write sees. The exceptions are what
+   * cannot be copied without becoming something else — a function, and an
+   * instance of a class core has no constructor for — which stay shared. Treat
+   * the whole thing as read-only.
    */
   field: PluginFieldInstance;
   /**

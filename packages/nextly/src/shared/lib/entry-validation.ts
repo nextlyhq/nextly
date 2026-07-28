@@ -664,14 +664,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Rebuild the plain data inside a value so nothing in it is shared.
+ * Rebuild a value so a validator holding it cannot reach the schema through it.
  *
- * Anything else — functions, dates, class instances — is carried by reference:
- * it is not option data a validator reads, and rebuilding it would either fail
- * or change what it means.
+ * Covers the shapes an option is written in: plain records, arrays, and the
+ * mutable built-ins a config can carry (a `Date` bound, a `Set` of allowed
+ * names, a `Map` of labels). What stays shared is what cannot be copied without
+ * changing what it is — a function, which is behavior rather than option data,
+ * and an instance of a class this code knows nothing about, whose constructor
+ * and private state a generic copy cannot reproduce.
  */
 function detachValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(detachValue);
+  if (value instanceof Date) return new Date(value.getTime());
+  if (value instanceof Set) return new Set([...value].map(detachValue));
+  if (value instanceof Map) {
+    return new Map([...value].map(([key, held]) => [key, detachValue(held)]));
+  }
   if (isPlainObject(value)) {
     const copy: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value)) {

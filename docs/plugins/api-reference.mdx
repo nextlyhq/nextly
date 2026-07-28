@@ -179,7 +179,7 @@ fieldTypes: [
 |---|---|
 | `data` | The write payload, for rules spanning fields. On update this is the patch, not the merged stored entry. Always the top-level payload, even for a field nested in a repeater row. |
 | `req` | Request context; carries `user` when authenticated. Empty for a field inside a component instance. |
-| `field` | The instance, so you can read the options your type declares. A detached copy, all the way down. |
+| `field` | The instance, so you can read the options your type declares. A detached copy: records, arrays, dates, sets and maps are rebuilt, so editing them changes nothing. Functions and class instances stay shared — treat it as read-only. |
 | `path` | Where this field sits in the write (`"stars"`, `"rows[1].stars"`). |
 | `mode` | `"create"` or `"update"`. |
 

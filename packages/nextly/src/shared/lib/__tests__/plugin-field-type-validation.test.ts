@@ -161,6 +161,8 @@ describe("plugin field-type validation", () => {
   });
 
   it("treats a throwing validator as a refusal, not a crash", async () => {
+    // Deliberately a bare Error: this stands in for third-party plugin code,
+    // which throws whatever it likes and is not bound by core's conventions.
     registerRating(() => {
       throw new Error("registry unreachable");
     });
@@ -170,6 +172,22 @@ describe("plugin field-type validation", () => {
     });
 
     // A defective plugin must not turn a rejected write into a server error.
+    expect(issues).toEqual([
+      { path: "stars", code: "CUSTOM", message: "stars failed validation." },
+    ]);
+  });
+
+  it("treats a validator that throws a non-Error as a refusal too", async () => {
+    // Nothing constrains what a plugin throws, so the catch cannot assume it
+    // is handed an Error at all.
+    registerRating(() => {
+      throw "registry unreachable";
+    });
+
+    const issues = await validateEntryData({ stars: 3 }, FIELDS, {
+      mode: "create",
+    });
+
     expect(issues).toEqual([
       { path: "stars", code: "CUSTOM", message: "stars failed validation." },
     ]);
@@ -389,6 +407,39 @@ describe("plugin field-type validation", () => {
     // validator run would have changed what every later write is checked
     // against.
     expect(allow).toEqual(["hero", "cta"]);
+  });
+
+  it("detaches the mutable built-ins an option can be written as", async () => {
+    const notBefore = new Date("2020-01-01T00:00:00.000Z");
+    const allowed = new Set(["hero"]);
+    const labels = new Map([["hero", "Hero"]]);
+
+    registerDocument((_value, args) => {
+      const {
+        notBefore: seenDate,
+        allowed: seenSet,
+        labels: seenMap,
+      } = args.field as {
+        notBefore: Date;
+        allowed: Set<string>;
+        labels: Map<string, string>;
+      };
+      seenDate.setFullYear(1999);
+      seenSet.add("injected");
+      seenMap.set("hero", "Overwritten");
+      return true;
+    });
+
+    const fields: ValidatableField[] = [
+      { name: "body", type: "document", notBefore, allowed, labels },
+    ];
+    await validateEntryData({ body: {} }, fields, { mode: "create" });
+
+    // A Date, Set, or Map is as reachable from a field config as an array is,
+    // and mutating one in place leaves no trace for the next write to notice.
+    expect(notBefore.toISOString()).toBe("2020-01-01T00:00:00.000Z");
+    expect([...allowed]).toEqual(["hero"]);
+    expect(labels.get("hero")).toBe("Hero");
   });
 
   it("leaves built-in types alone", async () => {
