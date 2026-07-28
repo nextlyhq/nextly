@@ -1177,11 +1177,10 @@ export class CollectionBulkService extends BaseService {
         result.failed = entries.length;
         // One error per requested index (not a single sentinel): the public
         // BatchOperationResult contract maps errors to input indices, and every
-        // input was rolled back.
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Write integrity failure rolled back the batch";
+        // input was rolled back. Use a generic message — the raw operational
+        // error (a missing table, a component-registry failure) is logged above,
+        // never surfaced to the caller.
+        const message = "The write could not be completed and was rolled back.";
         result.errors = entries.map((_, index) => ({ index, error: message }));
       } else if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk create rolled back due to stopOnError", {
@@ -1612,11 +1611,10 @@ export class CollectionBulkService extends BaseService {
         result.failed = entries.length;
         // One error per requested index (not a single sentinel): the public
         // BatchOperationResult contract maps errors to input indices, and every
-        // input was rolled back.
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Write integrity failure rolled back the batch";
+        // input was rolled back. Use a generic message — the raw operational
+        // error (a missing table, a component-registry failure) is logged above,
+        // never surfaced to the caller.
+        const message = "The write could not be completed and was rolled back.";
         result.errors = entries.map((_, index) => ({ index, error: message }));
       } else if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk update rolled back due to stopOnError", {
