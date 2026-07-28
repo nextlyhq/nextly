@@ -113,6 +113,53 @@ describe("filtering by an embedded field group value (integration)", () => {
     );
   });
 
+  it("round-trips the dynamic-zone discriminator", async () => {
+    // A dynamic zone stores WHICH field group each row is, in a column, and
+    // returns it under a JSON key. The two are spelled differently and are
+    // migrated separately, so a read that emitted the wrong key would break the
+    // write path's ability to round-trip its own output.
+    current = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({ slug: "hero", fields: [text({ name: "heading" })] }),
+        defineFieldGroup({ slug: "cta", fields: [text({ name: "label" })] }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({
+              name: "layout",
+              components: ["hero", "cta"],
+              repeatable: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler = current.getService(
+      "collectionsHandler"
+    ) as unknown as Handler;
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      {
+        title: "Home",
+        layout: [{ _componentType: "hero", heading: "Welcome" }],
+      }
+    );
+
+    const fetched = await handler.getEntry({
+      collectionName: "pages",
+      entryId: (created.data as { id: string }).id,
+      overrideAccess: true,
+    });
+
+    const layout = fetched.data?.layout as Array<Record<string, unknown>>;
+    expect(layout?.[0]?._componentType).toBe("hero");
+    expect(layout?.[0]?.heading).toBe("Welcome");
+  });
+
   it("returns nothing when no field group value matches", async () => {
     // Distinguishes a working filter from one that matches nothing for the
     // wrong reason: the positive case above must pass alongside this.

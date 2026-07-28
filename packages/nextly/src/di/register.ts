@@ -72,7 +72,6 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
-import { NextlyError } from "../errors";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -135,6 +134,7 @@ import type { Logger } from "../services/shared";
 import type { UserExtSchemaService } from "../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { registerFieldFunctions } from "../shared/lib/field-level-registry";
 import type { AdminConfig, AuthConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
@@ -368,25 +368,7 @@ export async function registerServices(
     );
   }
 
-  // `getNextly()` and `registerServices()` are public entry points, so a
-  // JavaScript caller can hand over a config object the compiler never saw.
-  // Under the old key the boot would succeed while every field group went
-  // unregistered, which is the one outcome this rename must not produce.
-  const legacyFieldGroups = (config as { components?: unknown }).components;
-  if (legacyFieldGroups !== undefined) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "components",
-          code: "CONFIG_KEY_RENAMED",
-          message:
-            "'components' is now 'fieldGroups'. Rename the key: the old one " +
-            "is no longer read.",
-        },
-      ],
-      logContext: { reason: "service-config-legacy-field-group-key" },
-    });
-  }
+  assertNoLegacyFieldGroupKey(config, "registerServices");
 
   // ----------------------------------------
   // Layer 0a: Resolve Plugins (validate + order)
@@ -407,6 +389,9 @@ export async function registerServices(
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
   const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+  // A transformer returns a NEW config object, so the pre-transform check
+  // above does not cover a plugin compiled against the old API.
+  assertNoLegacyFieldGroupKey(setupConfig, "pluginSetupTransformer");
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)

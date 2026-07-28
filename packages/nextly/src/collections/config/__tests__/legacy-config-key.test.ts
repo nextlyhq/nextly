@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
+import { mergeSetupResultIntoConfig } from "../../../cli/utils/config-loader";
 import { defineConfig } from "../define-config";
 
 const field = { type: "text" as const, name: "title" };
@@ -49,5 +50,30 @@ describe("legacy top-level config key", () => {
 
   it("accepts a config that declares no field groups at all", () => {
     expect(() => defineConfig({ collections: [] } as never)).not.toThrow();
+  });
+});
+
+// A plugin's setup() transformer returns a NEW config object, so a boundary that
+// only checks its input leaves that path unguarded — a plugin compiled against
+// the old API could reintroduce the key after every earlier check has passed.
+describe("legacy key at the post-transform boundary", () => {
+  it("rejects a transformed config carrying the old key", () => {
+    expect(() =>
+      mergeSetupResultIntoConfig(
+        { collections: [], singles: [], fieldGroups: [] } as never,
+        { collections: [], singles: [], components: [group("seo")] } as never,
+        []
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts a transformed config using the current key", () => {
+    expect(() =>
+      mergeSetupResultIntoConfig(
+        { collections: [], singles: [], fieldGroups: [] } as never,
+        { collections: [], singles: [], fieldGroups: [group("seo")] } as never,
+        []
+      )
+    ).not.toThrow();
   });
 });

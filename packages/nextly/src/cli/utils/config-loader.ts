@@ -53,6 +53,7 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
+import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -103,7 +104,7 @@ function applyFoldedToBase(
  * declarative plugin schema contributions (D3/D12) via the SAME shared function
  * the runtime boot uses (`applyPluginSchemaContributionsDeferred` in
  * `register.ts`), so the CLI and runtime produce the same merged schema (D50).
- * Threads collections, singles, AND components. Extend targets that aren't
+ * Threads collections, singles, AND field groups. Extend targets that aren't
  * code/plugin entities are deferred (candidate Builder targets, P8/R2) and
  * resolved by the caller against the Builder set — not thrown here. Exported for
  * unit/parity testing.
@@ -113,6 +114,9 @@ export function mergeSetupResultIntoConfig(
   transformed: SanitizedNextlyConfig,
   plugins: PluginDefinition[]
 ): SanitizedNextlyConfig {
+  // The CLI's post-transformer boundary, mirroring the runtime check in
+  // register.ts: a plugin compiled against the old API can return `components`.
+  assertNoLegacyFieldGroupKey(transformed, "cliSetupTransformer");
   const { config: folded } = applyPluginSchemaContributionsDeferred(
     transformed as unknown as NextlyServiceConfig,
     plugins

@@ -1001,7 +1001,7 @@ export class ComponentQueryService extends BaseService {
     result.id = row.id;
 
     if (includeComponentType && row[STORAGE_FORMAT.columns.type]) {
-      result._componentType = row[STORAGE_FORMAT.columns.type];
+      result[STORAGE_FORMAT.wireTypeKey] = row[STORAGE_FORMAT.columns.type];
     }
 
     const fieldByColumn = new Map<string, FieldConfig>();
