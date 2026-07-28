@@ -151,9 +151,13 @@ export interface FieldGroupValidationResult {
  */
 export const RESERVED_FIELD_GROUP_SLUGS = [
   ...RESERVED_SLUGS,
-  // API namespace for Components
+  // API namespaces. Both spellings are reserved while the routes still answer
+  // on the old one: dropping "component"/"components" before the routes move
+  // would open a window where a slug can claim a live path.
   "components",
   "component",
+  "field-groups",
+  "field-group",
 ] as const;
 
 const RESERVED_COMPONENT_SLUGS_SET: Set<string> = new Set<string>(
