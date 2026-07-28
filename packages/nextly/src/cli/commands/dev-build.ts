@@ -17,6 +17,7 @@ import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import { describeError, immediateMessage } from "../../errors/index";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
@@ -739,7 +740,7 @@ async function handleRemovedComponents(
       await teardownEntityI18n({ adapter, slug, tableName });
 
       // Delete registry entry directly
-      await adapter.delete("dynamic_components", {
+      await adapter.delete(STORAGE_FORMAT.registryTable, {
         and: [{ column: "slug", op: "=", value: slug }],
       });
 

@@ -358,5 +358,5 @@ export function buildComponentMetadataUpsert(
     { name: "migration_status", value: sqlStr("applied") },
   ];
   columns.push(...timestampColumns(dialect));
-  return buildUpsert("dynamic_components", columns, dialect);
+  return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
 }

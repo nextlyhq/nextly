@@ -12,6 +12,8 @@
  * @module domains/i18n/migration/resolve-entity-table
  */
 
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+
 /** The minimal entity shape this needs from a loaded config. */
 export interface EntityLike {
   slug?: string;
@@ -36,12 +38,15 @@ export interface ResolvedEntityTable {
 }
 
 /** Table-name prefix per entity kind — mirrors migrate-create's `toMinimalEntities`. */
-const GROUPS: [keyof ConfigLike, "dc_" | "single_" | "comp_", ResolvedEntityTable["kind"]][] =
-  [
-    ["collections", "dc_", "collection"],
-    ["singles", "single_", "single"],
-    ["components", "comp_", "component"],
-  ];
+const GROUPS: [
+  keyof ConfigLike,
+  "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix,
+  ResolvedEntityTable["kind"],
+][] = [
+  ["collections", "dc_", "collection"],
+  ["singles", "single_", "single"],
+  ["components", STORAGE_FORMAT.tablePrefix, "component"],
+];
 
 /**
  * Resolve `slug` to its main + companion table, or `null` when no entity of that slug exists in

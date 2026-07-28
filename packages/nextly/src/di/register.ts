@@ -107,6 +107,7 @@ import type {
   CollectionSource,
   FieldDefinition,
 } from "../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type {
   CollectionRegistryService,
   CodeFirstCollectionConfig,
@@ -1093,7 +1094,7 @@ async function initializeSchemaRegistry(
     // main comp_ table and registers/creates its companion `comp_<slug>_locales`.
     await loadDynamicTables(
       adapter,
-      "dynamic_components",
+      STORAGE_FORMAT.registryTable,
       async (tableName, fields, _hasStatus, localized) => {
         const { ComponentSchemaService } = await import(
           "../services/components/component-schema-service"

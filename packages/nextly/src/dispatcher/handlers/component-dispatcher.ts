@@ -54,6 +54,7 @@ import {
   getI18nArchiveDdl,
   getI18nArchiveIndexRepairDdl,
 } from "../../schemas/nextly-i18n-archive";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import { ComponentSchemaService } from "../../services/components/component-schema-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -758,7 +759,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       let versionPersisted = true;
       try {
         await adapter.update(
-          "dynamic_components",
+          STORAGE_FORMAT.registryTable,
           {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
