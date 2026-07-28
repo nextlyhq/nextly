@@ -202,8 +202,8 @@ export class ImageProcessor {
       metadata.height;
 
     if (hasFocalPoint) {
-      const srcW = metadata.width!;
-      const srcH = metadata.height!;
+      const srcW = metadata.width;
+      const srcH = metadata.height;
       const tgtW = options.width!;
       const tgtH = options.height!;
       const fx = (options.focalX ?? 50) / 100; // 0-1
