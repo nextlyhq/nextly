@@ -413,6 +413,9 @@ describe("plugin field-type validation", () => {
     const notBefore = new Date("2020-01-01T00:00:00.000Z");
     const allowed = new Set(["hero"]);
     const labels = new Map([["hero", "Hero"]]);
+    // An object used as a Map KEY is as reachable through the copy as a value.
+    const keyObject = { name: "hero" };
+    const byBlock = new Map([[keyObject, "Hero"]]);
 
     registerDocument((_value, args) => {
       const {
@@ -427,11 +430,14 @@ describe("plugin field-type validation", () => {
       seenDate.setFullYear(1999);
       seenSet.add("injected");
       seenMap.set("hero", "Overwritten");
+      const keyed = (args.field as { byBlock: Map<{ name: string }, string> })
+        .byBlock;
+      for (const seenKey of keyed.keys()) seenKey.name = "injected";
       return true;
     });
 
     const fields: ValidatableField[] = [
-      { name: "body", type: "document", notBefore, allowed, labels },
+      { name: "body", type: "document", notBefore, allowed, labels, byBlock },
     ];
     await validateEntryData({ body: {} }, fields, { mode: "create" });
 
@@ -440,6 +446,7 @@ describe("plugin field-type validation", () => {
     expect(notBefore.toISOString()).toBe("2020-01-01T00:00:00.000Z");
     expect([...allowed]).toEqual(["hero"]);
     expect(labels.get("hero")).toBe("Hero");
+    expect(keyObject.name).toBe("hero");
   });
 
   it("leaves built-in types alone", async () => {

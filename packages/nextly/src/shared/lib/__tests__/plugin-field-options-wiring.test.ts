@@ -39,18 +39,19 @@ function registerDocument(): void {
       // Reads either key: `policy` is the type's own option (code-first only,
       // since the manifest strips it) and `blocks` is one the manifest
       // declares, which is the only shape reachable on the Builder path.
+      const key = field.policy !== undefined ? "policy" : "blocks";
       const policy = field.policy ?? field.blocks;
       if (policy === undefined) return true;
       if (policy === null || typeof policy !== "object") {
-        return [{ path: "policy", message: "policy must be an object" }];
+        return [{ path: key, message: `${key} must be an object` }];
       }
       const kinds = (policy as { kinds?: unknown }).kinds;
       if (Array.isArray(kinds) && kinds.length === 0) {
         return [
           {
-            path: "policy.kinds",
+            path: `${key}.kinds`,
             code: "EMPTY_POLICY",
-            message: "policy.kinds cannot be empty",
+            message: `${key}.kinds must name at least one kind`,
           },
         ];
       }
@@ -81,7 +82,7 @@ describe("declaration checks reach every authoring path", () => {
         // The canonical member, not the plugin's `EMPTY_POLICY`: this result's
         // `code` is a closed union that consumers switch on exhaustively.
         code: "FIELD_TYPE_INVALID",
-        message: "policy.kinds cannot be empty.",
+        message: "policy.kinds must name at least one kind.",
       })
     );
   });
@@ -98,7 +99,7 @@ describe("declaration checks reach every authoring path", () => {
         slug: "posts",
         fields: [badField],
       } as unknown as CollectionConfig)
-    ).toThrow(/policy\.kinds cannot be empty/);
+    ).toThrow(/policy\.kinds must name at least one kind/);
   });
 
   it("refuses a code-first single field", () => {
@@ -140,8 +141,14 @@ describe("declaration checks reach every authoring path", () => {
     if (parsed.success) return;
     // Zod reports path segments rather than a dotted string, so a returned
     // option path has to survive the split to land on the right admin control.
+    // The message matters as much as the path: the manifest has its own
+    // `blocks.kinds` rule reporting at exactly this path, so asserting the path
+    // alone would pass with the plugin hook removed entirely.
     expect(parsed.error.issues).toContainEqual(
-      expect.objectContaining({ path: ["blocks", "kinds"] })
+      expect.objectContaining({
+        path: ["blocks", "kinds"],
+        message: "blocks.kinds must name at least one kind.",
+      })
     );
   });
 
@@ -156,8 +163,7 @@ describe("declaration checks reach every authoring path", () => {
     //
     // This is why the same declaration is refused code-first and accepted by
     // the Builder. Closing it needs a generic options bag in the manifest,
-    // which is a change to the persisted schema format and is tracked as a
-    // prerequisite for moving blocks into the page-builder plugin.
+    // which is a change to the persisted schema format.
     const parsed = uiSchemaFieldSchema.safeParse(badField);
 
     expect(parsed.success).toBe(true);

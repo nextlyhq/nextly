@@ -36,6 +36,8 @@ import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
+import type { ComponentConfig } from "../../components/config/types";
+import { assertValidComponentConfig } from "../../components/config/validate-component";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
@@ -44,6 +46,8 @@ import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
+import type { SingleConfig } from "../../singles/config/types";
+import { assertValidSingleConfig } from "../../singles/config/validate-single";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -255,12 +259,30 @@ export async function runBuild(
   result.errors.push(...validationResult.errors);
   result.warnings.push(...validationResult.warnings);
 
-  if (validationResult.errors.length > 0) {
+  // Singles and components answer to the same declaration rules as collections;
+  // without this a contributed one whose field type rejects its own declaration
+  // built clean and failed later at runtime.
+  const entityValidation = validateSinglesAndComponents(
+    configResult.config.singles ?? [],
+    configResult.config.components ?? [],
+    context
+  );
+  result.errors.push(...entityValidation.errors);
+
+  // Reported together: a build is valid only if every entity is, and a single
+  // or component error that did not fail the build would be a report the
+  // command prints and then ignores.
+  const declarationErrors = [
+    ...validationResult.errors,
+    ...entityValidation.errors,
+  ];
+
+  if (declarationErrors.length > 0) {
     result.success = false;
     logger.error(
-      `Validation failed with ${formatCount(validationResult.errors.length, "error")}`
+      `Validation failed with ${formatCount(declarationErrors.length, "error")}`
     );
-    for (const error of validationResult.errors) {
+    for (const error of declarationErrors) {
       const location = error.field
         ? `${error.collection}.${error.field}`
         : error.collection;
@@ -467,6 +489,48 @@ function validateAllCollections(
   warnings.push(...relationshipValidation.warnings);
 
   return { errors, warnings };
+}
+
+/**
+ * Run the comprehensive config validators over singles and components.
+ *
+ * Collections were already covered here; singles and components were not, so a
+ * declaration they alone carry — including one a plugin field type's own rules
+ * reject — reported success from `nextly build` and surfaced later at runtime.
+ * This is the one place the check is reliable, because the CLI registers plugin
+ * field types while loading the config, so the registry is populated by the
+ * time these run.
+ */
+function validateSinglesAndComponents(
+  singles: SingleConfig[],
+  components: ComponentConfig[],
+  context: CommandContext
+): { errors: BuildError[] } {
+  const { logger } = context;
+  const errors: BuildError[] = [];
+
+  for (const single of singles) {
+    logger.debug(`Validating single: ${single.slug}`);
+    try {
+      assertValidSingleConfig(single);
+    } catch (error) {
+      errors.push({ collection: single.slug, message: describeError(error) });
+    }
+  }
+
+  for (const component of components) {
+    logger.debug(`Validating component: ${component.slug}`);
+    try {
+      assertValidComponentConfig(component);
+    } catch (error) {
+      errors.push({
+        collection: component.slug,
+        message: describeError(error),
+      });
+    }
+  }
+
+  return { errors };
 }
 
 /**

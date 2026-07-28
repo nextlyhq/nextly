@@ -33,7 +33,11 @@ function detachValue(value: unknown): unknown {
   if (value instanceof Date) return new Date(value.getTime());
   if (value instanceof Set) return new Set([...value].map(detachValue));
   if (value instanceof Map) {
-    return new Map([...value].map(([key, held]) => [key, detachValue(held)]));
+    // Keys too: an object used as a key is as reachable through the copy as a
+    // value is, and mutating one changes the live declaration just the same.
+    return new Map(
+      [...value].map(([key, held]) => [detachValue(key), detachValue(held)])
+    );
   }
   if (isPlainObject(value)) {
     const copy: Record<string, unknown> = {};
