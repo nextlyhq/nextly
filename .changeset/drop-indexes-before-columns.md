@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Fix deleting an indexed field (media/upload, relationship, unique, or indexed) failing on SQLite with "Failed query: ALTER TABLE ... DROP COLUMN": the schema pipeline and generated migrations now drop a removed field's index before its column, and down-migrations recreate the column before its index.
+Fix deleting an indexed field (media/upload, relationship, unique, or indexed) failing on SQLite with "Failed query: ALTER TABLE ... DROP COLUMN": the schema pipeline and generated migrations now drop a removed field's index before its column, and down-migrations recreate the column before its index. Also fix media fields on Singles always reading back as null on SQLite ("db.execute is not a function"): upload expansion now uses the dialect-portable query builder, matching collections, and absolutizes local-storage media URLs.
