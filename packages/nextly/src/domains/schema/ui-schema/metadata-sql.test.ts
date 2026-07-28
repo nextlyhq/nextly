@@ -319,3 +319,100 @@ describe("revalidate column", () => {
     expect(parsed.success).toBe(false);
   });
 });
+
+describe("webhooks column", () => {
+  // Recording is on by default, so the manifest boolean behaves like
+  // revalidate: false persists the opt-out, true/absent persists NULL.
+  const off = uiSchemaManifest.parse({
+    collections: [
+      {
+        slug: "enquiries",
+        webhooks: false,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    singles: [
+      {
+        slug: "contact",
+        webhooks: false,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    components: [],
+  });
+
+  const on = uiSchemaManifest.parse({
+    collections: [
+      {
+        slug: "posts",
+        webhooks: true,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    singles: [
+      {
+        slug: "about",
+        webhooks: true,
+        fields: [{ name: "t", type: "text" }],
+      },
+    ],
+    components: [],
+  });
+
+  const cases = [
+    ["collection", buildCollectionMetadataUpsert, off.collections[0]],
+    ["single", buildSingleMetadataUpsert, off.singles[0]],
+  ] as const;
+
+  for (const [kind, build, entity] of cases) {
+    it(`${kind}: stores the opt-out when recording is off`, () => {
+      // Boot reads `webhooks.record` back, so an off entity must land the
+      // resolved config rather than a bare boolean.
+      const sql = build(entity, "sqlite");
+      expect(sql).toContain('"webhooks"');
+      expect(sql).toContain('"record":false');
+    });
+
+    it(`${kind}: keeps the column updatable on conflict`, () => {
+      const sql = build(entity, "postgresql");
+      expect(sql).toContain('"webhooks" = EXCLUDED."webhooks"');
+    });
+  }
+
+  const onCases = [
+    ["collection", buildCollectionMetadataUpsert, on.collections[0]],
+    ["single", buildSingleMetadataUpsert, on.singles[0]],
+  ] as const;
+
+  for (const [kind, build, entity] of onCases) {
+    it(`${kind}: writes NULL when recording is on`, () => {
+      // On is the default, stored as NULL so no override is persisted. The
+      // column must still be written, or turning recording off later would be
+      // left untouched by the upsert's DO UPDATE SET and the opt-out would be
+      // silently discarded.
+      const sql = build(entity, "sqlite");
+      expect(sql).toContain('"webhooks"');
+      expect(sql).not.toContain('"record"');
+      expect(sql).toMatch(/NULL/);
+    });
+  }
+
+  it("rejects webhooks on a component", () => {
+    // Components emit no outbox events of their own — their writes are recorded
+    // against the collection or single that embeds them — so the key would
+    // persist a setting nothing reads.
+    const parsed = uiSchemaManifest.safeParse({
+      collections: [],
+      singles: [],
+      components: [
+        {
+          slug: "seo",
+          webhooks: false,
+          fields: [{ name: "t", type: "text" }],
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+});

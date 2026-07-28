@@ -49,6 +49,7 @@ import type { MetaService } from "../domains/meta";
 import {
   clearFieldTypes,
   registerFieldType,
+  withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
@@ -58,9 +59,11 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
   resetWebhookRecordingPolicy,
+  setStoredRecordingRefresher,
   setWebhookRecording,
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
@@ -68,6 +71,7 @@ import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-c
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
+import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -419,7 +423,7 @@ export async function registerServices(
   clearFieldTypes();
   for (const fieldTypePlugin of resolvedPlugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
-      registerFieldType(fieldType);
+      registerFieldType(withoutDisabledBehavior(fieldType, fieldTypePlugin));
     }
   }
 
@@ -478,6 +482,26 @@ export async function registerServices(
   // `webhooks: false` collection (e.g. form submissions) would silently record
   // PII-bearing events despite the opt-out.
   publishWebhookRecordingPolicies(transformedConfig);
+
+  // Then layer in the registry-stored opt-outs. Builder-authored collections and
+  // singles have no code-first config to publish from, so without this read their
+  // switch would hold only for the process that set it and every restart would
+  // silently resume recording. Runs second and skips config-owned slugs, so live
+  // code always outranks a stored row.
+  const configOwnedSlugs = {
+    collections: collectSlugs(transformedConfig.collections),
+    singles: collectSlugs(transformedConfig.singles),
+  };
+  await publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs);
+
+  // Register how that read is repeated. The stored decisions are a snapshot, and
+  // a toggle applied on one instance only updates that instance's map; without a
+  // refresher a sibling in a multi-instance deployment would keep recording a
+  // collection someone opted out of elsewhere until it restarted. The gate
+  // schedules this out of band on a stale read, never inline on the write path.
+  setStoredRecordingRefresher(() =>
+    publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs)
+  );
 
   // Belt-and-suspenders: also register every code-first collection and
   // single from the supplied config directly into the resolver. The
@@ -1129,6 +1153,21 @@ async function initializeSchemaRegistry(
  * registry fails to initialize, where `registerConfigTablesInResolver` never
  * runs.
  */
+/**
+ * The slugs a list of config entities declares, skipping any malformed entry
+ * without a slug. Used to tell the stored-policy publisher which slugs the
+ * code-first config owns.
+ */
+function collectSlugs(
+  entities: Array<{ slug?: string }> | undefined
+): Set<string> {
+  const slugs = new Set<string>();
+  for (const entity of entities ?? []) {
+    if (entity.slug) slugs.add(entity.slug);
+  }
+  return slugs;
+}
+
 function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
   // Provenance comes from the plugin contribution list, not the optional
   // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a
@@ -1375,6 +1414,10 @@ async function syncCodeFirstCollections(
       // dynamic_collections.revalidate; the write path reads it to honor
       // `disable` and merge extra `tags`.
       revalidate: collection.revalidate,
+      // Mirror the recording opt-out onto the registry row so a code-first
+      // `webhooks: false` is visible to anything reading the row, not only to
+      // the in-process policy the config publisher populates.
+      webhooks: storedWebhookRecording(collection.webhooks),
       // Forward the i18n master switch (mirrors status) so the boot sync persists
       // dynamic_collections.localized — the read path keys companion resolution off it.
       localized: collection.localized === true,
@@ -1937,6 +1980,9 @@ async function syncCodeFirstSingles(
       // dynamic_singles.revalidate; the write path reads it to honor `disable`
       // and merge extra `tags`.
       revalidate: single.revalidate,
+      // Mirror the recording opt-out onto the registry row (same reason as
+      // collections).
+      webhooks: storedWebhookRecording(single.webhooks),
     }));
 
   try {

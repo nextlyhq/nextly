@@ -96,7 +96,7 @@ import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
-import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
+import { isRecordingDisabledByConfig } from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
 
@@ -400,13 +400,18 @@ export class CollectionMutationService extends BaseService {
     fields: readonly SensitiveFieldSource[],
     executor?: unknown
   ): Promise<readonly SensitiveFieldSource[]> {
-    // Gate only on the per-entity opt-out, NOT the endpoint/audit flag: that flag
-    // can flip on between this pre-record expansion and the in-transaction
-    // recordMutationEvent, and skipping expansion here while the choke point then
-    // records would ship component-nested secret/hidden values unstripped. The
-    // choke point still gates the actual write, so a gated-off collection records
-    // nothing — only this expansion runs, exactly as before endpoint gating.
-    if (!isWebhookRecordingEnabled("collection", collectionSlug)) return fields;
+    // Gate only on a decision that holds for the WHOLE write. The endpoint/audit
+    // flag can flip on between this pre-record expansion and the in-transaction
+    // recordMutationEvent, and a registry-stored (`db`) opt-out can be flipped by
+    // the background policy refresh for the same reason; skipping expansion here
+    // while the choke point then records would ship component-nested
+    // secret/hidden values unstripped. Config-sourced opt-outs (`code` and
+    // `plugin`, which is what the form-builder's submissions collection uses)
+    // cannot change mid-write, so they still skip the work. The choke point
+    // still gates the actual write, so a gated-off collection records nothing —
+    // only this expansion runs, exactly as before endpoint gating.
+    if (isRecordingDisabledByConfig("collection", collectionSlug))
+      return fields;
     return this.webhookFieldTree(fields, executor);
   }
 

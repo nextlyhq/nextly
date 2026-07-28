@@ -1427,6 +1427,32 @@ describe("plugin field types as block props", () => {
       expect(configs[0]?.type, storage).toBe(expected);
     }
   });
+
+  it("does not run the type's own validate on a prop value", async () => {
+    // A prop is built as its storage primitive and carries the contributed
+    // type only in `custom`, so the entry pass that validates prop values
+    // never sees a plugin type here. Block props are the page builder's
+    // surface to validate, and this records that the entry seam does not.
+    let called = false;
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "plugin/rating",
+      surfaces: ["blocks"],
+      validate: () => {
+        called = true;
+        return "the entry seam must not reject a block prop";
+      },
+    });
+
+    const issues = await validateBlockPropValues(
+      { score: 3 },
+      { name: "core/review", props: { score: { type: "rating" } } }
+    );
+
+    expect(called).toBe(false);
+    expect(issues).toEqual([]);
+  });
 });
 
 describe("validateBlockPropValues", () => {

@@ -171,6 +171,9 @@ export default function SingleBuilderEditPage({
       // Cache revalidation is on unless the stored config disables it (mirrors
       // the collection builder).
       revalidate: single.revalidate?.disable !== true,
+      // Webhook recording is on unless the stored policy opts out (mirrors the
+      // collection builder).
+      webhooks: single.webhooks?.record !== false,
     };
     setSettings(loadedSettings);
     setOriginalSettings(loadedSettings);
@@ -261,6 +264,8 @@ export default function SingleBuilderEditPage({
                   versions: settings.versions === true,
                   // Cache revalidation: on unless explicitly turned off.
                   revalidate: settings.revalidate !== false,
+                  // Webhook recording: on unless explicitly turned off.
+                  webhooks: settings.webhooks !== false,
                 },
               },
               {
@@ -344,6 +349,8 @@ export default function SingleBuilderEditPage({
             versions: settings.versions === true,
             // Cache revalidation: on unless explicitly turned off.
             revalidate: settings.revalidate !== false,
+            // Webhook recording: on unless explicitly turned off.
+            webhooks: settings.webhooks !== false,
           },
         },
         {

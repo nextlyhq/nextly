@@ -63,6 +63,7 @@ import { resolveSingleTableName } from "../../domains/singles/services/resolve-s
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
+import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -516,6 +517,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             versions?: boolean;
             // Cache-revalidation opt-out; persists to dynamic_singles.revalidate.
             revalidate?: boolean;
+            // Webhook recording opt-out; persists to dynamic_singles.webhooks.
+            webhooks?: boolean;
           }
         | undefined;
 
@@ -691,6 +694,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Cache-revalidation opt-out from the create payload (null = standard
         // tags, { disable: true } = off), so the write path reads it back.
         revalidate: resolveBuilderRevalidate(b.revalidate),
+        // Webhook recording opt-out from the create payload (null = record,
+        // { record: false } = off), so boot reads it back after a restart.
+        webhooks: resolveBuilderWebhooks(b.webhooks),
         schemaHash,
         migrationStatus,
       });
@@ -986,6 +992,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Cache-revalidation toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.revalidate.
             revalidate?: boolean;
+            // Webhook recording toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.webhooks.
+            webhooks?: boolean;
           }
         | undefined;
 
@@ -1024,6 +1033,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // path reads; on writes null (standard tags), off writes the disable config.
       if (b.revalidate !== undefined) {
         updateData.revalidate = resolveBuilderRevalidate(b.revalidate);
+      }
+      // Webhook recording toggle, normalized to the resolved policy boot reads;
+      // on writes null (record), off writes the stored opt-out.
+      if (b.webhooks !== undefined) {
+        updateData.webhooks = resolveBuilderWebhooks(b.webhooks);
       }
       const wasLocalized = existing.localized === true;
       const isLocalized =

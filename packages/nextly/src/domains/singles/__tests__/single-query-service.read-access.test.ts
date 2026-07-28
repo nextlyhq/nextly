@@ -438,6 +438,140 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
     return { service, expandRelationships };
   }
 
+  it("hides the underlying failure when a strict expansion throws", async () => {
+    // The strict path exists for the authorization view, and a failure there
+    // reaches the caller. `buildSingleErrorResult` puts a bare Error's own
+    // message on the wire, which for a driver fault is schema detail.
+    const expandRelationships = vi
+      .fn()
+      .mockRejectedValue(new Error('no such table: "dc_authors"'));
+    container.register("collectionsHandler", () => ({
+      getRelationshipService: () => ({ expandRelationships }),
+    }));
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      createMockSingleRegistry() as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    await expect(
+      service.expandRelationshipFields(
+        { id: "doc1", author: "a1" } as never,
+        RELATION_FIELDS as never,
+        1,
+        {},
+        true
+      )
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
+  it("hides the underlying failure when strict component population throws", async () => {
+    // The component path has its own strict mode, and its failures reach the
+    // caller the same way a relationship failure does.
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({
+        accessRules: { read: { type: "custom", functionPath: "./rule" } },
+      }),
+      fields: [textField("siteName")],
+    });
+    const componentDataService = {
+      populateComponentData: vi
+        .fn()
+        .mockRejectedValue(new Error('no such table: "comp_hero"')),
+    };
+    const service = new SingleQueryService(
+      createMockAdapter({
+        selectOne: vi.fn().mockResolvedValue({ id: "doc1" }),
+      }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      componentDataService as unknown as Ctor[4],
+      createMockRBACService(true) as unknown as Ctor[5],
+      undefined,
+      {
+        evaluateAccess: vi.fn().mockResolvedValue({ allowed: true }),
+      } as unknown as Ctor[7]
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    // Both halves matter: `not.toContain` alone holds for any failure, so the
+    // status pins that this is the strict-component path refusing rather than
+    // some earlier gate the mock happened to trip.
+    expect(result.statusCode).toBe(500);
+    expect(componentDataService.populateComponentData).toHaveBeenCalled();
+    expect(result.message).not.toContain("comp_hero");
+  });
+
+  it("leaves relationships inside containers alone for a caller with no context", async () => {
+    // Expansion copies whole related rows in, and a caller that threads no user
+    // cannot have the target collection's field rules evaluated for them — the
+    // mutation response path is exactly that caller. Reaching into containers
+    // for it would hand over rows nothing downstream can redact.
+    const { service, expandRelationships } = serviceWithRelationshipSpy();
+
+    await service.expandRelationshipFields(
+      { id: "doc1" } as never,
+      [
+        {
+          name: "meta",
+          type: "group",
+          fields: [{ name: "author", type: "relationship" }],
+        },
+      ] as never
+    );
+
+    expect(expandRelationships).not.toHaveBeenCalled();
+  });
+
+  it("hides the underlying failure when a strict overview read throws", async () => {
+    // The overview read only throws for a caller that will judge on it, and the
+    // result builder puts a bare Error's own message on the wire.
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({
+        accessRules: { read: { type: "custom", functionPath: "./rule" } },
+        localized: true,
+      }),
+      fields: [textField("siteName")],
+    });
+    const service = new SingleQueryService(
+      createMockAdapter({
+        selectOne: vi.fn().mockResolvedValue({ id: "doc1" }),
+      }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      undefined,
+      createMockRBACService(true) as unknown as Ctor[5],
+      undefined,
+      {
+        evaluateAccess: vi.fn().mockResolvedValue({ allowed: true }),
+      } as unknown as Ctor[7]
+    );
+    vi.spyOn(
+      service as unknown as {
+        populateTranslationMeta: () => Promise<void>;
+      },
+      "populateTranslationMeta"
+    ).mockRejectedValue(new Error('permission denied for "branding_locales"'));
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+      translationStatus: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).not.toContain("branding_locales");
+  });
+
   it("leaves enforcement off for a caller that supplies no access context", async () => {
     const { service, expandRelationships } = serviceWithRelationshipSpy();
 

@@ -506,6 +506,13 @@ export interface TranslationStatusArgs {
   /** Whether the companion carries a per-locale `_status` column (i18n M6). */
   hasStatus: boolean;
   idKey?: string;
+  /**
+   * Surface query failures rather than leaving the rows untouched. A caller
+   * judging an access rule on this overview cannot tell "no translations" from
+   * "the read failed", so it needs the failure. A missing companion table is
+   * still tolerated: that is a single before its migration, not a fault.
+   */
+  strict?: boolean;
   /** Row key to write the per-locale map under (default `_translations`). */
   outKey?: string;
   /**
@@ -558,7 +565,8 @@ export async function populateTranslationStatus(
           inArray(table._locale as never, locales)
         )
       );
-  } catch {
+  } catch (error) {
+    if (args.strict && !isMissingCompanionTableError(error)) throw error;
     return; // companion table not present yet — leave rows untouched
   }
 

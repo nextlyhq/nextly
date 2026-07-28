@@ -1747,11 +1747,19 @@ export class CollectionRelationshipService extends BaseService {
 
       const collection =
         await this.collectionService.getCollection(collectionName);
-      return ((
-        (collection as Record<string, unknown>).schemaDefinition as
-          | Record<string, unknown>
-          | undefined
-      )?.fields || []) as FieldDefinition[];
+      // Both shapes, the same way `getRedactionFields` reads them: a
+      // Builder-created collection carries `schemaDefinition`, while
+      // `getCollection` returns the raw row for a code-first one and its fields
+      // sit at the top level. Reading only the first resolved a code-first
+      // target to nothing, and the caller's `targetFields.length > 0` guard
+      // then skipped the nested hop entirely — silently, at any depth.
+      const fields =
+        (
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields ?? (collection as Record<string, unknown>).fields;
+      return Array.isArray(fields) ? (fields as FieldDefinition[]) : [];
     } catch {
       return [];
     }

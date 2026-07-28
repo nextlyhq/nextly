@@ -260,6 +260,13 @@ export interface Collection {
    */
   revalidate?: { disable?: boolean; tags?: string[] } | null;
   /**
+   * Resolved webhook recording policy, or null/absent when recording is on
+   * (the default). The server normalizes the Schema Builder's on/off switch
+   * into this shape (off → `{ record: false }`), so reads carry the object
+   * while writes send a boolean — see `UpdateCollectionPayload`.
+   */
+  webhooks?: { record?: boolean } | null;
+  /**
    * Legacy schema definition format.
    * New API returns `fields` directly at root level.
    */
@@ -345,6 +352,9 @@ export interface CreateCollectionPayload {
   versions?: boolean;
   /** Whether writes bust cache tags. Default true; false opts the collection out. */
   revalidate?: boolean;
+  /** Whether writes are recorded to the webhook outbox. Default true; false
+   *  keeps the collection's content out of the outbox and every delivery. */
+  webhooks?: boolean;
   /** Whether to auto-generate createdAt/updatedAt. Default true. */
   timestamps?: boolean;
   fields: FieldDefinition[];
@@ -369,6 +379,9 @@ export interface UpdateCollectionPayload {
   versions?: boolean;
   /** Toggle cache revalidation. Default true; false opts the collection out. */
   revalidate?: boolean;
+  /** Toggle webhook recording. Default true; false keeps the collection's
+   *  content out of the outbox and every delivery. */
+  webhooks?: boolean;
   /** i18n: toggle translatable fields. Toggling on adds the companion `_locales`
    *  table (migration-gated, via the schema-change preview). */
   localized?: boolean;
