@@ -165,13 +165,39 @@ function relationshipMaxDepth(field: FieldConfig): number | undefined {
   return config.options?.maxDepth ?? config.maxDepth;
 }
 
-/** Parse a container that may still be a JSON string (SQLite's shape). */
+/** Marks a stored value whose JSON could not be read. */
+const UNREADABLE_CONTAINER = Symbol("unreadable-container");
+
+/**
+ * Parse a group or repeater that may still be a JSON string (SQLite's shape).
+ *
+ * A string here is always meant to be JSON, so failing to read it is not the
+ * same as holding nothing: it hides whatever the container held, and treating
+ * it as empty would walk past every relationship inside it.
+ */
 function parseContainer(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
     return JSON.parse(value) as unknown;
   } catch {
-    return undefined;
+    return UNREADABLE_CONTAINER;
+  }
+}
+
+/**
+ * Parse a relationship or upload value that may hold one reference or a list.
+ *
+ * Unlike a container, a bare string here is an ordinary id rather than JSON, so
+ * only a value that announces itself as a list is parsed — and only that case
+ * can be unreadable.
+ */
+function parseReferenceValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  if (!value.trimStart().startsWith("[")) return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return UNREADABLE_CONTAINER;
   }
 }
 
@@ -181,6 +207,7 @@ function containerRows(
   type: "group" | "repeater"
 ): (Record<string, unknown> | undefined)[] {
   const parsed = parseContainer(value);
+  if (parsed === UNREADABLE_CONTAINER) return [];
   if (type === "repeater") {
     return Array.isArray(parsed)
       ? parsed.map(row =>
@@ -229,7 +256,9 @@ function isExpandedRow(value: unknown): boolean {
  * missing rather than evidence that says nothing is there.
  */
 function referencesExpanded(stored: unknown, assembled: unknown): boolean {
-  const storedList = parseContainer(stored);
+  const parsedStored = parseReferenceValue(stored);
+  if (parsedStored === UNREADABLE_CONTAINER) return false;
+  const storedList = parsedStored;
   const storedRefs = Array.isArray(storedList)
     ? storedList.filter(id => !isEmptyValue(id))
     : undefined;
@@ -759,8 +788,10 @@ export class SingleQueryService extends BaseService {
       if (type === "relationship" || type === "relation" || type === "upload") {
         if (type !== "upload" && !expandsRelationships) continue;
         // `maxDepth: 0` asks for the reference itself, so an unexpanded id is
-        // the configured outcome rather than a failure to expand.
-        if (relationshipMaxDepth(field) === 0) continue;
+        // the configured outcome rather than a failure to expand. Uploads are
+        // populated whatever depth is configured, so the same exemption would
+        // skip their only check.
+        if (type !== "upload" && relationshipMaxDepth(field) === 0) continue;
         // Neither is a polymorphic RELATIONSHIP expanded: it is stored and
         // served as `{ relationTo, value }`, so demanding a row there refuses
         // every read of a Single that has one. An upload is populated whatever
@@ -787,6 +818,26 @@ export class SingleQueryService extends BaseService {
       if (type !== "group" && type !== "repeater") continue;
       const nested = "fields" in field ? (field.fields as FieldConfig[]) : [];
       if (!nested || nested.length === 0) continue;
+
+      // A container that cannot be read is not a container that holds nothing.
+      // Its relationships are unreachable, so the walk below would step over
+      // them and the document would be judged on what it could not see.
+      if (
+        parseContainer(before) === UNREADABLE_CONTAINER ||
+        parseContainer(after) === UNREADABLE_CONTAINER
+      ) {
+        this.logger.error(
+          "Refusing a single read: a container could not be read while authorizing",
+          { single: slug, field: where }
+        );
+        throw NextlyError.internal({
+          logContext: {
+            single: slug,
+            field: where,
+            reason: "unreadable-container-during-authorization",
+          },
+        });
+      }
 
       const storedRows = containerRows(before, type);
       const assembledRows = containerRows(after, type);

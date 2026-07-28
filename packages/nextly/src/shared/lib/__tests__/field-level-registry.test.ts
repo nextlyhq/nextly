@@ -348,6 +348,69 @@ describe("field-level registry", () => {
     expect(described).toBe("tags(1)");
   });
 
+  it("keeps a sparse array's holes", async () => {
+    // Iterating fills holes with `undefined` and makes them real elements, so a
+    // callback testing membership decides on a different structure from the
+    // payload being authorized.
+    let hasHole: boolean | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            hasHole = !(1 in (data.items as unknown[]));
+            return true;
+          },
+        },
+      },
+    ]);
+    const items: unknown[] = [];
+    items[0] = "a";
+    items[2] = "c";
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", items },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(hasHole).toBe(true);
+  });
+
+  it("carries a decorated collection's own properties into the copy", async () => {
+    // A Map can hold state beyond its entries, and a rule reading one of those
+    // properties would otherwise be shown a collection missing it.
+    const flags = new Map<string, string>([["a", "1"]]);
+    (flags as unknown as Record<string, unknown>).restricted = true;
+    let sawRestricted: unknown;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            sawRestricted = (data.flags as unknown as Record<string, unknown>)
+              .restricted;
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", flags },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(sawRestricted).toBe(true);
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {

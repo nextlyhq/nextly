@@ -39,6 +39,22 @@ export function detachData<T>(value: T): T {
  * object in the copy, so a callback comparing them by reference still sees what
  * the document says.
  */
+/**
+ * Carry a collection's own properties onto its copy.
+ *
+ * A `Map` or `Set` can hold state beyond its entries, and a rule reading one of
+ * those properties would otherwise be shown a collection missing it.
+ */
+function copyOwnProperties(
+  source: object,
+  target: object,
+  seen: WeakMap<object, unknown>
+): void {
+  for (const [key, entry] of Object.entries(source)) {
+    (target as Record<string, unknown>)[key] = detachValue(entry, seen);
+  }
+}
+
 function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   if (!value || typeof value !== "object") return value;
 
@@ -46,9 +62,15 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   if (existing !== undefined) return existing;
 
   if (Array.isArray(value)) {
-    const copy: unknown[] = [];
+    // Length first, then only the indices that exist: iterating fills holes
+    // with `undefined`, which a callback testing `0 in items` can tell apart
+    // from the array it was given.
+    const copy: unknown[] = new Array(value.length) as unknown[];
     seen.set(value, copy);
-    for (const entry of value) copy.push(detachValue(entry, seen));
+    for (const index of Object.keys(value)) {
+      const at = Number(index);
+      if (Number.isInteger(at)) copy[at] = detachValue(value[at], seen);
+    }
     return copy;
   }
 
@@ -71,6 +93,7 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     for (const [key, entry] of value) {
       copy.set(detachValue(key, seen), detachValue(entry, seen));
     }
+    copyOwnProperties(value, copy, seen);
     return copy;
   }
 
@@ -78,6 +101,7 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     const copy = new Set<unknown>();
     seen.set(value, copy);
     for (const entry of value) copy.add(detachValue(entry, seen));
+    copyOwnProperties(value, copy, seen);
     return copy;
   }
 

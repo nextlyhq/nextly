@@ -1027,6 +1027,52 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data!.author).toBe(authorId);
   });
 
+  it("refuses when a stored container cannot be read", async () => {
+    // A group whose stored JSON is malformed hides whatever relationships it
+    // held. Treating it as an empty container walks straight past them, and the
+    // rule is judged on a document it could not actually see.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: {} },
+      { overrideAccess: true }
+    );
+    // Corrupt the stored container, the way a truncated or half-written value
+    // would arrive.
+    await current.adapter.update("single_branding", { meta: "{not json" }, {});
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
   it("leaves a relationship configured not to populate alone", async () => {
     // `maxDepth: 0` asks for the reference itself, so an unexpanded id is the
     // configured outcome. Demanding a row there refuses every read of the

@@ -40,4 +40,8 @@ The decision made on the document you actually receive is held to the same compl
 
 A read refused for incomplete evidence reports the canonical internal error rather than the underlying failure's own message, which for a database fault is schema detail. That covers relationship expansion, component population and translation loading alike.
 
+A group or repeater whose stored JSON cannot be read now fails the read rather than being treated as empty, which would have walked past every relationship inside it.
+
+Sparse arrays keep their holes when handed to an access callback, and a `Map` or `Set` carrying its own properties keeps them, so a rule reading either decides on the structure the payload actually has.
+
 A subclass of `Map` or `Set` reaches an access callback as itself rather than rebuilt as the base collection, which would have discarded its methods and private state.
