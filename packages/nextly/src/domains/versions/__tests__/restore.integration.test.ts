@@ -103,12 +103,54 @@ describe("restoreVersion (integration)", () => {
       entryId,
     });
 
-    // History grows rather than being rewritten, so the pre-restore state is
-    // still there and a wrong restore is undone by restoring again.
-    expect(history.length).toBe(3);
+    // v1 First, v2 Second, v3 the "Before restore" snapshot of the content the
+    // restore replaced, v4 the restore itself. History grows rather than being
+    // rewritten, so a wrong restore is undone by restoring again.
+    expect(history.length).toBe(4);
 
     const newest = history[0];
     expect(newest?.sourceVersionNo).toBe(1);
+    // The version just below the restore snapshots what it replaced.
+    expect(history[1]?.label).toBe("Before restore");
+  });
+
+  it("snapshots the live content as a 'Before restore' version so a restore never loses it", async () => {
+    current = await bootPosts();
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const versions = current.getService<VersionsService>("versionsService");
+
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "First" }
+    );
+    const entryId = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      { collectionName: "posts", entryId, overrideAccess: true },
+      { title: "Second" }
+    );
+
+    await restoreVersion({
+      scopeKind: "collection",
+      slug: "posts",
+      entryId,
+      versionNo: 1,
+      user: superAdmin,
+    });
+
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: "posts",
+      entryId,
+    };
+    const history = await versions.list(ref);
+    // The pre-restore snapshot holds exactly the content that was live at the
+    // moment of the restore ("Second") — the guarantee that a restore never
+    // destroys content that is in no other version.
+    const beforeRestore = history.find(v => v.label === "Before restore");
+    expect(beforeRestore).toBeDefined();
+    const full = await versions.get(ref, beforeRestore!.versionNo!);
+    expect((full.snapshot as { title?: string }).title).toBe("Second");
   });
 
   it("keeps the replaced version even under a tight retention cap", async () => {
@@ -210,6 +252,9 @@ describe("restoreVersion (integration)", () => {
     });
 
     expect((after.data as { title?: string }).title).toBe("Second");
-    expect(history.length).toBe(4);
+    // v1, v2, then each restore adds two: a "Before restore" snapshot of what it
+    // replaced and the restore itself. Two restores → six versions, history
+    // grown rather than rewritten.
+    expect(history.length).toBe(6);
   });
 });

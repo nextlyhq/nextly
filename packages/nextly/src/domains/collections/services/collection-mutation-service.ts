@@ -4040,6 +4040,48 @@ export class CollectionMutationService extends BaseService {
               components: previousComponents,
               manyToMany: previousM2M,
             });
+
+            // On a restore, snapshot the document as it is NOW, before the
+            // restore overwrites it: content written while versioning was off
+            // lives in no version, so without this a restore would destroy it.
+            // Captured here — before the write, in this same transaction — so it
+            // takes the number just below the restore's own capture, which the
+            // retention pass already protects as "the content the restore
+            // replaced". Passed no `maxPerDoc`, so it never runs retention itself
+            // (that would trim with none of the restore protections, e.g.
+            // dropping the version being restored FROM); the restore's own
+            // capture below trims once, with those protections.
+            if (params.sourceVersionNo != null && versionsConfig?.enabled) {
+              const previousHoldsLocaleState =
+                Object.keys(previousLocalizedValues).length > 0 ||
+                Object.keys(previousComponents ?? {}).length > 0 ||
+                previousCompanionStatus !== null;
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                },
+                contentStatus: (previousParent as { status?: unknown }).status,
+                parts: await this.snapshotPartsFor(
+                  {
+                    parentRow: previousParent,
+                    components: previousComponents,
+                    manyToMany: previousM2M,
+                  },
+                  fields,
+                  tx
+                ),
+                createdBy: params.user?.id ?? null,
+                // Labelled with a locale only when the prior state actually held
+                // locale-specific values — see the post-write capture below.
+                locale: previousHoldsLocaleState
+                  ? (localizedUpdate?.writeLocale ??
+                    this.componentSnapshotLocale(params.locale))
+                  : null,
+                label: "Before restore",
+              });
+            }
           }
 
           // TOCTOU-safe authorization: classify the transition against the
