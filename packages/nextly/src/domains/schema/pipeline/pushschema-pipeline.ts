@@ -897,9 +897,46 @@ export class PushSchemaPipeline {
 
         let emittedStatements: string[];
         let pushResult: PushSchemaPassResult | undefined;
+        // Statements this apply executed BEFORE drizzle-kit ran (kit-path
+        // add_table pre-creation below) — counted into the journal's
+        // executed total alongside the post-filter batch.
+        let preCreatedStatements = 0;
         if (useFastPath) {
           emittedStatements = emitDdl(resolvedOps, dialect);
         } else {
+          // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
+          // introspection with a tables filter): drizzle-kit v1's differ
+          // sees the WHOLE live DB on these dialects, so any live table
+          // absent from the desired schema (UI-created entities during a
+          // code-first apply, `_locales` companions, the i18n archive)
+          // reads as "deleted". Paired against a "created" table from this
+          // apply, its rename resolver throws `Internal error:
+          // resolver(table) was called without a HintsHandler` before
+          // emitting anything, failing the apply and leaving the new table
+          // uncreated. Creating the planned tables OURSELVES first empties
+          // the differ's created set — nothing to pair, no resolver call —
+          // and the kit then handles only the column-level remainder (it
+          // re-introspects and sees these tables live AND declared).
+          if (dialect !== "postgresql") {
+            const addTableOps = resolvedOps.filter(
+              op => op.type === "add_table"
+            );
+            if (addTableOps.length > 0) {
+              const createStatements = emitDdl(addTableOps, dialect);
+              try {
+                await this.deps.executor.executeStatements(
+                  tx,
+                  createStatements
+                );
+              } catch (err) {
+                throw new DdlExecutionError(
+                  err instanceof Error ? err.message : String(err),
+                  err
+                );
+              }
+              preCreatedStatements = createStatements.length;
+            }
+          }
           try {
             // withCapturedStdout reroutes any chatter drizzle-kit writes to
             // process.stdout/stderr so it doesn't leak into the dev console.
@@ -1051,12 +1088,14 @@ export class PushSchemaPipeline {
           );
         }
 
-        // `safe.length`, not the executed length: this number is the
-        // journal's `statements_executed`, read against `statements_planned`
-        // from the diff. The restore statements were never planned, so
-        // counting them would report a mismatch on every apply that had to
-        // put an index back.
-        return safe.length;
+        // `safe.length` plus the kit-path pre-created statements, not the
+        // executed length: this number is the journal's
+        // `statements_executed`, read against `statements_planned` from the
+        // diff. The restore statements were never planned, so counting them
+        // would report a mismatch on every apply that had to put an index
+        // back; the pre-created CREATEs WERE planned (add_table ops) and
+        // executed, so they count.
+        return safe.length + preCreatedStatements;
       };
 
       let statementsExecuted: number;

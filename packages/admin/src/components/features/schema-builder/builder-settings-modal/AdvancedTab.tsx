@@ -1,12 +1,16 @@
 // Why: Advanced-tab fields for the BuilderSettingsModal. Like BasicsTab,
 // renders only the fields listed in the per-kind config. PR B (2026-05-03)
 // removed Use as Title (system title is always the display) and Timestamps
-// (always emitted) from the UI. The i18n row stays as a disabled placeholder
-// with a neutral "Coming Soon" chip. Show system fields switch mirrors
-// Group + Order from the Advanced tab; server-side admin.group / admin.order
-// still work for code-first config.
+// (always emitted) from the UI. The i18n switch is gated on the app-level
+// `localization` config: enabling it without that config splits the entity's
+// storage into a shape the runtime cannot write to (the server rejects the
+// save too — this keeps the trap out of the UI). Show system fields switch
+// mirrors Group + Order from the Advanced tab; server-side admin.group /
+// admin.order still work for code-first config.
 import { Input, Label, Switch } from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
+
+import { useLocalization } from "@admin/hooks/useLocalization";
 
 import type { AdvancedField } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
@@ -24,6 +28,15 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
     key: K,
     value: BuilderSettingsValues[K]
   ) => onChange({ ...values, [key]: value });
+
+  // The i18n switch needs the app-level `localization` config to mean
+  // anything: without it the save is rejected server-side, so the switch is
+  // disabled with instructions instead of offering a toggle that cannot work.
+  // An entity that is ALREADY localized keeps an enabled switch so it can be
+  // turned off.
+  const { locales } = useLocalization();
+  const i18nConfigured = locales.length > 0;
+  const i18nLocked = !i18nConfigured && values.i18n !== true;
 
   return (
     <div className="space-y-4 py-2">
@@ -53,9 +66,15 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
         <SwitchRow
           ariaLabel="Internationalization"
           label="Internationalization"
-          help="Store translatable fields per language. Text fields localize by default; toggle each field's Localized setting to override. Applying this runs a migration to create the translations table."
+          help={
+            i18nLocked
+              ? "Requires a `localization` block (locales + defaultLocale) in nextly.config. Add it and restart the dev server to enable per-language content."
+              : "Store translatable fields per language. Text fields localize by default; toggle each field's Localized setting to override. Applying this runs a migration to create the translations table."
+          }
           checked={values.i18n ?? false}
           onChange={v => set("i18n", v)}
+          disabled={i18nLocked}
+          badge={i18nLocked ? "Not configured" : undefined}
         />
       )}
 

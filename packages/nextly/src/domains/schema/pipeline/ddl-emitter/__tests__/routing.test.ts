@@ -75,9 +75,39 @@ describe("canEmitWithoutDrizzleKit", () => {
     );
   });
 
-  it("returns false for non-postgresql dialects", () => {
-    expect(canEmitWithoutDrizzleKit([addCol], "mysql")).toBe(false);
-    expect(canEmitWithoutDrizzleKit([addCol], "sqlite")).toBe(false);
+  // SQLite/MySQL fast-path the purely-additive subset. Beyond speed this
+  // is a crash guard: drizzle-kit v1 has no introspection filter on these
+  // dialects, so a live table absent from the desired schema (UI-created
+  // entities, `_locales` companions) paired against a "created" table
+  // crashes its rename resolver (`resolver(table) was called without a
+  // HintsHandler`). Additive applies must therefore never reach the kit.
+  it("returns true for additive ops on sqlite and mysql", () => {
+    const addTable: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_new",
+        columns: [{ name: "id", type: "text", nullable: false }],
+        indexes: [],
+      },
+    };
+    expect(canEmitWithoutDrizzleKit([addCol, addTable], "sqlite")).toBe(true);
+    expect(canEmitWithoutDrizzleKit([addCol, addTable], "mysql")).toBe(true);
+  });
+
+  it("returns false for change_* ops on sqlite and mysql (kit owns rebuilds)", () => {
+    const changeType: Operation = {
+      type: "change_column_type",
+      tableName: "dc_authors",
+      columnName: "age",
+      fromType: "text",
+      toType: "integer",
+    };
+    expect(canEmitWithoutDrizzleKit([changeType], "sqlite")).toBe(false);
+    expect(canEmitWithoutDrizzleKit([changeType], "mysql")).toBe(false);
+    // Mixed lists degrade to the kit as a whole.
+    expect(canEmitWithoutDrizzleKit([addCol, changeType], "sqlite")).toBe(
+      false
+    );
   });
 
   // Regression: rext-site-v2 / test_verify_fix (May 2026).
@@ -92,10 +122,13 @@ describe("canEmitWithoutDrizzleKit", () => {
     expect(canEmitWithoutDrizzleKit([], "postgresql")).toBe(true);
   });
 
-  it("returns false for an empty op list on non-postgresql dialects", () => {
-    // mysql / sqlite still go through drizzle-kit; the fast in-memory
-    // emitter is PG-only.
-    expect(canEmitWithoutDrizzleKit([], "mysql")).toBe(false);
-    expect(canEmitWithoutDrizzleKit([], "sqlite")).toBe(false);
+  it("returns true for an empty op list on every dialect (no DDL needed)", () => {
+    // A zero-op apply must never reach drizzle-kit: on SQLite/MySQL the
+    // kit introspects the whole live DB and can crash its rename resolver
+    // on tables outside the desired schema even when our diff decided
+    // nothing needs to change (repeated HMR no-op applies hit exactly
+    // this). Our own diff is the authority for "no DDL is needed".
+    expect(canEmitWithoutDrizzleKit([], "mysql")).toBe(true);
+    expect(canEmitWithoutDrizzleKit([], "sqlite")).toBe(true);
   });
 });

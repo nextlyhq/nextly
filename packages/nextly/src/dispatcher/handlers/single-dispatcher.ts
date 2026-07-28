@@ -33,6 +33,7 @@ import { container } from "../../di/container";
 import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
@@ -553,6 +554,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // runtime schema would expect a column the DDL never created.
       const schemaService = new DynamicCollectionSchemaService();
       const isLocalized = b.localized === true;
+      // i18n: a localized single stores translatable values via the app's
+      // `localization` config; creating one without that config would split
+      // the tables into a shape the runtime cannot write to. Reject up
+      // front with an actionable message.
+      if (isLocalized) {
+        assertLocalizationConfigured("single", b.slug);
+      }
       const migrationSQL = schemaService.generateMigrationSQL(
         tableName,
         b.fields as unknown as FieldDefinition[],
@@ -1014,6 +1022,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;
       const alterOmitLocalized = isLocalized || wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true only — an already-localized
+      // single keeps saving, and disabling is always allowed).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("single", slug);
+      }
 
       let migrationStatus = existing.migrationStatus;
 
@@ -1400,10 +1414,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
       // simultaneous toggle+field-change save); fall back to the registry value.
+      const wasLocalized =
+        (single as { localized?: boolean }).localized === true;
       const isLocalized =
         requestLocalized !== undefined
           ? requestLocalized === true
-          : (single as { localized?: boolean }).localized === true;
+          : wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true transition only).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("single", slug);
+      }
 
       const currentVersion = single.schemaVersion ?? 1;
       // Reject a stale UI save before any DDL runs so two admins editing the

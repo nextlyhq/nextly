@@ -28,6 +28,7 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
@@ -597,6 +598,13 @@ const COLLECTIONS_METHODS: Record<
         requestLocalized !== undefined
           ? requestLocalized === true
           : wasLocalized;
+      // i18n: enabling Internationalization needs the app-level
+      // `localization` config — without it the companion reconcile below
+      // would move translatable columns into a table the runtime cannot
+      // address. Gate the false→true transition only.
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("collection", p.collectionName);
+      }
 
       // Legacy per-field resolutions get translated to typed
       // Resolution[] inside BrowserPromptDispatcher.dispatch() once the

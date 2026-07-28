@@ -97,6 +97,7 @@ import type {
   UpdateSingleOptions,
 } from "../types";
 
+import { ensureSingleRuntimeTable } from "./ensure-runtime-table";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -462,6 +463,12 @@ export class SingleMutationService extends BaseService {
           message: `Single "${slug}" not found`,
         };
       }
+
+      // 1.05. Lazily register the single's runtime table (and its localized
+      // companion) in this process — create/boot-time registration is
+      // per-process, so a write from a worker that never saw the create
+      // would otherwise fail with "not found in schema registry".
+      ensureSingleRuntimeTable(this.adapter, singleMeta);
 
       // 1.1. reject an unknown write locale rather than silently writing the
       // translatable values into the DEFAULT companion row (which would overwrite real

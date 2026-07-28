@@ -10,7 +10,13 @@ import { ServiceDispatcher } from "@nextly/services/dispatcher";
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
-import { isServicesRegistered, registerServices, getService } from "../di";
+import {
+  container,
+  isServicesRegistered,
+  registerServices,
+  getService,
+  shutdownServices,
+} from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
@@ -42,6 +48,33 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
 }
 
 /**
+ * Whether the stored config's `localization` block differs from the one the
+ * registered services were built with. Compared as JSON: both sides are the
+ * normalized `SanitizedLocalizationConfig` shape (stable key order from
+ * `normalizeLocalization`), and an absent block normalizes to `null` so
+ * ADDING or REMOVING localization both count as a change.
+ */
+function localizationBlockChanged(stored: SanitizedNextlyConfig): boolean {
+  try {
+    if (!container.has("config")) return false;
+    const registered = container.get<NextlyServiceConfig>("config");
+    return (
+      JSON.stringify(registered.localization ?? null) !==
+      JSON.stringify(stored.localization ?? null)
+    );
+  } catch {
+    // Container unavailable — nothing registered to be stale.
+    return false;
+  }
+}
+
+// Test seam: the staleness decision is the behavioral contract of the
+// dev-only re-registration in ensureServicesInitialized; exporting it under
+// a verbose name keeps the public surface honest while letting unit tests
+// pin it.
+export const _localizationBlockChangedForTest = localizationBlockChanged;
+
+/**
  * Ensure services are initialized, auto-initializing if needed.
  * This is critical for Singles and other services that depend on the DI container.
  *
@@ -61,6 +94,28 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
  * consumes no request body, so a handler that parses its own body still can.
  */
 export async function ensureServicesInitialized(): Promise<void> {
+  // Dev-only staleness recovery: services register ONCE per process, but
+  // editing nextly.config.ts re-evaluates the route module, which stores the
+  // NEW config here without re-registering anything. For most blocks that is
+  // fine (schema changes flow through the HMR reconcile), but `localization`
+  // is captured by the data services at construction — a stale value makes
+  // every localized read/write silently no-op to the main table (writes then
+  // fail with "no column named X" on a split table). When the stored block
+  // differs from the registered one, tear services down so the block below
+  // re-registers them with the current config. Gated to development: config
+  // modules never hot-change in production.
+  if (
+    process.env.NODE_ENV === "development" &&
+    isServicesRegistered() &&
+    _storedConfig &&
+    localizationBlockChanged(_storedConfig)
+  ) {
+    console.log(
+      "[Nextly] `localization` config changed — re-registering services to apply it..."
+    );
+    await shutdownServices();
+  }
+
   if (!isServicesRegistered()) {
     const nextlyConfig = _storedConfig;
 

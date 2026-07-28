@@ -88,6 +88,7 @@ import type {
   UserContext,
 } from "../types";
 
+import { ensureSingleRuntimeTable } from "./ensure-runtime-table";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
   assertValidBlocksDefault,
@@ -805,6 +806,13 @@ export class SingleQueryService extends BaseService {
           message: `Single "${slug}" not found`,
         };
       }
+
+      // 1.1. Lazily register the single's runtime table (and its localized
+      // companion) in this process. Create-time and boot-time registration
+      // are per-process, so a UI single created in another dev worker — or
+      // registered after this worker booted — would otherwise fail every
+      // read here with "not found in schema registry" until a restart.
+      ensureSingleRuntimeTable(this.adapter, singleMeta);
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
       // The Single's stored read rule is evaluated here against the caller the
