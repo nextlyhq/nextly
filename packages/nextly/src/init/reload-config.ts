@@ -23,7 +23,6 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { assertOwnableComponentTable } from "../components/config/validate-component";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -647,20 +646,6 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  // Ownership is checked here as well as in the registry sync: a component
-  // supplied inline in defineConfig or by a plugin never passes through
-  // defineComponent, and this path applies DDL before the sync would reject the
-  // name — an unowned one would otherwise create a table in another entity's
-  // namespace first and only fail afterwards.
-  const resolveComponentTableNameChecked = (
-    slug: string,
-    dbName?: string
-  ): string => {
-    const resolved = resolveComponentTableName(slug, dbName);
-    assertOwnableComponentTable(slug, resolved);
-    return resolved;
-  };
-
   // Normalize components. Names resolve canonically: custom dbName verbatim,
   // otherwise comp_<slug_with_underscores>.
   const componentTargets: Array<{
@@ -673,7 +658,7 @@ export async function reloadNextlyConfig(opts?: {
     if (!c.slug) continue;
     componentTargets.push({
       slug: c.slug,
-      tableName: resolveComponentTableNameChecked(c.slug, c.dbName),
+      tableName: resolveComponentTableName(c.slug),
       fields: (c.fields ?? []) as MinimalField[],
       // i18n: carry `localized` so the HMR diff omits translatable columns from the
       // component's main table and registers its companion.

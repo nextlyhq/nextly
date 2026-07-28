@@ -1677,7 +1677,6 @@ async function syncCodeFirstComponents(
         comp.slug.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
       fields: comp.fields,
       description: comp.description,
-      tableName: comp.dbName,
       admin: comp.admin,
       configPath: `components/${comp.slug}.ts`,
       // i18n: forward the localized flag from defineComponent so the registry persists
@@ -1715,10 +1714,7 @@ async function syncCodeFirstComponents(
     // A component may declare a custom `dbName`, in which case its table is not
     // named `comp_<slug>` at all. Probing the unresolved name would never find
     // it and would queue a redundant sync on every boot.
-    const tableName = resolveComponentTableName(
-      slug,
-      transformedConfig.components.find(c => c.slug === slug)?.dbName
-    );
+    const tableName = resolveComponentTableName(slug);
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -1751,7 +1747,7 @@ async function syncCodeFirstComponents(
       );
       if (!compConfig) continue;
 
-      const tableName = resolveComponentTableName(slug, compConfig.dbName);
+      const tableName = resolveComponentTableName(slug);
 
       // i18n: a localized component omits its translatable columns from the main comp_
       // table and gets a companion `comp_<slug>_locales` (created below).

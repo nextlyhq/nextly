@@ -398,7 +398,7 @@ function convertToComponentRecords(
     label: component.label?.singular ?? toTitleCase(component.slug),
     // Canonical resolution keeps generated table names aligned with the
     // registry and runtime schema for the same component.
-    tableName: resolveComponentTableName(component.slug, component.dbName),
+    tableName: resolveComponentTableName(component.slug),
     fields: component.fields,
     description: component.description ?? component.admin?.description,
     admin: component.admin,

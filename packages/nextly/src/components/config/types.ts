@@ -235,16 +235,6 @@ export interface ComponentConfig {
   admin?: ComponentAdminOptions;
 
   /**
-   * Custom database table name.
-   *
-   * If not specified, the table name is generated from the slug
-   * with a `comp_` prefix (e.g., 'seo' -> 'comp_seo').
-   *
-   * @example 'comp_site_seo', 'component_hero'
-   */
-  dbName?: string;
-
-  /**
    * Description of the Component.
    *
    * Displayed in the Admin UI and used for documentation.

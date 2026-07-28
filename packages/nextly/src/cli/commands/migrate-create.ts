@@ -236,7 +236,7 @@ export async function runMigrateCreate(
   );
   const codeComponents = toMinimalEntities(
     configResult.config.components ?? [],
-    e => resolveComponentTableName(e.slug, e.dbName)
+    e => resolveComponentTableName(e.slug)
   );
 
   // Load + merge UI-built entities (code-first wins on slug collision).

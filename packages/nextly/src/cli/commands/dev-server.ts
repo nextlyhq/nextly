@@ -901,7 +901,7 @@ export async function performComponentsAutoSync(
     }
 
     // Canonical resolution: custom dbName verbatim, else comp_ + normalized slug.
-    const tableName = resolveComponentTableName(slug, componentConfig.dbName);
+    const tableName = resolveComponentTableName(slug);
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);

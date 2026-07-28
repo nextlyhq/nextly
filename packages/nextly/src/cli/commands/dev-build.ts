@@ -299,7 +299,6 @@ export async function syncComponents(
       label: component.label?.singular ?? toTitleCase(component.slug),
       fields: component.fields,
       description: component.description,
-      tableName: component.dbName,
       admin: component.admin,
       configPath: `components/${component.slug}.ts`,
     })

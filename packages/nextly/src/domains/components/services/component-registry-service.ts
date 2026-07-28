@@ -2,10 +2,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { ComponentAdminOptions } from "../../../components/config/types";
-import {
-  MAX_COMPONENT_NESTING_DEPTH,
-  assertOwnableComponentTable,
-} from "../../../components/config/validate-component";
+import { MAX_COMPONENT_NESTING_DEPTH } from "../../../components/config/validate-component";
 import { toDbError } from "../../../database/errors";
 // PR 4 migration: switched the throw layer to NextlyError. Public messages now
 // follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
@@ -185,11 +182,6 @@ export class ComponentRegistryService extends BaseRegistryService<
     // resolveComponentTableName, where a custom dbName is honored as-is
     // (components intentionally differ from collections/singles); re-prefixing
     // here would desync the registry from the table the schema layer creates.
-    // Ownership is enforced here rather than in the config helper because a
-    // component can reach the registry without passing through defineComponent
-    // — an inline config entry or a plugin contribution — and a name pointing
-    // at another owner's storage would make its rows read as instances.
-    assertOwnableComponentTable(data.slug, data.tableName);
     const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
@@ -255,10 +247,7 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     const now = this.formatDateForDb();
-    // Same contract as registerComponent: the caller resolves the physical
-    // name (custom dbName verbatim), and ownership is enforced here so every
-    // path into the registry is covered.
-    assertOwnableComponentTable(data.slug, data.tableName);
+    // Same contract as registerComponent: the caller resolves the physical name.
     const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
@@ -360,11 +349,8 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     // Only ever supplied by the legacy-pointer repair, which has verified the
-    // target table exists and the stored one does not; the ownership rules
-    // still apply so a repair cannot land on storage this component may not
-    // claim.
+    // derived table exists and the stored one does not.
     if (data.tableName !== undefined) {
-      assertOwnableComponentTable(slug, data.tableName);
       updateData.table_name = data.tableName;
     }
 
@@ -509,10 +495,7 @@ export class ComponentRegistryService extends BaseRegistryService<
         // migrate:create derive for the same component. Resolved before the
         // existence check so a stored name that drifted from it is reconciled
         // rather than left addressing a table the schema layer never created.
-        const desiredTableName = resolveComponentTableName(
-          config.slug,
-          config.tableName
-        );
+        const desiredTableName = resolveComponentTableName(config.slug);
         // A component's stored table name is never changed here. Repointing an
         // existing component at different storage moves no data, and the paths
         // that generate DDL do not all have the registry available — the

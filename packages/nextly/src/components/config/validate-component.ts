@@ -28,7 +28,6 @@
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors";
-import { CORE_TABLE_NAMES } from "../../schemas/index";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -83,9 +82,6 @@ export type ComponentValidationErrorCode =
   | "SLUG_INVALID_FORMAT"
   | "SLUG_RESERVED"
   | "SLUG_SQL_KEYWORD"
-  // Custom table-name errors
-  | "DB_NAME_INVALID_TYPE"
-  | "DB_NAME_RESERVED"
   // Field errors
   | "FIELDS_REQUIRED"
   | "FIELDS_INVALID_TYPE"
@@ -319,87 +315,6 @@ function validateFields(
 // ============================================================
 
 /**
- * Validates a custom physical table name.
- *
- * A component's `dbName` is honored verbatim, so an unchecked value can name a
- * table this component does not own. Pointing the registry at a framework or
- * another entity's table would make unrelated rows look like component
- * instances, and an entity delete would sweep them.
- */
-/** Prefixes owned by other entity kinds, which a component may never claim. */
-const ENTITY_TABLE_PREFIXES = ["dc_", "single_"] as const;
-
-export function assertOwnableComponentTable(
-  slug: string,
-  tableName: string
-): void {
-  const errors: ComponentValidationError[] = [];
-  validateDbName(tableName, errors);
-  if (errors.length === 0) return;
-
-  throw NextlyError.validation({
-    errors: errors.map(err => ({
-      path: err.path,
-      code: err.code,
-      message: err.message,
-    })),
-    logContext: {
-      reason: "component-table-not-ownable",
-      slug,
-      tableName,
-    },
-  });
-}
-
-function validateDbName(
-  dbName: unknown,
-  errors: ComponentValidationError[]
-): void {
-  if (dbName === undefined) return;
-
-  if (typeof dbName !== "string" || dbName.trim() === "") {
-    errors.push({
-      path: "dbName",
-      message: "dbName must be a non-empty string when provided.",
-      code: "DB_NAME_INVALID_TYPE",
-    });
-    return;
-  }
-
-  // Compared with surrounding whitespace stripped and case folded: SQLite, and
-  // MySQL on a case-insensitive installation, resolve `DYNAMIC_COMPONENTS` and
-  // `dynamic_components` to the same physical table, and MySQL discards
-  // trailing identifier spaces, so either variant would otherwise slip past and
-  // let a later drop reach core storage.
-  const normalized = dbName.trim().toLowerCase();
-
-  // Only names belonging to a different OWNER are rejected: framework core
-  // tables, and the namespaces of other entity kinds. The component namespace
-  // is deliberately not policed here — `comp_site_seo` is a documented custom
-  // name, and whether some other component generates the same table is a
-  // cross-config question this single-config check cannot answer.
-  // Every localized component keeps its translations in `<table>_locales`,
-  // whatever its main table is called, so the suffix belongs to whichever
-  // component owns the matching main table. Claiming it would let a delete drop
-  // another component's translations, and a `comp_`-shaped one is additionally
-  // read as an orphaned companion by prune.
-  const looksLikeCompanion = normalized.endsWith("_locales");
-
-  const collides =
-    CORE_TABLE_NAMES.some(name => name.toLowerCase() === normalized) ||
-    ENTITY_TABLE_PREFIXES.some(prefix => normalized.startsWith(prefix)) ||
-    looksLikeCompanion;
-
-  if (collides) {
-    errors.push({
-      path: "dbName",
-      message: `dbName '${dbName}' names framework-managed storage. Choose a name outside the reserved tables and prefixes.`,
-      code: "DB_NAME_RESERVED",
-    });
-  }
-}
-
-/**
  * Validates a complete Component configuration.
  *
  * Performs comprehensive validation including slug format/reserved names,
@@ -433,8 +348,6 @@ export function validateComponentConfig(
     reservedSlugsSet: RESERVED_COMPONENT_SLUGS_SET,
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
-
-  validateDbName(config.dbName, errors);
 
   validateFields(config.fields, errors);
 

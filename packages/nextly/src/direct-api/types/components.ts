@@ -192,9 +192,6 @@ export interface CreateComponentArgs extends DirectAPIConfig {
   /** Optional description */
   description?: string;
 
-  /** Custom database table name (defaults to 'comp_{slug}') */
-  tableName?: string;
-
   /** Admin UI configuration */
   admin?: {
     /** Category for organizing components */

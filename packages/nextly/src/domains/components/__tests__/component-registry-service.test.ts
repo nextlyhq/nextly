@@ -144,30 +144,6 @@ describe("ComponentRegistryService", () => {
       const row = ctx.adapter.insert.mock.calls[0][1];
       expect(row.locked).toBe(0);
     });
-
-    it("stores a custom table name verbatim without forcing the comp_ prefix", async () => {
-      ctx.adapter.selectOne.mockResolvedValue(null);
-      // A name Nextly will create, not one already owned by something else.
-      ctx.adapter.tableExists.mockResolvedValue(false);
-      ctx.adapter.insert.mockResolvedValue(dbRow({ table_name: "seo_meta" }));
-
-      // A custom dbName is honored verbatim (components intentionally differ
-      // from collections/singles): callers resolve names via
-      // resolveComponentTableName, and the registry must store what the
-      // physical layer creates — re-prefixing here would desync the registry
-      // from the actual table.
-      await ctx.service.registerComponent({
-        slug: "seo",
-        label: "SEO",
-        tableName: "seo_meta",
-        fields: [],
-        source: "code",
-        schemaHash: "h",
-      });
-
-      const row = ctx.adapter.insert.mock.calls[0][1];
-      expect(row.table_name).toBe("seo_meta");
-    });
   });
 
   describe("getComponentBySlug", () => {
@@ -773,45 +749,6 @@ describe("ComponentRegistryService", () => {
   });
 });
 
-describe("ComponentRegistryService table ownership", () => {
-  it("refuses to register a component onto framework storage", async () => {
-    const ctx = createCtx();
-    ctx.adapter.selectOne.mockResolvedValue(null);
-
-    await expect(
-      ctx.service.registerComponent({
-        slug: "seo",
-        label: "SEO",
-        tableName: "users",
-        fields: [],
-        source: "code",
-        schemaHash: "h",
-      })
-    ).rejects.toThrow(NextlyError);
-    expect(ctx.adapter.insert).not.toHaveBeenCalled();
-  });
-
-  it("allows a custom name the component may own", async () => {
-    const ctx = createCtx();
-    ctx.adapter.selectOne.mockResolvedValue(null);
-    ctx.adapter.tableExists.mockResolvedValue(false);
-    ctx.adapter.insert.mockResolvedValue(
-      dbRow({ table_name: "comp_site_seo" })
-    );
-
-    await ctx.service.registerComponent({
-      slug: "seo",
-      label: "SEO",
-      tableName: "comp_site_seo",
-      fields: [],
-      source: "code",
-      schemaHash: "h",
-    });
-
-    expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("ComponentRegistryService legacy table mismatch", () => {
   it("reports a stored name that no longer matches the config", async () => {
     // Storage is not repointed, but the mismatch must not pass silently:
@@ -859,68 +796,29 @@ describe("ComponentRegistryService legacy pointer repair", () => {
     // Written before names resolved canonically: the data has always been in
     // the configured table, so correcting the row moves nothing.
     const ctx = createCtx();
-    stubExisting(ctx, "comp_seo_meta");
+    // An older version recorded a name the derived one no longer matches.
+    stubExisting(ctx, "comp_seo_legacy");
     ctx.adapter.tableExists.mockImplementation(
-      async (name: string) => name === "seo_meta"
+      async (name: string) => name === "comp_seo"
     );
     ctx.adapter.update.mockResolvedValue([dbRow()]);
 
     const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+      { slug: "seo", label: "SEO", fields },
     ]);
 
     expect(result.updated).toEqual(["seo"]);
     const [, updateData] = ctx.adapter.update.mock.calls[0];
-    expect(updateData.table_name).toBe("seo_meta");
+    expect(updateData.table_name).toBe("comp_seo");
   });
 
   it("reports rather than repairs when the stored table still exists", async () => {
     const ctx = createCtx();
-    stubExisting(ctx, "seo_meta");
+    stubExisting(ctx, "comp_seo_legacy");
     ctx.adapter.tableExists.mockResolvedValue(true);
 
     const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
-    ]);
-
-    expect(result.errors).toHaveLength(1);
-    expect(ctx.adapter.update).not.toHaveBeenCalled();
-  });
-});
-
-describe("ComponentRegistryService case-only table names", () => {
-  it("treats case variants as one table when the catalog reports one", async () => {
-    // Both spellings address one table where the dialect folds identifiers;
-    // reporting a mismatch would skip metadata updates on every boot.
-    const ctx = createCtx();
-    const fields = [{ name: "metaTitle", type: "text" }];
-    ctx.adapter.selectOne.mockImplementation(async () =>
-      dbRow({ schema_hash: "stale", table_name: "SEO_META" })
-    );
-    ctx.adapter.tableExists.mockResolvedValue(true);
-    ctx.adapter.listTables.mockResolvedValue(["seo_meta"]);
-    ctx.adapter.update.mockResolvedValue([dbRow()]);
-
-    const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
-    ]);
-
-    expect(result.errors).toEqual([]);
-    expect(result.updated).toEqual(["seo"]);
-  });
-
-  it("reports a mismatch when the catalog reports both case variants", async () => {
-    // PostgreSQL, or MySQL with lower_case_table_names=0: distinct tables.
-    const ctx = createCtx();
-    const fields = [{ name: "metaTitle", type: "text" }];
-    ctx.adapter.selectOne.mockImplementation(async () =>
-      dbRow({ schema_hash: "stale", table_name: "SEO_META" })
-    );
-    ctx.adapter.tableExists.mockResolvedValue(true);
-    ctx.adapter.listTables.mockResolvedValue(["SEO_META", "seo_meta"]);
-
-    const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+      { slug: "seo", label: "SEO", fields },
     ]);
 
     expect(result.errors).toHaveLength(1);
