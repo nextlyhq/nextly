@@ -294,6 +294,12 @@ export function resetWebhookRecordingPolicy(): void {
   storedRefresh.refresher = null;
   storedRefresh.readAtMs = 0;
   storedRefresh.queued = false;
-  storedRefresh.generation = 0;
+  // Advance rather than zero. A refresh that captured generation N before this
+  // reset may still be in flight; zeroing would let the next boot's ordinary
+  // increments climb back to N, so that stale read — taken against the previous
+  // adapter and config — would pass the guard and replace every `db` decision
+  // the new boot had just published, re-enabling recording for an opted-out
+  // entity. A counter that only ever increases can never be matched again.
+  storedRefresh.generation += 1;
   storedRefresh.now = () => Date.now();
 }
