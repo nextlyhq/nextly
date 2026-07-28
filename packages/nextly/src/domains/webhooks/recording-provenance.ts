@@ -51,3 +51,18 @@ export function collectPluginContributedSlugs(
   }
   return slugs;
 }
+
+/**
+ * Whether a registry `source` belongs to config rather than the Builder.
+ *
+ * Provenance is `"code"` for app config and `"plugin:<name>"` for a plugin's
+ * contributed entity; only `"ui"`/`"built-in"` rows are Builder-authored. This
+ * matters because the periodic stored-policy refresh replaces the whole `db`
+ * set: publishing a config-owned entity as `db` would let the next refresh drop
+ * a decision config owns — including the form-builder's submissions opt-out.
+ */
+export function isConfigOwnedSource(
+  source: string | null | undefined
+): boolean {
+  return source === "code" || (!!source && source.startsWith("plugin:"));
+}

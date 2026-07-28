@@ -70,6 +70,12 @@ interface StoredRefreshState {
   readAtMs: number;
   /** A background reload is queued; do not stampede. */
   queued: boolean;
+  /**
+   * Bumped by every LOCAL decision change. A refresh captures this before it
+   * starts reading and is discarded if it changed by the time it applies, so a
+   * snapshot taken before a local toggle cannot overwrite the newer truth.
+   */
+  generation: number;
   now: () => number;
 }
 
@@ -81,6 +87,7 @@ if (!globalForStoredRefresh.__nextly_webhookStoredRefresh) {
     refresher: null,
     readAtMs: 0,
     queued: false,
+    generation: 0,
     now: () => Date.now(),
   };
 }
@@ -113,14 +120,40 @@ export function setStoredRecordingClock(now: () => number): void {
  * config outranks storage.
  */
 export function applyStoredRecordingDecisions(
-  optOuts: ReadonlyArray<{ scope: WebhookRecordingScope; slug: string }>
+  optOuts: ReadonlyArray<{ scope: WebhookRecordingScope; slug: string }>,
+  readAtGeneration?: number
 ): void {
+  // A snapshot read before a local toggle would otherwise erase it: the local
+  // update commits `{ record: false }` and publishes immediately, then this
+  // older read removes that `db` entry and restores the recording default.
+  // Discarding the stale snapshot keeps the newer local truth; the value is
+  // already correct, so the read is still marked fresh rather than retried in a
+  // loop.
+  if (
+    readAtGeneration !== undefined &&
+    readAtGeneration !== storedRefresh.generation
+  ) {
+    storedRefresh.readAtMs = storedRefresh.now();
+    return;
+  }
+
   for (const [key, entry] of policy) {
     if (entry.source === "db") policy.delete(key);
   }
   for (const { scope, slug } of optOuts) {
     policy.set(keyFor(scope, slug), { record: false, source: "db" });
   }
+  storedRefresh.readAtMs = storedRefresh.now();
+  storedRefresh.generation += 1;
+}
+
+/**
+ * Mark the stored snapshot current without changing any decision. Used when a
+ * database predating the `webhooks` column is read: there is nothing to apply,
+ * and leaving the snapshot unprimed would make every later write schedule
+ * another failing query.
+ */
+export function markStoredRecordingFresh(): void {
   storedRefresh.readAtMs = storedRefresh.now();
 }
 
@@ -154,6 +187,16 @@ export function setWebhookRecording(
   source: WebhookRecordingSource = "code"
 ): void {
   policy.set(keyFor(scope, slug), { record, source });
+  storedRefresh.generation += 1;
+}
+
+/**
+ * The current decision generation. A refresh captures this BEFORE it reads and
+ * hands it back to `applyStoredRecordingDecisions`, which discards the snapshot
+ * if anything changed meanwhile.
+ */
+export function currentRecordingGeneration(): number {
+  return storedRefresh.generation;
 }
 
 /**
@@ -215,6 +258,7 @@ export function clearWebhookRecording(
   slug: string
 ): void {
   policy.delete(keyFor(scope, slug));
+  storedRefresh.generation += 1;
 }
 
 /** Clear every registered decision (boot/test reset). */
@@ -223,5 +267,6 @@ export function resetWebhookRecordingPolicy(): void {
   storedRefresh.refresher = null;
   storedRefresh.readAtMs = 0;
   storedRefresh.queued = false;
+  storedRefresh.generation = 0;
   storedRefresh.now = () => Date.now();
 }

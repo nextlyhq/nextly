@@ -55,6 +55,7 @@ import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
+import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import { resolveSingleTableName } from "./resolve-single-table-name";
 
@@ -346,7 +347,7 @@ export class SingleRegistryService extends BaseRegistryService<
    * from whatever the registry actually contains.
    */
   private publishRegisteredRecording(data: DynamicSingleInsert): void {
-    if (data.source === "code") return;
+    if (isConfigOwnedSource(data.source)) return;
     setWebhookRecording(
       "single",
       data.slug,
@@ -496,7 +497,10 @@ export class SingleRegistryService extends BaseRegistryService<
       // never writes it), and skipped for code-first sync so the entry keeps its
       // `code` provenance — a `db` entry survives the reconcile that prunes
       // removed code-first slugs, which would strand a stale opt-out.
-      if (data.webhooks !== undefined && options?.source !== "code") {
+      if (
+        data.webhooks !== undefined &&
+        !isConfigOwnedSource(options?.source)
+      ) {
         setWebhookRecording(
           "single",
           slug,

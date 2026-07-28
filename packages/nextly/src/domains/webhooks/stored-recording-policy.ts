@@ -26,8 +26,13 @@ import { dynamicSinglesMysql } from "../../schemas/dynamic-singles/mysql";
 import { dynamicSinglesPg } from "../../schemas/dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "../../schemas/dynamic-singles/sqlite";
 
-import { applyStoredRecordingDecisions } from "./recording-policy";
+import {
+  applyStoredRecordingDecisions,
+  currentRecordingGeneration,
+  markStoredRecordingFresh,
+} from "./recording-policy";
 import type { WebhookRecordingScope } from "./recording-policy";
+import { isConfigOwnedSource } from "./recording-provenance";
 
 /** The three registry columns this read needs, on any dialect's table. */
 interface PolicyTable {
@@ -162,7 +167,11 @@ async function collectScope(
   for (const row of rows) {
     const slug = row.slug;
     if (!slug) continue;
-    if (row.source === "code" || configSlugs.has(slug)) continue;
+    // Config-owned rows (`code` and `plugin:<name>`) are skipped: the config
+    // publisher already applied them, and republishing as `db` would let the
+    // next refresh — which replaces the whole `db` set — drop a decision config
+    // owns, including the form-builder's submissions opt-out.
+    if (isConfigOwnedSource(row.source) || configSlugs.has(slug)) continue;
     if (isStoredOptOut(row.webhooks)) optOuts.push({ scope, slug });
   }
   return optOuts;
@@ -189,27 +198,56 @@ export async function publishStoredWebhookRecordingPolicies(
   const dialect = adapter.getCapabilities().dialect;
   const db = adapter.getDrizzle<PolicyQuery>();
 
+  // Captured BEFORE reading so a local toggle that lands mid-read discards this
+  // snapshot rather than being erased by it.
+  const generation = currentRecordingGeneration();
+
+  // Each scope tolerates its own missing column. An upgrade interrupted between
+  // the two ALTERs — plausible on MySQL, where DDL auto-commits — would
+  // otherwise let the un-migrated table's failure discard the opt-outs already
+  // read from the migrated one, silently re-enabling recording for them.
+  const collections = await collectScopeTolerantly(
+    db,
+    "collection",
+    collectionsTable(dialect),
+    configSlugs.collections
+  );
+  const singles = await collectScopeTolerantly(
+    db,
+    "single",
+    singlesTable(dialect),
+    configSlugs.singles
+  );
+
+  if (collections === null && singles === null) {
+    // Neither table has the column: nothing to apply, but the snapshot is as
+    // current as it can be. Marking it fresh stops every later write scheduling
+    // another failing query until the migration runs.
+    markStoredRecordingFresh();
+    return;
+  }
+
+  applyStoredRecordingDecisions(
+    [...(collections ?? []), ...(singles ?? [])],
+    generation
+  );
+}
+
+/**
+ * Read one scope, or `null` when that table predates the `webhooks` column.
+ * Every other failure propagates so a transient error cannot masquerade as an
+ * empty policy.
+ */
+async function collectScopeTolerantly(
+  db: PolicyQuery,
+  scope: WebhookRecordingScope,
+  table: PolicyTable,
+  configSlugs: Set<string>
+): Promise<Array<{ scope: WebhookRecordingScope; slug: string }> | null> {
   try {
-    // Both scopes are read BEFORE anything is applied, so a failure part-way
-    // through cannot leave the policy holding half of one snapshot and half of
-    // the previous one.
-    const optOuts = [
-      ...(await collectScope(
-        db,
-        "collection",
-        collectionsTable(dialect),
-        configSlugs.collections
-      )),
-      ...(await collectScope(
-        db,
-        "single",
-        singlesTable(dialect),
-        configSlugs.singles
-      )),
-    ];
-    applyStoredRecordingDecisions(optOuts);
+    return await collectScope(db, scope, table, configSlugs);
   } catch (error) {
-    if (isMissingWebhooksColumn(error)) return;
+    if (isMissingWebhooksColumn(error)) return null;
     throw error;
   }
 }

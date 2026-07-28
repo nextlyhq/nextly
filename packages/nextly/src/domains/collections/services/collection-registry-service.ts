@@ -42,6 +42,7 @@ import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
+import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
@@ -270,7 +271,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       // collection would keep recording until the next restart — the window in
       // which its content is most likely to be created. Code-first entities are
       // skipped: their config is the source of truth and is already published.
-      if (data.source !== "code") {
+      if (!isConfigOwnedSource(data.source)) {
         setWebhookRecording(
           "collection",
           data.slug,
@@ -450,7 +451,10 @@ export class CollectionRegistryService extends BaseRegistryService<
       // `data.slug` rename but never writes it, so keying on the requested new
       // slug would publish under a name nothing reads and clear the only entry
       // that matters.
-      if (data.webhooks !== undefined && options?.source !== "code") {
+      if (
+        data.webhooks !== undefined &&
+        !isConfigOwnedSource(options?.source)
+      ) {
         setWebhookRecording(
           "collection",
           slug,

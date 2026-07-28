@@ -16,6 +16,7 @@ import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
+import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 export interface CollectionMetadata {
   id: string;
@@ -225,7 +226,7 @@ export class DynamicCollectionRegistryService extends BaseService {
     // collection would keep recording until the next restart — precisely the
     // window in which its first content is written. Code-first entities are
     // skipped: their config is the source of truth and is already published.
-    if (metadata.source !== "code") {
+    if (!isConfigOwnedSource(metadata.source)) {
       setWebhookRecording(
         "collection",
         metadata.slug,
@@ -278,7 +279,10 @@ export class DynamicCollectionRegistryService extends BaseService {
     // takes effect on the next write rather than the next restart. Keyed on the
     // slug the row is stored under rather than a requested rename target, so the
     // policy key and the persisted row can never disagree.
-    if (updates.webhooks !== undefined && existing[0].source !== "code") {
+    if (
+      updates.webhooks !== undefined &&
+      !isConfigOwnedSource(existing[0].source)
+    ) {
       setWebhookRecording(
         "collection",
         collectionSlug,

@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyStoredRecordingDecisions,
   isWebhookRecordingEnabled,
   resetWebhookRecordingPolicy,
   setWebhookRecording,
@@ -27,7 +28,10 @@ interface Row {
  * identified by the object the query is built `from`, which is the real dialect
  * table, so the stub cannot drift from the column names the code selects.
  */
-function readerReturning(rows: { collections?: Row[]; singles?: Row[] }) {
+function readerReturning(rows: {
+  collections?: Row[] | Error;
+  singles?: Row[] | Error;
+}) {
   return {
     getCapabilities: () => ({ dialect: "sqlite" as const }),
     getDrizzle: <T>() =>
@@ -225,5 +229,67 @@ describe("publishStoredWebhookRecordingPolicies", () => {
     await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
 
     expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
+  });
+
+  it("skips a plugin-owned row so the refresh cannot drop its opt-out", async () => {
+    // Plugin entities register as `plugin:<name>`. Publishing one as `db` would
+    // let the next refresh — which replaces the whole `db` set — delete the
+    // form-builder's submissions opt-out and resume recording PII.
+    const reader = readerReturning({
+      collections: [
+        {
+          slug: "form-submissions",
+          source: "plugin:@nextlyhq/plugin-form-builder",
+          webhooks: '{"record":false}',
+        },
+      ],
+    });
+
+    await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
+
+    // Not published as `db`, so a later swap leaves the plugin decision intact.
+    applyStoredRecordingDecisions([]);
+    expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
+      true
+    );
+  });
+
+  it("keeps the migrated scope's opt-outs when the other lacks the column", async () => {
+    // An upgrade interrupted between the two ALTERs (MySQL DDL auto-commits)
+    // must not discard opt-outs already read from the migrated table.
+    const reader = readerReturning({
+      collections: [
+        { slug: "enquiries", source: "ui", webhooks: '{"record":false}' },
+      ],
+      singles: new Error("Unknown column 'webhooks' in 'field list'"),
+    });
+
+    await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
+
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
+  });
+
+  it("discards a snapshot older than a local toggle", async () => {
+    // The read happens first; a Builder toggle lands before it applies. The
+    // stale snapshot must not erase the newer decision.
+    const reader = {
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: <T>() =>
+        ({
+          select: () => ({
+            from: () => ({
+              where: async () => {
+                // Simulates the local update committing mid-read.
+                setWebhookRecording("collection", "enquiries", false, "db");
+                return [];
+              },
+            }),
+          }),
+        }) as T,
+    };
+
+    await publishStoredWebhookRecordingPolicies(reader, noConfigSlugs);
+
+    expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
   });
 });
