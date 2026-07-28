@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect } from "vitest";
 
 import {
   applyStoredRecordingDecisions,
+  isRecordingDisabledByConfig,
   clearWebhookRecording,
   isWebhookRecordingEnabled,
   pruneRemovedCodeFirstRecording,
@@ -170,5 +171,27 @@ describe("webhook recording policy", () => {
     clock += 31_000;
 
     expect(isWebhookRecordingEnabled("collection", "enquiries")).toBe(false);
+  });
+
+  it("reports only config decisions as stable enough to skip expansion", () => {
+    // The pre-record field expansion skips component expansion when a write will
+    // not be recorded. That is only safe against a decision that holds for the
+    // whole write: a `db` decision can be flipped mid-write by the background
+    // refresh, and skipping expansion then recording would ship
+    // component-nested secret/hidden values unstripped.
+    setWebhookRecording("collection", "from-code", false, "code");
+    setWebhookRecording("collection", "from-plugin", false, "plugin");
+    setWebhookRecording("collection", "from-db", false, "db");
+
+    expect(isRecordingDisabledByConfig("collection", "from-code")).toBe(true);
+    expect(isRecordingDisabledByConfig("collection", "from-plugin")).toBe(true);
+    expect(isRecordingDisabledByConfig("collection", "from-db")).toBe(false);
+  });
+
+  it("reports nothing stable for a slug that records", () => {
+    setWebhookRecording("collection", "posts", true, "code");
+
+    expect(isRecordingDisabledByConfig("collection", "posts")).toBe(false);
+    expect(isRecordingDisabledByConfig("collection", "never-seen")).toBe(false);
   });
 });

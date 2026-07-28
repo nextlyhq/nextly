@@ -223,6 +223,33 @@ export function isWebhookRecordingEnabled(
 }
 
 /**
+ * Whether recording is disabled by a decision that CANNOT change mid-write.
+ *
+ * Only `code` and `plugin` decisions qualify: they come from config, are
+ * republished at boot/HMR, and are never touched by the stored-policy refresh.
+ * A `db` decision can be flipped by a background refresh at any moment, so it is
+ * deliberately NOT reported here.
+ *
+ * Used by the pre-record field expansion, which skips component expansion when a
+ * write will not be recorded. That skip is only safe against a decision that
+ * holds for the whole write: if expansion is skipped and the decision then flips
+ * to recording before the choke point re-checks, the payload ships with
+ * component-nested secret/hidden values unstripped. The endpoint/audit flag was
+ * already excluded there for exactly this reason.
+ */
+export function isRecordingDisabledByConfig(
+  scope: WebhookRecordingScope,
+  slug: string
+): boolean {
+  const entry = policy.get(keyFor(scope, slug));
+  return (
+    entry !== undefined &&
+    !entry.record &&
+    (entry.source === "code" || entry.source === "plugin")
+  );
+}
+
+/**
  * Within ONE scope, drop every `code`-sourced decision whose slug is not in
  * `presentSlugs`. Scoped so a reload that republishes only the entities whose
  * metadata sync succeeded (e.g. collections but not singles) prunes only that
