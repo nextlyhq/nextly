@@ -27,6 +27,9 @@ interface Handler {
     ctx: Record<string, unknown>,
     data: Record<string, unknown>
   ) => Promise<{ data: Record<string, unknown> | null }>;
+  getEntry: (
+    params: Record<string, unknown>
+  ) => Promise<{ data: Record<string, unknown> | null }>;
   listEntries: (
     params: Record<string, unknown>
   ) => Promise<{ data: { docs: Record<string, unknown>[] } | null }>;
@@ -82,6 +85,32 @@ describe("filtering by an embedded field group value (integration)", () => {
     });
 
     expect((result.data?.docs ?? []).map(e => e.title)).toEqual(["About"]);
+  });
+
+  it("round-trips the embedded value on read", async () => {
+    // The write stores the value in the field group's own table keyed by the
+    // three link columns, and the read reassembles it from there. Both sides
+    // address those columns by name, so this proves the pair agrees — the
+    // filter cases above would still pass if reads dropped the value entirely.
+    current = await boot();
+    const handler = current.getService(
+      "collectionsHandler"
+    ) as unknown as Handler;
+
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "About", seo: { metaTitle: "About us" } }
+    );
+
+    const fetched = await handler.getEntry({
+      collectionName: "pages",
+      entryId: (created.data as { id: string }).id,
+      overrideAccess: true,
+    });
+
+    expect((fetched.data?.seo as { metaTitle?: string })?.metaTitle).toBe(
+      "About us"
+    );
   });
 
   it("returns nothing when no field group value matches", async () => {
