@@ -96,6 +96,39 @@ This is a per-table override; the rest of your schema keeps the server defaults.
 
 Do **not** run `VACUUM` automatically after pruning. `VACUUM` takes a whole-database exclusive lock and rewrites the entire file, which stalls every other connection; in WAL mode it also needs a following checkpoint before the space is actually reclaimed. Let pruning delete the rows, and only run `VACUUM` (or set `PRAGMA auto_vacuum` at database creation) deliberately, during a maintenance window when the app is idle. For most self-hosted SQLite deployments the freed pages are simply reused by later inserts, and no manual reclamation is needed at all.
 
+## Keeping content out of the outbox
+
+Recording is per entity. A collection or single that holds personal data can opt
+out, and its writes then reach neither the outbox nor any subscribed endpoint.
+
+In code:
+
+```ts
+defineCollection({
+  slug: "enquiries",
+  webhooks: false, // or { record: false }
+  fields: [text({ name: "message" })],
+});
+```
+
+In the admin, open the collection or single in the **Schema Builder**, then
+**Settings → Advanced → Webhook recording**. The switch is on by default; turning
+it off stores the opt-out on the entity's registry row, so it holds across
+restarts as well as for the running process.
+
+For an entity defined in code, the code config wins: the switch reflects what is
+stored, but a `webhooks` value in `defineCollection`/`defineSingle` is
+republished on every boot and overrides the row. Change it in code for
+code-first entities.
+
+The plugin-provided `form-submissions` collection ships opted out, because
+submissions carry visitor-entered content plus `ipAddress` and `userAgent`.
+
+> **Upgrading:** the switch is stored in a registry column added in this release.
+> An existing install must run `nextly migrate` before the setting can persist;
+> until then `nextly migrate` reports the column as core-schema drift and
+> recording continues exactly as before.
+
 ## Related
 
 - [Production migrations](/docs/guides/production-migrations) — the `nextly migrate` model these system tables evolve through.
