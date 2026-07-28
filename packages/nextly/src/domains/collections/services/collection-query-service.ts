@@ -2563,7 +2563,7 @@ export class CollectionQueryService extends BaseService {
 
       // Handle _componentType filter specially (already snake_case)
       const dbColumnName = filter.isComponentTypeFilter
-        ? "_component_type"
+        ? STORAGE_FORMAT.columns.type
         : columnName;
 
       // Build the value condition based on operator
