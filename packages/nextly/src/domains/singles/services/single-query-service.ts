@@ -202,6 +202,28 @@ function parseReferenceValue(value: unknown): unknown {
 }
 
 /** The rows of a group (one) or repeater (many), whatever form they arrive in. */
+/**
+ * Whether a stored container holds something other than the shape its field
+ * declares — a group arriving as a list, say, or as a scalar.
+ *
+ * Read as zero rows, such a value walks the check past every relationship
+ * inside it, which is the same blind spot as JSON that would not parse. An
+ * absent container is not this: nothing was stored, so there is nothing to
+ * miss.
+ */
+function isMisshapenContainer(
+  value: unknown,
+  type: "group" | "repeater"
+): boolean {
+  if (value === null || value === undefined || value === "") return false;
+  const parsed = parseContainer(value);
+  if (parsed === UNREADABLE_CONTAINER) return true;
+  if (parsed === null || parsed === undefined) return false;
+  return type === "repeater"
+    ? !Array.isArray(parsed)
+    : typeof parsed !== "object" || Array.isArray(parsed);
+}
+
 function containerRows(
   value: unknown,
   type: "group" | "repeater"
@@ -827,12 +849,13 @@ export class SingleQueryService extends BaseService {
       const nested = "fields" in field ? (field.fields as FieldConfig[]) : [];
       if (!nested || nested.length === 0) continue;
 
-      // A container that cannot be read is not a container that holds nothing.
-      // Its relationships are unreachable, so the walk below would step over
-      // them and the document would be judged on what it could not see.
+      // A container that cannot be read, or that holds the wrong shape, is not
+      // a container that holds nothing. Its relationships are unreachable
+      // either way, so the walk below would step over them and the document
+      // would be judged on what it could not see.
       if (
-        parseContainer(before) === UNREADABLE_CONTAINER ||
-        parseContainer(after) === UNREADABLE_CONTAINER
+        isMisshapenContainer(before, type) ||
+        isMisshapenContainer(after, type)
       ) {
         this.logger.error(
           "Refusing a single read: a container could not be read while authorizing",
@@ -915,7 +938,8 @@ export class SingleQueryService extends BaseService {
       await this.populateTranslationMeta(
         params.slug,
         params.singleMeta,
-        assembled
+        assembled,
+        true
       );
     }
     return detachData(assembled);
@@ -1396,6 +1420,8 @@ export class SingleQueryService extends BaseService {
       // it was copied into. The rule still sees related fields unredacted: the
       // decision that governs them is the one made before any of this ran, on
       // an unredacted assembly of the stored row.
+      // Whether a stored rule will be judged on what this assembly produces.
+      const judgedRead = deferCustomRule && !options.overrideAccess;
       let responseReferences: SingleDocument | undefined;
       doc = await this.assembleStoredDocument({
         slug,
@@ -1404,6 +1430,10 @@ export class SingleQueryService extends BaseService {
         options,
         statusFilterValue: statusFilter ? statusFilter.value : undefined,
         enforceRelatedFieldAccess: true,
+        // An ordinary read is still served when a companion query fails, but a
+        // read about to be judged cannot be: the rule would decide on values
+        // the failure removed rather than on what is stored.
+        strict: judgedRead,
         // Recorded only so the decision below can be held to the same
         // completeness bar as the earlier one; the response itself stays
         // best-effort.
@@ -1437,7 +1467,7 @@ export class SingleQueryService extends BaseService {
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
-        await this.populateTranslationMeta(slug, singleMeta, doc);
+        await this.populateTranslationMeta(slug, singleMeta, doc, judgedRead);
       }
 
       // Redact password hashes BEFORE any afterRead hook runs (a hook could
@@ -1599,7 +1629,13 @@ export class SingleQueryService extends BaseService {
   private async populateTranslationMeta(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>
+    doc: Record<string, unknown>,
+    /**
+     * Surface a failed overview read instead of leaving the field off. A rule
+     * deciding on `_translations` cannot tell an untranslated Single from one
+     * whose overview could not be loaded.
+     */
+    strict = false
   ): Promise<void> {
     // Gate on THIS single's flag, not just app-level localization — a non-localized single has
     // no companion, so there is no per-locale translation status to attach.
@@ -1622,6 +1658,7 @@ export class SingleQueryService extends BaseService {
       hasStatus: companion.hasStatus,
       // The Single's own row id keys the companion `_parent`, same as the collection path.
       idKey: "id",
+      strict,
     });
   }
 

@@ -977,6 +977,12 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     });
 
     expect(result.success).toBe(true);
+    // The reference IS the outcome here, so pin the shape: expanding or
+    // reshaping it would still satisfy a bare success assertion.
+    expect(result.data!.author).toEqual({
+      relationTo: "authors",
+      value: (author.data as { id: string }).id,
+    });
   });
 
   it("serves a depth-zero read the references it asked for", async () => {
@@ -1126,6 +1132,52 @@ describe("Single custom read rules vs the assembled document (integration)", () 
 
     expect(result.success).toBe(true);
     expect(result.data).not.toHaveProperty("author");
+  });
+
+  it("refuses when a stored container holds the wrong shape", async () => {
+    // Valid JSON of the wrong shape reads as zero rows, which walks the check
+    // past every relationship the container was meant to hold — the same blind
+    // spot as JSON that will not parse.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: {} },
+      { overrideAccess: true }
+    );
+    // A list where the field declares a group: parses cleanly, holds nothing
+    // the walk can read.
+    await current.adapter.update("single_branding", { meta: "[]" }, {});
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
   });
 
   it("leaves a relationship configured not to populate alone", async () => {

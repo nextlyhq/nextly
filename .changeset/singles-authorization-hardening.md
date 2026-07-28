@@ -40,7 +40,9 @@ The decision made on the document you actually receive is held to the same compl
 
 A read refused for incomplete evidence reports the canonical internal error rather than the underlying failure's own message, which for a database fault is schema detail. That covers relationship expansion, component population and translation loading alike.
 
-A group or repeater whose stored JSON cannot be read now fails the read rather than being treated as empty, which would have walked past every relationship inside it.
+A group or repeater whose stored value cannot be read — malformed JSON, or valid JSON of the wrong shape such as a list where the field declares a group — now fails the read rather than being treated as empty, which would have walked past every relationship inside it.
+
+Translation loading and the per-locale overview both fail the read when it is being judged, rather than leaving the fields off. An ordinary read is still served best-effort; a rule cannot tell "no translations" from "the query failed", so a read about to be judged gets the failure instead.
 
 Metadata attached to a `Map` or `Set` under a symbol key survives the copy handed to an access callback. Arrays keep their holes and their own properties when handed to an access callback, under the keys they actually have — a decoration like `"01"` no longer overwrites element `1`. Sparse arrays keep their holes, and a `Map` or `Set` carrying its own properties keeps them, so a rule reading either decides on the structure the payload actually has.
 
