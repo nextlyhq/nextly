@@ -182,6 +182,384 @@ describe("field-level registry", () => {
     expect(data.title).toBe("t");
   });
 
+  it("keeps a rule's writes to a Map or Set out of the payload", async () => {
+    // The snapshot copies plain containers, and a Map or Set is just as
+    // reachable and just as mutable — a callback writing into one would change
+    // the payload that goes on to be validated and persisted.
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            (data.tags as Map<string, string>).set("injected", "x");
+            (data.flags as Set<string>).add("injected");
+            return true;
+          },
+        },
+      },
+    ]);
+    const data: Record<string, unknown> = {
+      title: "t",
+      tags: new Map([["a", "1"]]),
+      flags: new Set(["a"]),
+    };
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(Array.from(data.tags as Map<string, string>)).toEqual([["a", "1"]]);
+    expect(Array.from(data.flags as Set<string>)).toEqual(["a"]);
+  });
+
+  it("keeps a rule's writes to a Map KEY out of the payload", async () => {
+    // A mutable object used as a key is as reachable, and as writable, as the
+    // value it points at.
+    const key = { id: "k" };
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            for (const [entryKey] of data.tags as Map<
+              Record<string, unknown>,
+              string
+            >) {
+              entryKey.injected = "x";
+            }
+            return true;
+          },
+        },
+      },
+    ]);
+    const data: Record<string, unknown> = {
+      title: "t",
+      tags: new Map([[key, "1"]]),
+    };
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(key).toEqual({ id: "k" });
+  });
+
+  it("survives a payload that refers to itself", async () => {
+    // A hook is free to build a cycle. A naive deep copy would recurse until
+    // the stack gives out, failing a read or write that has nothing wrong with
+    // it. Shared references stay shared in the copy, so a rule comparing two
+    // paths still sees what the document says.
+    registerFieldFunctions("collection", "posts", [
+      { name: "title", type: "text", access: { update: () => true } },
+    ]);
+    const shared: Record<string, unknown> = { name: "s" };
+    const cyclic: Record<string, unknown> = { shared };
+    cyclic.self = cyclic;
+    const data: Record<string, unknown> = {
+      title: "t",
+      a: cyclic,
+      b: shared,
+    };
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(data.title).toBe("t");
+  });
+
+  it("keeps a shared Date one object in the copy", async () => {
+    // Identity is part of the contract: two paths to one value must stay one
+    // value, or a callback comparing them by reference decides differently
+    // from what the document says.
+    const shared = new Date("2020-01-01T00:00:00.000Z");
+    let sameObject: boolean | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const a = (data.a as { at?: Date }).at;
+            const b = (data.b as { at?: Date }).at;
+            sameObject = a === b;
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", a: { at: shared }, b: { at: shared } },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(sameObject).toBe(true);
+  });
+
+  it("passes a Map subclass through instead of rebuilding it", async () => {
+    // Rebuilding it as a plain Map would strip its prototype and whatever it
+    // keeps privately — the same reason any other class instance is passed
+    // through rather than reconstructed.
+    class Tags extends Map<string, string> {
+      describe(): string {
+        return `tags(${this.size})`;
+      }
+    }
+    let described: string | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            described = (data.tags as Tags).describe();
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", tags: new Tags([["a", "1"]]) },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(described).toBe("tags(1)");
+  });
+
+  it("keeps a sparse array's holes", async () => {
+    // Iterating fills holes with `undefined` and makes them real elements, so a
+    // callback testing membership decides on a different structure from the
+    // payload being authorized.
+    let hasHole: boolean | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            hasHole = !(1 in (data.items as unknown[]));
+            return true;
+          },
+        },
+      },
+    ]);
+    const items: unknown[] = [];
+    items[0] = "a";
+    items[2] = "c";
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", items },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(hasHole).toBe(true);
+  });
+
+  it("carries a decorated collection's own properties into the copy", async () => {
+    // A Map can hold state beyond its entries, and a rule reading one of those
+    // properties would otherwise be shown a collection missing it.
+    const flags = new Map<string, string>([["a", "1"]]);
+    (flags as unknown as Record<string, unknown>).restricted = true;
+    let sawRestricted: unknown;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            sawRestricted = (data.flags as unknown as Record<string, unknown>)
+              .restricted;
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", flags },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(sawRestricted).toBe(true);
+  });
+
+  it("keeps an array's decorations under their own keys", async () => {
+    // `"01"` and `"1"` both coerce to the number 1, so keying a copy off the
+    // number lets a decoration overwrite a real element. Non-numeric keys are
+    // properties too, and dropping them shows a callback a different array from
+    // the one being authorized.
+    let seen: { one?: unknown; oh1?: unknown; meta?: unknown } | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const items = data.items as unknown[] & Record<string, unknown>;
+            seen = { one: items[1], oh1: items["01"], meta: items.meta };
+            return true;
+          },
+        },
+      },
+    ]);
+    const items = ["a", "b"] as unknown[] & Record<string, unknown>;
+    items["01"] = "decoration";
+    items.meta = "note";
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", items },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toEqual({ one: "b", oh1: "decoration", meta: "note" });
+  });
+
+  it("carries symbol-keyed metadata into the copy", async () => {
+    // Metadata is often attached under a symbol, and `Object.entries` does not
+    // see one — so a rule reading it would be shown a collection without the
+    // state it was meant to decide on.
+    const RESTRICTED = Symbol("restricted");
+    const flags = new Map<string, string>();
+    (flags as unknown as Record<symbol, unknown>)[RESTRICTED] = true;
+    let seen: unknown;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            seen = (data.flags as unknown as Record<symbol, unknown>)[
+              RESTRICTED
+            ];
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", flags },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toBe(true);
+  });
+
+  it("copies a decorated collection without tripping inherited accessors", async () => {
+    // `size` is a getter-only accessor on Map.prototype, so assigning an own
+    // `size` onto the copy throws under strict mode — before the rule it was
+    // taken for ever runs. `__proto__` is the other trap: assigning it would
+    // repoint the copy's prototype rather than become a property on it.
+    const flags = new Map<string, string>([["a", "1"]]);
+    Object.defineProperty(flags, "size", {
+      value: 99,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    let seen: { size?: unknown; proto?: unknown } | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const copy = data.flags as unknown as Record<string, unknown>;
+            seen = {
+              size: copy.size,
+              proto: Object.getPrototypeOf(copy) === Map.prototype,
+            };
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", flags },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toEqual({ size: 99, proto: true });
+  });
+
+  it("copies an array's metadata without repointing its prototype", async () => {
+    // `__proto__` is an inherited setter, so assigning that key would change
+    // the copy's prototype rather than land on it as a property — and the copy
+    // would lose the array methods a callback expects.
+    const items = ["a", "b"];
+    Object.defineProperty(items, "__proto__", {
+      value: { spoofed: true },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    let seen: { isArray?: boolean; proto?: unknown } | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const copy = data.items as unknown[];
+            seen = {
+              isArray: Array.isArray(copy) && typeof copy.map === "function",
+              proto: Object.getPrototypeOf(copy) === Array.prototype,
+            };
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", items },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toEqual({ isArray: true, proto: true });
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {

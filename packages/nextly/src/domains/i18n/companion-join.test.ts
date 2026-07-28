@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 
-import { resolveLocalizedValue } from "./companion-join";
+import {
+  populateTranslationStatus,
+  resolveLocalizedValue,
+} from "./companion-join";
 
 describe("resolveLocalizedValue (fallback chain, blank = untranslated)", () => {
   it("returns the requested locale's value when present", () => {
@@ -56,5 +59,57 @@ describe("resolveLocalizedValue (fallback chain, blank = untranslated)", () => {
     expect(resolveLocalizedValue({ de: false, en: true }, ["de", "en"])).toBe(
       false
     );
+  });
+});
+
+describe("populateTranslationStatus (failed overview reads)", () => {
+  /** A db whose query rejects the way a permission or schema fault would. */
+  function failingDb(message: string) {
+    const rejection = () => {
+      throw new Error(message);
+    };
+    return {
+      select: () => ({ from: () => ({ where: rejection }) }),
+    } as never;
+  }
+
+  const args = (strict: boolean, message: string) => ({
+    db: failingDb(message),
+    companionTable: { _parent: "p", _locale: "l" },
+    localizedFields: [],
+    rows: [{ id: "doc1" } as Record<string, unknown>],
+    locales: ["en", "de"],
+    defaultLocale: "en",
+    hasStatus: true,
+    strict,
+  });
+
+  it("leaves the rows untouched when a caller is not judging on them", () => {
+    // The default stays forgiving: an ordinary read is still served when the
+    // overview cannot be loaded.
+    const rows = [{ id: "doc1" } as Record<string, unknown>];
+    return expect(
+      populateTranslationStatus({
+        ...args(false, "permission denied for relation"),
+        rows,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("surfaces the failure to a caller that will judge on the overview", async () => {
+    // A rule reading `_translations` cannot tell an untranslated Single from
+    // one whose overview simply failed to load, so the failure has to reach it.
+    await expect(
+      populateTranslationStatus(args(true, "permission denied for relation"))
+    ).rejects.toThrow("permission denied");
+  });
+
+  it("still tolerates a companion table that does not exist yet", async () => {
+    // A Single before its migration runs is not a fault.
+    await expect(
+      populateTranslationStatus(
+        args(true, "no such table: single_branding_locales")
+      )
+    ).resolves.toBeUndefined();
   });
 });
