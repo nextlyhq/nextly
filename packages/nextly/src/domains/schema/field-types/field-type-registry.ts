@@ -52,10 +52,15 @@ export function registerFieldType(def: PluginFieldType): void {
  *
  * A disabled plugin keeps its declarative schema — storage primitive, admin
  * component, picker metadata — because its collections are retained and their
- * fields still have to resolve and render. `validate` is not declarative: it is
- * the plugin's code running on every write. Dropping it here rather than
- * guarding at the call site keeps "disabled means no behavior" a property of
- * what is in the registry.
+ * fields still have to resolve and render. Its callbacks are not declarative:
+ * they are the plugin's code, running on every write (`validate`) and on every
+ * schema load (`validateOptions`). Dropping them here rather than guarding at
+ * each call site keeps "disabled means no behavior" a property of what is in
+ * the registry.
+ *
+ * Dropping `validateOptions` matters most of all: a disabled plugin's fields
+ * are still read back and revalidated, so a check left running could refuse the
+ * very schema it is retained to keep working.
  */
 export function withoutDisabledBehavior(
   fieldType: PluginFieldType,
@@ -64,6 +69,7 @@ export function withoutDisabledBehavior(
   if (plugin.enabled !== false) return fieldType;
   const declarative = { ...fieldType };
   delete declarative.validate;
+  delete declarative.validateOptions;
   return declarative;
 }
 

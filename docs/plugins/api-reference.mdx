@@ -144,6 +144,7 @@ interface PluginFieldType {
   surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
   layout?: "takeover";
   validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
+  validateOptions?: (field) => true | string | PluginFieldIssue[];              // see below
 }
 ```
 
@@ -212,6 +213,47 @@ on the `users`, `forms`, or `blocks` surface does **not** run it yet: those
 surfaces validate through their own paths. A disabled plugin keeps its field
 types registered (its collections are retained) but its `validate` does not
 run — that is behavior, and a disabled plugin contributes none.
+
+### `validateOptions` — rules about the declaration
+
+`validate` answers "is this value allowed in this field". `validateOptions`
+answers "is this field declared coherently at all". It runs when a schema is
+registered, not when a value is written.
+
+The distinction matters because a schema defect reported per write is reported
+to the wrong person: the writer cannot fix it, and it fails every write until
+whoever declared the field notices.
+
+```ts
+validateOptions(field) {
+  const policy = field.policy;
+  if (policy === undefined) return true;
+  if (policy === null || typeof policy !== "object") {
+    return [{ path: "policy", message: "policy must be an object" }];
+  }
+  const { kinds } = policy as { kinds?: unknown };
+  if (Array.isArray(kinds) && kinds.length === 0) {
+    // Nothing could ever be stored in this field. That is a contradiction in
+    // the declaration, not a problem with any particular value.
+    return [{ path: "policy.kinds", message: "policy.kinds cannot be empty" }];
+  }
+  return true;
+}
+```
+
+Synchronous on purpose: a declaration is checked against itself, and a
+config-time rule that needed I/O would make boot depend on something that can be
+down. Issue paths are **relative** and get appended to the field's own, so
+`"policy.kinds"` reports against `fields[2].policy.kinds` — unlike `validate`,
+whose paths are absolute, because this one only ever names an option it already
+knows and has no way to learn its own index. Throwing is a rejected declaration,
+not a failed boot.
+
+**Where it runs.** Code-first collection, single, and component configs, and
+Schema Builder saves. One caveat on the Builder path: the stored manifest
+declares its option keys and strips the rest, so a plugin type's own options do
+not currently survive a Builder save and there is nothing there for the check to
+read. Options the manifest already declares are checked normally.
 
 ## Secrets
 

@@ -1,0 +1,81 @@
+/**
+ * Declaration checks a plugin stated for its own field type.
+ *
+ * A plugin type reaches none of the cases in the config validators' switches —
+ * they know only the built-ins — so without this a custom type's options are
+ * accepted unread. The type is the only thing that knows what its options mean,
+ * and a contradiction between them (a policy admitting no value at all, a list
+ * that is not a list) is a defect in the schema rather than in any write.
+ *
+ * Kept here rather than in `base-validator` because both the code-first
+ * validators and the Schema Builder's zod schema consume it, and the two want
+ * the result in different shapes. This returns the raw issues; each caller
+ * renders them the way its own error channel expects.
+ *
+ * @module shared/lib/plugin-field-options
+ */
+import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
+
+import { detachedField } from "./detached-field";
+
+/** One problem with a field's declaration, located relative to that field. */
+export interface PluginFieldOptionIssue {
+  /** Option this concerns (`"blocks.kinds"`), or absent for the field itself. */
+  path?: string;
+  message: string;
+  code?: string;
+}
+
+/**
+ * Run `validateOptions` for a field's type, if its type declared one.
+ *
+ * A defective plugin fails its own field rather than the boot: a check that
+ * throws is reported as a rejected declaration, exactly as a returned message
+ * is, so one bad plugin cannot stop an app from starting with a stack trace.
+ */
+export function pluginFieldOptionIssues(field: {
+  type?: unknown;
+  name?: unknown;
+}): PluginFieldOptionIssue[] {
+  if (typeof field.type !== "string") return [];
+  const custom = getFieldType(field.type);
+  if (!custom?.validateOptions) return [];
+
+  const rejected = (): PluginFieldOptionIssue[] => [
+    { message: `${String(field.type)} field is not declared correctly.` },
+  ];
+
+  try {
+    const result = custom.validateOptions(
+      detachedField({
+        ...field,
+        type: field.type,
+        name: typeof field.name === "string" ? field.name : undefined,
+      })
+    );
+
+    if (result === true) return [];
+
+    if (typeof result === "string") return [{ message: asSentence(result) }];
+
+    if (Array.isArray(result)) {
+      return result.map(issue => ({
+        path: issue.path,
+        message: asSentence(issue.message),
+        code: issue.code,
+      }));
+    }
+
+    // Anything outside the documented union is a refusal, matching the
+    // write-time seam: a check that forgets to return must not read as
+    // approval, which would leave the type stating rules nothing applies.
+    return rejected();
+  } catch {
+    return rejected();
+  }
+}
+
+/** A message a client can show as-is: one sentence, ending in a period. */
+function asSentence(message: string): string {
+  return message.endsWith(".") ? message : `${message}.`;
+}

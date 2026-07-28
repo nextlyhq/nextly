@@ -29,6 +29,7 @@ import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 
 import { validateBlocksValue } from "../collections/fields/validators/blocks-validator";
 
+import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
 // ============================================================
@@ -381,6 +382,29 @@ export function validateFieldTypeShared(
  * are seeded with. It is rejected here rather than left to fail per write,
  * because the contradiction is in the declaration, not in any value.
  */
+/**
+ * Report a plugin type's own declaration checks through the shared error shape.
+ *
+ * The checks themselves live in `pluginFieldOptionIssues`, which the Schema
+ * Builder's zod schema also consumes; this only renders their result, turning
+ * an option-relative path into the absolute one the config validators report.
+ */
+export function validatePluginFieldOptionsShared(
+  field: { type?: unknown; name?: unknown },
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  for (const issue of pluginFieldOptionIssues(field)) {
+    errors.push({
+      // A returned path names an option, so it is read relative to the field:
+      // the plugin knows its options by name and cannot know its own index.
+      path: issue.path ? `${path}.${issue.path}` : path,
+      message: issue.message,
+      code: issue.code ?? "FIELD_TYPE_INVALID",
+    });
+  }
+}
+
 export function validateBlocksPolicyShared(
   field: { type?: string; blocks?: unknown },
   path: string,

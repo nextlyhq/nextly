@@ -30,10 +30,9 @@ import type { DocumentKind } from "../../collections/fields/types/blocks";
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
-import type {
-  PluginFieldInstance,
-  PluginFieldType,
-} from "../../plugins/contributions";
+import type { PluginFieldType } from "../../plugins/contributions";
+
+import { detachedField } from "./detached-field";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
 
@@ -654,57 +653,6 @@ async function validateFieldValue(
 /** A message the API can show as-is: one sentence, ending in a period. */
 function asSentence(message: string): string {
   return message.endsWith(".") ? message : `${message}.`;
-}
-
-/** Whether a value is a `{}` literal, as opposed to a Date, class instance, or null. */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object") return false;
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
-
-/**
- * Rebuild a value so a validator holding it cannot reach the schema through it.
- *
- * Covers the shapes an option is written in: plain records, arrays, and the
- * mutable built-ins a config can carry (a `Date` bound, a `Set` of allowed
- * names, a `Map` of labels). What stays shared is what cannot be copied without
- * changing what it is — a function, which is behavior rather than option data,
- * and an instance of a class this code knows nothing about, whose constructor
- * and private state a generic copy cannot reproduce.
- */
-function detachValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(detachValue);
-  if (value instanceof Date) return new Date(value.getTime());
-  if (value instanceof Set) return new Set([...value].map(detachValue));
-  if (value instanceof Map) {
-    return new Map([...value].map(([key, held]) => [key, detachValue(held)]));
-  }
-  if (isPlainObject(value)) {
-    const copy: Record<string, unknown> = {};
-    for (const [key, nested] of Object.entries(value)) {
-      copy[key] = detachValue(nested);
-    }
-    return copy;
-  }
-  return value;
-}
-
-/**
- * The field instance a plugin validator is handed.
- *
- * Detached all the way down, not spread one level: a validator reads its own
- * options off the instance, and those options are routinely nested
- * (`blocks.allow`, `validation.*`, `fields`). A shallow copy would leave every
- * one of them pointing at the live schema, so a validator that sorted or
- * pushed to an option array would change validation for every later write.
- */
-function detachedField(field: ValidatableField): PluginFieldInstance {
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(field)) {
-    copy[key] = detachValue(value);
-  }
-  return { ...copy, type: field.type, name: field.name };
 }
 
 /**

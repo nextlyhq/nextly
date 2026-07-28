@@ -37,6 +37,7 @@ import {
   validateRelationshipTargetShared,
   validateBlocksDefaultShared,
   validateBlocksPolicyShared,
+  validatePluginFieldOptionsShared,
   validateSelectOptionsShared,
   validateSlugShared,
 } from "../../shared/base-validator";
@@ -200,6 +201,11 @@ function validateField(
     seenNames,
     DEFAULT_SQL_KEYWORDS_SET
   );
+
+  // A plugin type reaches none of the cases below, so its own declaration
+  // checks run here rather than as a case that could never be written for a
+  // type core does not know.
+  validatePluginFieldOptionsShared(f, path, errsBase);
 
   switch (fieldType) {
     case "select":

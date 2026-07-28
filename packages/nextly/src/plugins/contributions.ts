@@ -193,6 +193,35 @@ export interface PluginFieldType {
     value: unknown,
     args: PluginFieldValidateArgs
   ) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>;
+  /**
+   * Checks on the field's own DECLARATION, run when a schema is registered
+   * rather than when a value is written.
+   *
+   * `validate` answers "is this value allowed in this field". This answers "is
+   * this field declared coherently at all" — a policy option that is not the
+   * shape the type reads, or one whose settings contradict each other so no
+   * value could ever satisfy them. Those are defects in the schema, and a
+   * schema defect that surfaces per write is reported to the wrong person: the
+   * writer cannot fix it, and it fails every write until whoever declared the
+   * field notices.
+   *
+   * Runs for a code-first config at boot and for a Schema Builder save before
+   * it is stored, so both authoring paths refuse the same declaration. It is
+   * synchronous on purpose: a declaration is checked against itself, and a
+   * config-time rule that needed I/O would make boot depend on something that
+   * can be down.
+   *
+   * Return `true` to accept, a string for one problem, or an array to point at
+   * individual options — a path is appended to the field's own, so `"allow"`
+   * reports against `fields[2].allow`. Throwing is treated as a refusal.
+   *
+   * Paths here are RELATIVE, where `validate`'s are absolute. The difference is
+   * deliberate: a value validator may address a position deep inside a stored
+   * document and is told where the field sits so it can build that, while this
+   * one only ever names an option it already knows by name and has no way to
+   * learn its own index.
+   */
+  validateOptions?: (field: PluginFieldInstance) => PluginFieldValidationResult;
 }
 
 /** What a plugin field type's `validate` is given. */
