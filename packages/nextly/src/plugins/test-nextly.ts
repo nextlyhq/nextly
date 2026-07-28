@@ -223,20 +223,31 @@ function snapshotEnv(): () => void {
 let active: { provisioned?: ProvisionedDatabase; restoreEnv?: () => void } = {};
 
 /**
- * Reclaim the database a previous instance left behind, without touching the
- * environment.
+ * Reclaim the database a previous instance left behind, and hand back the
+ * environment snapshot it never got to restore.
  *
  * Deliberately not symmetric with `destroy()`. The environment belongs to
  * whoever boots next: a boot that provisions immediately sets its own, and a
  * boot that supplies its own adapter inherits the current one on purpose —
  * restoring here would leave that second kind with no dialect configured at
- * all. A provisioned handle still restores its own snapshot inside `release`,
- * because the environment it set names a database about to be dropped.
+ * all.
+ *
+ * Discarding the snapshot instead would strand the process one instance short
+ * of where it started: the incoming boot would capture the abandoned
+ * instance's `sqlite` as the value to return to, so no later `destroy()` could
+ * reach the environment that existed before it. Returning it lets the next
+ * instance adopt it and put the process back properly.
+ *
+ * A provisioned handle restores its own snapshot inside `release`, because the
+ * environment it set names a database about to be dropped; only the SQLite
+ * path leaves one pending. Best-effort by design — a failed drop is swallowed
+ * here rather than blocking the boot that is trying to start.
  */
-async function releaseActiveDatabase(): Promise<void> {
+async function releaseActiveDatabase(): Promise<(() => void) | undefined> {
   const previous = active;
   active = {};
   await previous.provisioned?.release().catch(() => {});
+  return previous.restoreEnv;
 }
 
 /**
@@ -298,21 +309,28 @@ async function provisionDatabase(
       adapter,
       async release() {
         if (released) return;
-        released = true;
-        // Nested so each step still runs when an earlier one throws. A failed
-        // drop must not strand the environment pointing at a database this
-        // instance owns, and a failed disconnect must not either — the files
-        // that follow share this process.
+        // Marked released only once the drop has actually happened, and the
+        // server connection is left open until then. A drop that fails — a
+        // transient error, or a session the server still counts as attached —
+        // is therefore retryable by a later `destroy()` or by the next boot's
+        // recovery, rather than leaking a randomly named database for the rest
+        // of the run.
         try {
           await serverAdapter.executeQuery(
             dropDatabaseStatement(dialect, name)
           );
+        } catch (error) {
+          // Put back either way: it names a database this instance owns, and
+          // the files that follow share this process.
+          restoreEnv();
+          throw error;
+        }
+        released = true;
+        // A failed disconnect must not strand the environment either.
+        try {
+          await serverAdapter.disconnect();
         } finally {
-          try {
-            await serverAdapter.disconnect();
-          } finally {
-            restoreEnv();
-          }
+          restoreEnv();
         }
       },
     };
@@ -402,7 +420,9 @@ export async function createTestNextly(
   // After `shutdownServices` above has disconnected the previous adapter, so a
   // database this drops has nothing attached to it. Covers the instance that
   // was never destroyed: its closure is unreachable, but its database is not.
-  await releaseActiveDatabase();
+  // Any environment snapshot it never restored comes back here to be adopted
+  // below, so the process can still be returned to where it started.
+  const inheritedRestore = await releaseActiveDatabase();
 
   let adapter = opts.adapter;
   // Created for a non-SQLite boot and dropped by destroy(). Undefined when the
@@ -416,10 +436,15 @@ export async function createTestNextly(
     adapter = provisioned.adapter;
   }
   // Set when this boot changes the environment without provisioning anything,
-  // so `destroy()` can put it back the way the provisioned path does.
-  let restoreEnv: (() => void) | undefined;
+  // so `destroy()` can put it back the way the provisioned path does. Starts
+  // as whatever an abandoned instance left pending: adopting it is what makes
+  // this instance's teardown restore the environment that predates it, and it
+  // is the right target even for a boot that changes nothing itself.
+  let restoreEnv: (() => void) | undefined = inheritedRestore;
   if (!adapter) {
-    restoreEnv = snapshotEnv();
+    // The inherited snapshot points further back than one taken now would, so
+    // it wins when there is one.
+    restoreEnv = inheritedRestore ?? snapshotEnv();
     // Force the SQLite dialect so the env validation the factory triggers
     // (env.DATABASE_URL access) passes without a configured database — SQLite
     // needs no DATABASE_URL, and production-only checks are skipped under test.
