@@ -231,6 +231,28 @@ function snapshotEnv(): () => void {
 let active: { provisioned?: ProvisionedDatabase; restoreEnv?: () => void } = {};
 
 /**
+ * Finish the work an instance started and did not await.
+ *
+ * Boot fires an endpoint-presence read without awaiting it
+ * (`di/registrations/register-webhooks.ts`), and plugin event handlers are
+ * post-commit and asynchronous. Either can still be in flight when the
+ * connection goes away, and the consequences differ by dialect: on MySQL a
+ * query reaching a closed pool is raised as an unhandled exception, which ends
+ * the whole run; on PostgreSQL the session it holds open makes a later
+ * `DROP DATABASE` fail, which the recovery path swallows — leaking the
+ * database for good.
+ *
+ * Handlers settle first: draining them can schedule webhook work, so the
+ * presence read has to come after.
+ */
+async function drainPendingWork(): Promise<void> {
+  await getEventBus()
+    .settle()
+    .catch(() => {});
+  await refreshEndpointPresence().catch(() => {});
+}
+
+/**
  * Reclaim the database a previous instance left behind, and hand back the
  * environment snapshot it never got to restore.
  *
@@ -404,6 +426,12 @@ const defaultTestLogger: Logger = {
 export async function createTestNextly(
   opts: CreateTestNextlyOptions = {}
 ): Promise<TestNextly> {
+  // Before the reset below, which discards the promises: `shutdownServices`
+  // disconnects the adapter and `resetEventBus` drops pending handlers, so an
+  // instance the caller never destroyed would otherwise have its unawaited
+  // work land on a closed pool — or keep a session open that makes its own
+  // database undroppable.
+  await drainPendingWork();
   // Defensive reset in case a prior test left services registered.
   await shutdownServices();
   resetHookRegistry();
@@ -587,20 +615,9 @@ async function bootServices(
     events: getEventBus(),
     adapter,
     async destroy() {
-      // Everything the instance started but did not await has to finish before
-      // the connection goes away. A query that arrives after the pool closes
-      // is raised by mysql2 as an unhandled exception rather than a rejected
-      // promise, which ends the whole run instead of the one query.
-      //
-      // Event handlers first: they are post-commit and asynchronous, and one
-      // still running would otherwise read a closed pool or lose its write
-      // into a database being dropped. Draining them can schedule webhook
-      // work, so the endpoint-presence read boot leaves unawaited is drained
-      // after, not before.
-      await getEventBus()
-        .settle()
-        .catch(() => {});
-      await refreshEndpointPresence().catch(() => {});
+      // Everything the instance started but did not await has to finish while
+      // the connection is still open.
+      await drainPendingWork();
       // shutdownServices runs plugin destroy() once T9 wires it, then
       // disconnects the adapter and clears the container.
       await shutdownServices();
@@ -616,10 +633,14 @@ async function bootServices(
       resetNextlyInstance();
       clearCachedSnapshot();
       clearLiveSnapshots();
-      // Last, and only after shutdownServices has disconnected: PostgreSQL
-      // will not drop a database that still has a session attached. The
-      // SQLite path provisions nothing but still changed the environment, so
-      // it is put back here too.
+      // Last, and only after the adapter is closed: PostgreSQL will not drop a
+      // database that still has a session attached. `shutdownServices`
+      // normally does the disconnecting, but it swallows a rejection from it
+      // and then no-ops on every later call, so a repeat would have no way to
+      // clear a session left behind — this is idempotent and does. The SQLite
+      // path provisions nothing but still changed the environment, so that is
+      // put back here too.
+      if (!opts.adapter) await adapter.disconnect().catch(() => {});
       await provisioned?.release();
       restoreEnv?.();
       active = {};
