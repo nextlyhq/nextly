@@ -36,7 +36,7 @@ type EntityKind = "collection" | "single" | "component";
 
 type RenamedContributes = Pick<
   NonNullable<PluginDefinition["contributes"]>,
-  "collections" | "singles" | "components"
+  "collections" | "singles" | "fieldGroups"
 >;
 
 interface Slugged {
@@ -123,12 +123,12 @@ function tryExtend<T extends Fielded>(
 function applyExtends(
   collections: NextlyServiceConfig["collections"],
   singles: NextlyServiceConfig["singles"],
-  components: NextlyServiceConfig["components"],
+  fieldGroups: NextlyServiceConfig["fieldGroups"],
   plugins: PluginDefinition[]
-): Pick<NextlyServiceConfig, "collections" | "singles" | "components"> {
+): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
   const cols = [...(collections ?? [])];
   const sin = [...(singles ?? [])];
-  const comp = [...(components ?? [])];
+  const comp = [...(fieldGroups ?? [])];
 
   for (const plugin of plugins) {
     for (const clause of plugin.contributes?.extend ?? []) {
@@ -145,7 +145,7 @@ function applyExtends(
     }
   }
 
-  return { collections: cols, singles: sin, components: comp };
+  return { collections: cols, singles: sin, fieldGroups: comp };
 }
 
 /**
@@ -210,18 +210,18 @@ export function applyExtendClauses<
 >(
   collections: C[] | undefined,
   singles: S[] | undefined,
-  components: P[] | undefined,
+  fieldGroups: P[] | undefined,
   clauses: DeferredExtend[],
   onUnknown: "throw" | "collect"
 ): {
   collections: C[];
   singles: S[];
-  components: P[];
+  fieldGroups: P[];
   deferred: DeferredExtend[];
 } {
   const cols = [...(collections ?? [])];
   const sin = [...(singles ?? [])];
-  const comp = [...(components ?? [])];
+  const comp = [...(fieldGroups ?? [])];
   const deferred: DeferredExtend[] = [];
   for (const { target, fields, owner } of clauses) {
     const applied =
@@ -233,7 +233,7 @@ export function applyExtendClauses<
       deferred.push({ target, fields, owner });
     }
   }
-  return { collections: cols, singles: sin, components: comp, deferred };
+  return { collections: cols, singles: sin, fieldGroups: comp, deferred };
 }
 
 /**
@@ -298,14 +298,14 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
     return {
       collections: contributes?.collections,
       singles: contributes?.singles,
-      components: contributes?.components,
+      fieldGroups: contributes?.fieldGroups,
     };
   }
 
   const ownSlugs = new Set<string>([
     ...(contributes.collections ?? []).map(e => e.slug),
     ...(contributes.singles ?? []).map(e => e.slug),
-    ...(contributes.components ?? []).map(e => e.slug),
+    ...(contributes.fieldGroups ?? []).map(e => e.slug),
   ]);
   for (const key of Object.keys(map)) {
     if (!ownSlugs.has(key)) throw renameUnknownTargetError(key, plugin.name);
@@ -314,7 +314,7 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
   return {
     collections: contributes.collections?.map(e => renameEntity(e, map)),
     singles: contributes.singles?.map(e => renameEntity(e, map)),
-    components: contributes.components?.map(e => renameEntity(e, map)),
+    fieldGroups: contributes.fieldGroups?.map(e => renameEntity(e, map)),
   };
 }
 
@@ -328,7 +328,7 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
 function mergeRenamed(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
-): Pick<NextlyServiceConfig, "collections" | "singles" | "components"> {
+): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
   const renamed = plugins.map(p => ({
     owner: p.name,
     contributes: renamePluginContributes(p),
@@ -347,10 +347,13 @@ function mergeRenamed(
       config.singles ?? [],
       renamed.map(r => ({ owner: r.owner, entities: r.contributes.singles }))
     ),
-    components: mergeKind(
+    fieldGroups: mergeKind(
       "component",
-      config.components ?? [],
-      renamed.map(r => ({ owner: r.owner, entities: r.contributes.components }))
+      config.fieldGroups ?? [],
+      renamed.map(r => ({
+        owner: r.owner,
+        entities: r.contributes.fieldGroups,
+      }))
     ),
   };
 }
@@ -371,14 +374,14 @@ export function applyPluginSchemaContributions(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): NextlyServiceConfig {
-  const { collections, singles, components } = mergeRenamed(config, plugins);
+  const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
   // extend a code, own, or earlier-plugin entity). `extend[].target` is matched
   // against the merged (post-rename) slugs and is NOT itself rewritten through a
   // rename map — a plugin extending its own renamed entity must target the
   // renamed slug. (No current plugin extends its own entity.)
-  const extended = applyExtends(collections, singles, components, plugins);
+  const extended = applyExtends(collections, singles, fieldGroups, plugins);
 
   return { ...config, ...extended };
 }
@@ -396,11 +399,11 @@ export function applyPluginSchemaContributionsDeferred(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): FoldResult {
-  const { collections, singles, components } = mergeRenamed(config, plugins);
+  const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
   const r = applyExtendClauses(
     collections,
     singles,
-    components,
+    fieldGroups,
     flattenExtends(plugins),
     "collect"
   );
@@ -409,7 +412,7 @@ export function applyPluginSchemaContributionsDeferred(
       ...config,
       collections: r.collections,
       singles: r.singles,
-      components: r.components,
+      fieldGroups: r.fieldGroups,
     },
     deferredExtends: r.deferred,
   };
@@ -445,7 +448,7 @@ export function resolveBuilderExtends(
   return {
     collections: r.collections,
     singles: r.singles,
-    components: r.components,
+    components: r.fieldGroups,
   };
 }
 

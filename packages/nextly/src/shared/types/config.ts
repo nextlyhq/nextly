@@ -581,8 +581,8 @@ export interface NextlyConfig {
   /** Array of Single configurations. */
   singles?: SingleConfig[];
 
-  /** Array of Component configurations. */
-  components?: FieldGroupConfig[];
+  /** Array of Field Group configurations. */
+  fieldGroups?: FieldGroupConfig[];
 
   /** User model extension configuration. */
   users?: UserConfig;
@@ -689,7 +689,7 @@ export interface SanitizedNextlyConfig {
   singles: SingleConfig[];
 
   /** Array of Component configurations (empty array if none provided). */
-  components: FieldGroupConfig[];
+  fieldGroups: FieldGroupConfig[];
 
   /** User model extension configuration. Undefined if no user config provided. */
   users?: UserConfig;
@@ -879,7 +879,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
   return {
     collections: config.collections ?? [],
     singles: config.singles ?? [],
-    components: config.components ?? [],
+    fieldGroups: config.fieldGroups ?? [],
     users: config.users,
     email: config.email,
     typescript: {

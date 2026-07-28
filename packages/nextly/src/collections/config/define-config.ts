@@ -275,7 +275,7 @@ function validateNextlyConfig(config: NextlyConfig): void {
     slugs.add(slug);
   }
 
-  const components = config.components ?? [];
+  const components = config.fieldGroups ?? [];
   const componentTables = new Map<string, string>();
 
   for (const comp of components) {
@@ -401,7 +401,7 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
     ...(config.singles ?? []),
     // Components localize too — a localized component with no app-level localization config
     // would route translatable writes to main comp_ columns the localized schema omits.
-    ...(config.components ?? []),
+    ...(config.fieldGroups ?? []),
   ];
   for (const entity of entities) {
     const rec = entity as {

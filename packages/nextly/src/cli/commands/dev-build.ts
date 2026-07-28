@@ -294,7 +294,7 @@ export async function syncComponents(
   );
 
   // Transform FieldGroupConfig[] to CodeFirstComponentConfig[]
-  const codeFirstConfigs: CodeFirstComponentConfig[] = config.components.map(
+  const codeFirstConfigs: CodeFirstComponentConfig[] = config.fieldGroups.map(
     component => ({
       slug: component.slug,
       label: component.label?.singular ?? toTitleCase(component.slug),

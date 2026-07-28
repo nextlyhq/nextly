@@ -506,7 +506,7 @@ describe("buildPluginAdminMeta", () => {
           contributes: {
             collections: [{ slug: "forms" }],
             singles: [{ slug: "form-settings" }],
-            components: [{ slug: "form-block" }],
+            fieldGroups: [{ slug: "form-block" }],
           },
         },
       ]),

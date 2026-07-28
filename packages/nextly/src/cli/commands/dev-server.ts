@@ -903,7 +903,7 @@ export async function performComponentsAutoSync(
 
   for (const slug of componentsToSync) {
     // Get the Component config to get fields
-    const componentConfig = config.components.find(c => c.slug === slug);
+    const componentConfig = config.fieldGroups.find(c => c.slug === slug);
     if (!componentConfig) {
       errors.push({ slug, error: "Component config not found" });
       continue;

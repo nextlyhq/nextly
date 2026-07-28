@@ -291,8 +291,8 @@ export interface PluginContributions {
   collections?: CollectionConfig[];
   /** @public New plugin-owned singles. */
   singles?: SingleConfig[];
-  /** @public Plugin-owned components. */
-  components?: FieldGroupConfig[];
+  /** @public Plugin-owned field groups. */
+  fieldGroups?: FieldGroupConfig[];
   /** @public Add fields to existing entities by slug. */
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
   /** @public Custom permissions; CRUD is auto-seeded separately. */

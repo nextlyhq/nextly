@@ -236,7 +236,7 @@ export async function runMigrateCreate(
     resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
   );
   const codeComponents = toMinimalEntities(
-    configResult.config.components ?? [],
+    configResult.config.fieldGroups ?? [],
     e => resolveComponentTableName(e.slug)
   );
 

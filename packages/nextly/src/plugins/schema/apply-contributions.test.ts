@@ -43,17 +43,17 @@ const slugs = (entities: { slug: string }[] | undefined): string[] =>
   (entities ?? []).map(e => e.slug);
 
 describe("applyPluginSchemaContributions (fold — D3/D12)", () => {
-  it("appends each plugin's contributes.{collections,singles,components}, config-first then plugin order", () => {
+  it("appends each plugin's contributes.{collections,singles,fieldGroups}, config-first then plugin order", () => {
     const config = cfg({
       collections: [coll("code-posts")],
       singles: [single("code-settings")],
-      components: [comp("code-hero")],
+      fieldGroups: [comp("code-hero")],
     });
     const plugins = [
       plugin("plugin-a", {
         collections: [coll("a-forms")],
         singles: [single("a-single")],
-        components: [comp("a-comp")],
+        fieldGroups: [comp("a-comp")],
       }),
       plugin("plugin-b", {
         collections: [coll("b-submissions")],
@@ -68,7 +68,7 @@ describe("applyPluginSchemaContributions (fold — D3/D12)", () => {
       "b-submissions",
     ]);
     expect(slugs(result.singles)).toEqual(["code-settings", "a-single"]);
-    expect(slugs(result.components)).toEqual(["code-hero", "a-comp"]);
+    expect(slugs(result.fieldGroups)).toEqual(["code-hero", "a-comp"]);
   });
 
   it("does not mutate the input config or its arrays", () => {

@@ -567,7 +567,7 @@ async function bootServices(
     plugins: opts.plugins,
     collections: opts.collections,
     singles: opts.singles,
-    components: opts.components,
+    fieldGroups: opts.components,
     localization: opts.localization
       ? normalizeLocalization(opts.localization)
       : undefined,

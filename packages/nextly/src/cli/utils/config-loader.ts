@@ -84,7 +84,7 @@ function applyFoldedToBase(
     ...base,
     collections: folded.collections ?? base.collections,
     singles: folded.singles ?? base.singles,
-    components: folded.components ?? base.components,
+    fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
     // Carry a plugin setup transformer's audit decision through, so an audit

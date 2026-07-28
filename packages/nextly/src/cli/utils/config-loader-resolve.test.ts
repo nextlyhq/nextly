@@ -72,16 +72,16 @@ describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
     ({
       collections: [],
       singles: [],
-      components: [],
+      fieldGroups: [],
     }) as unknown as SanitizedNextlyConfig;
 
-  it("folds plugin contributes.{collections,singles,components} into the config (components threaded)", () => {
+  it("folds plugin contributes.{collections,singles,fieldGroups} into the config (field groups threaded)", () => {
     const plugins = [
       plugin("@t/p", {
         contributes: {
           collections: [coll("p-coll")],
           singles: [single("p-single")],
-          components: [comp("p-comp")],
+          fieldGroups: [comp("p-comp")],
         },
       }),
     ];
@@ -91,8 +91,8 @@ describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
 
     expect((result.collections ?? []).map(c => c.slug)).toContain("p-coll");
     expect((result.singles ?? []).map(s => s.slug)).toContain("p-single");
-    // components were dropped by the old whitelist merge-back — must survive now.
-    expect((result.components ?? []).map(c => c.slug)).toContain("p-comp");
+    // field groups were dropped by the old whitelist merge-back — must survive now.
+    expect((result.fieldGroups ?? []).map(c => c.slug)).toContain("p-comp");
   });
 
   it("carries a plugin setup()'s transformed webhookRetention (and audit) over the base value", () => {

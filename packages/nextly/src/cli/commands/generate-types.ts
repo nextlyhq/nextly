@@ -158,7 +158,7 @@ export async function runGenerateTypes(
 
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles?.length ?? 0;
-  const componentCount = configResult.config.components?.length ?? 0;
+  const componentCount = configResult.config.fieldGroups?.length ?? 0;
   const userFieldCount = configResult.config.users?.fields?.length ?? 0;
   logger.keyValue("Collections", collectionCount);
   logger.keyValue("Singles", singleCount);
@@ -211,7 +211,7 @@ async function generateTypes(
   const result: GenerationResult = {
     collectionCount: config.collections.length,
     singleCount: config.singles?.length ?? 0,
-    componentCount: config.components?.length ?? 0,
+    componentCount: config.fieldGroups?.length ?? 0,
     userFieldCount: config.users?.fields?.length ?? 0,
     zodSchemaFiles: [],
     durationMs: 0,
@@ -227,7 +227,7 @@ async function generateTypes(
   const singleRecords = convertToSingleRecords(config.singles ?? []);
 
   // Convert FieldGroupConfig[] to DynamicFieldGroupRecord[] for generators
-  const componentRecords = convertToComponentRecords(config.components ?? []);
+  const componentRecords = convertToComponentRecords(config.fieldGroups ?? []);
 
   // Convert UserFieldConfig[] to UserFieldDefinitionRecord[] for generators
   const userFieldRecords = convertToUserFieldRecords(

@@ -99,12 +99,12 @@ export function buildServiceConfig(
       }
     }
 
-    // If components not explicitly provided, use from nextly.config.ts
-    if (!serviceConfig.components && nextlyConfig?.components) {
-      serviceConfig.components = nextlyConfig.components;
-      if (nextlyConfig.components.length > 0) {
+    // If field groups not explicitly provided, use from nextly.config.ts
+    if (!serviceConfig.fieldGroups && nextlyConfig?.fieldGroups) {
+      serviceConfig.fieldGroups = nextlyConfig.fieldGroups;
+      if (nextlyConfig.fieldGroups.length > 0) {
         console.log(
-          `[Nextly] Using ${nextlyConfig.components.length} component(s) from config`
+          `[Nextly] Using ${nextlyConfig.fieldGroups.length} field group(s) from config`
         );
       }
     }

@@ -9,7 +9,7 @@ function build(slugs: string[]) {
   return () =>
     defineConfig({
       collections: [],
-      components: slugs.map(slug => ({
+      fieldGroups: slugs.map(slug => ({
         slug,
         label: { singular: slug },
         fields: [field],

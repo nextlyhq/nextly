@@ -234,8 +234,8 @@ export interface NextlyServiceConfig {
   /** Single (global document) configurations. */
   singles?: SingleConfig[];
 
-  /** Component (reusable field group) configurations. */
-  components?: FieldGroupConfig[];
+  /** Field Group (reusable field structure) configurations. */
+  fieldGroups?: FieldGroupConfig[];
 
   /** User model extension configuration. */
   users?: UserConfig;
@@ -1728,8 +1728,8 @@ async function syncCodeFirstComponents(
   transformedConfig: NextlyServiceConfig
 ): Promise<void> {
   if (
-    !transformedConfig.components ||
-    transformedConfig.components.length === 0
+    !transformedConfig.fieldGroups ||
+    transformedConfig.fieldGroups.length === 0
   ) {
     return;
   }
@@ -1739,7 +1739,7 @@ async function syncCodeFirstComponents(
   );
 
   const codeFirstComponentConfigs: CodeFirstComponentConfig[] =
-    transformedConfig.components.map(comp => ({
+    transformedConfig.fieldGroups.map(comp => ({
       slug: comp.slug,
       label:
         comp.label?.singular ??
@@ -1810,7 +1810,7 @@ async function syncCodeFirstComponents(
     const compSchemaService = new CompSchemaService(dialect);
 
     for (const slug of componentsNeedingTableSync) {
-      const compConfig = transformedConfig.components.find(
+      const compConfig = transformedConfig.fieldGroups.find(
         c => c.slug === slug
       );
       if (!compConfig) continue;

@@ -381,7 +381,7 @@ async function syncCodeFirstMetadataOnly(
   newConfig: {
     collections?: CollectionDef[];
     singles?: SingleDef[];
-    components?: ComponentDef[];
+    fieldGroups?: ComponentDef[];
   },
   logger?: LoggerLike
 ): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
@@ -434,7 +434,7 @@ async function syncCodeFirstMetadataOnly(
     const compReg = (await resolve(
       "componentRegistryService"
     )) as ComponentRegistrySurface;
-    const payload = buildComponentSyncPayload(newConfig.components ?? []);
+    const payload = buildComponentSyncPayload(newConfig.fieldGroups ?? []);
     if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
   } catch (err) {
     components = false;
@@ -573,7 +573,7 @@ export async function reloadNextlyConfig(opts?: {
     | {
         collections?: CollectionDef[];
         singles?: SingleDef[];
-        components?: ComponentDef[];
+        fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
       }
     | undefined;
@@ -588,7 +588,7 @@ export async function reloadNextlyConfig(opts?: {
         config?: {
           collections?: CollectionDef[];
           singles?: SingleDef[];
-          components?: ComponentDef[];
+          fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
         };
       }
@@ -732,7 +732,7 @@ export async function reloadNextlyConfig(opts?: {
     fields: MinimalField[];
     localized?: boolean;
   }> = [];
-  for (const c of newConfig.components ?? []) {
+  for (const c of newConfig.fieldGroups ?? []) {
     if (!c.slug) continue;
     componentTargets.push({
       slug: c.slug,
@@ -1257,7 +1257,7 @@ export async function reloadNextlyConfig(opts?: {
         "componentRegistryService"
       )) as ComponentRegistrySurface;
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        newConfig.components ?? []
+        newConfig.fieldGroups ?? []
       );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
