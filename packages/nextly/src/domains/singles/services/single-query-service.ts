@@ -177,26 +177,70 @@ function containerRows(
     : [];
 }
 
+/** Whether a field holds nothing at all. */
+function isEmptyValue(value: unknown): boolean {
+  return value === null || value === undefined || value === "";
+}
+
 /**
- * Whether every stored reference became a row.
+ * Whether a value is an expanded document rather than a reference to one.
  *
- * Cardinality is part of the question: a `hasMany` expansion drops the entries
- * it could not fetch, so a shorter list — or an empty one — is evidence that
- * went missing rather than evidence that says nothing is there.
+ * The `id` is what distinguishes them. A polymorphic reference is stored as
+ * `{ relationTo, value }` — an object, and so indistinguishable from a row by
+ * shape alone, which would let an unexpanded reference pass for evidence.
+ */
+function isExpandedRow(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "id" in value
+  );
+}
+
+/**
+ * Whether a relationship arrived as documents rather than references.
+ *
+ * Judged on the ASSEMBLED value first, because that is the only place a
+ * localized reference appears at all: it lives in the companion table and is
+ * overlaid after the main row is read, so comparing against the stored row
+ * would skip the field entirely.
+ *
+ * Cardinality is the second half: a `hasMany` expansion drops the entries it
+ * could not fetch, so a shorter list — or an empty one — is evidence that went
+ * missing rather than evidence that says nothing is there.
  */
 function referencesExpanded(stored: unknown, assembled: unknown): boolean {
-  const isRow = (value: unknown): boolean =>
-    typeof value === "object" && value !== null && !Array.isArray(value);
-
   const storedList = parseContainer(stored);
-  if (Array.isArray(storedList)) {
-    const references = storedList.filter(
-      id => id !== null && id !== undefined && id !== ""
-    );
-    if (!Array.isArray(assembled)) return references.length === 0;
-    return assembled.length === references.length && assembled.every(isRow);
+  const storedRefs = Array.isArray(storedList)
+    ? storedList.filter(id => !isEmptyValue(id))
+    : undefined;
+
+  if (Array.isArray(assembled)) {
+    if (!assembled.every(isExpandedRow)) return false;
+    return storedRefs === undefined || assembled.length === storedRefs.length;
   }
-  return isRow(assembled);
+
+  // Nothing in the view is only honest when nothing was referenced.
+  if (isEmptyValue(assembled)) {
+    return storedRefs !== undefined
+      ? storedRefs.length === 0
+      : isEmptyValue(stored);
+  }
+
+  return isExpandedRow(assembled);
+}
+
+/** Whether these fields hold a relationship at any depth. */
+function containsRelationField(fields: FieldConfig[]): boolean {
+  return fields.some(field => {
+    if (!("name" in field) || !field.name) return false;
+    const type = field.type as string;
+    if (type === "relationship" || type === "relation") return true;
+    if (type !== "group" && type !== "repeater") return false;
+    const nested = "fields" in field ? (field.fields as FieldConfig[]) : [];
+    return Array.isArray(nested) && containsRelationField(nested);
+  });
 }
 
 /** Hook namespace prefix for Singles. */
@@ -572,29 +616,45 @@ export class SingleQueryService extends BaseService {
     );
 
     if (this.componentDataService) {
-      doc = (await this.componentDataService.populateComponentData({
-        entry: doc,
-        parentTable: singleMeta.tableName,
-        fields: singleMeta.fields,
-        depth: options.depth,
-        // i18n: thread the read locale so an embedded localized component resolves
-        // its translatable fields per language, and forward fallback control so a
-        // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
-        // fields blank instead of showing default-language text.
-        locale: options.locale,
-        fallbackLocale: options.fallbackLocale,
-        // A component's relationship fields copy whole rows out of the target
-        // collection, which a Single's field list never describes — so the
-        // caller travels down to reach the related row's own rules.
-        access: {
-          enforceFieldAccess: enforceRelatedFieldAccess,
-          user: options.user as Record<string, unknown> | undefined,
-          overrideAccess: options.overrideAccess,
-        },
-        // Read errors otherwise become empty component values, which reads to a
-        // rule exactly like a component that holds nothing.
-        strict,
-      })) as SingleDocument;
+      try {
+        doc = (await this.componentDataService.populateComponentData({
+          entry: doc,
+          parentTable: singleMeta.tableName,
+          fields: singleMeta.fields,
+          depth: options.depth,
+          // i18n: thread the read locale so an embedded localized component resolves
+          // its translatable fields per language, and forward fallback control so a
+          // no-fallback read (`?fallback-locale=none`) leaves untranslated embedded
+          // fields blank instead of showing default-language text.
+          locale: options.locale,
+          fallbackLocale: options.fallbackLocale,
+          // A component's relationship fields copy whole rows out of the target
+          // collection, which a Single's field list never describes — so the
+          // caller travels down to reach the related row's own rules.
+          access: {
+            enforceFieldAccess: enforceRelatedFieldAccess,
+            user: options.user as Record<string, unknown> | undefined,
+            overrideAccess: options.overrideAccess,
+          },
+          // Read errors otherwise become empty component values, which reads to a
+          // rule exactly like a component that holds nothing.
+          strict,
+        })) as SingleDocument;
+      } catch (error) {
+        // Only strict asks for a throw, and the result builder puts a bare
+        // Error's own message on the wire — component table and column names
+        // the caller has no business seeing.
+        if (!strict) throw error;
+        throw NextlyError.is(error)
+          ? error
+          : NextlyError.internal({
+              cause: error instanceof Error ? error : undefined,
+              logContext: {
+                single: slug,
+                reason: "component-population-failed-during-authorization",
+              },
+            });
+      }
     }
 
     return doc;
@@ -634,21 +694,24 @@ export class SingleQueryService extends BaseService {
     assembled: Record<string, unknown> | undefined,
     path = ""
   ): void {
-    if (!stored || !assembled) return;
+    if (!assembled) return;
 
     for (const field of fields) {
       if (!("name" in field) || !field.name) continue;
       const name = field.name;
       const type = field.type as string;
-      const before = stored[name];
-      if (before === null || before === undefined || before === "") continue;
+      // `stored` may not carry the field at all: a localized value lives in the
+      // companion table and only reaches the document once it is overlaid.
+      const before = stored?.[name];
+      const after = assembled[name];
+      if (isEmptyValue(before) && isEmptyValue(after)) continue;
       const where = path ? `${path}.${name}` : name;
 
       if (type === "relationship" || type === "relation") {
         // `maxDepth: 0` asks for the reference itself, so an unexpanded id is
         // the configured outcome rather than a failure to expand.
         if (relationshipMaxDepth(field) === 0) continue;
-        if (!referencesExpanded(before, assembled[name])) {
+        if (!referencesExpanded(before, after)) {
           this.logger.error(
             "Refusing a single read: relationship evidence could not be assembled",
             { single: slug, field: where }
@@ -671,7 +734,7 @@ export class SingleQueryService extends BaseService {
       if (!nested || nested.length === 0) continue;
 
       const storedRows = containerRows(before, type);
-      const assembledRows = containerRows(assembled[name], type);
+      const assembledRows = containerRows(after, type);
       for (let index = 0; index < storedRows.length; index += 1) {
         this.assertRelationshipsExpanded(
           slug,
@@ -1953,14 +2016,10 @@ export class SingleQueryService extends BaseService {
     }
 
     // FieldConfig uses "relationship"; FieldDefinition (UI-created) uses "relation".
-    const hasRelationFields = fields.some(
-      f =>
-        "name" in f &&
-        f.name &&
-        ((f.type as string) === "relationship" ||
-          (f.type as string) === "relation")
-    );
-    if (!hasRelationFields) {
+    // Nested relationships count: expansion reaches into groups and repeaters,
+    // so a Single whose only relationships live inside one would otherwise be
+    // skipped here and returned with its references unexpanded.
+    if (!containsRelationField(fields)) {
       return doc;
     }
 

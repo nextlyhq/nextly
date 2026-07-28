@@ -466,6 +466,45 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
 
+  it("hides the underlying failure when strict component population throws", async () => {
+    // The component path has its own strict mode, and its failures reach the
+    // caller the same way a relationship failure does.
+    const registry = createMockSingleRegistry();
+    registry.registerSingle("site-settings", {
+      ...siteSettingsMeta({
+        accessRules: { read: { type: "custom", functionPath: "./rule" } },
+      }),
+      fields: [textField("siteName")],
+    });
+    const componentDataService = {
+      populateComponentData: vi
+        .fn()
+        .mockRejectedValue(new Error('no such table: "comp_hero"')),
+    };
+    const service = new SingleQueryService(
+      createMockAdapter({
+        selectOne: vi.fn().mockResolvedValue({ id: "doc1" }),
+      }) as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3],
+      componentDataService as unknown as Ctor[4],
+      createMockRBACService(true) as unknown as Ctor[5],
+      undefined,
+      {
+        evaluateAccess: vi.fn().mockResolvedValue({ allowed: true }),
+      } as unknown as Ctor[7]
+    );
+
+    const result = await service.get("site-settings", {
+      user: { id: "u1" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).not.toContain("comp_hero");
+  });
+
   it("leaves enforcement off for a caller that supplies no access context", async () => {
     const { service, expandRelationships } = serviceWithRelationshipSpy();
 

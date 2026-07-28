@@ -814,6 +814,170 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data).toBeUndefined();
   });
 
+  it("expands a relationship that exists only inside a group", async () => {
+    // The expansion guard looked at top-level fields only, so a Single whose
+    // relationships all live inside a container was returned unexpanded — and
+    // the completeness check then refused every read of a perfectly valid
+    // document.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        meta: { author: (author.data as { id: string }).id },
+      },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    expect(
+      (result.data!.meta as { author?: { id?: string } })?.author?.id
+    ).toBe((author.data as { id: string }).id);
+  });
+
+  it("checks a localized relationship, which the stored row never carries", async () => {
+    // A localized reference lives in the companion table and is overlaid after
+    // the main row is read, so comparing the view against the stored row skips
+    // the field entirely and a failed expansion goes unnoticed.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          localized: true,
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: "authors",
+              localized: true,
+            }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    const authorId = (author.data as { id: string }).id;
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: authorId },
+      { overrideAccess: true, locale: "en" }
+    );
+    // Leaves the localized reference dangling, as a failed lookup does.
+    await current.adapter.delete("dc_authors", {
+      and: [{ column: "id", op: "=", value: authorId }],
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      locale: "en",
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("does not mistake a polymorphic reference for an expanded row", async () => {
+    // A polymorphic reference is stored as `{ relationTo, value }`, so judging
+    // "is this an object" accepts the reference itself as evidence and a rule
+    // reading into it decides on fields that were never fetched.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    const authorId = (author.data as { id: string }).id;
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: { relationTo: "authors", value: authorId } },
+      { overrideAccess: true }
+    );
+    await current.adapter.delete("dc_authors", {
+      and: [{ column: "id", op: "=", value: authorId }],
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
   it("leaves a relationship configured not to populate alone", async () => {
     // `maxDepth: 0` asks for the reference itself, so an unexpanded id is the
     // configured outcome. Demanding a row there refuses every read of the
