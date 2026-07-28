@@ -889,7 +889,7 @@ describe("ComponentRegistryService legacy pointer repair", () => {
 });
 
 describe("ComponentRegistryService case-only table names", () => {
-  it("does not treat a casing difference as a storage mismatch", async () => {
+  it("treats case variants as one table when the catalog reports one", async () => {
     // Both spellings address one table where the dialect folds identifiers;
     // reporting a mismatch would skip metadata updates on every boot.
     const ctx = createCtx();
@@ -898,6 +898,7 @@ describe("ComponentRegistryService case-only table names", () => {
       dbRow({ schema_hash: "stale", table_name: "SEO_META" })
     );
     ctx.adapter.tableExists.mockResolvedValue(true);
+    ctx.adapter.listTables.mockResolvedValue(["seo_meta"]);
     ctx.adapter.update.mockResolvedValue([dbRow()]);
 
     const result = await ctx.service.syncCodeFirstComponents([
@@ -906,5 +907,23 @@ describe("ComponentRegistryService case-only table names", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.updated).toEqual(["seo"]);
+  });
+
+  it("reports a mismatch when the catalog reports both case variants", async () => {
+    // PostgreSQL, or MySQL with lower_case_table_names=0: distinct tables.
+    const ctx = createCtx();
+    const fields = [{ name: "metaTitle", type: "text" }];
+    ctx.adapter.selectOne.mockImplementation(async () =>
+      dbRow({ schema_hash: "stale", table_name: "SEO_META" })
+    );
+    ctx.adapter.tableExists.mockResolvedValue(true);
+    ctx.adapter.listTables.mockResolvedValue(["SEO_META", "seo_meta"]);
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+    ]);
+
+    expect(result.errors).toHaveLength(1);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });

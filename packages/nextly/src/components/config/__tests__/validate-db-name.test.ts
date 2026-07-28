@@ -129,3 +129,16 @@ describe("reserved-name matching ignores surrounding whitespace", () => {
     expect(result.valid).toBe(false);
   });
 });
+
+describe("companion suffix is reserved for unprefixed names too", () => {
+  it("rejects the companion of a custom unprefixed table", () => {
+    // A localized component with main table `seo_meta` owns
+    // `seo_meta_locales`; another component claiming it could drop those
+    // translations on delete.
+    const result = validateComponentConfig({
+      ...base,
+      dbName: "seo_meta_locales",
+    });
+    expect(result.valid).toBe(false);
+  });
+});
