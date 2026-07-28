@@ -196,7 +196,15 @@ interface ProvisionedDatabase {
 function snapshotEnv(): () => void {
   const previousUrl = process.env.DATABASE_URL;
   const previousDialect = process.env.DB_DIALECT;
+  // One-shot. `destroy()` may be called more than once, and a repeat must not
+  // reapply a snapshot that has already been honoured — by then the values it
+  // holds are stale, and whatever set the environment since (the next test's
+  // setup, the next instance) owns it. The same reasoning covers a retried
+  // release: the first attempt restored, so the retry has nothing to put back.
+  let restored = false;
   return () => {
+    if (restored) return;
+    restored = true;
     if (previousUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousUrl;
     if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -428,19 +436,31 @@ export async function createTestNextly(
   // Created for a non-SQLite boot and dropped by destroy(). Undefined when the
   // caller supplied their own adapter or the boot is on in-memory SQLite.
   let provisioned: ProvisionedDatabase | undefined;
-  if (!adapter && opts.dialect && opts.dialect !== "sqlite") {
-    provisioned = await provisionDatabase(
-      opts.dialect,
-      resolveServerUrl(opts.dialect, opts.serverUrl)
-    );
-    adapter = provisioned.adapter;
-  }
   // Set when this boot changes the environment without provisioning anything,
   // so `destroy()` can put it back the way the provisioned path does. Starts
   // as whatever an abandoned instance left pending: adopting it is what makes
   // this instance's teardown restore the environment that predates it, and it
   // is the right target even for a boot that changes nothing itself.
+  //
+  // Adopted BEFORE anything can fail. Acquiring the database is the first
+  // step that throws — an unset server URL, an unreachable server — and until
+  // this instance owns the pending snapshot there is nothing to put the
+  // environment back with.
   let restoreEnv: (() => void) | undefined = inheritedRestore;
+  if (!adapter && opts.dialect && opts.dialect !== "sqlite") {
+    try {
+      provisioned = await provisionDatabase(
+        opts.dialect,
+        resolveServerUrl(opts.dialect, opts.serverUrl)
+      );
+    } catch (error) {
+      // `provisionDatabase` restores its own snapshot; this is the abandoned
+      // instance's, which nothing else will reach once this boot gives up.
+      restoreEnv?.();
+      throw error;
+    }
+    adapter = provisioned.adapter;
+  }
   if (!adapter) {
     // The inherited snapshot points further back than one taken now would, so
     // it wins when there is one.

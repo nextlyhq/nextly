@@ -111,6 +111,57 @@ for (const dialect of getConfiguredTestDialects().filter(d => d !== "sqlite")) {
   }, 60_000);
 }
 
+it("restores the inherited environment when acquiring a database fails", async () => {
+  // The abandoned instance's snapshot is the only way back to the original
+  // environment. Acquiring a database is the first thing that can throw, so
+  // this boot has to own that snapshot before it tries.
+  const original = process.env.DB_DIALECT;
+  process.env.DB_DIALECT = "postgresql";
+
+  try {
+    // Abandoned on purpose: its pending snapshot is what the failed boot below
+    // must hand back.
+    await createTestNextly({});
+    expect(process.env.DB_DIALECT).toBe("sqlite");
+
+    await expect(
+      createTestNextly({
+        dialect: "postgresql",
+        // Refused immediately rather than timing out.
+        serverUrl: "postgres://nextly:nextly@127.0.0.1:1/none",
+      })
+    ).rejects.toThrow();
+
+    expect(process.env.DB_DIALECT).toBe("postgresql");
+  } finally {
+    if (original === undefined) delete process.env.DB_DIALECT;
+    else process.env.DB_DIALECT = original;
+  }
+}, 60_000);
+
+it("does not reapply a stale environment on a repeated destroy", async () => {
+  // Teardown is explicitly repeatable, so a second call must be inert. A
+  // snapshot honoured once is stale, and whatever configured the environment
+  // since owns it.
+  const original = process.env.DB_DIALECT;
+  process.env.DB_DIALECT = "postgresql";
+
+  try {
+    const instance = await createTestNextly({});
+    await instance.destroy();
+    expect(process.env.DB_DIALECT).toBe("postgresql");
+
+    // Stands in for the next test's setup running between the two calls.
+    process.env.DB_DIALECT = "mysql";
+    await instance.destroy();
+
+    expect(process.env.DB_DIALECT).toBe("mysql");
+  } finally {
+    if (original === undefined) delete process.env.DB_DIALECT;
+    else process.env.DB_DIALECT = original;
+  }
+}, 60_000);
+
 it.skipIf(!process.env.TEST_POSTGRES_URL)(
   "retries the drop after one fails, rather than leaking the database",
   async () => {
