@@ -3024,11 +3024,14 @@ export class CollectionMutationService extends BaseService {
             // `locale`-tagged event carries that language's content and its own
             // prior status, not the main row's. Read on the transaction
             // (read-your-writes).
-            const localeValues = await this.readCompanionLocalizedValues(
-              tx,
-              params.collectionName,
-              params.entryId,
-              locale
+            const localeValues = this.deserializeJsonFieldsForSnapshot(
+              await this.readCompanionLocalizedValues(
+                tx,
+                params.collectionName,
+                params.entryId,
+                locale
+              ),
+              fields
             );
             const localeData = {
               ...publishedDocument,
@@ -4234,16 +4237,32 @@ export class CollectionMutationService extends BaseService {
                 Object.keys(previousLocalizedValues).length > 0 ||
                 Object.keys(previousComponents ?? {}).length > 0 ||
                 previousCompanionStatus !== null;
+              // For a per-locale restore into a locale whose companion row is
+              // absent (a locale disabled then re-enabled), the prior per-locale
+              // state is draft — an absent per-locale row starts as draft — not
+              // the main row's status. Recording the main row's "published" here
+              // would make undoing the restore recreate and PUBLISH an empty
+              // translation instead of returning the locale to its prior
+              // absent/draft state. Scoped to this snapshot, so the `previous`
+              // event above is unaffected.
+              const perLocaleAbsentRestore =
+                !!localizedUpdate?.hasStatus &&
+                localizedUpdate.writeLocale !==
+                  this.localization?.defaultLocale &&
+                previousCompanionStatus === null;
+              const preRestoreParent = perLocaleAbsentRestore
+                ? { ...previousParent, status: "draft" }
+                : previousParent;
               await captureInTx(tx, this.versionCapture, {
                 ref: {
                   scopeKind: "collection",
                   scopeSlug: params.collectionName,
                   entryId: params.entryId,
                 },
-                contentStatus: (previousParent as { status?: unknown }).status,
+                contentStatus: (preRestoreParent as { status?: unknown }).status,
                 parts: await this.snapshotPartsFor(
                   {
-                    parentRow: previousParent,
+                    parentRow: preRestoreParent,
                     components: previousComponents,
                     manyToMany: previousM2M,
                   },

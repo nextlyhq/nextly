@@ -1517,6 +1517,13 @@ export class SingleMutationService extends BaseService {
               // translation standing. Keyed by field.name to match the read
               // shape; mirrors the collection capture, which reads back the full
               // write-locale companion.
+              // Set when the fallback carries a REAL (non-null) prior translation
+              // into the snapshot. That makes the snapshot locale-specific even
+              // when this write touched only shared fields, so the locale tag
+              // below must claim the locale — otherwise `restoreVersion` treats a
+              // null-locale snapshot as shared-only and drops exactly these
+              // recovered translations.
+              let overlaidPriorTranslations = false;
               if (companion) {
                 for (const f of companion.localizedFields) {
                   if (
@@ -1532,7 +1539,13 @@ export class SingleMutationService extends BaseService {
                       f.column
                     )
                   ) {
-                    parentRow[f.name] = previousCompanionValues[f.column];
+                    const priorValue = previousCompanionValues[f.column];
+                    parentRow[f.name] = priorValue;
+                    // A phantom null (the locale has no companion row yet) is not
+                    // a real translation and must not force the locale tag, or a
+                    // shared-only write to an untranslated locale would claim that
+                    // language from state that was never its own.
+                    if (priorValue != null) overlaidPriorTranslations = true;
                   }
                 }
               }
@@ -1832,7 +1845,8 @@ export class SingleMutationService extends BaseService {
                   Object.keys(companionData).length > 0 ||
                   companionStatus !== undefined ||
                   capturedLocalizedComponents ||
-                  seededDefaultsOverlaid
+                  seededDefaultsOverlaid ||
+                  overlaidPriorTranslations
                     ? (snapshotLocale ?? null)
                     : null,
                 sourceVersionNo: options.sourceVersionNo ?? null,

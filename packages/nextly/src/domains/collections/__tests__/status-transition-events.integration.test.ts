@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineCollection, text } from "../../../config";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
+import { NextlyError } from "../../../errors";
 import {
   createTestNextly,
   type TestNextly,
@@ -209,7 +210,10 @@ describe("document status-transition events (integration)", () => {
       collectionLocalized: true,
       status: true,
     });
-    if (!spec) throw new Error("expected a companion spec");
+    if (!spec)
+      throw NextlyError.internal({
+        logContext: { reason: "missing-companion-spec", collection: "pages" },
+      });
     if (!(await current.adapter.tableExists(spec.companionTable))) {
       await (
         current.adapter as unknown as {
