@@ -25,6 +25,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 import { teardownEntityComponentData } from "./teardown-entity-component-data";
 
@@ -177,7 +178,11 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     const now = this.formatDateForDb();
-    const tableName = this.ensureTableNamePrefix(data.tableName);
+    // Store the caller-resolved physical name verbatim. Callers derive it via
+    // resolveComponentTableName, where a custom dbName is honored as-is
+    // (components intentionally differ from collections/singles); re-prefixing
+    // here would desync the registry from the table the schema layer creates.
+    const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
       slug: data.slug,
@@ -242,7 +247,9 @@ export class ComponentRegistryService extends BaseRegistryService<
     }
 
     const now = this.formatDateForDb();
-    const tableName = this.ensureTableNamePrefix(data.tableName);
+    // Same contract as registerComponent: the caller resolves the physical
+    // name (custom dbName verbatim); the registry stores it unchanged.
+    const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
       slug: data.slug,
@@ -483,7 +490,10 @@ export class ComponentRegistryService extends BaseRegistryService<
           await this.registerComponent({
             slug: config.slug,
             label: config.label,
-            tableName: config.tableName ?? this.generateTableName(config.slug),
+            // Canonical resolution: a custom dbName is honored verbatim,
+            // otherwise comp_ + normalized slug — matching what the runtime
+            // schema layer and migrate:create derive for the same component.
+            tableName: resolveComponentTableName(config.slug, config.tableName),
             description: config.description,
             fields: config.fields,
             admin: config.admin,

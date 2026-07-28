@@ -9,6 +9,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   ComponentDefinition,
@@ -34,8 +35,12 @@ export interface ComponentsNamespace {
   findBySlug(
     args: FindComponentBySlugArgs
   ): Promise<ComponentDefinition | null>;
-  create(args: CreateComponentArgs): Promise<MutationResult<ComponentDefinition>>;
-  update(args: UpdateComponentArgs): Promise<MutationResult<ComponentDefinition>>;
+  create(
+    args: CreateComponentArgs
+  ): Promise<MutationResult<ComponentDefinition>>;
+  update(
+    args: UpdateComponentArgs
+  ): Promise<MutationResult<ComponentDefinition>>;
   delete(args: DeleteComponentArgs): Promise<MutationResult<{ slug: string }>>;
 }
 
@@ -149,14 +154,16 @@ export function createComponentsNamespace(
       const { calculateSchemaHash } = await import(
         "../../domains/schema/services/schema-hash"
       );
-      const fieldsTyped =
-        args.fields as unknown as FieldConfig[];
+      const fieldsTyped = args.fields as unknown as FieldConfig[];
       const schemaHash = calculateSchemaHash(fieldsTyped);
 
       const component = await ctx.componentRegistryService.registerComponent({
         slug: args.slug,
         label: args.label,
-        tableName: args.tableName ?? `comp_${args.slug}`,
+        // Canonical resolution: an explicit tableName is honored verbatim;
+        // otherwise the slug is normalized before the comp_ prefix so a
+        // dashed slug maps to the same table the schema layer creates.
+        tableName: resolveComponentTableName(args.slug, args.tableName),
         description: args.description,
         fields: fieldsTyped,
         admin: args.admin,

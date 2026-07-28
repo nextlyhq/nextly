@@ -55,7 +55,10 @@ import type {
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
-import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
@@ -140,6 +143,8 @@ type ComponentDef = {
   label?: { singular?: string } | string;
   description?: string;
   admin?: unknown;
+  /** Custom physical table name, honored verbatim by the canonical resolver. */
+  dbName?: string;
 };
 
 // Minimal duck-typed surfaces of registry services used here.
@@ -291,6 +296,9 @@ function buildComponentSyncPayload(components: ComponentDef[]) {
         fields: c.fields ?? [],
         description: c.description,
         admin: c.admin,
+        // Forward the custom table name so the metadata sync resolves the
+        // same physical name as boot registration.
+        tableName: c.dbName,
         // i18n: forward the localized master switch — otherwise the reload flips
         // a localized component's flag OFF every HMR/boot.
         localized: (c as { localized?: boolean }).localized === true,
@@ -638,7 +646,8 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  // Normalize components. Table name is always comp_<slug_with_underscores>.
+  // Normalize components. Names resolve canonically: custom dbName verbatim,
+  // otherwise comp_<slug_with_underscores>.
   const componentTargets: Array<{
     slug: string;
     tableName: string;
@@ -649,10 +658,7 @@ export async function reloadNextlyConfig(opts?: {
     if (!c.slug) continue;
     componentTargets.push({
       slug: c.slug,
-      tableName: `comp_${c.slug
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")}`,
+      tableName: resolveComponentTableName(c.slug, c.dbName),
       fields: (c.fields ?? []) as MinimalField[],
       // i18n: carry `localized` so the HMR diff omits translatable columns from the
       // component's main table and registers its companion.

@@ -145,21 +145,50 @@ describe("ComponentRegistryService", () => {
       expect(row.locked).toBe(0);
     });
 
-    it("ensures comp_ table name prefix", async () => {
+    it("stores a custom table name verbatim without forcing the comp_ prefix", async () => {
       ctx.adapter.selectOne.mockResolvedValue(null);
-      ctx.adapter.insert.mockResolvedValue(dbRow());
+      ctx.adapter.insert.mockResolvedValue(dbRow({ table_name: "seo_meta" }));
 
+      // A custom dbName is honored verbatim (components intentionally differ
+      // from collections/singles): callers resolve names via
+      // resolveComponentTableName, and the registry must store what the
+      // physical layer creates — re-prefixing here would desync the registry
+      // from the actual table.
       await ctx.service.registerComponent({
         slug: "seo",
         label: "SEO",
-        tableName: "seo", // no prefix
+        tableName: "seo_meta",
         fields: [],
         source: "code",
         schemaHash: "h",
       });
 
       const row = ctx.adapter.insert.mock.calls[0][1];
-      expect(row.table_name).toBe("comp_seo");
+      expect(row.table_name).toBe("seo_meta");
+    });
+
+    it("stores the table name verbatim in registerComponentInTransaction", async () => {
+      const tx = {
+        selectOne: vi.fn().mockResolvedValue(null),
+        insert: vi.fn().mockResolvedValue(dbRow({ table_name: "seo_meta" })),
+      };
+
+      await ctx.service.registerComponentInTransaction(
+        tx as unknown as Parameters<
+          typeof ctx.service.registerComponentInTransaction
+        >[0],
+        {
+          slug: "seo",
+          label: "SEO",
+          tableName: "seo_meta",
+          fields: [],
+          source: "code",
+          schemaHash: "h",
+        }
+      );
+
+      const row = tx.insert.mock.calls[0][1] as Record<string, unknown>;
+      expect(row.table_name).toBe("seo_meta");
     });
   });
 

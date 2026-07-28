@@ -105,6 +105,7 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -2604,7 +2605,9 @@ export class CollectionQueryService extends BaseService {
       const tableExistsConditions: any[] = [];
 
       for (const slug of slugsToQuery) {
-        const componentTableName = `comp_${slug}`;
+        // Canonical resolution normalizes the slug (e.g. dashes) so the
+        // EXISTS subquery targets the same table the schema layer created.
+        const componentTableName = resolveComponentTableName(slug);
 
         // Build EXISTS subquery:
         // EXISTS (SELECT 1 FROM comp_{slug}
