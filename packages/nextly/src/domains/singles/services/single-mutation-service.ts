@@ -1398,6 +1398,13 @@ export class SingleMutationService extends BaseService {
                     parentTable: singleMeta.tableName,
                     fields: fieldConfigs,
                     executor: tx.getDrizzle(),
+                    // References only, like the post-write and collection reads:
+                    // an expanded relationship/upload would store the whole
+                    // related row where the component write path expects an id,
+                    // so restoring this snapshot would fail persistence; it would
+                    // also smuggle the target's fields past a redaction list
+                    // built from this Single's tree alone.
+                    depth: 0,
                     strict: true,
                     ...(snapshotLocale !== undefined
                       ? {
@@ -1599,6 +1606,13 @@ export class SingleMutationService extends BaseService {
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
                         executor: tx.getDrizzle(),
+                        // References only, like the collection capture: an
+                        // expanded relationship/upload stores the whole related
+                        // row where the component write path expects an id, so a
+                        // restore of this snapshot would fail persistence; it
+                        // also smuggles the target's fields past a redaction list
+                        // built from this Single's tree alone.
+                        depth: 0,
                         // Surface a read failure (the catch below fails the
                         // write) instead of silently capturing an incomplete
                         // component snapshot in durable version history.
@@ -1685,6 +1699,16 @@ export class SingleMutationService extends BaseService {
                       prevParentRow[f.name] = previousCompanionValues[f.column];
                     }
                   }
+                }
+                // Match the snapshot's own `status` field to the version's
+                // recorded status: for a per-locale write that status lives on
+                // the companion `_status`, so the pre-write main-row status left
+                // here would otherwise disagree with `contentStatus` below and
+                // undoing this restore would publish content that was draft (or
+                // the reverse). A no-op for a default-locale/non-localized write,
+                // where `previousLocaleStatus` is already the main-row status.
+                if (singleHasStatus) {
+                  prevParentRow.status = previousLocaleStatus;
                 }
                 stripPasswordFieldValues(prevParentRow, fieldConfigs);
                 stripSystemOwnerField(prevParentRow);
