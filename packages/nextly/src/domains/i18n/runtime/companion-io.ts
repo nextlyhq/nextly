@@ -257,7 +257,12 @@ export async function ensureCompanionTable(
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
-  }
+  },
+  /**
+   * Notified when creation fails. Optional so existing callers are unchanged;
+   * without it the previous swallow-and-retry-next-boot behaviour is preserved.
+   */
+  onError?: (error: unknown) => void
 ): Promise<void> {
   const companionTableName = `${args.tableName}_locales`;
   try {
@@ -281,8 +286,15 @@ export async function ensureCompanionTable(
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
     }
-  } catch {
-    // Best-effort: main table may not exist yet on a very first boot — the companion
-    // will be created on the next boot (or by `nextly migrate`).
+  } catch (error) {
+    // Best-effort: the main table may not exist yet on a very first boot, where the
+    // companion is created on the next boot (or by `nextly migrate`). That case is
+    // expected and self-healing. Anything else is NOT — a persistent failure here
+    // leaves the entity marked localized with no place to store translations, and
+    // swallowing it silently is how that state went unnoticed. Report it through
+    // the optional reporter so a caller (db:sync, boot) can surface it; the
+    // function still resolves, because refusing to boot over a companion is worse
+    // than booting with non-default-locale writes refused.
+    onError?.(error);
   }
 }

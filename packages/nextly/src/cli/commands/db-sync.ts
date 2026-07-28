@@ -85,6 +85,7 @@ import {
 import { formatDuration } from "../utils/logger";
 
 import {
+  ensureLocalizedCompanions,
   performPermissionSeeding,
   syncCollections,
   syncComponents,
@@ -301,6 +302,13 @@ export async function runDbSync(
     await syncCollections(configResult, adapter, options, context);
     await syncSingles(configResult, adapter, options, context);
     await syncComponents(configResult, adapter, options, context);
+
+    // Step 5.6: Create the `_locales` companion of every localized entity, which
+    // the push pipeline does not manage. Runs after all three syncs because the
+    // companion references its main table. Without this, `db:sync` left the
+    // registry saying "localized" with no table to hold translations until the
+    // app next booted, and writes in that window overwrote the default language.
+    await ensureLocalizedCompanions(configResult.config, adapter, context);
 
     if (collectionCount === 0) {
       logger.warn("No collections defined in config");

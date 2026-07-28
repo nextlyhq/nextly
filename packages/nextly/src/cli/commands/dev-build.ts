@@ -761,3 +761,80 @@ async function handleRemovedComponents(
     }
   }
 }
+
+/**
+ * Create the companion `_locales` table for every localized collection, single
+ * and component in the config.
+ *
+ * The push pipeline deliberately does not manage companion tables (see
+ * `managed-tables.isCompanionTable`), and `ensureCompanionTable` — the intended
+ * db:sync/dev-boot counterpart to migration-owned creation — was only ever called
+ * at boot. Because `db:sync` runs in its own CLI process, it flipped the
+ * registry's `localized` flag and left creation to whenever the app next started;
+ * a server already running then rendered the whole localization UI over a table
+ * that did not exist.
+ *
+ * MUST be called after `syncCollections`, `syncSingles` AND `syncComponents`:
+ * the companion carries a foreign key to its main table, so running it earlier
+ * fails for whichever entity types have not been pushed yet. Idempotent —
+ * `ensureCompanionTable` returns early when the table is already there — so
+ * running it on every sync costs one probe per localized entity.
+ */
+export async function ensureLocalizedCompanions(
+  config: LoadConfigResult["config"],
+  adapter: CLIDatabaseAdapter,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const dialect = adapter.getCapabilities().dialect;
+  const { ensureCompanionTable } = await import(
+    "../../domains/i18n/runtime/companion-io"
+  );
+  const { resolveEntityTable } = await import(
+    "../../domains/i18n/migration/resolve-entity-table"
+  );
+
+  const groups = [
+    config.collections ?? [],
+    config.singles ?? [],
+    config.components ?? [],
+  ];
+
+  for (const group of groups) {
+    for (const raw of group) {
+      const entity = raw as {
+        slug?: string;
+        localized?: boolean;
+        status?: boolean;
+        fields?: { name: string; type: string; localized?: boolean }[];
+      };
+      if (!entity.slug || entity.localized !== true) continue;
+      const resolved = resolveEntityTable(config, entity.slug);
+      if (!resolved) continue;
+      // `ensureCompanionTable` resolves even on failure (a first boot may not have
+      // the main table yet), so the reporter — not a try/catch — is what surfaces
+      // a real problem.
+      // `CLIDatabaseAdapter` under-declares the runtime object, which is a real
+      // DrizzleAdapter — the same conversion this file already uses for the sync
+      // service above. `ensureCompanionTable` needs `executeQuery`, which the
+      // declared CLI interface omits.
+      await ensureCompanionTable(
+        adapter as unknown as DrizzleAdapter,
+        {
+          slug: entity.slug,
+          tableName: resolved.tableName,
+          fields: entity.fields ?? [],
+          dialect,
+          status: entity.status === true,
+        },
+        error => {
+          logger.warn(
+            `Could not create the translations table for "${entity.slug}" (${resolved.companionTableName}). ` +
+              `Writes in a non-default locale will be refused until it exists: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+    }
+  }
+}

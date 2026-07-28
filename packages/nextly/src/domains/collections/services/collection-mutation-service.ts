@@ -942,6 +942,32 @@ export class CollectionMutationService extends BaseService {
     // `migrate`, the dev auto-sync leaves localized columns on the MAIN table (Option B), so
     // writes must go there — return null and let the localized values flow to main as today.
     if (!(await this.companionTableExists(companion.companionTableName))) {
+      // CREATE is unaffected: a new entry has no other language's values to lose,
+      // so its translatable values legitimately sit on the main table until the
+      // companion exists — the documented pre-migration fallback.
+      //
+      // UPDATE is where content dies. The row already holds the default
+      // language's values on main, so letting a NON-default locale fall through
+      // overwrites them with the translation and regenerates the slug from it,
+      // silently and with a success response. The window is real: `db:sync`
+      // flips the registry's `localized` flag in its own process while the
+      // running server has yet to create the companion. Refuse rather than
+      // destroy.
+      const requested = resolveRequestedLocale(this.localization, locale);
+      if (!isCreate && requested !== this.localization.defaultLocale) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            collection: collectionName,
+            locale: requested,
+            defaultLocale: this.localization.defaultLocale,
+            companionTable: companion.companionTableName,
+          },
+        });
+      }
       return null;
     }
 

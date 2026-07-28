@@ -865,6 +865,34 @@ export class SingleMutationService extends BaseService {
               companion.companionTableName
             )
           : false;
+      // A localized single whose companion table does not exist yet has nowhere
+      // to put a NON-default locale's values: the split below moves them out of
+      // the main payload and the companion upsert is then skipped, so the
+      // translation is silently dropped while the write reports success. The
+      // window is real — `db:sync` flips the registry's `localized` flag in its
+      // own process before the running server creates the companion — so refuse
+      // rather than discard the user's content. Default-locale values stay on
+      // the main table until the companion exists, which is intended.
+      if (
+        companion &&
+        !companionPhysicallyExists &&
+        this.localization &&
+        writeLocale !== undefined &&
+        writeLocale !== this.localization.defaultLocale
+      ) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this single yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            single: singleMeta.slug,
+            locale: writeLocale,
+            defaultLocale: this.localization.defaultLocale,
+            companionTable: companion.companionTableName,
+          },
+        });
+      }
       // Same pre-transaction, pooled probe for the auto-create default seed: it
       // is keyed on the DEFAULT locale (not the write locale), so it needs its
       // own existence check rather than reusing `companionPhysicallyExists`.
