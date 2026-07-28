@@ -217,7 +217,12 @@ async function listRegisteredComponentTables(
     {}
   );
 
-  const catalog = new Set(discovered);
+  // MySQL with `lower_case_table_names` reports a verbatim `SEO_META` as
+  // `seo_meta`, so an exact match would discard the registered table — and an
+  // unprefixed custom name is not recovered by the prefix scan either, leaving
+  // its rows orphaned. Matching folds case and resolves back to the name the
+  // catalog actually reported, which is what later statements must address.
+  const catalog = new Map(discovered.map(name => [name.toLowerCase(), name]));
   return (
     rows
       .map(row => row.table_name ?? row.tableName)
@@ -226,7 +231,8 @@ async function listRegisteredComponentTables(
       // whose migration is pending or failed. Probing one raises a missing-table
       // error, and because this sweep precedes every entity delete, a single
       // unmaterialized component would block all of them.
-      .filter(name => catalog.has(name))
+      .map(name => catalog.get(name.toLowerCase()))
+      .filter((name): name is string => name !== undefined)
   );
 }
 

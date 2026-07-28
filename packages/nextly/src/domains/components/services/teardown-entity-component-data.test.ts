@@ -294,3 +294,34 @@ describe("teardownEntityComponentData registry read failures", () => {
     ).rejects.toThrow(/connection terminated/);
   });
 });
+
+describe("teardownEntityComponentData catalog case folding", () => {
+  it("matches a registered name against a differently-cased catalog entry", async () => {
+    // MySQL with lower_case_table_names reports the folded name.
+    const deleted: string[] = [];
+    const adapter = {
+      dialect: "mysql" as const,
+      listTables: vi.fn().mockResolvedValue(["seo_meta", "dynamic_components"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") {
+          return [{ slug: "seo", table_name: "SEO_META" }];
+        }
+        return [{ id: `${table}-1` }];
+      }),
+    };
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).toContain("seo_meta");
+    expect(deleted).toContain("seo_meta");
+  });
+});

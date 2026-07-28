@@ -839,3 +839,51 @@ describe("ComponentRegistryService legacy table mismatch", () => {
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });
+
+describe("ComponentRegistryService legacy pointer repair", () => {
+  const fields = [{ name: "metaTitle", type: "text" }];
+
+  function stubExisting(ctx: RegistryTestCtx, storedName: string) {
+    ctx.adapter.selectOne.mockImplementation(async () => {
+      const { calculateSchemaHash } = await import(
+        "../../schema/services/schema-hash"
+      );
+      return dbRow({
+        schema_hash: calculateSchemaHash(fields),
+        table_name: storedName,
+      });
+    });
+  }
+
+  it("repairs a pointer whose table never existed when the configured one does", async () => {
+    // Written before names resolved canonically: the data has always been in
+    // the configured table, so correcting the row moves nothing.
+    const ctx = createCtx();
+    stubExisting(ctx, "comp_seo_meta");
+    ctx.adapter.tableExists.mockImplementation(
+      async (name: string) => name === "seo_meta"
+    );
+    ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+    ]);
+
+    expect(result.updated).toEqual(["seo"]);
+    const [, updateData] = ctx.adapter.update.mock.calls[0];
+    expect(updateData.table_name).toBe("seo_meta");
+  });
+
+  it("reports rather than repairs when the stored table still exists", async () => {
+    const ctx = createCtx();
+    stubExisting(ctx, "seo_meta");
+    ctx.adapter.tableExists.mockResolvedValue(true);
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
+    ]);
+
+    expect(result.errors).toHaveLength(1);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});

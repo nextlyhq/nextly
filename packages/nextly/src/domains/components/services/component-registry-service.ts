@@ -359,6 +359,15 @@ export class ComponentRegistryService extends BaseRegistryService<
       updateData.config_path = data.configPath;
     }
 
+    // Only ever supplied by the legacy-pointer repair, which has verified the
+    // target table exists and the stored one does not; the ownership rules
+    // still apply so a repair cannot land on storage this component may not
+    // claim.
+    if (data.tableName !== undefined) {
+      assertOwnableComponentTable(slug, data.tableName);
+      updateData.table_name = data.tableName;
+    }
+
     try {
       const results = await this.adapter.update<DynamicComponentRecord>(
         this.registryTableName,
@@ -516,15 +525,35 @@ export class ComponentRegistryService extends BaseRegistryService<
         // teardown all follow the stored name, so a mismatch means they address
         // a table the schema layer is not maintaining. Recording it as a sync
         // error surfaces it on every boot until a migration resolves it.
+        let repairedTableName: string | undefined;
         if (existing !== null && existing.tableName !== desiredTableName) {
-          result.errors.push({
-            slug: config.slug,
-            error:
-              `Registry table '${existing.tableName}' does not match the configured ` +
-              `'${desiredTableName}'. Storage is not repointed automatically; run a ` +
-              `migration to move the data, or restore the previous dbName.`,
-          });
-          continue;
+          // One mismatch is repairable without moving anything: the stored name
+          // addresses no table while the configured one does. That is a row
+          // written before names resolved canonically — the data has always
+          // been in the configured table — so correcting the pointer converges
+          // the registry onto the config rather than leaving them divergent.
+          const [storedExists, desiredExists] = await Promise.all([
+            this.adapter.tableExists(existing.tableName),
+            this.adapter.tableExists(desiredTableName),
+          ]);
+
+          if (!storedExists && desiredExists) {
+            repairedTableName = desiredTableName;
+            this.logger.warn("Component registry table name repaired", {
+              slug: config.slug,
+              from: existing.tableName,
+              to: desiredTableName,
+            });
+          } else {
+            result.errors.push({
+              slug: config.slug,
+              error:
+                `Registry table '${existing.tableName}' does not match the configured ` +
+                `'${desiredTableName}'. Storage is not repointed automatically; run a ` +
+                `migration to move the data, or restore the previous dbName.`,
+            });
+            continue;
+          }
         }
         if (!existing) {
           await this.registerComponent({
@@ -542,6 +571,7 @@ export class ComponentRegistryService extends BaseRegistryService<
           });
           result.created.push(config.slug);
         } else if (
+          repairedTableName !== undefined ||
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
           (config.localized === true) !== (existing.localized === true)
         ) {
@@ -556,6 +586,7 @@ export class ComponentRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               localized: config.localized === true,
+              tableName: repairedTableName,
             },
             { source: "code" }
           );
