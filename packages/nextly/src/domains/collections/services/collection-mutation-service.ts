@@ -5226,6 +5226,32 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Append the outbox event on the caller's transaction so a create through
+      // the tx-API (importers, plugins, batch) is observable too — the invariant
+      // the interactive and delete-in-tx paths already hold. Built from the
+      // freshly-inserted row in read shape; recorded on `tx` so it commits with
+      // the entry and never survives a rollback. Carried on the result so the
+      // owning caller flushes the drain after IT commits.
+      const eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.created",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+        },
+        data: this.deserializeJsonFieldsForSnapshot(
+          entry as Record<string, unknown>,
+          fields
+        ),
+        previous: null,
+        fields: await this.webhookFieldTreeIfRecording(
+          params.collectionName,
+          fields,
+          tx.getDrizzle()
+        ),
+        actor: actorForWrite(undefined, params.user),
+      });
+
       // Compute the intent from the freshly inserted row, before the after-hooks
       // run or redaction can strip the slug.
       revalidationIntent = buildEntryRevalidationIntent(
@@ -5297,6 +5323,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: entry,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
@@ -6440,6 +6467,31 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Append the outbox event on the caller's transaction so a batch create
+      // (createEntries) is observable too — the same invariant the interactive
+      // path holds. Recording is NOT a hook, so it runs even under `skipHooks`;
+      // built from the freshly-inserted row in read shape and recorded on `tx`
+      // so it commits with the entry and never survives a rollback.
+      const eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.created",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+        },
+        data: this.deserializeJsonFieldsForSnapshot(
+          entry as Record<string, unknown>,
+          fields
+        ),
+        previous: null,
+        fields: await this.webhookFieldTreeIfRecording(
+          params.collectionName,
+          fields,
+          tx.getDrizzle()
+        ),
+        actor: actorForWrite(undefined, params.user),
+      });
+
       // Compute the intent from the freshly inserted row, before ANY after-hooks
       // run (a throwing afterCreate hook must not lose it) and before redaction
       // can strip the slug.
@@ -6520,6 +6572,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: entry,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
