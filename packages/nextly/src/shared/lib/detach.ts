@@ -50,7 +50,6 @@ function copyOwnProperties(
   target: object,
   seen: WeakMap<object, unknown>
 ): void {
-  const record = source as Record<string | symbol, unknown>;
   // Symbol keys too: metadata is often attached under one, and dropping it
   // shows a rule a collection without the state it was meant to decide on.
   const keys: (string | symbol)[] = [
@@ -60,9 +59,19 @@ function copyOwnProperties(
     ),
   ];
   for (const key of keys) {
-    (target as Record<string | symbol, unknown>)[key] = detachValue(
-      record[key],
-      seen
+    // Defined rather than assigned. Assignment resolves the target's inherited
+    // accessors — a `size` own property on a Map would hit the prototype's
+    // getter-only `size` and throw — and a `__proto__` key would repoint the
+    // copy's prototype instead of becoming a property on it. Reading the
+    // descriptor also leaves any getter on the source uninvoked.
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (!descriptor) continue;
+    Object.defineProperty(
+      target,
+      key,
+      "value" in descriptor
+        ? { ...descriptor, value: detachValue(descriptor.value, seen) }
+        : descriptor
     );
   }
 }

@@ -479,6 +479,47 @@ describe("field-level registry", () => {
     expect(seen).toBe(true);
   });
 
+  it("copies a decorated collection without tripping inherited accessors", async () => {
+    // `size` is a getter-only accessor on Map.prototype, so assigning an own
+    // `size` onto the copy throws under strict mode — before the rule it was
+    // taken for ever runs. `__proto__` is the other trap: assigning it would
+    // repoint the copy's prototype rather than become a property on it.
+    const flags = new Map<string, string>([["a", "1"]]);
+    Object.defineProperty(flags, "size", {
+      value: 99,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    let seen: { size?: unknown; proto?: unknown } | undefined;
+    registerFieldFunctions("collection", "posts", [
+      {
+        name: "title",
+        type: "text",
+        access: {
+          update: ({ data }: { data: Record<string, unknown> }) => {
+            const copy = data.flags as unknown as Record<string, unknown>;
+            seen = {
+              size: copy.size,
+              proto: Object.getPrototypeOf(copy) === Map.prototype,
+            };
+            return true;
+          },
+        },
+      },
+    ]);
+
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "posts",
+      data: { title: "t", flags },
+      operation: "update",
+      user: { id: "u1" },
+    });
+
+    expect(seen).toEqual({ size: 99, proto: true });
+  });
+
   it("field hooks transform values in phase order", async () => {
     registerFieldFunctions("collection", "posts", [
       {
