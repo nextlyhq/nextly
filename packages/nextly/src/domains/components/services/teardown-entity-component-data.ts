@@ -21,7 +21,7 @@
  *
  * Component tables are discovered from the live catalog UNION the registry: the catalog
  * covers `comp_`-prefixed tables whose registry row was already removed, and the registry
- * covers components with a custom `dbName`, whose table carries no prefix to match on.
+ * covers registered components whose table has not been materialized yet.
  *
  * @module domains/components/services/teardown-entity-component-data
  */
@@ -196,8 +196,8 @@ function chunk<T>(items: T[], size: number): T[][] {
 /**
  * Physical table names recorded in the component registry.
  *
- * Read through the registry rather than inferred from a prefix so components
- * with a custom `dbName` are visited too. Returns an empty list when the
+ * Read through the registry rather than inferred from a prefix so a row still
+ * pointing at a non-derived table is visited too. Returns an empty list when the
  * registry table is absent (a database that predates it, or a teardown running
  * before system tables exist), leaving prefix discovery as the only source.
  */
@@ -266,10 +266,10 @@ export async function teardownEntityComponentData(
   const { adapter, parentTable, maxDepth = DEFAULT_MAX_DEPTH } = args;
 
   // Component data tables: `comp_` prefixed by convention, plus every table the
-  // registry has registered — a component with a custom dbName is stored under a
-  // name that carries no prefix, so prefix discovery alone would leave its rows
-  // orphaned with `_parent_table` pointing at the deleted entity. Companions are
-  // excluded either way (they are reached through their owning instance, never
+  // registry has registered — a row written before names resolved canonically can
+  // point at a table carrying no prefix, so prefix discovery alone would leave its
+  // rows orphaned with `_parent_table` pointing at the deleted entity. Companions
+  // are excluded either way (they are reached through their owning instance, never
   // scanned as parents).
   const discovered = await adapter.listTables();
   const registered = await listRegisteredComponentTables(adapter, discovered);
@@ -278,10 +278,10 @@ export async function teardownEntityComponentData(
       ...discovered.filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix)),
       ...registered,
     ]),
-    // The registry itself is metadata, never component storage. A row whose
-    // dbName names it would otherwise be probed as an instance table, where a
-    // missing `_parent_table` column breaks the delete and a permissive
-    // adapter could damage the metadata.
+    // The registry itself is metadata, never component storage. A row pointing
+    // at it would otherwise be probed as an instance table, where a missing
+    // `_parent_table` column breaks the delete and a permissive adapter could
+    // damage the metadata.
   ].filter(name => name !== REGISTRY_TABLE && !isCompanionTable(name));
 
   if (componentTables.length === 0) {

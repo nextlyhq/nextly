@@ -46,13 +46,16 @@ export interface UpdateComponentOptions {
 
 /**
  * Input for registering a code-first Component during sync.
+ *
+ * Carries no table name: the sync derives the physical name from the slug, so a
+ * caller-supplied one could only disagree with the table the schema layer
+ * creates.
  */
 export interface CodeFirstComponentConfig {
   slug: string;
   label: string;
   fields: DynamicComponentInsert["fields"];
   description?: string;
-  tableName?: string;
   admin?: ComponentAdminOptions;
   configPath?: string;
   /** i18n: whether the component is localized (translatable fields → companion table). */
@@ -180,9 +183,8 @@ export class ComponentRegistryService extends BaseRegistryService<
 
     const now = this.formatDateForDb();
     // Store the caller-resolved physical name verbatim. Callers derive it via
-    // resolveComponentTableName, where a custom dbName is honored as-is
-    // (components intentionally differ from collections/singles); re-prefixing
-    // here would desync the registry from the table the schema layer creates.
+    // resolveComponentTableName; re-prefixing here would desync the registry
+    // from the table the schema layer creates.
     const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
@@ -491,9 +493,9 @@ export class ComponentRegistryService extends BaseRegistryService<
       try {
         const existing = await this.getComponentBySlug(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
-        // Canonical resolution: a custom dbName is honored verbatim, otherwise
-        // comp_ + normalized slug — matching what the runtime schema layer and
-        // migrate:create derive for the same component. Resolved before the
+        // Canonical resolution: comp_ + normalized slug, matching what the
+        // runtime schema layer and migrate:create derive for the same
+        // component. Resolved before the
         // existence check so a stored name that drifted from it is reconciled
         // rather than left addressing a table the schema layer never created.
         const desiredTableName = resolveComponentTableName(config.slug);
@@ -502,8 +504,8 @@ export class ComponentRegistryService extends BaseRegistryService<
         // that generate DDL do not all have the registry available — the
         // offline migration generator has no database connection at all — so a
         // divergence between the configured name and the stored one cannot be
-        // honoured consistently. Changing dbName for a component that is
-        // already registered is a migration, not a config edit.
+        // honoured consistently. Moving a registered component to different
+        // storage is a migration, not a config edit.
         //
         // Reported rather than passed over: registry-backed reads, filters and
         // teardown all follow the stored name, so a mismatch means they address
@@ -538,9 +540,9 @@ export class ComponentRegistryService extends BaseRegistryService<
             result.errors.push({
               slug: config.slug,
               error:
-                `Registry table '${existing.tableName}' does not match the configured ` +
+                `Registry table '${existing.tableName}' does not match the derived ` +
                 `'${desiredTableName}'. Storage is not repointed automatically; run a ` +
-                `migration to move the data, or restore the previous dbName.`,
+                `migration to move the data.`,
             });
             continue;
           }

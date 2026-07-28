@@ -1779,9 +1779,8 @@ async function syncCodeFirstComponents(
   );
 
   for (const slug of componentSyncResult.unchanged) {
-    // A component may declare a custom `dbName`, in which case its table is not
-    // named `comp_<slug>` at all. Probing the unresolved name would never find
-    // it and would queue a redundant sync on every boot.
+    // The physical name normalizes the slug, so probing the raw slug would
+    // never find the table and would queue a redundant sync on every boot.
     const tableName = resolveComponentTableName(slug);
     try {
       const tableExists = await adapter.tableExists(tableName);

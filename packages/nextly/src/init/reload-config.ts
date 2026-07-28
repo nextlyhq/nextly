@@ -144,8 +144,6 @@ type ComponentDef = {
   label?: { singular?: string } | string;
   description?: string;
   admin?: unknown;
-  /** Custom physical table name, honored verbatim by the canonical resolver. */
-  dbName?: string;
 };
 
 // Minimal duck-typed surfaces of registry services used here.
@@ -361,9 +359,6 @@ function buildComponentSyncPayload(components: ComponentDef[]) {
         fields: c.fields ?? [],
         description: c.description,
         admin: c.admin,
-        // Forward the custom table name so the metadata sync resolves the
-        // same physical name as boot registration.
-        tableName: c.dbName,
         // i18n: forward the localized master switch — otherwise the reload flips
         // a localized component's flag OFF every HMR/boot.
         localized: (c as { localized?: boolean }).localized === true,
@@ -729,8 +724,8 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  // Normalize components. Names resolve canonically: custom dbName verbatim,
-  // otherwise comp_<slug_with_underscores>.
+  // Normalize components. Every name resolves canonically to
+  // comp_<slug_with_underscores>.
   const componentTargets: Array<{
     slug: string;
     tableName: string;
