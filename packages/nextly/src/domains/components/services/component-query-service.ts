@@ -137,7 +137,7 @@ export interface PopulateComponentDataManyParams {
 // Duplicated here (and in the mutation service) to avoid a cross-domain
 // import into collections just for a type predicate.
 function isComponentField(field: FieldConfig): field is ComponentFieldConfig {
-  return field.type === "component";
+  return field.type === STORAGE_FORMAT.fieldType;
 }
 
 export class ComponentQueryService extends BaseService {

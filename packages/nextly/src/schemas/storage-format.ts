@@ -61,6 +61,15 @@ export const STORAGE_FORMAT = {
 
   /** Directory segment recorded in a registry row's `config_path`. */
   configPathDir: "components",
+
+  /**
+   * Discriminator written into a stored field definition's `type`.
+   *
+   * Persisted inside the `fields` JSON of every collection, single and
+   * component registry row, and inside `ui-schema.json`, so it is on-disk data
+   * rather than an in-memory tag.
+   */
+  fieldType: "component",
 } as const;
 
 /** The on-disk spelling of a component's type discriminator column. */

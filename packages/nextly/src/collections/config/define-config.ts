@@ -36,6 +36,7 @@ import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-co
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -82,7 +83,7 @@ function collectComponentRefs(
   refs: string[]
 ): void {
   for (const field of fields) {
-    if (field.type === "component") {
+    if (field.type === STORAGE_FORMAT.fieldType) {
       if (typeof field.component === "string") {
         refs.push(field.component);
       }

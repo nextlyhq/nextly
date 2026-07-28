@@ -14,6 +14,8 @@
  * @module domains/webhooks/expand-component-fields
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type { SensitiveFieldSource } from "./sensitive-fields";
 
 /** Resolves a component slug to its field definitions, or null if unknown. */
@@ -32,7 +34,7 @@ export type ComponentFieldResolver = (
  * reaches the deny list.
  */
 function referencedSlugs(field: SensitiveFieldSource): string[] {
-  if (field.type !== "component") return [];
+  if (field.type !== STORAGE_FORMAT.fieldType) return [];
   const candidate = field as {
     component?: unknown;
     componentSlug?: unknown;

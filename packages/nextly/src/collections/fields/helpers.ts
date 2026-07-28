@@ -27,6 +27,8 @@
  * ```
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type {
   // Text field types
   TextFieldConfig,
@@ -671,7 +673,7 @@ export const component = (
   config: Omit<ComponentFieldConfig, "type">
 ): ComponentFieldConfig => ({
   ...config,
-  type: "component",
+  type: STORAGE_FORMAT.fieldType,
 });
 
 // ============================================================

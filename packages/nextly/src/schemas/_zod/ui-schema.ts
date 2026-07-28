@@ -17,6 +17,7 @@ import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 /**
  * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
@@ -324,7 +325,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // slot. Exactly one form must be present, and every referenced slug
       // must be a real slug — a blank or malformed reference points at no
       // loadable component, so runtime writes to it would be silently dropped.
-      if (f.type === "component") {
+      if (f.type === STORAGE_FORMAT.fieldType) {
         const hasSingle = f.component !== undefined;
         const hasMulti = f.components !== undefined;
         if (hasSingle === hasMulti) {

@@ -72,7 +72,7 @@ export interface DeleteComponentDataParams {
 }
 
 function isComponentField(field: FieldConfig): field is ComponentFieldConfig {
-  return field.type === "component";
+  return field.type === STORAGE_FORMAT.fieldType;
 }
 
 export class ComponentMutationService extends BaseService {

@@ -8,6 +8,8 @@
  * @since 1.0.0
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type {
   // Text field types
   TextFieldConfig,
@@ -321,8 +323,9 @@ export const isBlocksField = createTypeGuard<BlocksFieldConfig>("blocks");
  * }
  * ```
  */
-export const isComponentField =
-  createTypeGuard<ComponentFieldConfig>("component");
+export const isComponentField = createTypeGuard<ComponentFieldConfig>(
+  STORAGE_FORMAT.fieldType
+);
 
 // ============================================================
 // Individual Type Guards - Chips Fields

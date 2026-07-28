@@ -16,6 +16,8 @@
  * @since 1.0.0
  */
 
+import type { STORAGE_FORMAT } from "../../../schemas/storage-format";
+
 import type { BaseFieldConfig } from "./base";
 
 // ============================================================
@@ -72,7 +74,7 @@ import type { BaseFieldConfig } from "./base";
  * ```
  */
 export interface ComponentFieldConfig extends BaseFieldConfig {
-  type: "component";
+  type: typeof STORAGE_FORMAT.fieldType;
 
   /**
    * Single component mode: embed one specific component type.
