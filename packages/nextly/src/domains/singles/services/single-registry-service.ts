@@ -176,27 +176,42 @@ export class SingleRegistryService extends BaseRegistryService<
    * `defaultValue` is a function, which is dropped when field metadata is
    * JSON-serialized to `dynamic_singles.fields`, so the default resolution on a
    * first-read auto-create reads defaults from here instead of the serialized
-   * (function-less) registry row. Undefined for UI-created Singles, and refreshed
-   * on config reload (HMR) via {@link setCodeFirstSingles}.
+   * (function-less) registry row. Undefined for UI-created Singles. Set only
+   * AFTER a successful metadata sync (boot and HMR reload) via
+   * {@link setCodeFirstSingles}, never eagerly — otherwise new live fields could
+   * pair with stale serialized metadata for a single whose sync failed.
    */
   private codeFirstSingles?: SingleConfig[];
 
-  constructor(
-    adapter: DrizzleAdapter,
-    logger: Logger,
-    codeFirstSingles?: SingleConfig[]
-  ) {
+  constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
-    this.codeFirstSingles = codeFirstSingles;
   }
 
   /**
-   * Replace the live code-first config snapshot. Called after a config reload
-   * (HMR) syncs Single metadata, so a newly added Single or a changed function
-   * default resolves against the current config rather than the boot-time one.
+   * Update the live code-first config snapshot after a metadata sync. Pass
+   * `keepPriorFor` (the slugs whose sync FAILED) to retain their previous
+   * snapshot entry instead of the new config: a failed single's serialized
+   * metadata did not advance, so exposing its new fields would mis-encode a
+   * default against the old type. A failed single with no prior entry is
+   * dropped (it falls back to the serialized fields).
    */
-  setCodeFirstSingles(codeFirstSingles: SingleConfig[]): void {
-    this.codeFirstSingles = codeFirstSingles;
+  setCodeFirstSingles(
+    singles: SingleConfig[],
+    options?: { keepPriorFor?: ReadonlySet<string> }
+  ): void {
+    const keepPrior = options?.keepPriorFor;
+    if (!keepPrior || keepPrior.size === 0) {
+      this.codeFirstSingles = singles;
+      return;
+    }
+    const priorBySlug = new Map(
+      (this.codeFirstSingles ?? []).map(single => [single.slug, single])
+    );
+    this.codeFirstSingles = singles
+      .map(single =>
+        keepPrior.has(single.slug) ? priorBySlug.get(single.slug) : single
+      )
+      .filter((single): single is SingleConfig => single !== undefined);
   }
 
   /**

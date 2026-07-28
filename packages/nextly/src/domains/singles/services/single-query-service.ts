@@ -50,6 +50,7 @@ import type { ComponentDataService } from "../../../services/components/componen
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { detachData } from "../../../shared/lib/detach";
+import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   runFieldHooks,
@@ -1387,13 +1388,20 @@ export class SingleQueryService extends BaseService {
         // field's own policy rejects — and the admin control is read-only, so
         // the stored value could not be corrected from the UI.
         assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
-        // Keep the object on the logical view for later dependent defaults, but
-        // JSON-encode it for the DB insert when the column is json-backed.
-        logicalDefaults[field.name] = resolved;
+        // Clone before exposing: a live STATIC structured default is the object
+        // stored on the config, so handing that reference to later dependent
+        // defaults (which may sort/mutate it) would corrupt the config itself.
+        const cloned = cloneDefault(resolved);
+        // Keep the value on the logical view for later dependent defaults, and
+        // JSON-encode it for the DB insert when the column is json-backed. Encode
+        // EVERY defined value, not only objects: a json-backed column stores text
+        // (SQLite especially), so a primitive default like `() => true` must be
+        // "true", not a raw boolean that better-sqlite3 cannot bind.
+        logicalDefaults[field.name] = cloned;
         defaults[field.name] =
-          shouldTreatAsJson(field) && typeof resolved === "object"
-            ? JSON.stringify(resolved)
-            : resolved;
+          shouldTreatAsJson(field) && cloned !== undefined
+            ? JSON.stringify(cloned)
+            : cloned;
         continue;
       }
 

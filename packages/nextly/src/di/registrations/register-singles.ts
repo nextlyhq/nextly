@@ -30,14 +30,11 @@ export function registerSingleServices(ctx: RegistrationContext): void {
   container.registerSingleton<SingleRegistryService>(
     "singleRegistryService",
     () => {
-      // Pass the live code-first single configs so field `defaultValue`
-      // functions (which do not survive serialization to `dynamic_singles`)
-      // remain available when a first read auto-creates the row.
-      const singleRegistryService = new SingleRegistryService(
-        adapter,
-        logger,
-        ctx.config.singles
-      );
+      // The live code-first snapshot (for field `defaultValue` functions that do
+      // not survive serialization) is set AFTER the boot metadata sync via
+      // setCodeFirstSingles, not here — so a single whose sync fails never
+      // exposes new fields paired with stale serialized metadata.
+      const singleRegistryService = new SingleRegistryService(adapter, logger);
 
       if (container.has("permissionSeedService")) {
         singleRegistryService.setPermissionSeedService(

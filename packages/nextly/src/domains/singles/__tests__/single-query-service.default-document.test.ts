@@ -330,6 +330,31 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(insertValues).toMatchObject({ tier: "pro" });
   });
 
+  it("JSON-encodes a primitive default for a json-backed column", () => {
+    // A json column stores text (SQLite especially), so a primitive default like
+    // `() => true` must be encoded to "true"; a raw boolean cannot be bound.
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    const meta = siteSettingsMeta({
+      fields: [{ name: "flags", type: "json" }],
+    });
+    registry.getCodeFirstFields.mockReturnValue([
+      { name: "flags", type: "json", defaultValue: () => true },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues.flags).toBe("true");
+  });
+
   it("keeps the serialized-meta default for a UI-created single (no code-first fields)", () => {
     // getCodeFirstFields returns undefined by default in the mock, mirroring a
     // UI-created single; the serialized primitive default still applies.

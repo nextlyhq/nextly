@@ -162,9 +162,13 @@ interface CollectionRegistrySurface {
 interface SingleRegistrySurface {
   syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
   // Refresh the live code-first config snapshot the default resolver reads, so
-  // an HMR-added single or changed function default is honoured. Optional for
-  // partial resolver fakes.
-  setCodeFirstSingles?(singles: unknown[]): void;
+  // an HMR-added single or changed function default is honoured. `keepPriorFor`
+  // holds the slugs whose sync failed, so their prior snapshot is retained.
+  // Optional for partial resolver fakes.
+  setCodeFirstSingles?(
+    singles: unknown[],
+    options?: { keepPriorFor?: ReadonlySet<string> }
+  ): void;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created singles. Optional for partial resolver fakes.
@@ -177,6 +181,21 @@ interface SingleRegistrySurface {
     }>
   >;
 }
+/**
+ * The slugs whose single sync failed. `syncCodeFirstSingles` resolves with an
+ * `errors[]` (per-single failures) rather than rejecting, so a partial failure
+ * is read from there; those slugs keep their prior default snapshot.
+ */
+function failedSingleSlugs(syncResult: unknown): Set<string> {
+  const errs = (syncResult as { errors?: Array<{ slug?: string }> } | undefined)
+    ?.errors;
+  const slugs = new Set<string>();
+  if (Array.isArray(errs)) {
+    for (const entry of errs) if (entry?.slug) slugs.add(entry.slug);
+  }
+  return slugs;
+}
+
 interface ComponentRegistrySurface {
   syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
@@ -343,17 +362,18 @@ async function syncCodeFirstMetadataOnly(
       "singleRegistryService"
     )) as SingleRegistrySurface;
     const payload = buildSingleSyncPayload(newConfig.singles ?? []);
-    let singleSyncFailed = false;
+    let failedSlugs = new Set<string>();
     if (payload.length > 0) {
-      const syncResult = await singleReg.syncCodeFirstSingles(payload);
-      // Inspect the resolved errors[] (sync does not reject on a per-single
-      // failure) so a single with stale metadata is not paired with new fields.
-      const errs = (syncResult as { errors?: unknown[] } | undefined)?.errors;
-      singleSyncFailed = Array.isArray(errs) && errs.length > 0;
+      failedSlugs = failedSingleSlugs(
+        await singleReg.syncCodeFirstSingles(payload)
+      );
     }
-    // Refresh the live default source only after a successful metadata sync.
-    if (!singleSyncFailed)
-      singleReg.setCodeFirstSingles?.(newConfig.singles ?? []);
+    // Refresh the live default source after the sync: successful singles adopt
+    // the new config; a single whose sync failed keeps its prior snapshot so its
+    // new fields never pair with stale serialized metadata.
+    singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
+      keepPriorFor: failedSlugs,
+    });
   } catch (err) {
     singles = false;
     logger?.warn(
@@ -1143,17 +1163,14 @@ export async function reloadNextlyConfig(opts?: {
       const codeFirstSingleConfigs = buildSingleSyncPayload(
         newConfig.singles ?? []
       );
-      let singleSyncFailed = false;
+      let failedSlugs = new Set<string>();
       if (codeFirstSingleConfigs.length > 0) {
-        const syncResult = await singleReg.syncCodeFirstSingles(
-          codeFirstSingleConfigs
+        // syncCodeFirstSingles resolves with an errors[] rather than rejecting;
+        // a per-single failure means its serialized metadata is stale, so that
+        // slug keeps its prior default snapshot below rather than the new fields.
+        failedSlugs = failedSingleSlugs(
+          await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs)
         );
-        // syncCodeFirstSingles resolves with an errors[] rather than rejecting,
-        // so inspect it: a per-single failure means its serialized metadata is
-        // stale, and pairing that with the refreshed live fields below would
-        // encode a new default against the old field type.
-        const errs = (syncResult as { errors?: unknown[] } | undefined)?.errors;
-        singleSyncFailed = Array.isArray(errs) && errs.length > 0;
 
         // registerSingle defaults migration_status to 'pending'. The
         // pipeline above just created any missing physical tables, so
@@ -1170,12 +1187,12 @@ export async function reloadNextlyConfig(opts?: {
           }
         }
       }
-      // Refresh the live default source (with function defaults intact) only
-      // after a successful metadata sync, so new live fields never pair with
-      // stale serialized metadata for a single whose registry update failed.
-      if (!singleSyncFailed) {
-        singleReg.setCodeFirstSingles?.(newConfig.singles ?? []);
-      }
+      // Refresh the live default source after the sync: successful singles adopt
+      // the new config; a single whose sync failed keeps its prior snapshot so
+      // its new fields never pair with stale serialized metadata.
+      singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
+        keepPriorFor: failedSlugs,
+      });
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above.
       singleSynced = false;

@@ -100,7 +100,7 @@ export function applyFieldDefaults(
  * row, say — would reach into unrelated rows, entries already written from the
  * same config, and the definition itself.
  */
-function cloneDefault(value: unknown): unknown {
+export function cloneDefault(value: unknown): unknown {
   if (value === null || typeof value !== "object") return value;
   try {
     return structuredClone(value);

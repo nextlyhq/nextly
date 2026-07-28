@@ -824,10 +824,18 @@ export async function registerServices(
     // plugin registered under the same `single:<slug>` namespace untouched (a
     // clear-then-register would wipe those).
     if (transformedConfig.singles && transformedConfig.singles.length > 0) {
-      const singleHooks = registerSingleHooks(
-        transformedConfig.singles,
-        hookRegistry
+      // A disabled plugin's contributions stay in `transformedConfig` so the
+      // schema is deterministic, but the plugin lifecycle's behavior-skip
+      // contract means its runtime hooks must NOT run. Skip singles a disabled
+      // plugin contributed; app and enabled-plugin singles register normally.
+      const disabledSingleSlugs = collectPluginContributedSlugs(
+        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        "singles"
       );
+      const hookedSingles = transformedConfig.singles.filter(
+        single => !disabledSingleSlugs.has(single.slug)
+      );
+      const singleHooks = registerSingleHooks(hookedSingles, hookRegistry);
       resolvedLogger.info?.(
         `Registered ${singleHooks.totalHooks} hook(s) for ${singleHooks.singles.length} single(s)`
       );
@@ -1938,6 +1946,15 @@ async function syncCodeFirstSingles(
     logger.info?.(
       `Singles registered: ${singleSyncResult.created.length} created, ${singleSyncResult.updated.length} updated, ${singleSyncResult.unchanged.length} unchanged`
     );
+    // Expose the live code-first snapshot (for function/structured defaults)
+    // only for singles that synced: a failed slug's serialized metadata did not
+    // advance, so it is kept off the snapshot and falls back to those fields.
+    const failedSingleSlugs = new Set(
+      singleSyncResult.errors.map(entry => entry.slug)
+    );
+    singleRegistry.setCodeFirstSingles(transformedConfig.singles, {
+      keepPriorFor: failedSingleSlugs,
+    });
   } catch (error) {
     logger.warn?.(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
