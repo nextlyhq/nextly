@@ -25,7 +25,7 @@ describe("component dbName validation", () => {
     expect(result.errors.map(e => e.code)).toContain("DB_NAME_RESERVED");
   });
 
-  it("rejects a managed entity prefix", () => {
+  it("rejects another entity kind's namespace", () => {
     const result = validateComponentConfig({ ...base, dbName: "dc_posts" });
     expect(result.valid).toBe(false);
     expect(result.errors.map(e => e.code)).toContain("DB_NAME_RESERVED");
@@ -44,10 +44,14 @@ describe("component dbName validation", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("still rejects another component's generated name", () => {
-    const result = validateComponentConfig({ ...base, dbName: "comp_hero" });
-    expect(result.valid).toBe(false);
-    expect(result.errors.map(e => e.code)).toContain("DB_NAME_RESERVED");
+  it("accepts a custom name inside the component namespace", () => {
+    // Documented as supported; only ANOTHER component's generated name aliases
+    // storage that is not this component's.
+    const result = validateComponentConfig({
+      ...base,
+      dbName: "comp_site_seo",
+    });
+    expect(result.valid).toBe(true);
   });
 
   it("leaves components without a dbName untouched", () => {

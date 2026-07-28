@@ -2,7 +2,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { ComponentAdminOptions } from "../../../components/config/types";
-import { MAX_COMPONENT_NESTING_DEPTH } from "../../../components/config/validate-component";
+import {
+  MAX_COMPONENT_NESTING_DEPTH,
+  assertOwnableComponentTable,
+} from "../../../components/config/validate-component";
 import { toDbError } from "../../../database/errors";
 // PR 4 migration: switched the throw layer to NextlyError. Public messages now
 // follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
@@ -182,6 +185,11 @@ export class ComponentRegistryService extends BaseRegistryService<
     // resolveComponentTableName, where a custom dbName is honored as-is
     // (components intentionally differ from collections/singles); re-prefixing
     // here would desync the registry from the table the schema layer creates.
+    // Ownership is enforced here rather than in the config helper because a
+    // component can reach the registry without passing through defineComponent
+    // — an inline config entry or a plugin contribution — and a name pointing
+    // at another owner's storage would make its rows read as instances.
+    assertOwnableComponentTable(data.slug, data.tableName);
     const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
@@ -248,7 +256,9 @@ export class ComponentRegistryService extends BaseRegistryService<
 
     const now = this.formatDateForDb();
     // Same contract as registerComponent: the caller resolves the physical
-    // name (custom dbName verbatim); the registry stores it unchanged.
+    // name (custom dbName verbatim), and ownership is enforced here so every
+    // path into the registry is covered.
+    assertOwnableComponentTable(data.slug, data.tableName);
     const tableName = data.tableName;
     const record: Record<string, unknown> = {
       id: this.generateId(),
@@ -525,27 +535,15 @@ export class ComponentRegistryService extends BaseRegistryService<
           // both safe and the outcome the config asked for. Only instances
           // actually stored there make the move destructive. Bounded to one
           // row because the question is emptiness, not size.
-          const storedExists = await this.adapter.tableExists(
+          // An existing table keeps its pointer, without inspecting whether
+          // it holds rows. A concurrent write could land between such a probe
+          // and the update, stranding a freshly committed instance in the old
+          // table, and no lock here is shared with the write path. Abandoning
+          // an existing table is therefore an explicit migration, never an
+          // automatic consequence of a config edit.
+          const keepStoredPointer = await this.adapter.tableExists(
             existing.tableName
           );
-          const storedHoldsData =
-            storedExists &&
-            (
-              await this.adapter.select<Record<string, unknown>>(
-                existing.tableName,
-                { limit: 1 }
-              )
-            ).length > 0;
-          // Repointing is only safe onto storage that can actually serve. An
-          // empty stored table is expendable, but moving to a name nothing has
-          // created yet would leave reads and writes addressing a table that
-          // does not exist — this path carries no DDL to create it. Moving is
-          // therefore allowed only when the target already exists, or when
-          // neither does and the schema sync will create the target.
-          const desiredExists =
-            await this.adapter.tableExists(desiredTableName);
-          const keepStoredPointer =
-            storedHoldsData || (storedExists && !desiredExists);
           if (keepStoredPointer) {
             this.logger.warn(
               "Component table name differs from its populated table; keeping the populated one",

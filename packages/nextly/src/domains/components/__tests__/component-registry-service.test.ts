@@ -612,59 +612,6 @@ describe("ComponentRegistryService", () => {
       expect(updateData).not.toHaveProperty("table_name");
     });
 
-    it("reconciles when the stored table exists but holds no instances", async () => {
-      // Nothing to strand, so the configured name wins.
-      const fields = [{ name: "metaTitle", type: "text" }];
-      ctx.adapter.selectOne.mockImplementation(async () => {
-        const { calculateSchemaHash } = await import(
-          "../../schema/services/schema-hash"
-        );
-        return dbRow({
-          schema_hash: calculateSchemaHash(fields),
-          table_name: "seo_meta",
-        });
-      });
-      // Both tables exist; the empty stored one may be abandoned.
-      ctx.adapter.tableExists.mockResolvedValue(true);
-      ctx.adapter.select.mockResolvedValue([]);
-      ctx.adapter.update.mockResolvedValue([dbRow()]);
-
-      const result = await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
-      ]);
-
-      expect(result.updated).toEqual(["seo"]);
-      const [, updateData] = ctx.adapter.update.mock.calls[0];
-      expect(updateData.table_name).toBe("seo_v2");
-    });
-
-    it("keeps the pointer when the requested table does not exist yet", async () => {
-      // An empty stored table is expendable, but this path creates no DDL, so
-      // moving to an uncreated name would leave the registry addressing
-      // nothing.
-      const fields = [{ name: "metaTitle", type: "text" }];
-      ctx.adapter.selectOne.mockImplementation(async () => {
-        const { calculateSchemaHash } = await import(
-          "../../schema/services/schema-hash"
-        );
-        return dbRow({
-          schema_hash: calculateSchemaHash(fields),
-          table_name: "seo_meta",
-        });
-      });
-      ctx.adapter.select.mockResolvedValue([]);
-      ctx.adapter.tableExists.mockImplementation(
-        async (name: string) => name === "seo_meta"
-      );
-
-      const result = await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
-      ]);
-
-      expect(result.unchanged).toEqual(["seo"]);
-      expect(ctx.adapter.update).not.toHaveBeenCalled();
-    });
-
     it("never repoints when reconciliation is disabled", async () => {
       // The metadata-only sync path applies no DDL, so it must leave storage
       // pointers alone even when the stored name has drifted.
@@ -945,5 +892,43 @@ describe("ComponentRegistryService", () => {
       const nested = (enriched[0].fields as Array<Record<string, unknown>>)[0];
       expect(nested.componentFields).toBeDefined();
     });
+  });
+});
+
+describe("ComponentRegistryService table ownership", () => {
+  it("refuses to register a component onto framework storage", async () => {
+    const ctx = createCtx();
+    ctx.adapter.selectOne.mockResolvedValue(null);
+
+    await expect(
+      ctx.service.registerComponent({
+        slug: "seo",
+        label: "SEO",
+        tableName: "users",
+        fields: [],
+        source: "code",
+        schemaHash: "h",
+      })
+    ).rejects.toThrow(NextlyError);
+    expect(ctx.adapter.insert).not.toHaveBeenCalled();
+  });
+
+  it("allows a custom name the component may own", async () => {
+    const ctx = createCtx();
+    ctx.adapter.selectOne.mockResolvedValue(null);
+    ctx.adapter.insert.mockResolvedValue(
+      dbRow({ table_name: "comp_site_seo" })
+    );
+
+    await ctx.service.registerComponent({
+      slug: "seo",
+      label: "SEO",
+      tableName: "comp_site_seo",
+      fields: [],
+      source: "code",
+      schemaHash: "h",
+    });
+
+    expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
   });
 });

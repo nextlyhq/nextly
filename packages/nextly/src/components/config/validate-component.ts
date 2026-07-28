@@ -27,9 +27,8 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
-import { CORE_TABLE_NAMES, CORE_TABLE_PREFIXES } from "../../schemas/index";
+import { CORE_TABLE_NAMES } from "../../schemas/index";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -328,9 +327,33 @@ function validateFields(
  * another entity's table would make unrelated rows look like component
  * instances, and an entity delete would sweep them.
  */
+/** Prefixes owned by other entity kinds, which a component may never claim. */
+const ENTITY_TABLE_PREFIXES = ["dc_", "single_"] as const;
+
+export function assertOwnableComponentTable(
+  slug: string,
+  tableName: string
+): void {
+  const errors: ComponentValidationError[] = [];
+  validateDbName(tableName, errors);
+  if (errors.length === 0) return;
+
+  throw NextlyError.validation({
+    errors: errors.map(err => ({
+      path: err.path,
+      code: err.code,
+      message: err.message,
+    })),
+    logContext: {
+      reason: "component-table-not-ownable",
+      slug,
+      tableName,
+    },
+  });
+}
+
 function validateDbName(
   dbName: unknown,
-  slug: unknown,
   errors: ComponentValidationError[]
 ): void {
   if (dbName === undefined) return;
@@ -354,18 +377,14 @@ function validateDbName(
     return;
   }
 
-  // Spelling out the name this component would get anyway is not a collision:
-  // it addresses the very table it owns, and was valid before this check.
-  if (typeof slug === "string" && dbName === resolveComponentTableName(slug)) {
-    return;
-  }
-
-  // Core tables belong to the framework, and the managed prefixes address
-  // collections, singles and generated component tables — claiming any of them
-  // would alias storage that another owner already writes to.
+  // Only names belonging to a different OWNER are rejected: framework core
+  // tables, and the namespaces of other entity kinds. The component namespace
+  // is deliberately not policed here — `comp_site_seo` is a documented custom
+  // name, and whether some other component generates the same table is a
+  // cross-config question this single-config check cannot answer.
   const collides =
     CORE_TABLE_NAMES.includes(dbName) ||
-    CORE_TABLE_PREFIXES.some(prefix => dbName.startsWith(prefix));
+    ENTITY_TABLE_PREFIXES.some(prefix => dbName.startsWith(prefix));
 
   if (collides) {
     errors.push({
@@ -411,7 +430,7 @@ export function validateComponentConfig(
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
 
-  validateDbName(config.dbName, config.slug, errors);
+  validateDbName(config.dbName, errors);
 
   validateFields(config.fields, errors);
 
