@@ -305,6 +305,31 @@ describe("plugin field-type validation", () => {
     );
   });
 
+  it("reports the operation, not the mode the nested walk runs under", async () => {
+    // Rows are walked in "create" mode because a row is a complete object
+    // whose required fields must all be present. That says nothing about
+    // whether the entry is being created, which is what a validator asks.
+    const seen = vi.fn(() => true as const);
+    registerRating(seen);
+
+    const fields: ValidatableField[] = [
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [{ name: "stars", type: "rating" }],
+      },
+    ];
+
+    await validateEntryData({ rows: [{ stars: 4 }] }, fields, {
+      mode: "update",
+    });
+
+    expect(seen).toHaveBeenCalledWith(
+      4,
+      expect.objectContaining({ mode: "update" })
+    );
+  });
+
   it("detaches nested options, not just the field's own keys", async () => {
     const allow = ["hero", "cta"];
     registerDocument((_value, args) => {

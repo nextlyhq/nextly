@@ -171,17 +171,32 @@ function isValidDateValue(value: unknown): boolean {
 }
 
 /**
+ * The write the pass started from, as opposed to whatever the recursion is
+ * currently walking.
+ *
+ * Both differ from what the recursion carries inside a repeater row or group:
+ * the walked `data` is the row, and `options.mode` is forced to "create" there
+ * because a row is a complete object whose required fields must all be present.
+ * Neither is true of the write itself, and a plugin validator is told about the
+ * write — it asks "is this an update?" meaning the operation, not the nesting.
+ */
+interface WriteContext {
+  data: Record<string, unknown>;
+  mode: "create" | "update";
+}
+
+/**
  * Validate one value against one field's rules, appending issues.
  * `path` is the dotted/bracketed location for the admin's error mapping.
  * `data` is the object this field lives on (a repeater row or group for a
- * nested field); `rootData` is the write payload the pass started from.
+ * nested field); `write` is the operation the pass started from.
  */
 async function validateFieldValue(
   field: ValidatableField,
   value: unknown,
   path: string,
   data: Record<string, unknown>,
-  rootData: Record<string, unknown>,
+  write: WriteContext,
   options: ValidateEntryOptions,
   issues: ValidationIssue[]
 ): Promise<void> {
@@ -496,7 +511,7 @@ async function validateFieldValue(
           await validateFields(
             field.fields,
             row as Record<string, unknown>,
-            rootData,
+            write,
             `${path}[${i}]`,
             // Rows are complete objects, so nested required-ness applies.
             { ...options, mode: "create" },
@@ -520,7 +535,7 @@ async function validateFieldValue(
         await validateFields(
           field.fields,
           value as Record<string, unknown>,
-          rootData,
+          write,
           path,
           { ...options, mode: "create" },
           issues
@@ -569,7 +584,7 @@ async function validateFieldValue(
       value,
       path,
       label,
-      rootData,
+      write,
       options,
       issues
     );
@@ -664,7 +679,7 @@ async function validatePluginFieldType(
   value: unknown,
   path: string,
   label: string | undefined,
-  rootData: Record<string, unknown>,
+  write: WriteContext,
   options: ValidateEntryOptions,
   issues: ValidationIssue[]
 ): Promise<void> {
@@ -674,14 +689,17 @@ async function validatePluginFieldType(
 
   try {
     const result = await validate(value, {
-      data: rootData,
+      data: write.data,
       req: options.req ?? {},
       field: detachedField(field),
       // The validator cannot work out where it sits — a type nested in a
       // repeater row has no way to know its index — so the location it would
       // need to build an issue path is given to it.
       path,
-      mode: options.mode,
+      // The operation, not `options.mode`: the latter is switched to "create"
+      // while walking a repeater row, which says nothing about whether the
+      // entry itself is being created.
+      mode: write.mode,
     });
 
     if (result === true) return;
@@ -718,7 +736,7 @@ async function validatePluginFieldType(
 async function validateFields(
   fields: ValidatableField[],
   data: Record<string, unknown>,
-  rootData: Record<string, unknown>,
+  write: WriteContext,
   basePath: string,
   options: ValidateEntryOptions,
   issues: ValidationIssue[]
@@ -737,7 +755,7 @@ async function validateFields(
       data[field.name],
       path,
       data,
-      rootData,
+      write,
       options,
       issues
     );
@@ -754,9 +772,16 @@ export async function validateEntryData(
   options: ValidateEntryOptions
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
-  // The write payload is the root every nested pass reports against: a
-  // validator on a field inside a repeater row still needs to see its
-  // top-level siblings, which the row it is walking does not carry.
-  await validateFields(fields, data, data, "", options, issues);
+  // The write is what every nested pass reports against: a validator on a
+  // field inside a repeater row still needs the top-level siblings the row it
+  // is walking does not carry, and the operation the nested walk overrides.
+  await validateFields(
+    fields,
+    data,
+    { data, mode: options.mode },
+    "",
+    options,
+    issues
+  );
   return issues;
 }
