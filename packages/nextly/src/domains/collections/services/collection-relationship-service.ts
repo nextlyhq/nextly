@@ -194,24 +194,27 @@ interface RelationshipRef {
 }
 
 /**
- * Keeps a populated multi-target value round-trippable.
+ * Keeps a populated multi-target value round-trippable, and keeps it out of the
+ * related row's own namespace.
  *
- * The write path reduces a populated object to a bare id unless it still
- * carries both `relationTo` and `value`, so a document read at depth and saved
- * back unchanged would lose the collection the reference named and resolve the
- * id against the field's first declared target instead — silently retargeting
- * or dropping the relationship.
+ * The write path reduces a populated object to a bare id unless it still says
+ * which collection it came from, and a bare id resolves against the field's
+ * first declared target — so a document read at depth and saved back unchanged
+ * would silently retarget or drop the relationship.
  *
- * Carried beside the row's own columns rather than wrapping it, because that is
- * the shape the write path already accepts, and applied only to values that
- * arrived discriminated so an ordinary single-target row is untouched.
+ * The row is nested under `value` rather than carrying the discriminator beside
+ * its own columns: a target collection may legitimately define a field called
+ * `value` or `relationTo` (neither is reserved), and merging would overwrite
+ * that field's real data, including re-adding a key that field-level access
+ * had just removed. Nesting also keeps one shape at every depth — `value` is
+ * the id when nothing was populated, and the row when something was.
  */
 function withReferenceIdentity(
   row: Record<string, unknown>,
   ref: RelationshipRef
 ): Record<string, unknown> {
   if (!ref.discriminated) return row;
-  return { ...row, relationTo: ref.collection, value: ref.id };
+  return { relationTo: ref.collection, value: row };
 }
 
 /**

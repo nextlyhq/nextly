@@ -113,7 +113,10 @@ describe("polymorphic relationship expansion (integration)", () => {
 
     const target = await readTarget(handler, postRefId);
 
-    expect(target).toMatchObject({ title: "A post" });
+    expect(target).toMatchObject({
+      relationTo: "posts",
+      value: { title: "A post" },
+    });
   });
 
   // The mirror, and the reason the case above is not enough on its own:
@@ -126,7 +129,10 @@ describe("polymorphic relationship expansion (integration)", () => {
 
     const target = await readTarget(handler, pageRefId);
 
-    expect(target).toMatchObject({ title: "A page" });
+    expect(target).toMatchObject({
+      relationTo: "pages",
+      value: { title: "A page" },
+    });
   });
 
   // The list path batches its fetches instead of loading one row at a time,
@@ -146,8 +152,14 @@ describe("polymorphic relationship expansion (integration)", () => {
       target?: Record<string, unknown>;
     }[];
     const byName = new Map(rows.map(item => [item.name, item.target]));
-    expect(byName.get("points at a post")).toMatchObject({ title: "A post" });
-    expect(byName.get("points at a page")).toMatchObject({ title: "A page" });
+    expect(byName.get("points at a post")).toMatchObject({
+      relationTo: "posts",
+      value: { title: "A post" },
+    });
+    expect(byName.get("points at a page")).toMatchObject({
+      relationTo: "pages",
+      value: { title: "A page" },
+    });
   });
 
   // Populating spreads the whole related row into the parent, and the row now
@@ -201,8 +213,11 @@ describe("polymorphic relationship expansion (integration)", () => {
     const target = (result.data as { target?: Record<string, unknown> }).target;
     // Expanded, so the rule had something to act on, and the protected field
     // did not survive it.
-    expect(target).toMatchObject({ title: "A page" });
-    expect(target).not.toHaveProperty("hidden");
+    expect(target).toMatchObject({
+      relationTo: "pages",
+      value: { title: "A page" },
+    });
+    expect(target).not.toHaveProperty("value.hidden");
 
     // The mirror: without it, the assertion above would hold just as well for
     // a field that never reaches the response at all, and would keep holding
@@ -215,7 +230,7 @@ describe("polymorphic relationship expansion (integration)", () => {
     });
     expect(
       (trusted.data as { target?: Record<string, unknown> }).target
-    ).toHaveProperty("hidden");
+    ).toHaveProperty("value.hidden");
   });
 
   // Nothing validates the stored slug on the way in, so the value cannot be
@@ -285,7 +300,7 @@ describe("polymorphic relationship expansion (integration)", () => {
     });
     const populated = (read.data as { target?: Record<string, unknown> })
       .target;
-    expect(populated).toMatchObject({ title: "A page" });
+    expect(populated).toMatchObject({ value: { title: "A page" } });
 
     // Saved back exactly as it was served, which is what a client editing one
     // other field does.
@@ -303,7 +318,7 @@ describe("polymorphic relationship expansion (integration)", () => {
     // Still the page, not a post and not empty: the target survived the trip.
     expect(
       (after.data as { target?: Record<string, unknown> }).target
-    ).toMatchObject({ title: "A page" });
+    ).toMatchObject({ relationTo: "pages", value: { title: "A page" } });
   });
 
   it("keeps the pair intact when no expansion was asked for", async () => {

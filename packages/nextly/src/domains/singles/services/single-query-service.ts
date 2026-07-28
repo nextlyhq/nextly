@@ -253,12 +253,16 @@ function isEmptyValue(value: unknown): boolean {
  * shape alone, which would let an unexpanded reference pass for evidence.
  */
 function isExpandedRow(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "id" in value
-  );
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  // A reference that names its own collection keeps that shape when it is
+  // populated, with the row under `value` — so the row is what has to be
+  // judged. Unpopulated, `value` is still the bare id and fails the same test.
+  if ("relationTo" in value && "value" in value) {
+    return isExpandedRow((value as Record<string, unknown>).value);
+  }
+  return "id" in value;
 }
 
 /**

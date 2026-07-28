@@ -982,8 +982,8 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     // collection the value named, and a bare success assertion would be
     // satisfied by the unexpanded reference just as well.
     expect(result.data!.author).toMatchObject({
-      id: (author.data as { id: string }).id,
-      name: "A",
+      relationTo: "authors",
+      value: { id: (author.data as { id: string }).id, name: "A" },
     });
   });
 
