@@ -708,7 +708,8 @@ export function extractComponentFieldConditions(
                 componentFieldPath,
                 operator: operator as QueryOperator,
                 value: operatorValue,
-                isComponentTypeFilter: componentFieldPath === "_componentType",
+                isComponentTypeFilter:
+                  componentFieldPath === STORAGE_FORMAT.wireTypeKey,
               });
             }
           }
@@ -721,7 +722,8 @@ export function extractComponentFieldConditions(
             componentFieldPath,
             operator: "equals",
             value,
-            isComponentTypeFilter: componentFieldPath === "_componentType",
+            isComponentTypeFilter:
+              componentFieldPath === STORAGE_FORMAT.wireTypeKey,
           });
         }
 

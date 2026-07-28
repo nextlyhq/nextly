@@ -39,6 +39,7 @@ import {
   readRevalidateConfig,
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   AccessControlService,
   type CollectionAccessRules,
@@ -139,12 +140,15 @@ function writtenComponentInstances(
     if (
       instance &&
       typeof instance === "object" &&
-      "_componentType" in instance &&
-      typeof (instance as { _componentType?: unknown })._componentType ===
-        "string"
+      STORAGE_FORMAT.wireTypeKey in instance &&
+      typeof (instance as { _componentType?: unknown })[
+        STORAGE_FORMAT.wireTypeKey
+      ] === "string"
     ) {
       out.push({
-        slug: (instance as { _componentType: string })._componentType,
+        slug: (instance as { _componentType: string })[
+          STORAGE_FORMAT.wireTypeKey
+        ],
         data: instance as Record<string, unknown>,
       });
     }

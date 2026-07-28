@@ -70,6 +70,16 @@ export const STORAGE_FORMAT = {
    * rather than an in-memory tag.
    */
   fieldType: "component",
+
+  /**
+   * Discriminator naming which component a dynamic-zone instance is.
+   *
+   * Distinct from `columns.type`: that is the database column, this is the key
+   * the same value travels under once it is JSON — entry reads, version
+   * snapshots, webhook envelopes, generated types and query filters. The two
+   * spell the concept differently and are migrated separately.
+   */
+  wireTypeKey: "_componentType",
 } as const;
 
 /** The on-disk spelling of a component's type discriminator column. */

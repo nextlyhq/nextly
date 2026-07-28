@@ -22,7 +22,7 @@ export const POPULATE_INTERNAL_COLUMNS: ReadonlySet<string> = new Set([
  */
 export const COMPONENT_META_KEYS: ReadonlySet<string> = new Set([
   "id",
-  "_componentType",
+  STORAGE_FORMAT.wireTypeKey,
   STORAGE_FORMAT.columns.order,
   STORAGE_FORMAT.columns.parentId,
   STORAGE_FORMAT.columns.parentTable,

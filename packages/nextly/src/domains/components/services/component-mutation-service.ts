@@ -835,7 +835,7 @@ export class ComponentMutationService extends BaseService {
 
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
-        const componentType = instance._componentType;
+        const componentType = instance[STORAGE_FORMAT.wireTypeKey];
 
         if (!componentType) {
           this.logger.warn("Multi-component instance missing _componentType", {
@@ -1007,7 +1007,7 @@ export class ComponentMutationService extends BaseService {
 
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
-        const componentType = instance._componentType;
+        const componentType = instance[STORAGE_FORMAT.wireTypeKey];
 
         if (!componentType || !allowedSlugs.includes(componentType)) continue;
 

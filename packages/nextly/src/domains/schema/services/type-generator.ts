@@ -43,6 +43,7 @@ import {
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 
 // ============================================================
@@ -514,7 +515,7 @@ export class TypeGenerator {
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
     // Add discriminator property for type narrowing in dynamic zones
-    lines.push(`  _componentType: "${component.slug}";`);
+    lines.push(`  ${STORAGE_FORMAT.wireTypeKey}: "${component.slug}";`);
 
     // Generate field types
     for (const field of component.fields) {
