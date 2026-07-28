@@ -14,6 +14,7 @@ import type {
   ComponentMigrationStatus,
   ComponentSource,
 } from "../../../schemas/dynamic-components/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { BaseRegistryService } from "../../../shared/base-registry-service";
 import type {
   BaseListOptions,
@@ -96,9 +97,9 @@ export class ComponentRegistryService extends BaseRegistryService<
   DynamicComponentRecord,
   ComponentMigrationStatus
 > {
-  protected readonly registryTableName = "dynamic_components";
+  protected readonly registryTableName = STORAGE_FORMAT.registryTable;
   protected readonly resourceType = "Component";
-  protected readonly tableNamePrefix = "comp_";
+  protected readonly tableNamePrefix = STORAGE_FORMAT.tablePrefix;
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -697,9 +698,12 @@ export class ComponentRegistryService extends BaseRegistryService<
         }
       }
     } catch (error) {
-      this.logger.debug("Could not scan dynamic_components for references", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.logger.debug(
+        `Could not scan ${STORAGE_FORMAT.registryTable} for references`,
+        {
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
     }
 
     if (references.length > 0) {

@@ -32,6 +32,7 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { q } from "../../i18n/migration/ddl-types";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
 
@@ -39,7 +40,7 @@ import { isCompanionTable } from "../../schema/pipeline/managed-tables";
 const DEFAULT_MAX_DEPTH = 10;
 
 /** Registry table holding one row per component, including its physical table name. */
-const REGISTRY_TABLE = "dynamic_components";
+const REGISTRY_TABLE = STORAGE_FORMAT.registryTable;
 
 /**
  * Chunk size for `IN (...)` lists. Keeps a very large entity from exceeding a driver's
@@ -141,8 +142,11 @@ async function assertNoRowsForFrontier(
 
   const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
-  const parentTableColumn = q("_parent_table", adapter.dialect);
-  const parentIdColumn = q("_parent_id", adapter.dialect);
+  const parentTableColumn = q(
+    STORAGE_FORMAT.columns.parentTable,
+    adapter.dialect
+  );
+  const parentIdColumn = q(STORAGE_FORMAT.columns.parentId, adapter.dialect);
 
   const params: unknown[] = [parent.table];
   let where = `${parentTableColumn} = ${pg ? "$1" : "?"}`;
@@ -164,7 +168,7 @@ async function assertNoRowsForFrontier(
     // No `_parent_table` column means the table does not hold component instances at all,
     // despite the `comp_` prefix, so it cannot own rows for this entity. Any other failure
     // leaves the question unanswered and must not be read as "empty".
-    if (/_parent_table/.test(String(error))) return;
+    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return;
     throw error;
   }
 
@@ -271,7 +275,7 @@ export async function teardownEntityComponentData(
   const registered = await listRegisteredComponentTables(adapter, discovered);
   const componentTables = [
     ...new Set([
-      ...discovered.filter(name => name.startsWith("comp_")),
+      ...discovered.filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix)),
       ...registered,
     ]),
     // The registry itself is metadata, never component storage. A row whose
@@ -326,10 +330,20 @@ export async function teardownEntityComponentData(
 
           const where: WhereClause = {
             and: [
-              { column: "_parent_table", op: "=", value: parent.table },
+              {
+                column: STORAGE_FORMAT.columns.parentTable,
+                op: "=",
+                value: parent.table,
+              },
               ...(ids === null
                 ? []
-                : [{ column: "_parent_id", op: "IN" as const, value: ids }]),
+                : [
+                    {
+                      column: STORAGE_FORMAT.columns.parentId,
+                      op: "IN" as const,
+                      value: ids,
+                    },
+                  ]),
             ],
           };
 
