@@ -6032,6 +6032,14 @@ export class CollectionMutationService extends BaseService {
       const needsRelations =
         !!versionsConfig?.enabled ||
         isOutboxRecordingActive("collection", params.collectionName);
+      // The `previous` document is carried ONLY by the outbox event, never by the
+      // version snapshot, so gate its relation read on outbox recording alone: a
+      // version-only update (versioning on, nothing recording) skips it instead of
+      // paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations = isOutboxRecordingActive(
+        "collection",
+        params.collectionName
+      );
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m
@@ -6045,7 +6053,7 @@ export class CollectionMutationService extends BaseService {
         parentRow: this.readShapeEventDocument(existingEntry, fields),
         fields,
         manyToManyFields,
-        needsRelations,
+        needsRelations: previousNeedsRelations,
       });
 
       // Handle many-to-many relationships on the caller's transaction so the
@@ -7504,6 +7512,14 @@ export class CollectionMutationService extends BaseService {
       const needsRelations =
         !!versionsConfig?.enabled ||
         isOutboxRecordingActive("collection", params.collectionName);
+      // The `previous` document is carried ONLY by the outbox event, never by the
+      // version snapshot, so gate its relation read on outbox recording alone: a
+      // version-only update (versioning on, nothing recording) skips it instead of
+      // paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations = isOutboxRecordingActive(
+        "collection",
+        params.collectionName
+      );
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m
@@ -7516,7 +7532,7 @@ export class CollectionMutationService extends BaseService {
         parentRow: this.readShapeEventDocument(existingEntry, fields),
         fields,
         manyToManyFields,
-        needsRelations,
+        needsRelations: previousNeedsRelations,
       });
 
       // Handle many-to-many relationships on the caller's transaction so the

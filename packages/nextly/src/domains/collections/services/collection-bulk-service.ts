@@ -1175,15 +1175,14 @@ export class CollectionBulkService extends BaseService {
         result.successful = 0;
         result.ids = [];
         result.failed = entries.length;
-        result.errors = [
-          {
-            index: -1,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Write integrity failure rolled back the batch",
-          },
-        ];
+        // One error per requested index (not a single sentinel): the public
+        // BatchOperationResult contract maps errors to input indices, and every
+        // input was rolled back.
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Write integrity failure rolled back the batch";
+        result.errors = entries.map((_, index) => ({ index, error: message }));
       } else if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk create rolled back due to stopOnError", {
           collectionName: params.collectionName,
@@ -1611,15 +1610,14 @@ export class CollectionBulkService extends BaseService {
         result.successful = 0;
         result.ids = [];
         result.failed = entries.length;
-        result.errors = [
-          {
-            index: -1,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Write integrity failure rolled back the batch",
-          },
-        ];
+        // One error per requested index (not a single sentinel): the public
+        // BatchOperationResult contract maps errors to input indices, and every
+        // input was rolled back.
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Write integrity failure rolled back the batch";
+        result.errors = entries.map((_, index) => ({ index, error: message }));
       } else if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk update rolled back due to stopOnError", {
           collectionName: params.collectionName,

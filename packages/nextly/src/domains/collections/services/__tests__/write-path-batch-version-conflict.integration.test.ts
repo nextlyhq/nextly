@@ -7,9 +7,7 @@
  * back. The batch deliberately does NOT retry the transaction: re-running would
  * replay every preceding item's (non-transactional) hooks — duplicate emails,
  * discarded ids. So a conflict surfaces as a clean failure the caller can retry
- * at the application level, and nothing is left half-written. (Retrying without
- * replaying hooks needs savepoint-scoped allocation or a serialized allocator —
- * see tasks/left-tasks/context/2026-07-28-programmatic-version-conflict-retry-followup.md.)
+ * at the application level, and nothing is left half-written.
  *
  * The conflict is injected deterministically by making the first capture raise
  * VersionConflictError; no real concurrency is needed.
