@@ -21,7 +21,28 @@ describe("storage format", () => {
       indexPrefix: "idx_",
       uniqueIndexPrefix: "uq_",
       configPathDir: "components",
+      fieldType: "component",
+      wireTypeKey: "_componentType",
+      refKeys: {
+        single: "component",
+        many: "components",
+        legacy: "componentSlug",
+      },
+      manifest: {
+        key: "components",
+        entityKind: "component",
+        version: 1,
+        schemaUrl: "https://nextlyhq.com/schemas/ui-schema.v1.json",
+      },
+      schemaEventScope: "component",
     });
+  });
+
+  it("keeps the column and wire discriminators distinct", () => {
+    // The same value travels under two spellings — one as a database column,
+    // one as a JSON key. Collapsing them would make a migration of either
+    // silently rewrite the other.
+    expect(STORAGE_FORMAT.columns.type).not.toBe(STORAGE_FORMAT.wireTypeKey);
   });
 
   it("keeps the companion suffix consistent with the table prefix", () => {
