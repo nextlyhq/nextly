@@ -16,6 +16,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { NextlyError } from "../../../errors";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import type { WebhookEvent } from "../types";
@@ -185,6 +186,53 @@ describe("webhook outbox capture, localized (integration)", () => {
     const updatedEvent = rows.find(r => r.type === "entry.updated");
     expect(envelopeOf(createdEvent!).resource).toMatchObject({ locale: "de" });
     expect(envelopeOf(updatedEvent!).resource).toMatchObject({ locale: "en" });
+  });
+
+  it("emits a per-locale entry.published for each companion locale a publish-all transitions", async () => {
+    // Publishing every locale flips the companion `_status` for all of them in
+    // one statement, but a subscriber watching a single language needs its own
+    // event. Each companion locale that actually transitioned to published must
+    // get a locale-tagged `entry.published`, alongside the document-wide event
+    // for the default locale (whose status lives on the main row).
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    // Default-locale draft: main row plus the `en` companion are draft.
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    // A German draft translation, so the `de` companion is draft too.
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { heading: "Deutsch" }
+    );
+
+    const entries = h.getEntryService() as CollectionEntryService;
+    const result = await entries.publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const publishedLocales = rows
+      .filter(r => r.type === "entry.published")
+      .map(r => (envelopeOf(r).resource as { locale?: string }).locale);
+    // The German companion transitioned draft -> published, so it carries its
+    // own locale tag...
+    expect(publishedLocales).toContain("de");
+    // ...and the default locale's transition is the document-wide event, which
+    // carries no locale.
+    expect(publishedLocales).toContain(undefined);
   });
 
   it("reports a brand-new translation as the draft it was written as", async () => {

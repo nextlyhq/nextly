@@ -1156,6 +1156,39 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Every locale's committed per-locale `_status` for one entry, keyed by
+   * locale. Read with raw `tx.execute` for the same reason as
+   * {@link readCompanionStatus}: the companion `_locales` table is not in the
+   * Drizzle schema and the CRUD helpers would camelCase `_status`/`_locale`.
+   * Only locales that actually have a companion row appear — a never-translated
+   * locale has no row and so no per-locale status to transition.
+   */
+  private async readCompanionStatusAllLocales(
+    tx: TransactionContext,
+    companionTableName: string,
+    entryId: string
+  ): Promise<Map<string, string | null>> {
+    const isMysqlDialect = this.dialect === "mysql";
+    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
+    const placeholder = (i: number) =>
+      this.dialect === "postgresql" ? `$${i}` : "?";
+    const rows = await tx.execute<{ _locale?: unknown; _status?: unknown }>(
+      `SELECT ${quote("_locale")}, ${quote("_status")} FROM ${quote(companionTableName)} ` +
+        `WHERE ${quote("_parent")} = ${placeholder(1)}`,
+      [entryId]
+    );
+    const byLocale = new Map<string, string | null>();
+    for (const row of rows) {
+      if (typeof row._locale !== "string") continue;
+      byLocale.set(
+        row._locale,
+        typeof row._status === "string" ? row._status : null
+      );
+    }
+    return byLocale;
+  }
+
+  /**
    * The document parts a version records, with component types tagged.
    *
    * A separate shape from what the outbox carries: the same parts feed both,
@@ -2733,6 +2766,17 @@ export class CollectionMutationService extends BaseService {
       // Set inside the transaction when the publish records its outbox events, so
       // the caller can flush the drain after IT commits.
       let eventRecorded = false;
+      // Set inside the transaction when the row is gone by the time the lock is
+      // taken (deleted between the pre-transaction read and the lock), so the
+      // publish records nothing and the caller answers not-found rather than
+      // reporting a publish of content that no longer exists.
+      let entryVanished = false;
+      // The main row's status read UNDER the transaction lock, so the publish
+      // transition is judged against the committed value this publish overwrites
+      // rather than the stale pre-transaction read. The closure sets it; the
+      // post-commit transition event reads it. Defaults to the pre-read value so
+      // a companion-only (no main status) publish still has a sane fallback.
+      let lockedPreviousStatus = previousStatus;
       const needsFreshParent =
         !!versionsConfig?.enabled ||
         (hasMainStatus && previousStatus !== "published");
@@ -2749,16 +2793,33 @@ export class CollectionMutationService extends BaseService {
       // race, mirroring updateEntry.
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
+          // Lock the main row up front. One read serves three needs: it is the
+          // liveness check (a row deleted between the pre-transaction read and
+          // this lock is gone here, so the publish writes and records nothing);
+          // it carries the committed status the publish transition is judged
+          // against; and it is the document a deferred publish rule re-checks.
+          // Reset per attempt because the conflict retry re-runs this closure.
+          entryVanished = false;
+          lockedPreviousStatus = previousStatus;
+          const lockedRow = await tx.selectOne<Record<string, unknown>>(
+            tableName,
+            { where: this.whereEq("id", params.entryId), forUpdate: true }
+          );
+          if (!lockedRow) {
+            // Nothing to publish — record nothing and roll back an empty tx.
+            entryVanished = true;
+            return;
+          }
+          const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
+          lockedPreviousStatus =
+            typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
+
           // Re-check a deferred document-dependent (owner-only/custom) publish
           // rule against the row read UNDER the lock, before the status write, so
           // a concurrent change to a field the rule inspects is accounted for.
           // Throwing here rolls the publish back with nothing written.
           if (publishDocumentRule) {
-            const lockedRow = await tx.selectOne<Record<string, unknown>>(
-              tableName,
-              { where: this.whereEq("id", params.entryId), forUpdate: true }
-            );
-            if (lockedRow) {
+            {
               const documentDenied =
                 await this.accessService.evaluateTransitionDocumentRule(
                   publishDocumentRule.accessRules,
@@ -2772,6 +2833,19 @@ export class CollectionMutationService extends BaseService {
               }
             }
           }
+          // Each locale's committed per-locale status BEFORE the bulk companion
+          // flip below, so a real draft->published transition can be told from a
+          // locale that was already live. Read under the lock and inside the
+          // retry so it reflects the state this publish actually overwrites.
+          const priorCompanionStatuses =
+            companion && companionPublishable
+              ? await this.readCompanionStatusAllLocales(
+                  tx,
+                  companion.companionTableName,
+                  params.entryId
+                )
+              : new Map<string, string | null>();
+
           if (hasMainStatus) {
             await tx.execute(
               `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr} WHERE ${q("id")} = ${ph(2)}`,
@@ -2903,11 +2977,16 @@ export class CollectionMutationService extends BaseService {
             actor: publishActor,
           });
           eventRecorded = baseRecorded || eventRecorded;
-          if (hasMainStatus && previousStatus !== "published") {
+          // The document-wide (main-row) publish transition. Gated on the status
+          // read under the lock so a concurrent unpublish/publish is judged
+          // correctly. For a localized collection the main row holds the default
+          // locale's status, so this event stands in for the default locale and
+          // carries no `locale` tag.
+          if (hasMainStatus && lockedPreviousStatus !== "published") {
             const statusRecorded = await this.recordStatusEvents(tx, {
               collection: params.collectionName,
               id: params.entryId,
-              from: previousStatus ?? null,
+              from: lockedPreviousStatus,
               to: "published",
               isCreate: false,
               data: publishedDocument,
@@ -2917,16 +2996,57 @@ export class CollectionMutationService extends BaseService {
             });
             eventRecorded = statusRecorded || eventRecorded;
           }
+          // Per-locale publish transitions. The bulk flip above moved every
+          // companion locale to published in one statement, but a subscriber
+          // watching a single language needs its own `entry.published` — so each
+          // companion locale that actually transitioned gets a locale-tagged
+          // event, with the locale's own prior `_status` as the transition
+          // `from`. The default locale is skipped when the collection has a main
+          // status column (its transition is the document-wide event above);
+          // without one, the default locale's status lives on the companion and
+          // needs its own event too.
+          const defaultLocale = this.localization?.defaultLocale;
+          for (const [
+            locale,
+            priorLocaleStatus,
+          ] of priorCompanionStatuses) {
+            if (hasMainStatus && locale === defaultLocale) continue;
+            if (priorLocaleStatus === "published") continue;
+            const localeRecorded = await this.recordStatusEvents(tx, {
+              collection: params.collectionName,
+              id: params.entryId,
+              locale,
+              from: priorLocaleStatus,
+              to: "published",
+              isCreate: false,
+              data: publishedDocument,
+              previous: previousDocument,
+              fields: publishEventFields,
+              actor: publishActor,
+            });
+            eventRecorded = localeRecorded || eventRecorded;
+          }
         })
       );
+
+      // The entry was deleted out from under the publish: nothing was written or
+      // recorded, so answer not-found rather than a success for absent content.
+      if (entryVanished) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
 
       // Post-commit status events: publishing is a real status transition, so
       // workflow subscribers on statusTransition/published must see it (this
       // path previously changed status without emitting anything). Skip when the
-      // main row was already published (no transition), matching updateEntry.
-      // Prefer the fresh in-tx row; fall back to the pre-read only if the row
-      // vanished mid-publish.
-      if (hasMainStatus && previousStatus !== "published") {
+      // main row was already published (no transition, judged on the status read
+      // under the lock), matching updateEntry. Prefer the fresh in-tx row; fall
+      // back to the pre-read only if the row vanished mid-publish.
+      if (hasMainStatus && lockedPreviousStatus !== "published") {
         this.transitionStatus({
           collection: params.collectionName,
           id: params.entryId,
@@ -2935,7 +3055,7 @@ export class CollectionMutationService extends BaseService {
             status: "published",
           },
           user: params.user,
-          previousStatus,
+          previousStatus: lockedPreviousStatus,
           status: "published",
           emitStatusChanged: true,
         });
