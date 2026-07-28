@@ -3,6 +3,7 @@
 // collection resumes recording content the operator chose to keep out of the
 // outbox. Code-first entities are excluded because the config publisher already
 // applied them from live config, which outranks a row that may be stale.
+import { getTableName } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -37,19 +38,17 @@ function readerReturning(rows: {
     getDrizzle: <T>() =>
       ({
         select: () => ({
-          from: (
-            table: { slug: { name?: string } } & Record<string, unknown>
-          ) => ({
+          from: (table: Parameters<typeof getTableName>[0]) => ({
             where: async () => {
-              // Both registry tables declare a `slug` column; the table name
-              // lives on Drizzle's internal symbol, so match on the object
-              // identity the caller passed instead.
-              const isSingles = String(
-                (table as { _?: { name?: string } })._?.name ?? ""
-              ).includes("singles");
-              return isSingles
+              // Drizzle keeps the table name under symbol metadata, so a plain
+              // property read is always undefined — which silently routed both
+              // queries to the collections fixture and left the Singles branch
+              // untested. `getTableName` reads the real name.
+              const result = getTableName(table).includes("singles")
                 ? (rows.singles ?? [])
                 : (rows.collections ?? []);
+              if (result instanceof Error) throw result;
+              return result;
             },
           }),
         }),
@@ -177,9 +176,30 @@ describe("publishStoredWebhookRecordingPolicies", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("still fails closed when a wrapped error is not a missing column", async () => {
-    const wrapped = new Error("Failed query: select `webhooks` from ...", {
+  it("tolerates a registry table that does not exist yet", async () => {
+    // No table means no entities, so no opt-outs can exist and recording
+    // everything is correct. It also keeps the deliberately failure-safe
+    // first-run path intact: when registry provisioning fails,
+    // `initializeSchemaRegistry` swallows it so boot can reach the recovery
+    // path, and this read must not turn that into a hard abort.
+    const missingTable = new Error("Failed query: select `webhooks` from ...", {
       cause: new Error("Table 'nextly_test.dynamic_collections' doesn't exist"),
+    });
+
+    await expect(
+      publishStoredWebhookRecordingPolicies(
+        readerThrowing(missingTable),
+        noConfigSlugs
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails closed when a DIFFERENT column is missing", async () => {
+    // A damaged registry missing some other selected column reports the same
+    // generic wording. Treating that as the tolerated upgrade case would drop
+    // every stored opt-out instead of surfacing the broken schema.
+    const wrapped = new Error("Failed query: select `source` from ...", {
+      cause: new Error('column "source" does not exist'),
     });
 
     await expect(
@@ -187,7 +207,7 @@ describe("publishStoredWebhookRecordingPolicies", () => {
         readerThrowing(wrapped),
         noConfigSlugs
       )
-    ).rejects.toThrow("Failed query");
+    ).rejects.toThrow();
   });
 
   it("fails closed when the registry read fails for any other reason", async () => {
@@ -198,7 +218,12 @@ describe("publishStoredWebhookRecordingPolicies", () => {
 
     await expect(
       publishStoredWebhookRecordingPolicies(reader, noConfigSlugs)
-    ).rejects.toThrow("connection terminated");
+      // Surfaced as the canonical error type, with the driver failure preserved
+      // as the cause rather than thrown raw.
+    ).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      cause: expect.objectContaining({ message: "connection terminated" }),
+    });
   });
 
   it("never overrides a decision the config publisher already made", async () => {

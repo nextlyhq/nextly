@@ -18,6 +18,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { isNotNull } from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
+import { NextlyError } from "../../errors";
 import { dynamicCollectionsMysql } from "../../schemas/dynamic-collections/mysql";
 import { dynamicCollectionsPg } from "../../schemas/dynamic-collections/postgres";
 import { dynamicCollectionsSqlite } from "../../schemas/dynamic-collections/sqlite";
@@ -79,24 +80,39 @@ export interface ConfigOwnedSlugs {
  * for it. Matches the classification `loadDynamicTables` already applies to the
  * same registry tables.
  */
-function isMissingWebhooksColumn(error: unknown): boolean {
+function isPreMigrationRegistry(error: unknown): boolean {
   // Drizzle wraps driver failures, so the recognizable text is on the cause, not
   // the wrapper ("Failed query: ..."). Both are searched, mirroring
-  // `isMissingCompanionTableError`. Matching only the missing-COLUMN wordings
-  // keeps a missing table — a genuinely broken registry — on the fail-closed
-  // path: SQLite says `no such column`, Postgres `column "x" does not exist`,
-  // MySQL `Unknown column`.
+  // `isMissingCompanionTableError`.
   const message = [
     error instanceof Error ? error.message : String(error),
     error instanceof Error && error.cause instanceof Error
       ? error.cause.message
       : "",
   ].join(" ");
-  return (
+
+  const missingColumn =
     /no such column/i.test(message) ||
     /unknown column/i.test(message) ||
-    (/column/i.test(message) && /does not exist/i.test(message))
-  );
+    (/column/i.test(message) && /does not exist/i.test(message));
+  if (missingColumn) {
+    // Only a missing `webhooks` is the tolerated upgrade case. A damaged
+    // registry missing some OTHER selected column produces the same generic
+    // wording, and treating that as "nothing stored" would silently drop every
+    // opt-out instead of surfacing the broken schema.
+    return /webhooks/i.test(message);
+  }
+
+  const missingTable =
+    /no such table/i.test(message) ||
+    /doesn't exist/i.test(message) ||
+    (/relation/i.test(message) && /does not exist/i.test(message));
+  // A missing registry table means there are no entities at all, so there are no
+  // opt-outs to lose and recording everything is correct. Tolerating it also
+  // keeps the deliberately failure-safe first-run path intact: when
+  // `initializeSchemaRegistry` swallows a provisioning failure so boot can reach
+  // the recovery/migration path, this read must not turn that into a hard abort.
+  return missingTable && /dynamic_(collections|singles)/i.test(message);
 }
 
 /**
@@ -185,11 +201,12 @@ async function collectScope(
  * so writing opt-ins would add nothing while risking the override of a code or
  * plugin decision that arrived first.
  *
- * Fails open ONLY for a database predating the `webhooks` column, where there is
- * nothing to read and recording everything is the correct previous behavior.
- * Every other read failure is rethrown: a transient error is indistinguishable
- * from "no opt-outs" here, and booting on regardless would deliver exactly the
- * content an operator asked to withhold.
+ * Fails open ONLY where there is genuinely nothing to read: a database predating
+ * the `webhooks` column, or a registry table that does not exist yet (no
+ * entities, so no opt-outs). Every other read failure surfaces as a
+ * `NextlyError`: a transient error is indistinguishable from "no opt-outs" here,
+ * and booting on regardless would deliver exactly the content an operator asked
+ * to withhold.
  */
 export async function publishStoredWebhookRecordingPolicies(
   adapter: RecordingPolicyReader,
@@ -247,7 +264,18 @@ async function collectScopeTolerantly(
   try {
     return await collectScope(db, scope, table, configSlugs);
   } catch (error) {
-    if (isMissingWebhooksColumn(error)) return null;
-    throw error;
+    if (isPreMigrationRegistry(error)) return null;
+    // Anything else is a real failure that must not be mistaken for "no
+    // opt-outs". Normalized to the canonical error type, preserving the driver
+    // error as the cause so the classification is not lost.
+    throw NextlyError.internal({
+      cause: error instanceof Error ? error : undefined,
+      logContext: {
+        reason: "webhook-recording-policy-read-failed",
+        scope,
+        // Preserved for the non-Error case, which `cause` cannot carry.
+        detail: error instanceof Error ? undefined : String(error),
+      },
+    });
   }
 }
