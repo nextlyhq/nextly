@@ -2517,6 +2517,9 @@ export class CollectionMutationService extends BaseService {
       // payload exposes a stale pre-image of the non-status columns. The closure
       // sets it; it is read once after commit for the event.
       let publishedParentRow: Record<string, unknown> | undefined;
+      // Set inside the transaction when the publish records its outbox events, so
+      // the caller can flush the drain after IT commits.
+      let eventRecorded = false;
       const needsFreshParent =
         !!versionsConfig?.enabled ||
         (hasMainStatus && previousStatus !== "published");
@@ -2642,11 +2645,58 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // This path writes no base `entry.updated` outbox event, so recording
-          // a status-only lifecycle event here would ship an inconsistent
-          // partial surface (a status change with no corresponding write event).
-          // Its lifecycle events belong with its base write event, not in
-          // isolation, so none are recorded here.
+          // Append the base `entry.updated` outbox event for the publish write,
+          // then its publish lifecycle event, both on this transaction so they
+          // commit with the status write and never survive a rollback. Built from
+          // the post-publish document (the fresh in-tx row overlaid with the new
+          // status, or the pre-read row so the event still fires when no fresh
+          // read was needed). The publish event is gated on a real main-row
+          // transition, matching the post-commit `transitionStatus` below.
+          const publishedDocument = this.deserializeJsonFieldsForSnapshot(
+            {
+              ...(publishedParentRow ??
+                (existingEntry as Record<string, unknown>)),
+              status: "published",
+            },
+            fields
+          );
+          const previousDocument = this.deserializeJsonFieldsForSnapshot(
+            existingEntry as Record<string, unknown>,
+            fields
+          );
+          const publishEventFields = await this.webhookFieldTreeIfRecording(
+            params.collectionName,
+            fields,
+            tx.getDrizzle()
+          );
+          const publishActor = actorForWrite(undefined, params.user);
+          const baseRecorded = await recordMutationEvent(tx, {
+            type: "entry.updated",
+            resource: {
+              kind: "entry",
+              collection: params.collectionName,
+              id: params.entryId,
+            },
+            data: publishedDocument,
+            previous: previousDocument,
+            fields: publishEventFields,
+            actor: publishActor,
+          });
+          eventRecorded = baseRecorded || eventRecorded;
+          if (hasMainStatus && previousStatus !== "published") {
+            const statusRecorded = await this.recordStatusEvents(tx, {
+              collection: params.collectionName,
+              id: params.entryId,
+              from: previousStatus ?? null,
+              to: "published",
+              isCreate: false,
+              data: publishedDocument,
+              previous: previousDocument,
+              fields: publishEventFields,
+              actor: publishActor,
+            });
+            eventRecorded = statusRecorded || eventRecorded;
+          }
         })
       );
 
@@ -2722,6 +2772,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "All languages published.",
         data: { id: params.entryId, status: "published" },
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error) {
@@ -5723,6 +5774,58 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Append the outbox event on the caller's transaction so an update through
+      // the tx-API (importers, plugins) is observable too — the invariant the
+      // interactive path holds. Built from the freshly-updated row and the
+      // pre-update row in read shape; recorded on `tx` so it commits with the
+      // update and never survives a rollback. A status-lifecycle transition also
+      // emits its publish/unpublish/status_changed event, gated on the
+      // collection's Draft/Published flag so an ordinary user `status` field is
+      // not mistaken for a lifecycle change.
+      const updatedDocument = this.deserializeJsonFieldsForSnapshot(
+        updated as Record<string, unknown>,
+        fields
+      );
+      const previousDocument = this.deserializeJsonFieldsForSnapshot(
+        existingEntry,
+        fields
+      );
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.updated",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: params.entryId,
+        },
+        data: updatedDocument,
+        previous: previousDocument,
+        fields: eventFields,
+        actor: eventActor,
+      });
+      if ((collection as { status?: boolean }).status === true) {
+        const statusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: params.entryId,
+          from: readStringField(existingEntry, "status") ?? null,
+          to: (updated as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: false,
+          data: updatedDocument,
+          previous: previousDocument,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = eventRecorded || statusRecorded;
+      }
+
       // Execute afterUpdate hooks (code-registered)
       const afterContext = this.hookService.buildHookContext({
         collection: params.collectionName,
@@ -5784,6 +5887,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: updated,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
@@ -7038,6 +7142,57 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Append the outbox event on the caller's transaction so a batch update
+      // (updateEntries) is observable too. Recording is NOT a hook, so it runs
+      // even under `skipHooks`; built from the freshly-updated row and the
+      // pre-update row in read shape and recorded on `tx` so it commits with the
+      // update and never survives a rollback. A status-lifecycle transition also
+      // emits its publish/unpublish/status_changed event, gated on the
+      // collection's Draft/Published flag.
+      const updatedDocument = this.deserializeJsonFieldsForSnapshot(
+        updated as Record<string, unknown>,
+        fields
+      );
+      const previousDocument = this.deserializeJsonFieldsForSnapshot(
+        existingEntry,
+        fields
+      );
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.updated",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: entryId,
+        },
+        data: updatedDocument,
+        previous: previousDocument,
+        fields: eventFields,
+        actor: eventActor,
+      });
+      if ((collection as { status?: boolean }).status === true) {
+        const statusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: entryId,
+          from: readStringField(existingEntry, "status") ?? null,
+          to: (updated as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: false,
+          data: updatedDocument,
+          previous: previousDocument,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = eventRecorded || statusRecorded;
+      }
+
       // Execute afterUpdate hooks (unless skipped)
       if (!skipHooks) {
         // Execute afterUpdate hooks (code-registered)
@@ -7107,6 +7262,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: updated,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
