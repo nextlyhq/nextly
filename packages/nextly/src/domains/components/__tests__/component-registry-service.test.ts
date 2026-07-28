@@ -624,6 +624,7 @@ describe("ComponentRegistryService", () => {
           table_name: "seo_meta",
         });
       });
+      // Both tables exist; the empty stored one may be abandoned.
       ctx.adapter.tableExists.mockResolvedValue(true);
       ctx.adapter.select.mockResolvedValue([]);
       ctx.adapter.update.mockResolvedValue([dbRow()]);
@@ -635,6 +636,33 @@ describe("ComponentRegistryService", () => {
       expect(result.updated).toEqual(["seo"]);
       const [, updateData] = ctx.adapter.update.mock.calls[0];
       expect(updateData.table_name).toBe("seo_v2");
+    });
+
+    it("keeps the pointer when the requested table does not exist yet", async () => {
+      // An empty stored table is expendable, but this path creates no DDL, so
+      // moving to an uncreated name would leave the registry addressing
+      // nothing.
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async () => {
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          table_name: "seo_meta",
+        });
+      });
+      ctx.adapter.select.mockResolvedValue([]);
+      ctx.adapter.tableExists.mockImplementation(
+        async (name: string) => name === "seo_meta"
+      );
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields, tableName: "seo_v2" },
+      ]);
+
+      expect(result.unchanged).toEqual(["seo"]);
+      expect(ctx.adapter.update).not.toHaveBeenCalled();
     });
 
     it("reconciles a stored table name that drifted from canonical resolution", async () => {

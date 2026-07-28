@@ -516,15 +516,28 @@ export class ComponentRegistryService extends BaseRegistryService<
           // both safe and the outcome the config asked for. Only instances
           // actually stored there make the move destructive. Bounded to one
           // row because the question is emptiness, not size.
-          const storedTableHoldsData =
-            (await this.adapter.tableExists(existing.tableName)) &&
+          const storedExists = await this.adapter.tableExists(
+            existing.tableName
+          );
+          const storedHoldsData =
+            storedExists &&
             (
               await this.adapter.select<Record<string, unknown>>(
                 existing.tableName,
                 { limit: 1 }
               )
             ).length > 0;
-          if (storedTableHoldsData) {
+          // Repointing is only safe onto storage that can actually serve. An
+          // empty stored table is expendable, but moving to a name nothing has
+          // created yet would leave reads and writes addressing a table that
+          // does not exist — this path carries no DDL to create it. Moving is
+          // therefore allowed only when the target already exists, or when
+          // neither does and the schema sync will create the target.
+          const desiredExists =
+            await this.adapter.tableExists(desiredTableName);
+          const keepStoredPointer =
+            storedHoldsData || (storedExists && !desiredExists);
+          if (keepStoredPointer) {
             this.logger.warn(
               "Component table name differs from its populated table; keeping the populated one",
               {
