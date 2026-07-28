@@ -23,7 +23,7 @@ export default defineConfig({
   // Content model
   collections: [Posts, Media],
   singles: [SiteSettings, Header, Footer],
-  components: [Seo, Hero],
+  fieldGroups: [Seo, Hero],
 
   // Built-in user model extensions
   users: {
@@ -116,7 +116,7 @@ export default defineConfig({
 |---|---|---|---|
 | `collections` | `CollectionConfig[]` | `[]` | Content types with multiple entries. See [Collections](/docs/configuration/collections). |
 | `singles` | `SingleConfig[]` | `[]` | Single-document content (site settings, header, etc.). See [Singles](/docs/configuration/singles). |
-| `components` | `ComponentConfig[]` | `[]` | Reusable field groups. See [Components](/docs/configuration/components). |
+| `components` | `FieldGroupConfig[]` | `[]` | Reusable field groups. See [Components](/docs/configuration/components). |
 | `users` | `UserConfig` | `undefined` | Extend the built-in user model with custom fields. |
 | `typescript` | `TypeScriptConfig` | See below | Generated types path and module augmentation. |
 | `db` | `DatabaseConfig` | See below | Where Drizzle schema and migration files are written. |
@@ -177,16 +177,16 @@ See [Singles](/docs/configuration/singles) for the full `SingleConfig` shape.
 ### `components`
 
 ```ts
-components?: ComponentConfig[];
+components?: FieldGroupConfig[];
 ```
 
-Array of reusable field-group templates created with `defineComponent()`. Components are embedded inside collections, singles, or other components via the `component` field type. Slugs must be unique across collections, singles, and components.
+Array of reusable field-group templates created with `defineFieldGroup()`. Components are embedded inside collections, singles, or other components via the `component` field type. Slugs must be unique across collections, singles, and components.
 
 ```typescript
 import { Seo, Hero } from "./src/components";
 
 export default defineConfig({
-  components: [Seo, Hero],
+  fieldGroups: [Seo, Hero],
 });
 ```
 
