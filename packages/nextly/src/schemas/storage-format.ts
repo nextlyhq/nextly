@@ -42,7 +42,14 @@ export const STORAGE_FORMAT = {
     type: "_component_type",
   },
 
-  /** Prefixes for generated index and unique-index names. */
+  /**
+   * Prefixes for generated index and unique-index names.
+   *
+   * Shared with collection and single tables rather than owned by components,
+   * so they name no concept and do not move when the concept is renamed. They
+   * live here because they are still on-disk spellings: changing one renames
+   * an index in every existing database.
+   */
   indexPrefix: "idx_",
   uniqueIndexPrefix: "uq_",
 
