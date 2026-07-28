@@ -369,4 +369,68 @@ describe("SingleQueryService.buildDefaultDocument", () => {
 
     expect(insertValues).toMatchObject({ region: "us" });
   });
+
+  it("rejects a password field that declares a defaultValue", () => {
+    // This path inserts the resolved value directly, bypassing the write path's
+    // password hashing, so a password default would persist in plaintext; it
+    // must be refused rather than stored.
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+    const meta = siteSettingsMeta({
+      fields: [{ name: "secret", type: "password" }],
+    });
+    registry.getCodeFirstFields.mockReturnValue([
+      { name: "secret", type: "password", defaultValue: () => "hunter2" },
+    ]);
+
+    let caught: unknown;
+    try {
+      service.buildDefaultDocument(meta as unknown as SingleMeta);
+    } catch (error) {
+      caught = error;
+    }
+    // A validation error naming the password field, not the plaintext value in
+    // the row that would otherwise be inserted.
+    const publicData = (
+      caught as { publicData?: { errors?: Array<{ code?: string }> } }
+    )?.publicData;
+    expect(publicData?.errors?.[0]?.code).toBe("PASSWORD_DEFAULT_UNSUPPORTED");
+  });
+
+  it("coerces a string date default to a Date for the timestamp column", () => {
+    // A timestamp column needs a Date; the ordinary write path coerces, and the
+    // direct insert must too, or SQLite stores the string in an integer column.
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+    const meta = siteSettingsMeta({
+      fields: [{ name: "launchAt", type: "date" }],
+    });
+    registry.getCodeFirstFields.mockReturnValue([
+      {
+        name: "launchAt",
+        type: "date",
+        defaultValue: () => "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    // insertValues is keyed by DB column name (launchAt -> launch_at).
+    expect(insertValues.launch_at).toBeInstanceOf(Date);
+    expect((insertValues.launch_at as Date).toISOString()).toBe(
+      "2026-01-01T00:00:00.000Z"
+    );
+  });
 });

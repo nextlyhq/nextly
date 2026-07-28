@@ -55,6 +55,7 @@ import {
   applyFieldReadAccess,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
+import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -91,6 +92,7 @@ import type {
 
 import type { SingleRegistryService } from "./single-registry-service";
 import {
+  assertNoPasswordDefault,
   assertValidBlocksDefault,
   buildSingleErrorResult,
   collectAllMediaIds,
@@ -1388,6 +1390,10 @@ export class SingleQueryService extends BaseService {
         // field's own policy rejects — and the admin control is read-only, so
         // the stored value could not be corrected from the UI.
         assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
+        // Same direct-insert reasoning for passwords: this path never runs
+        // `hashPasswordFieldValues`, so a resolved password default would persist
+        // in plaintext. Refuse it (a password must be set explicitly to be hashed).
+        assertNoPasswordDefault(field, singleMeta.slug);
         // Clone before exposing: a live STATIC structured default is the object
         // stored on the config, so handing that reference to later dependent
         // defaults (which may sort/mutate it) would corrupt the config itself.
@@ -1436,6 +1442,13 @@ export class SingleQueryService extends BaseService {
         logicalDefaults[field.name] = toLogical(field, defaults[field.name]);
       }
     }
+
+    // A date default resolves to a string (e.g. `() => new Date().toISOString()`),
+    // but a timestamp column needs a `Date` — the ordinary write path coerces via
+    // `coerceDateFieldsToDate`, and this direct-insert path must do the same or
+    // SQLite stores the string in an integer column and reads back an invalid
+    // date. Idempotent: an existing `Date` passes through untouched.
+    coerceDateFieldsToDate(defaults, singleMeta.fields);
 
     // A field can be translatable/required yet emit NO storage column — a
     // component or other layout-only ("skip") field type. Its default has nowhere
