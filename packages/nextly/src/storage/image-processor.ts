@@ -193,19 +193,24 @@ export class ImageProcessor {
     // the focal point at the target aspect ratio, then resize to exact dimensions.
     // Sharp's resize({ position }) only accepts gravity strings (e.g. "center", "north"),
     // not arbitrary percentage values.
+    // Read into locals BEFORE the condition. Narrowing through an aliased
+    // condition only carries to `const` references, so testing the properties
+    // inline leaves them optional inside the block — which is what forced the
+    // non-null assertions this replaces.
+    const srcW = metadata.width;
+    const srcH = metadata.height;
+    const tgtW = options.width;
+    const tgtH = options.height;
+
     const hasFocalPoint =
       options.fit === "cover" &&
       (options.focalX !== undefined || options.focalY !== undefined) &&
-      options.width &&
-      options.height &&
-      metadata.width &&
-      metadata.height;
+      tgtW !== undefined &&
+      tgtH !== undefined &&
+      srcW !== undefined &&
+      srcH !== undefined;
 
     if (hasFocalPoint) {
-      const srcW = metadata.width;
-      const srcH = metadata.height;
-      const tgtW = options.width!;
-      const tgtH = options.height!;
       const fx = (options.focalX ?? 50) / 100; // 0-1
       const fy = (options.focalY ?? 50) / 100; // 0-1
 
