@@ -13,6 +13,8 @@
  * @module domains/schema/field-types/field-type-registry
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { FieldSurface } from "../../../collections/fields/catalog";
 import { DEFAULT_FIELD_SURFACES } from "../../../collections/fields/catalog";
 import { ALL_FIELD_TYPES } from "../../../collections/fields/types";
@@ -24,11 +26,48 @@ const globalForFieldTypes = globalThis as unknown as {
   __nextly_fieldTypes?: Map<string, PluginFieldType>;
 };
 
-function store(): Map<string, PluginFieldType> {
+/**
+ * The registry an operation reads, when it declared one of its own.
+ *
+ * The live set below belongs to whichever config was loaded last. That is right
+ * for serving requests and wrong for work that is already underway against an
+ * earlier config: `db:sync --watch` reloads on save, and a reload clears and
+ * rebuilds the live set while the previous sync may still be materializing
+ * columns. Resolution runs deep inside the schema pipeline — `classifyFieldKind`
+ * calls this from beneath `getColumnDescriptor` — so an operation pins its
+ * registry for the length of its async run instead of threading one through
+ * every frame in between.
+ */
+const scopedFieldTypes = new AsyncLocalStorage<
+  ReadonlyMap<string, PluginFieldType>
+>();
+
+/** The live set, which registration and clearing always act on. */
+function liveStore(): Map<string, PluginFieldType> {
   if (!globalForFieldTypes.__nextly_fieldTypes) {
     globalForFieldTypes.__nextly_fieldTypes = new Map();
   }
   return globalForFieldTypes.__nextly_fieldTypes;
+}
+
+/** What a lookup resolves against: the operation's own set, else the live one. */
+function store(): ReadonlyMap<string, PluginFieldType> {
+  return scopedFieldTypes.getStore() ?? liveStore();
+}
+
+/**
+ * Run `operation` with `fieldTypes` as the registry every lookup inside it sees.
+ *
+ * Scoped rather than installed, so a reload replacing the live set midway
+ * through changes nothing for work already running, and the operation cannot
+ * leave a stale set behind for anyone else.
+ */
+export function runWithFieldTypes<T>(
+  fieldTypes: ReadonlyMap<string, PluginFieldType> | undefined,
+  operation: () => T
+): T {
+  if (!fieldTypes) return operation();
+  return scopedFieldTypes.run(fieldTypes, operation);
 }
 
 /** Register a custom field type. Throws on collision with a built-in or another plugin. */
@@ -38,7 +77,7 @@ export function registerFieldType(def: PluginFieldType): void {
       `NEXTLY_FIELD_TYPE_COLLISION: field type "${def.type}" is a built-in type and cannot be redefined.`
     );
   }
-  const map = store();
+  const map = liveStore();
   if (map.has(def.type)) {
     throw new Error(
       `NEXTLY_FIELD_TYPE_COLLISION: field type "${def.type}" is already registered by another plugin.`
@@ -103,7 +142,7 @@ export function allFieldTypes(): PluginFieldType[] {
 
 /** Drop all registered custom field types (per-boot reset / HMR / tests). */
 export function clearFieldTypes(): void {
-  store().clear();
+  liveStore().clear();
 }
 
 /**
@@ -116,7 +155,7 @@ export function clearFieldTypes(): void {
  * wrong until the next successful load.
  */
 export function snapshotFieldTypes(): ReadonlyMap<string, PluginFieldType> {
-  return new Map(store());
+  return new Map(liveStore());
 }
 
 /**
@@ -129,7 +168,7 @@ export function snapshotFieldTypes(): ReadonlyMap<string, PluginFieldType> {
 export function restoreFieldTypes(
   snapshot: ReadonlyMap<string, PluginFieldType>
 ): void {
-  const map = store();
+  const map = liveStore();
   map.clear();
   for (const [type, definition] of snapshot) {
     map.set(type, definition);

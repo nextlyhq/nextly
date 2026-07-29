@@ -40,6 +40,7 @@ import {
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { NextlyError, describeError } from "../../errors/index";
+import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -180,6 +181,16 @@ export interface LoadConfigResult {
    * materialize the extra columns onto the Builder tables without re-folding.
    */
   deferredExtends?: DeferredExtend[];
+
+  /**
+   * The plugin field types this config registered, captured at the end of its
+   * load.
+   *
+   * Work that outlives the load it started from — the `db:sync` watcher keeps
+   * syncing across a save — resolves against this rather than the live registry,
+   * which the next load clears and rebuilds.
+   */
+  fieldTypes?: ReadonlyMap<string, PluginFieldType>;
 }
 
 /**
@@ -281,6 +292,9 @@ async function loadConfigInternal(
       config: defineConfig({}),
       configPath: undefined,
       dependencies: [],
+      // Empty, matching the clear above: work pinned to this result must not
+      // resolve plugin types a later config happens to register.
+      fieldTypes: snapshotFieldTypes(),
     };
   }
 
@@ -460,6 +474,9 @@ async function loadConfigInternal(
       configPath,
       dependencies,
       deferredExtends,
+      // Captured after registration, so it holds exactly what this config
+      // contributed rather than whatever the live set becomes later.
+      fieldTypes: snapshotFieldTypes(),
     };
   } catch (error) {
     // The load owns the registry from the clear above until it returns, so
