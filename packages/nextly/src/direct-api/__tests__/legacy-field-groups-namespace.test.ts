@@ -19,6 +19,22 @@ describe("the pre-rename field groups namespace", () => {
     ).toThrowError(/'nextly\.components' is now 'nextly\.fieldGroups'/);
   });
 
+  // Built through the canonical factory, so the status comes from the shared
+  // code mapping rather than an inline number that could drift from it.
+  it("reports the canonical invalid-input code and status", () => {
+    const instance = new Nextly();
+    let caught: unknown;
+    try {
+      void (instance as unknown as { components: unknown }).components;
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as NextlyError).code).toBe("INVALID_INPUT");
+    expect((caught as NextlyError).statusCode).toBe(400);
+  });
+
   it("rejects facade access with the rename instruction", () => {
     expect(
       () => (nextly as unknown as { components: unknown }).components

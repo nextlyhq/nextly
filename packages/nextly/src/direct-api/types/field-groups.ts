@@ -286,23 +286,3 @@ export interface DeleteFieldGroupArgs extends DirectAPIConfig {
   /** Field group slug (required) */
   slug: string;
 }
-
-/**
- * Result of listing field group definitions.
- *
- * `ListResult<FieldGroupDefinition>` (`{ items, meta }`). This legacy
- * shape is retained only for transitional consumer code and is removed
- */
-export interface FieldGroupListResult {
-  /** Field group definitions */
-  docs: FieldGroupDefinition[];
-
-  /** Total count of matching field groups */
-  totalDocs: number;
-
-  /** Number of results returned */
-  limit: number;
-
-  /** Number of results skipped */
-  offset: number;
-}

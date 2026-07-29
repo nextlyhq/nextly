@@ -314,6 +314,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // Forms API namespace (Direct API style)
         forms: directAPI.forms,
 
+        // Field groups namespace (Direct API style)
+        fieldGroups: directAPI.fieldGroups,
+
         // Email & User Field namespaces
         emailProviders: directAPI.emailProviders,
         emailTemplates: directAPI.emailTemplates,
@@ -425,6 +428,7 @@ export async function getCachedNextly(): Promise<Nextly> {
       users: directAPI.users,
       media: directAPI.media,
       forms: directAPI.forms,
+      fieldGroups: directAPI.fieldGroups,
       emailProviders: directAPI.emailProviders,
       emailTemplates: directAPI.emailTemplates,
       userFields: directAPI.userFields,

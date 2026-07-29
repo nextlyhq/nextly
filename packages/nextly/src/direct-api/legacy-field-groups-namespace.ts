@@ -32,12 +32,10 @@ import { NextlyError } from "../errors/nextly-error";
 export function installLegacyFieldGroupsNamespaceGuard(target: object): void {
   Object.defineProperty(target, "components", {
     get(): never {
-      throw new NextlyError({
-        code: "INVALID_INPUT",
-        publicMessage:
+      throw NextlyError.invalidInput({
+        message:
           "'nextly.components' is now 'nextly.fieldGroups'. Rename the call: " +
           "the old namespace is no longer served.",
-        statusCode: 400,
         logContext: { reason: "legacy-field-groups-namespace" },
       });
     },

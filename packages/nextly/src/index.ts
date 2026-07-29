@@ -138,6 +138,18 @@ export type {
   DataFromFieldGroupSlug,
 } from "./direct-api/types";
 
+// Direct API types - the `nextly.fieldGroups.*` namespace. Exported from the
+// root because they are the argument and result types of a public namespace:
+// without them a caller cannot annotate a variable holding what it returns.
+export type {
+  FieldGroupDefinition,
+  FindFieldGroupsArgs,
+  FindFieldGroupBySlugArgs,
+  CreateFieldGroupArgs,
+  UpdateFieldGroupArgs,
+  DeleteFieldGroupArgs,
+} from "./direct-api/types";
+
 // Direct API types - core operation argument types
 export type {
   DirectAPIConfig,

@@ -111,7 +111,6 @@ export type {
   CreateFieldGroupArgs,
   UpdateFieldGroupArgs,
   DeleteFieldGroupArgs,
-  FieldGroupListResult,
 } from "./field-groups";
 
 export type {
