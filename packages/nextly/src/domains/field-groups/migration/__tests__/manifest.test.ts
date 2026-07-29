@@ -264,6 +264,25 @@ describe("field-group migration manifest", () => {
     ).not.toThrow();
   });
 
+  // A row naming a system table is malformed. It is left unrenamed, so its
+  // discriminator rename would be issued against the registry itself -- and the
+  // registry's own rename puts that name among the plan's sources, so nothing
+  // else flags the overlap.
+  it.each(["dynamic_components", "dynamic_field_groups"])(
+    "refuses a row whose table is the system registry (%s)",
+    table => {
+      try {
+        buildMigrationManifest([row({ slug: "x", tableName: table })]);
+        expect.fail("expected a refusal");
+      } catch (error) {
+        expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
+        expect((error as NextlyError).logContext?.reason).toMatch(
+          /names a system table/
+        );
+      }
+    }
+  );
+
   // Renaming a table away frees its name, so two rows swapping prefixes is not
   // a conflict.
   it("allows a target whose occupant is itself renamed away", () => {

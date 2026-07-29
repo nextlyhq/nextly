@@ -295,10 +295,12 @@ export async function beginMigration(
     manifestHash: args.plan.manifestHash,
     planHash: args.plan.planHash,
     // Carried from the settled marker rather than dropped: a rollback has no
-    // other source for the plan it is reversing.
+    // other source for the plan it is reversing. Validated through the same
+    // function the read uses, so a write cannot produce a marker its own reader
+    // refuses -- which would strand a run after its first step had committed.
     ...(args.appliedManifest === undefined
       ? {}
-      : { appliedManifest: [...args.appliedManifest] }),
+      : { appliedManifest: parseAppliedManifest(args.appliedManifest) }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
@@ -468,7 +470,7 @@ export async function settleMigration(
     // database, which cannot say which names this migration created.
     ...(appliedManifest === undefined
       ? {}
-      : { appliedManifest: [...appliedManifest] }),
+      : { appliedManifest: parseAppliedManifest(appliedManifest) }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }

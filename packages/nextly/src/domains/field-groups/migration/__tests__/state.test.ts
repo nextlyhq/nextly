@@ -238,6 +238,43 @@ describe("field-group migration marker", () => {
     });
   });
 
+  // The writer holds itself to the reader's rules. Writing a plan the next read
+  // refuses would strand a run after its first step had already committed.
+  it.each([
+    ["an empty source", { kind: "table" as const, from: "", to: "fg_a" }],
+    ["an empty target", { kind: "table" as const, from: "comp_a", to: "" }],
+    [
+      "a column with no table",
+      {
+        kind: "column" as const,
+        from: "_component_type",
+        to: "_field_group_type",
+      },
+    ],
+  ])("refuses to begin a rollback with %s in the plan", async (_l, entry) => {
+    const { meta, read } = createMeta();
+    await expect(
+      beginMigration(meta, {
+        direction: "down",
+        migrationId: "run-1",
+        plan: { manifestHash: "h", planHash: "p" },
+        appliedManifest: [entry],
+      })
+    ).rejects.toThrowError(NextlyError);
+    expect(read()).toBe(ABSENT);
+  });
+
+  it("refuses to settle with a plan its own reader would reject", async () => {
+    const { meta, read } = createMeta();
+    await expect(
+      settleMigration(meta, {
+        generation: "field-groups-v2",
+        appliedManifest: [{ kind: "table", from: "comp_a", to: "" }],
+      })
+    ).rejects.toThrowError(NextlyError);
+    expect(read()).toBe(ABSENT);
+  });
+
   // A column rename is addressed through its table, so an entry without one
   // cannot be executed or reversed.
   it("refuses a recorded column entry that names no table", async () => {
