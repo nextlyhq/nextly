@@ -5,6 +5,7 @@ import { getDialectTables } from "../../../../database/index";
 import {
   drizzleTableNames,
   filterUnsafeStatements,
+  stripKitDropsOfDeclaredIndexes,
 } from "../filter-unsafe-statements";
 
 afterEach(() => vi.restoreAllMocks());
@@ -74,5 +75,48 @@ describe("filterUnsafeStatements — internal nextly_ table allowlist", () => {
     const out = filterUnsafeStatements(['DROP TABLE "dc_orphan"'], []);
     expect(out).toEqual([]);
     expect(warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe("stripKitDropsOfDeclaredIndexes", () => {
+  const desired = {
+    tables: [
+      {
+        name: "dc_posts",
+        indexes: [
+          { name: "idx_dc_posts_slug" },
+          { name: "idx_dc_posts_created_at" },
+        ],
+      },
+      { name: "dc_pages" }, // snapshot without tracked indexes
+    ],
+  };
+
+  it("strips DROP INDEX for indexes the snapshot declares (any quoting)", () => {
+    const out = stripKitDropsOfDeclaredIndexes(
+      [
+        "DROP INDEX IF EXISTS `idx_dc_posts_slug`;",
+        'DROP INDEX "idx_dc_posts_created_at"',
+        'ALTER TABLE "dc_posts" ADD COLUMN "views" integer',
+      ],
+      desired
+    );
+    expect(out).toEqual(['ALTER TABLE "dc_posts" ADD COLUMN "views" integer']);
+  });
+
+  it("keeps DROP INDEX for indexes the snapshot does not declare", () => {
+    const out = stripKitDropsOfDeclaredIndexes(
+      ['DROP INDEX "custom_manual_index"'],
+      desired
+    );
+    expect(out).toEqual(['DROP INDEX "custom_manual_index"']);
+  });
+
+  it("passes everything through when the snapshot tracks no indexes", () => {
+    const stmts = ['DROP INDEX "idx_dc_posts_slug"'];
+    const out = stripKitDropsOfDeclaredIndexes(stmts, {
+      tables: [{ name: "dc_posts" }],
+    });
+    expect(out).toEqual(stmts);
   });
 });

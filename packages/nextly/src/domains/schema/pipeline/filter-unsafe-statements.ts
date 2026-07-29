@@ -192,6 +192,51 @@ export function filterUnsafeStatements(
 }
 
 /**
+ * Strip the kit's DROP INDEX emissions for indexes the desired snapshot
+ * DECLARES.
+ *
+ * The Drizzle tables handed to drizzle-kit declare no dynamic-table indexes
+ * (see index-restore.ts), so v1's differ reads every live secondary index on
+ * a declared table as undeclared and emits `DROP INDEX` for it — even on a
+ * no-op apply (probe-verified on the sqlite payload). The ownership-based
+ * drop-guard deliberately allows drops whose owner table is in the desired
+ * set, so these emissions would strip a managed table's tracked indexes with
+ * nothing putting them back (the restore step replays only rebuilt tables
+ * and standalone add_index ops). An index the snapshot tracks can only be
+ * dropped by Nextly's own diff (a drop_index op), never by the kit.
+ * Silent, like the companion-table drop block: the kit emits these on every
+ * apply, so a warning would be noise.
+ */
+export function stripKitDropsOfDeclaredIndexes(
+  statements: string[],
+  desired: NextlySnapshotLike
+): string[] {
+  const declared = new Set<string>();
+  for (const table of desired.tables) {
+    for (const index of table.indexes ?? []) {
+      declared.add(index.name.toLowerCase());
+    }
+  }
+  if (declared.size === 0) return statements;
+
+  return statements.filter(stmt => {
+    const m = stmt.match(
+      /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
+    );
+    if (!m) return true;
+    return !declared.has((m[1] ?? "").toLowerCase());
+  });
+}
+
+/** The snapshot slice {@link stripKitDropsOfDeclaredIndexes} reads. */
+interface NextlySnapshotLike {
+  tables: ReadonlyArray<{
+    name: string;
+    indexes?: ReadonlyArray<{ name: string }>;
+  }>;
+}
+
+/**
  * Statement patterns that name the table they act on directly. Used to decide
  * which table a statement belongs to when filtering by ownership.
  *

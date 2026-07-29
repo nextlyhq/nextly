@@ -55,6 +55,7 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
+  stripKitDropsOfDeclaredIndexes,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
@@ -807,9 +808,14 @@ export class PushSchemaPipeline {
           ? scopedSchema
           : drizzleSchema;
 
-      const kit: DrizzleKitLike = this.testHooks._kitOverride
-        ? this.testHooks._kitOverride
-        : await this.importDrizzleKit(dialect, databaseName);
+      // Deferred until the route decision needs it: importing eagerly made
+      // MySQL fail its databaseName precondition even for applies that never
+      // reach drizzle-kit (empty or purely-additive op sets on an adapter
+      // wired without a parseable DATABASE_URL).
+      const getKit = async (): Promise<DrizzleKitLike> =>
+        this.testHooks._kitOverride
+          ? this.testHooks._kitOverride
+          : this.importDrizzleKit(dialect, databaseName);
 
       const isSqlite = dialect === "sqlite";
 
@@ -959,6 +965,7 @@ export class PushSchemaPipeline {
             // `Internal error: resolver(...) without a HintsHandler` — the
             // catch below converts that into a journaled PushSchemaError
             // instead of the pre-v1 unanswerable TTY prompt.
+            const kit = await getKit();
             pushResult = await withCapturedStdout(
               () =>
                 kit.pushSchema(
@@ -976,7 +983,17 @@ export class PushSchemaPipeline {
               err
             );
           }
-          emittedStatements = pushResult.sqlStatements;
+          // The kit reads every live index on a declared table as
+          // undeclared (its runtime schemas carry none) and emits DROP
+          // INDEX for it even on a no-op. An index the desired snapshot
+          // TRACKS is only ever dropped by our own diff's drop_index op,
+          // so the kit's drops of tracked indexes are stripped here —
+          // otherwise a kit-path apply would shed the canonical indexes
+          // of every managed table it did not rebuild.
+          emittedStatements = stripKitDropsOfDeclaredIndexes(
+            pushResult.sqlStatements,
+            desiredSnapshot
+          );
         }
         // Safety net, v1 semantics (observed on all three dialects,
         // 2026-07): drizzle-kit now INCLUDES destructive statements in

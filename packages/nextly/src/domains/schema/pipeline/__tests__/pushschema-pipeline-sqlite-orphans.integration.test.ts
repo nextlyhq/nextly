@@ -205,5 +205,21 @@ describe("PushSchemaPipeline — SQLite applies with orphan live tables", () => 
     // Orphans still intact — the drop-guard filtered the kit's orphan drops.
     expect(tableExists(`dc_${P}_other_locales`)).toBe(true);
     expect(tableExists(`dc_${P}_ui_made`)).toBe(true);
+
+    // Tracked indexes survive the kit pass on BOTH tables. drizzle-kit reads
+    // every live index on a declared table as undeclared (its runtime
+    // schemas carry none) and emits DROP INDEX even for tables it did not
+    // change; the pipeline strips those for snapshot-tracked indexes and the
+    // rebuild-restore replays the rebuilt table's set.
+    const indexNames = (table: string) =>
+      (
+        sqlite
+          .prepare(
+            `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?`
+          )
+          .all(table) as Array<{ name: string }>
+      ).map(r => r.name);
+    expect(indexNames(`dc_${P}_posts`)).toContain(`idx_dc_${P}_posts_slug`);
+    expect(indexNames(`dc_${P}_reviews`)).toContain(`idx_dc_${P}_reviews_slug`);
   });
 });
