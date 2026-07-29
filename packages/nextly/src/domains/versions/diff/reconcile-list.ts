@@ -117,8 +117,10 @@ function reconcilePositionally(
   for (let index = 0; index < length; index += 1) {
     const beforeItem = index < before.length ? before[index] : undefined;
     const afterItem = index < after.length ? after[index] : undefined;
-    // A synthetic id keeps every item addressable when the real ids are unusable.
-    const id = readId(afterItem) ?? readId(beforeItem) ?? `$index:${index}`;
+    // We are in the positional fallback precisely because the real ids are
+    // unusable (missing or duplicated), so every emitted item gets a unique
+    // synthetic id rather than reusing a duplicate one.
+    const id = `$index:${index}`;
     if (beforeItem !== undefined && afterItem !== undefined) {
       matches.push({
         presence: "both",

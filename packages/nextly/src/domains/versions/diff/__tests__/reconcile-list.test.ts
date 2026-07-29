@@ -71,6 +71,20 @@ describe("reconcileById", () => {
     expect(result.items[2]).toMatchObject({ presence: "added", toIndex: 2 });
   });
 
+  it("gives duplicate-id positional items unique synthetic ids", () => {
+    const before = [{ id: "a" }, { id: "a" }];
+    const after = [{ id: "a" }, { id: "a" }];
+
+    const result = reconcileById(before, after);
+
+    expect(result.strategy).toBe("positional");
+    const ids = result.items.map(m => m.id);
+    // The real ids are unusable (that is why we fell back), so every item gets
+    // a distinct synthetic id rather than a reused duplicate.
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(["$index:0", "$index:1"]);
+  });
+
   it("degrades to positional matching when an id is missing", () => {
     const before = [{ heading: "x" }];
     const after = [{ heading: "y" }];

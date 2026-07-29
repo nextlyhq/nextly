@@ -49,6 +49,17 @@ describe("normalizeStoredValue", () => {
     expect(normalizeStoredValue(field, [row])).toEqual(row);
   });
 
+  it("normalizes an absent many-valued field to an empty array", () => {
+    // So an optional list omitted in one version and saved as [] in another
+    // compare equal instead of null-vs-array.
+    expect(normalizeStoredValue({ type: "chips" }, null)).toEqual([]);
+    expect(
+      normalizeStoredValue({ type: "text", hasMany: true }, undefined)
+    ).toEqual([]);
+    // A single-valued field is still null when absent.
+    expect(normalizeStoredValue({ type: "text" }, null)).toBeNull();
+  });
+
   it("coerces a numeric string to a number", () => {
     const field = { type: "number" };
     expect(normalizeStoredValue(field, "42")).toBe(42);

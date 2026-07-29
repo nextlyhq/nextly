@@ -562,6 +562,72 @@ describe("computeVersionDiff — round-3 hardening", () => {
   });
 });
 
+describe("computeVersionDiff — round-4 hardening", () => {
+  it("marks a single dynamic-zone type swap changed even if field values match", () => {
+    const hero = field({
+      name: "hero",
+      type: "component",
+      components: ["a", "b"],
+      componentSchemas: {
+        a: { fields: [field({ name: "label", type: "text" })] },
+        b: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { hero: { id: "1", _componentType: "a", label: "Go" } },
+      { hero: { id: "1", _componentType: "b", label: "Go" } },
+      [hero]
+    );
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.fields[0].status).toBe("changed");
+  });
+
+  it("diffs a type swap that reuses a field name at a different type per schema", () => {
+    const zone = field({
+      name: "block",
+      type: "component",
+      components: ["a", "b"],
+      repeatable: true,
+      componentSchemas: {
+        a: { fields: [field({ name: "content", type: "text" })] },
+        b: { fields: [field({ name: "content", type: "richText" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { block: [{ id: "1", _componentType: "a", content: "hello" }] },
+      { block: [{ id: "1", _componentType: "b", content: { rich: true } }] },
+      [zone]
+    );
+    const list = diff.fields[0];
+    if (list.kind === "list") {
+      const item = list.items[0];
+      expect(item.status).toBe("changed");
+      const content = item.fields.filter(n => n.name === "content");
+      // The old text field is removed and the new richText field added; the two
+      // definitions never collide.
+      expect(
+        content.some(n => n.type === "text" && n.status === "removed")
+      ).toBe(true);
+      expect(
+        content.some(n => n.type === "richText" && n.status === "added")
+      ).toBe(true);
+    }
+  });
+
+  it("reports changed for two different masked secrets in a text field", () => {
+    const hashA = "$2b$12$" + "a".repeat(53);
+    const hashB = "$2b$12$" + "b".repeat(53);
+    const diff = computeVersionDiff({ legacy: hashA }, { legacy: hashB }, [
+      field({ name: "legacy", type: "text" }),
+    ]);
+    const node = diff.fields[0];
+    expect(node.status).toBe("changed");
+    if (node.kind === "text") {
+      expect(node.segments.every(s => !s.text.includes("$2b$"))).toBe(true);
+    }
+  });
+});
+
 describe("computeVersionDiff — modifiedOnly", () => {
   it("drops unchanged nodes when asked", () => {
     const fields = [

@@ -82,11 +82,20 @@ function parseJson(value: string): unknown {
  * Returns `null` for an absent value so callers have a single empty case to
  * handle rather than distinguishing `undefined`, `null`, and `""`.
  */
+/** Many-valued fields hold an array; their empty state is `[]`, not `null`. */
+function isManyValued(field: NormalizableField): boolean {
+  return field.hasMany === true || field.type === "chips";
+}
+
 export function normalizeStoredValue(
   field: NormalizableField,
   raw: unknown
 ): unknown {
-  if (raw === undefined || raw === null) return null;
+  // A many-valued field that is absent in one version and stored as `[]` in
+  // another must compare equal, so absence normalizes to an empty array.
+  if (raw === undefined || raw === null) {
+    return isManyValued(field) ? [] : null;
+  }
 
   // An empty string means "absent" for every type except `json`, where it is a
   // legitimate stored primitive and must survive.

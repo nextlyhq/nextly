@@ -295,10 +295,14 @@ function statusFromPresence(
 function textNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
   const b = asText(maskSecret(before));
   const a = asText(maskSecret(after));
+  // Status is derived from the RAW text so two different masked secrets (a
+  // password field since retyped as text) are still reported as changed; the
+  // segments use the masked text for display.
+  const changed = asText(before) !== asText(after);
   const status = statusFromPresence(
     before === "" ? null : before,
     after === "" ? null : after,
-    b !== a
+    changed
   );
   return {
     ...meta,
@@ -400,22 +404,30 @@ function zoneFieldsForType(
 }
 
 /**
- * Fields from both schemas, deduped by name. Used when an item or single
- * dynamic zone changes component type, so a protected/nested field present in
- * EITHER the before or after schema is still recognised (not just the newer).
+ * Field diffs for a component whose type changed between versions. A genuine
+ * type change shows the OLD type's fields removed and the NEW type's fields
+ * added, each read with its own schema — so a field name reused with a
+ * different type across the two components is never mis-diffed, and a protected
+ * field on either side is still recognised. A discriminator that merely
+ * appeared or disappeared keeps the one known schema, since the underlying
+ * fields are unchanged (the caller marks the node changed regardless).
  */
-function unionFields(a: FieldConfig[], b: FieldConfig[]): FieldConfig[] {
-  const seen = new Set<string>();
-  const out: FieldConfig[] = [];
-  for (const field of [...a, ...b]) {
-    const name = (field as { name?: string }).name;
-    if (typeof name === "string" && name !== "") {
-      if (seen.has(name)) continue;
-      seen.add(name);
-    }
-    out.push(field);
+function componentSwapFields(
+  field: FieldConfig,
+  beforeType: string | undefined,
+  afterType: string | undefined,
+  beforeObj: Record<string, unknown>,
+  afterObj: Record<string, unknown>,
+  ctx: WalkContext
+): FieldDiff[] {
+  if (beforeType !== undefined && afterType !== undefined) {
+    return [
+      ...collectNodes(zoneFieldsForType(field, beforeType), beforeObj, {}, ctx),
+      ...collectNodes(zoneFieldsForType(field, afterType), {}, afterObj, ctx),
+    ];
   }
-  return out;
+  const type = afterType ?? beforeType;
+  return collectNodes(zoneFieldsForType(field, type), beforeObj, afterObj, ctx);
 }
 
 function itemDiff(
@@ -433,12 +445,7 @@ function itemDiff(
   // previously-untagged (older or imported) item counts too. Diff against BOTH
   // schemas so a protected field from either side is still recognised.
   const typeChanged = match.presence === "both" && beforeType !== afterType;
-  const childFields = typeChanged
-    ? unionFields(
-        itemChildFields(field, beforeType),
-        itemChildFields(field, afterType)
-      )
-    : itemChildFields(field, componentType);
+  const childFields = itemChildFields(field, componentType);
 
   if (match.presence === "added") {
     return {
@@ -464,8 +471,16 @@ function itemDiff(
           : [],
     };
   }
-  const fields =
-    childFields.length > 0
+  const fields = typeChanged
+    ? componentSwapFields(
+        field,
+        beforeType,
+        afterType,
+        match.beforeItem,
+        match.afterItem,
+        ctx
+      )
+    : childFields.length > 0
       ? collectNodes(childFields, match.beforeItem, match.afterItem, ctx)
       : [];
   const contentChanged =
@@ -556,23 +571,26 @@ function diffField(
     };
     // Non-repeatable component. A single-mode component keeps a fixed schema; a
     // dynamic zone whose stored type differs between versions — a discriminator
-    // that changed, appeared, or disappeared — is diffed over the union of both
-    // type schemas, so nested values are masked/omitted field-by-field rather
-    // than dumped as raw objects.
+    // that changed, appeared, or disappeared — is a change even when the shared
+    // field values match, and is diffed field-by-field per schema (never a raw
+    // object dump).
     if (Array.isArray(componentSlugs(field))) {
       const beforeType = componentTypeOf(asObject(before));
       const afterType = componentTypeOf(asObject(after));
       if (beforeType !== afterType) {
-        return groupNode(
-          meta,
-          unionFields(
-            zoneFieldsForType(field, beforeType),
-            zoneFieldsForType(field, afterType)
+        return {
+          ...meta,
+          kind: "group",
+          status: statusFromPresence(before, after, true),
+          fields: componentSwapFields(
+            field,
+            beforeType,
+            afterType,
+            asObject(before),
+            asObject(after),
+            componentCtx
           ),
-          before,
-          after,
-          componentCtx
-        );
+        };
       }
     }
     return groupNode(
