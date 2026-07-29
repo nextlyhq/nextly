@@ -28,8 +28,14 @@ import {
 let dir: string;
 let dbPath: string;
 let current: TestNextly | undefined;
+// The harness snapshots DB_DIALECT when IT creates an adapter. These tests build
+// their own first, so the snapshot captures the already-overwritten "sqlite" and
+// never puts the real dialect back — which, in a single-fork run, would make every
+// later file resolve environment-backed schema behaviour as SQLite.
+let previousDialect: string | undefined;
 
 beforeEach(() => {
+  previousDialect = process.env.DB_DIALECT;
   dir = mkdtempSync(join(tmpdir(), "nextly-single-window-"));
   dbPath = join(dir, "test.db");
 });
@@ -37,6 +43,8 @@ beforeEach(() => {
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  if (previousDialect === undefined) delete process.env.DB_DIALECT;
+  else process.env.DB_DIALECT = previousDialect;
   rmSync(dir, { recursive: true, force: true });
 });
 

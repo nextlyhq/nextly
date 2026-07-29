@@ -1200,6 +1200,17 @@ async function runReload(opts?: {
   // not surface as a schema diff — so run the idempotent metadata sync before
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
+  // Provision the `_locales` companion of every localized entity BEFORE anything
+  // touches the schema. Two orderings matter here and both are load-bearing:
+  //
+  //  - before the apply, because enabling localization asks the pipeline to DROP
+  //    the translatable columns from the main table, and the seed copies out of
+  //    those columns. Running afterwards would find them already gone.
+  //  - before the `!hasChanges` return, because that drop is classified unsafe and
+  //    deferred, which leaves `hasChanges` false — so the exact transition this
+  //    exists to support would return early and never provision anything.
+  await ensureLocalizedCompanionsForReload(adapter, newConfig);
+
   if (!hasChanges) {
     // Only sync when the schema is genuinely in step (every entity had a zero-op
     // diff). If a real schema change was deferred (unsafe/needs review) or a diff
@@ -1492,16 +1503,6 @@ async function runReload(opts?: {
       collections: collectionSynced && componentSynced,
       singles: singleSynced && componentSynced,
     });
-
-    // Physically provision the `_locales` companion of every localized entity
-    // before the runtime descriptors below register it. `next dev` routes config
-    // edits here rather than through the CLI watcher, so without this, turning on
-    // localization during ordinary HMR registered a companion the database did
-    // not have: the admin rendered the full localization UI, non-default writes
-    // were refused, and the main columns could still be dropped before anything
-    // had copied them across. Seeding is part of the same call, which is why it
-    // must run before the drop the schema apply may perform.
-    await ensureLocalizedCompanionsForReload(adapter, newConfig);
 
     // Pre-compute fresh Drizzle table objects for all affected collections,
     // singles, and components. Synchronous (schema generation, no DB I/O).

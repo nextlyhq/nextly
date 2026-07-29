@@ -411,6 +411,7 @@ export async function ensureCompanionTable(
       });
     }
     await seedCompanionFromMain(adapter, {
+      companionJustCreated: !alreadyExists,
       mainColumns,
       slug: args.slug,
       tableName: args.tableName,
@@ -476,6 +477,8 @@ async function seedCompanionFromMain(
     dialect: SupportedDialect;
     status: boolean;
     defaultLocale?: string;
+    /** True when the caller created this companion in the same call. */
+    companionJustCreated?: boolean;
   }
 ): Promise<void> {
   if (!args.defaultLocale || args.localizedFields.length === 0) return;
@@ -496,7 +499,18 @@ async function seedCompanionFromMain(
 
   // The transition test. See the note above: any per-locale content at all means
   // the main columns can no longer be safely declared to be the default language.
-  if (!(await companionIsEmpty(adapter, args))) return;
+  //
+  // Skipped when THIS call just created the companion, because then the transition
+  // is known rather than inferred and there is nothing to misread. It also has to
+  // be skipped: `db:sync` updates the registry before this runs, so a server that
+  // is already up can write a locale row the moment the CREATE commits, and one
+  // such row would otherwise cancel the backfill for every other document. The
+  // `onlyMissing` predicate protects that concurrent row on its own.
+  if (
+    args.companionJustCreated !== true &&
+    !(await companionIsEmpty(adapter, args))
+  )
+    return;
 
   const columnsOnMain = spec.columns
     .filter(column => args.mainColumns.has(column.name))
