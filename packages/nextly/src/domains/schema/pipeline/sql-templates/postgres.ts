@@ -91,11 +91,13 @@ function generateDropIndex(op: DropIndexOp): string {
   // idempotent drops in one DO block: dropping the constraint takes its index
   // with it and the following DROP INDEX no-ops, while for a bare index the
   // DROP CONSTRAINT no-ops and the DROP INDEX does the work.
+  // Emitted as two plain statements rather than a DO block: this SQL is also
+  // written verbatim into migrate:create files, and the migration runner's
+  // splitter understands quotes and semicolons but not dollar-quoting, so a
+  // DO block would be split into unterminated fragments.
   return (
-    `DO $$ BEGIN ` +
     `ALTER TABLE ${q(op.tableName)} DROP CONSTRAINT IF EXISTS ${q(op.index.name)}; ` +
-    `DROP INDEX IF EXISTS ${q(op.index.name)}; ` +
-    `END $$`
+    `DROP INDEX IF EXISTS ${q(op.index.name)}`
   );
 }
 

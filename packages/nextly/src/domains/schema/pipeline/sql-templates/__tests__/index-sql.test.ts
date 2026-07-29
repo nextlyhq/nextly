@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { splitSqlStatements } from "../../../../../cli/commands/migrate";
 import { generateMysqlSQL } from "../mysql";
 import { generatePgSQL } from "../postgres";
 import { generateSqliteSQL } from "../sqlite";
@@ -48,6 +49,24 @@ describe("postgres index SQL", () => {
   });
   it("keeps the plain form for a non-unique index (never constraint-owned)", () => {
     expect(generatePgSQL(dropPlain)).not.toContain("DROP CONSTRAINT");
+  });
+  it("survives the migration runner's statement splitter", () => {
+    // This SQL is written verbatim into migrate:create files, and the runner
+    // splits a file on semicolons outside quotes — it does not understand
+    // dollar-quoting, so a DO block here would be cut into unterminated
+    // fragments that fail at apply time. Both halves must come back whole.
+    const sql = generatePgSQL({
+      type: "drop_index",
+      tableName: "dc_x",
+      index: { name: "uq_dc_x_email", columns: ["email"], unique: true },
+    } as never);
+
+    const statements = splitSqlStatements(`${sql};`);
+
+    expect(statements).toEqual([
+      'ALTER TABLE "dc_x" DROP CONSTRAINT IF EXISTS "uq_dc_x_email"',
+      'DROP INDEX IF EXISTS "uq_dc_x_email"',
+    ]);
   });
   it("renders table indexes on add_table", () => {
     const sql = generatePgSQL({

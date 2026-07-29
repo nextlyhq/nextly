@@ -23,7 +23,9 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { makeTestContext } from "../../../../../database/__tests__/integration/helpers/test-db";
+import { buildDesiredTableFromFields } from "../../diff/build-from-fields";
 import type { Operation } from "../../diff/types";
+import { generatePgSQL } from "../../sql-templates/postgres";
 import { executePreResolutionOps } from "../executor";
 
 const ctx = makeTestContext("postgresql");
@@ -50,19 +52,32 @@ describe("pre-resolution drop_index — PostgreSQL constraint-backed uniques", (
 
   async function resetTable(): Promise<void> {
     await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
-    await pool.query(
-      `CREATE TABLE "${table}" ("id" text PRIMARY KEY, "email" text, "code" text, "views" integer)`
+
+    // Build the table through the same helpers the pipeline uses for a new
+    // table — field configs to a TableSpec, TableSpec to DDL — so the fixture
+    // cannot drift from the real shape. `views` carries `index: true`, which
+    // is what gives it the managed idx_ index.
+    const spec = buildDesiredTableFromFields(
+      table,
+      [
+        { name: "email", type: "text" },
+        { name: "code", type: "text" },
+        { name: "views", type: "number", index: true },
+      ] as never,
+      "postgresql"
     );
-    // Form 1: constraint-owned index (the schema services' Postgres path).
+    await pool.query(generatePgSQL({ type: "add_table", table: spec }));
+
+    // Only the two form-specific uniques are added by hand, because which
+    // physical form a unique takes is exactly what these cases distinguish.
+    // Form 1 — constraint-owned index: what the dynamic collection, component
+    // and user-ext schema services emit for a `unique: true` field on Postgres.
     await pool.query(
       `ALTER TABLE "${table}" ADD CONSTRAINT "uq_${table}_email" UNIQUE ("email")`
     );
-    // Form 2: bare unique index (the diff's add_index path).
+    // Form 2 — bare unique index: what the diff's own add_index path emits.
     await pool.query(
       `CREATE UNIQUE INDEX "uq_${table}_code" ON "${table}" ("code")`
-    );
-    await pool.query(
-      `CREATE INDEX "idx_${table}_views" ON "${table}" ("views")`
     );
   }
 
@@ -132,6 +147,9 @@ describe("pre-resolution drop_index — PostgreSQL constraint-backed uniques", (
 
   it("drops a plain non-unique index", async () => {
     await resetTable();
+    // Guard against a vacuous pass: DROP INDEX IF EXISTS also succeeds when
+    // the index was never there, so prove the builder actually created it.
+    expect(await indexNames()).toContain(`idx_${table}_views`);
 
     const ops: Operation[] = [
       {
