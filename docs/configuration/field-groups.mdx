@@ -1,20 +1,20 @@
 ---
-title: Components
+title: Field Groups
 description: Define reusable field groups that can be shared across collections and singles.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Components are reusable field-group templates. Define a set of fields once as a component, then embed it in any number of collections or singles. Each usage creates a separate data instance — components are schemas, not shared documents.
+Field groups are reusable field structures. Define a set of fields once as a field group, then embed it in any number of collections or singles. Each usage creates a separate data instance — field groups are schemas, not shared documents.
 
 > **Source of truth:** the `FieldGroupConfig` interface lives in `packages/nextly/src/components/config/types.ts`. The `defineFieldGroup()` helper is in `packages/nextly/src/components/config/define-field-group.ts`.
 
 Key characteristics:
 
-- **Templates, not documents** — components define a field structure; each embed creates its own data row.
-- **Own database table** — each component type gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
-- **Nesting** — a component's fields can include `component` fields referencing other components (max depth: 3 levels).
-- **Slug uniqueness** — component slugs must be unique across components, collections, **and** singles.
+- **Templates, not documents** — field groups define a field structure; each embed creates its own data row.
+- **Own database table** — each field group gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
+- **Nesting** — a field group's fields can include `component` fields referencing other field groups (max depth: 3 levels).
+- **Slug uniqueness** — field group slugs must be unique across field groups, collections, **and** singles.
 - **Dual creation** — define in code with `defineFieldGroup()` or visually in the Visual Schema Builder.
 
 <Tabs items={["Code-first", "Visual Schema Builder"]}>
@@ -22,7 +22,7 @@ Key characteristics:
 
 Use `defineFieldGroup()` from `nextly` to create components in TypeScript:
 
-```typescript title="src/components/seo.ts"
+```typescript title="src/field-groups/seo.ts"
 import {
   defineFieldGroup,
   text,
@@ -54,7 +54,7 @@ export default defineFieldGroup({
 </Tab>
 <Tab value="Visual Schema Builder">
 
-Components can also be created visually in the admin UI:
+Field groups can also be created visually in the admin UI:
 
 1. Navigate to **Components** in the sidebar.
 2. Click **Create Component**.
@@ -66,7 +66,7 @@ Builder-created components work identically to code-defined ones; both produce t
 </Tab>
 </Tabs>
 
-## Component options
+## Field group options
 
 Only `slug` and `fields` are required.
 
@@ -85,11 +85,11 @@ Only `slug` and `fields` are required.
 
 > **Components do not have hooks or access control of their own.** They inherit hook execution and access checks from the collection or single they're embedded in.
 
-## Using components in collections and singles
+## Using field groups in collections and singles
 
-Once defined, embed a component in any collection or single using the `component` field helper. There are three usage modes.
+Once defined, embed a field group in any collection or single using the `component` field helper. There are three usage modes.
 
-### Single component (fixed type)
+### Single field group (fixed type)
 
 Embed exactly one instance of a specific component type:
 
@@ -106,7 +106,7 @@ export default defineCollection({
 });
 ```
 
-### Dynamic zone (multiple component types)
+### Dynamic zone (multiple field group types)
 
 Let editors choose from several component types — ideal for flexible page builders:
 
@@ -126,7 +126,7 @@ export default defineCollection({
 });
 ```
 
-### Repeatable single component
+### Repeatable single field group
 
 An array of the same component type — for example, a list of feature cards:
 
@@ -150,9 +150,9 @@ export default defineCollection({
 
 The `component` field's full option reference lives in [Fields → Component](/docs/configuration/fields#component).
 
-## Example: hero section component
+## Example: hero section field group
 
-```typescript title="src/components/hero.ts"
+```typescript title="src/field-groups/hero.ts"
 import {
   defineFieldGroup,
   text,
@@ -189,11 +189,11 @@ export default defineFieldGroup({
 });
 ```
 
-## Component nesting
+## Field group nesting
 
-Components can embed other components using the `component` field type, up to **3 levels deep**. `defineConfig()` rejects circular references and configurations that exceed the depth limit at startup.
+Field groups can embed other field groups using the `component` field type, up to **3 levels deep**. `defineConfig()` rejects circular references and configurations that exceed the depth limit at startup.
 
-```typescript title="src/components/faq-item.ts"
+```typescript title="src/field-groups/faq-item.ts"
 import { defineFieldGroup, text, fieldGroup } from "nextly";
 
 export default defineFieldGroup({

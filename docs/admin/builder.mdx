@@ -63,7 +63,7 @@ For the full per-type option reference, see [Fields](/docs/configuration/fields)
 
 Repeater, Group, and Component fields can themselves contain fields. Nesting is capped at 4 levels deep — `MAX_NESTING_DEPTH = 4` in `packages/admin/src/components/features/schema-builder/types.ts`. Each level renders with a progressively darker background to make the hierarchy visible.
 
-A Component field embeds a reusable component definition (created via the Components Builder or `defineFieldGroup()`). It can target a single component or a list of allowed components, and can be marked repeatable to act as an inline content zone.
+A Component field embeds a reusable field group definition (created via the Field Groups Builder or `defineFieldGroup()`). It can target a single field group or a list of allowed field groups, and can be marked repeatable to act as an inline content zone.
 
 ## Walkthrough: create a Blog Posts collection
 
@@ -119,5 +119,5 @@ You can mix both — define core collections in code and let editors prototype n
 - [Branding](/docs/admin/branding) — control Builder visibility with `showBuilder`
 - [Collections](/docs/configuration/collections) — code-first collection definitions
 - [Singles](/docs/configuration/singles) — code-first Single definitions
-- [Components](/docs/configuration/components) — reusable field groups
+- [Field Groups](/docs/configuration/field-groups) — reusable field groups
 - [Fields](/docs/configuration/fields) — per-type option reference and validation

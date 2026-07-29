@@ -26,9 +26,11 @@ import { defineConfig } from "nextly/config";
 import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
+import { Seo } from "./src/field-groups/seo";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
+import { SiteSettings } from "./src/singles/site-settings";
 
 // Set by e2e/playwright.config.ts for the suite's own server. Compared to
 // "1" rather than checked for presence so an empty value reads as off.
@@ -72,7 +74,8 @@ export default defineConfig({
     fallback: true,
   },
   collections: [Posts, Categories, Tags],
-  singles: [Homepage, LandingPage],
+  singles: [Homepage, LandingPage, SiteSettings],
+  fieldGroups: [Seo],
   // Dev-harness plugins: page builder, form builder, and the styling fixture
   // (exercises the plugin admin-styling layers for e2e).
   plugins: [pageBuilder(), formBuilderPlugin, styleFixturePlugin],
