@@ -280,12 +280,31 @@ collections are retained and their fields still have to map to a column and
 render, but `validate` and `validateOptions` are both dropped at registration —
 they are behavior, and a disabled plugin contributes none.
 
-**Naming your options.** An option key must not collide with one the field
-schema already declares — `options`, `fields`, `admin`, `label` and the rest of
+**Where your options live.** An option written directly on the field is read as
+written, and that is the ergonomic choice while its name differs from every key
+the field schema declares — `options`, `fields`, `admin`, `label` and the rest of
 the built-in field surface. The manifest applies the built-in shape to every
-field whatever its type, so a colliding key is judged against the core meaning
-(`options` as a select's choice array) and rejected before your check runs.
-Namespace anything that might clash, e.g. `policy` rather than `options`.
+field whatever its type, so a name that does collide is judged against the core
+meaning (`options` as a select's choice array) and rejected before your check
+runs.
+
+For a name core already uses, or to be safe against names core may add later,
+put the option in the `pluginOptions` container. Core never looks inside it, so
+any name is legal there:
+
+```json
+{
+  "name": "rating",
+  "type": "star-rating",
+  "pluginOptions": { "options": { "presets": ["a", "b"] } }
+}
+```
+
+Both are read, and your type is handed **one flat view** either way, so
+`field.options` above resolves to your object without your having to know where
+it was stored. The container wins when the same name appears in both. Writes
+from the Schema Builder go to the container, so a field stored the older way
+moves there the next time it is saved; nothing you read changes when it does.
 
 Fields nested in a `repeater` or `group` are covered. A type offered only on the
 `users`, `forms`, or `blocks` surface is **not**: those surfaces have their own

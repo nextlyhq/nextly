@@ -408,6 +408,18 @@ function collectUnmodelledOptions(
     if (value === undefined) continue;
     carried[key] = value;
   }
+
+  // The container's entries win over any of the same name sitting directly on
+  // the field: a type that moved an option into the container did so to escape
+  // the meaning the surrounding schema gives that name.
+  const container = (field as { pluginOptions?: unknown }).pluginOptions;
+  if (container !== null && typeof container === "object") {
+    for (const [key, value] of Object.entries(container)) {
+      if (value === undefined) continue;
+      carried[key] = value;
+    }
+  }
+
   return Object.keys(carried).length > 0 ? carried : undefined;
 }
 
@@ -423,15 +435,17 @@ export function applyCarriedOptions(
   carried: Record<string, unknown> | undefined
 ): void {
   if (!carried) return;
-  for (const [key, value] of Object.entries(carried)) {
-    if (Object.prototype.hasOwnProperty.call(target, key)) continue;
-    Object.defineProperty(target, key, {
-      value,
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
-  }
+  // Written into the container rather than onto the field. Directly on the
+  // field an option is legal only while its name differs from every key the
+  // field schema declares, and the writer cannot know which names a future
+  // core version will add. Both locations are still read, so a field stored
+  // the old way keeps working until something saves it.
+  Object.defineProperty(target, "pluginOptions", {
+    value: { ...carried },
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 /**

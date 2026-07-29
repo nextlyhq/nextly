@@ -155,6 +155,12 @@ export type FieldNode = {
   // the canonical tokens.
   type: (typeof UI_FIELD_TYPES)[number] | (string & {});
   label?: string;
+  /**
+   * Options belonging to the field's own plugin type, which core never reads.
+   * Declared so the parsed result carries it statically; a name used here is
+   * free of the keys around it, which is the reason the container exists.
+   */
+  pluginOptions?: Record<string, unknown>;
   required?: boolean;
   unique?: boolean;
   index?: boolean;
@@ -226,6 +232,12 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // unregistered type falls back to a text column.
       type: z.union([z.enum(UI_FIELD_TYPES), z.string().regex(SLUG_RE)]),
       label: z.string().optional(),
+      // Options belonging to the field's own plugin type. Held in a container
+      // because the shape above is applied to every field whatever its type,
+      // so an option sharing a name with one of these keys would be judged as
+      // that key instead. Core never looks inside, which is what lets any name
+      // be used here — including the ones declared alongside it.
+      pluginOptions: z.record(z.string(), z.unknown()).optional(),
       required: z.boolean().optional(),
       unique: z.boolean().optional(),
       index: z.boolean().optional(),
