@@ -65,6 +65,7 @@ import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   isBlank,
+  companionRowExists,
   populateCompanionFields,
   readCompanionLocaleStatus,
 } from "../../i18n/companion-join";
@@ -1124,6 +1125,12 @@ export class SingleMutationService extends BaseService {
             // `previous`/`data` diff symmetrically.
             const previousCompanionValues: Record<string, unknown> = {};
             let previousCompanionStatus: string | null = null;
+            // Whether a companion row already exists for the write locale. A row
+            // can exist with every translatable value blank/null, which the value
+            // read above cannot distinguish from a missing row — so the snapshot
+            // locale gate below uses this, not value non-nullness, to decide the
+            // locale is the snapshot's own.
+            let previousCompanionRowExists = false;
             // `companionPhysicallyExists` was probed off the transaction above;
             // skip the in-transaction companion reads when the table is absent.
             if (
@@ -1163,6 +1170,19 @@ export class SingleMutationService extends BaseService {
                 previousCompanionStatus = await readCompanionLocaleStatus(
                   tx.getDrizzle<
                     Parameters<typeof readCompanionLocaleStatus>[0]
+                  >(),
+                  companion.table,
+                  existingDoc.id,
+                  writeLocale
+                );
+                // A status-bearing companion row always carries a non-null
+                // `_status`, so its presence already answers row existence — no
+                // extra query.
+                previousCompanionRowExists = previousCompanionStatus !== null;
+              } else {
+                previousCompanionRowExists = await companionRowExists(
+                  tx.getDrizzle<
+                    Parameters<typeof companionRowExists>[0]
                   >(),
                   companion.table,
                   existingDoc.id,
@@ -1819,14 +1839,19 @@ export class SingleMutationService extends BaseService {
 
               // Whether this snapshot holds locale-specific state and is therefore
               // tagged with `snapshotLocale`. Includes `overlaidPriorTranslations`
-              // (a shared-field write that folded in an existing translation), so
-              // the status handling below stays in lockstep with the locale tag.
+              // (a shared-field write that folded in a non-null translation) and
+              // `previousCompanionRowExists` (the locale has a companion row even
+              // if every translated value is currently blank) — so a shared-field
+              // write at an already-translated locale is tagged and a restore
+              // resets its fields, rather than the null-locale snapshot dropping
+              // them. The status handling below stays in lockstep with the tag.
               const isLocaleSpecificSnapshot =
                 Object.keys(companionData).length > 0 ||
                 companionStatus !== undefined ||
                 capturedLocalizedComponents ||
                 seededDefaultsOverlaid ||
-                overlaidPriorTranslations;
+                overlaidPriorTranslations ||
+                previousCompanionRowExists;
               // For a locale-specific snapshot of a status-bearing Single, the
               // status is the WRITE LOCALE's own (`dataLocaleStatus`), not the
               // main row's. A snapshot tagged a draft non-default locale that

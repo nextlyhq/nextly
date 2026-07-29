@@ -296,6 +296,50 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(enPublished.some(e => e.previous?.status === "draft")).toBe(true);
   });
 
+  it("does not emit a publish event for a locale removed from configuration", async () => {
+    // A locale dropped from configuration can leave stale companion rows behind.
+    // A later publish-all must not emit an `entry.published` tagged with that
+    // unconfigured locale, which normal reads and writes would reject.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Manufacture a stale companion row for `fr`, which is NOT in the configured
+    // locales (en, de) — as if `fr` had been removed after being translated.
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+      dialect: string;
+    };
+    const q = (idn: string) =>
+      adapter.dialect === "mysql" ? `\`${idn}\`` : `"${idn}"`;
+    await adapter.executeQuery(
+      `INSERT INTO ${q("dc_pages_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'fr', 'draft', 'Bonjour')`
+    );
+
+    const entries = h.getEntryService() as CollectionEntryService;
+    const result = await entries.publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const publishedLocales = rows
+      .filter(r => r.type === "entry.published")
+      .map(r => (envelopeOf(r).resource as { locale?: string }).locale);
+    // No event carries the unconfigured `fr` locale...
+    expect(publishedLocales).not.toContain("fr");
+    // ...while the configured English one is still emitted.
+    expect(publishedLocales).toContain("en");
+  });
+
   it("reports a brand-new translation as the draft it was written as", async () => {
     // Translating into a locale for the first time creates the companion row,
     // so `_status` lands on the column default. Reporting the main row's status

@@ -2845,16 +2845,32 @@ export class CollectionMutationService extends BaseService {
           // flip below, so a real draft->published transition can be told from a
           // locale that was already live. Read under the lock and inside the
           // retry so it reflects the state this publish actually overwrites.
-          const priorCompanionStatuses =
-            companion && companionPublishable
-              ? await readCompanionLocaleStatusAll(
-                  tx.getDrizzle<
-                    Parameters<typeof readCompanionLocaleStatusAll>[0]
-                  >(),
-                  companion.table,
-                  params.entryId
-                )
-              : new Map<string, string | null>();
+          let priorCompanionStatuses: Map<string, string | null>;
+          try {
+            priorCompanionStatuses =
+              companion && companionPublishable
+                ? await readCompanionLocaleStatusAll(
+                    tx.getDrizzle<
+                      Parameters<typeof readCompanionLocaleStatusAll>[0]
+                    >(),
+                    companion.table,
+                    params.entryId
+                  )
+                : new Map<string, string | null>();
+          } catch (err) {
+            // The helper already tolerates a missing companion table; any error
+            // here is a real database failure. Normalize it to the canonical
+            // internal error so the raw driver message (which can carry schema
+            // or connection details) does not reach the API caller through the
+            // service's failure result.
+            throw NextlyError.internal({
+              cause: err instanceof Error ? err : undefined,
+              logContext: {
+                reason: "publish-all-companion-status-scan",
+                collection: params.collectionName,
+              },
+            });
+          }
 
           if (hasMainStatus) {
             await tx.execute(
@@ -3030,17 +3046,27 @@ export class CollectionMutationService extends BaseService {
           // event, with the locale's own prior `_status` as the transition
           // `from`. The default locale is included: its companion event replaces
           // the untagged main event suppressed above.
+          // Only locales the app still configures get an event: a locale
+          // removed from configuration can leave stale companion rows behind,
+          // and a publish event tagged with a locale that normal reads/writes
+          // reject would mislead locale-routed consumers.
+          const configuredLocales = new Set(
+            this.localization?.locales.map(l => l.code) ?? []
+          );
           for (const [
             locale,
             priorLocaleStatus,
           ] of priorCompanionStatuses) {
+            if (configuredLocales.size > 0 && !configuredLocales.has(locale))
+              continue;
             if (priorLocaleStatus === "published") continue;
             // Build this locale's own before/after documents. Publishing changes
-            // only status, so the locale's translatable values are identical on
-            // both sides — overlay them onto the main-row event shape so a
-            // `locale`-tagged event carries that language's content and its own
-            // prior status, not the main row's. Read on the transaction
-            // (read-your-writes).
+            // only status, so the locale's translatable values AND its component
+            // subtrees are identical on both sides — read them at this locale and
+            // assemble them onto the main-row event shape so a `locale`-tagged
+            // event carries that language's full content (fields and localized
+            // components) and its own prior status, matching the ordinary
+            // localized update path. Read on the transaction (read-your-writes).
             const localeValues = this.deserializeJsonFieldsForSnapshot(
               await this.readCompanionLocalizedValues(
                 tx,
@@ -3054,24 +3080,45 @@ export class CollectionMutationService extends BaseService {
               ),
               fields
             );
-            const localeData = {
+            const { components: localeComponents, manyToMany: localeM2M } =
+              await this.buildFullSnapshotRelations(
+                tx,
+                params.entryId,
+                params.collectionName,
+                tableName,
+                fields,
+                manyToManyFields,
+                locale
+              );
+            // Strip parent-level password fields before assembling: a localized
+            // group/repeater can carry a nested password hash the overlay
+            // reintroduces after `publishedDocument` was already redacted. The
+            // durable outbox re-strips while building its envelope, but the
+            // in-process `transitionStatus` replay receives this document
+            // unchanged, so strip here to protect both paths. Component subtrees
+            // are already password-stripped by the snapshot read.
+            const localeDataParent = {
               ...publishedDocument,
               ...localeValues,
               status: "published",
             };
-            const localePrevious = {
+            stripPasswordFieldValues(localeDataParent, fields);
+            const localePrevParent = {
               ...previousDocument,
               ...localeValues,
               status: priorLocaleStatus,
             };
-            // Re-strip password fields from the merged documents: a localized
-            // group/repeater can carry a nested password hash that the overlay
-            // reintroduces after `publishedDocument` was already redacted. The
-            // durable outbox re-strips while building its envelope, but the
-            // in-process `transitionStatus` replay below receives `localeData`
-            // unchanged, so strip here to protect both paths.
-            stripPasswordFieldValues(localeData, fields);
-            stripPasswordFieldValues(localePrevious, fields);
+            stripPasswordFieldValues(localePrevParent, fields);
+            const localeData = assembleDocument({
+              parentRow: localeDataParent,
+              components: localeComponents,
+              manyToMany: localeM2M,
+            });
+            const localePrevious = assembleDocument({
+              parentRow: localePrevParent,
+              components: localeComponents,
+              manyToMany: localeM2M,
+            });
             const localeRecorded = await this.recordStatusEvents(tx, {
               collection: params.collectionName,
               id: params.entryId,

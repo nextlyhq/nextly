@@ -195,7 +195,9 @@ export async function populateCompanionFields(
 
 /** A Drizzle-select surface that also supports `.limit()` for a single-row read. */
 interface LimitableDb {
-  select: () => {
+  // An optional column projection narrows the SELECT; a bare call selects every
+  // column of the table object.
+  select: (projection?: Record<string, unknown>) => {
     from: (table: unknown) => {
       where: (cond: unknown) => {
         limit: (n: number) => Promise<Record<string, unknown>[]>;
@@ -244,6 +246,41 @@ export async function readCompanionLocaleStatus(
     if (isMissingCompanionTableError(err)) {
       return null;
     }
+    throw err;
+  }
+}
+
+/**
+ * Whether a companion `_locales` row exists for `(parentId, locale)`.
+ *
+ * Distinct from {@link readCompanionLocaleStatus}: a row can exist while every
+ * translatable value is blank/null, which a value read cannot tell apart from a
+ * missing row. Callers deciding whether a snapshot is locale-specific need the
+ * row's existence, not its contents. Projects only `_parent` so unrelated
+ * companion drift cannot fail the probe, and tolerates a missing companion table
+ * (no row) the same way the readers above do.
+ */
+export async function companionRowExists(
+  db: LimitableDb,
+  companionTable: unknown,
+  parentId: string | number,
+  locale: string
+): Promise<boolean> {
+  const table = companionTable as CompanionTable;
+  try {
+    const rows = await db
+      .select({ parent: table._parent })
+      .from(companionTable)
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale)
+        )
+      )
+      .limit(1);
+    return rows.length > 0;
+  } catch (err) {
+    if (isMissingCompanionTableError(err)) return false;
     throw err;
   }
 }
