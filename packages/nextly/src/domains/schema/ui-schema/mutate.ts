@@ -15,6 +15,9 @@ import {
   parseUiSchema,
   type UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
+import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
+
+import { restorePluginFieldOptions } from "./preserve-plugin-options";
 
 export type ManifestKind = "collections" | "singles" | "components";
 
@@ -75,5 +78,36 @@ export function mutateManifest(
       publicMessage: `ui-schema change rejected: ${issues}`,
     });
   }
-  return result.data;
+  // The parse strips every key the manifest schema does not declare, and a
+  // plugin field type's own options are exactly those. The database keeps them
+  // (the field-payload writer persists what it was given), so returning the
+  // parsed copy verbatim would commit a manifest describing a different field
+  // from the one stored — and a deployment sourced from it would rebuild the
+  // field without its options.
+  const next = restorePluginFieldOptions(result.data, draft);
+
+  // The upserted entity's own field types get to judge their declarations
+  // before this reaches the file. `dev-schema-handler` writes whatever comes
+  // back, so without this a declaration its plugin rejects lands in
+  // `ui-schema.json` and is refused later — by HMR, or by the next boot, at a
+  // point that no longer names the request that wrote it.
+  //
+  // Only the upserted entity: a manifest may already hold an entity some
+  // plugin now rejects, and blocking an unrelated edit until that is cleaned
+  // up would make one bad entity freeze the whole Builder.
+  if (mutation.type === "upsert") {
+    const upserted = next[mutation.kind].find(
+      e => slugOf(e) === slugOf(mutation.entity)
+    );
+    if (upserted) {
+      const kind = mutation.kind;
+      assertPluginFieldDeclarations({
+        collections: kind === "collections" ? [upserted] : [],
+        singles: kind === "singles" ? [upserted] : [],
+        fieldGroups: kind === "components" ? [upserted] : [],
+      });
+    }
+  }
+
+  return next;
 }

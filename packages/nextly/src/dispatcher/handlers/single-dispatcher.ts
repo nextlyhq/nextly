@@ -19,7 +19,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -570,6 +573,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
+
+      // This create path persists and runs DDL without the schema
+      // preview/apply handlers. It keeps its own field rules, but nothing here
+      // can judge a plugin type's own options, so an unsatisfiable declaration
+      // would be stored and then fail on every write to the single.
+      assertValidPluginFieldOptions(b.fields);
 
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry

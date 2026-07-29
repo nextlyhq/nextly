@@ -338,7 +338,100 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
     if (Object.keys(admin).length > 0) definition.admin = admin;
   }
 
+  // Last, so a carried option can never displace a property the builder owns.
+  applyCarriedOptions(definition, field.pluginOptions);
+
   return definition;
+}
+
+/**
+ * Every property the builder rebuilds from its own state.
+ *
+ * Anything else on a stored field was put there by whoever declared its type.
+ * A plugin-contributed field type names its own options, so they cannot be
+ * enumerated here; they are carried verbatim instead. Rebuilding a field from
+ * the modelled keys alone drops them, and since a save replaces the whole
+ * entity, editing an unrelated setting would erase options the field's own
+ * type requires.
+ */
+const BUILDER_MODELLED_FIELD_KEYS: ReadonlySet<string> = new Set([
+  "id",
+  "isSystem",
+  "name",
+  "label",
+  "type",
+  "source",
+  "owner",
+  "locked",
+  "description",
+  "defaultValue",
+  "required",
+  "unique",
+  "index",
+  "localized",
+  "hasMany",
+  "validation",
+  "advanced",
+  "admin",
+  "options",
+  "fields",
+  "relationTo",
+  "maxDepth",
+  "allowCreate",
+  "allowEdit",
+  "isSortable",
+  "relationshipFilter",
+  "mimeTypes",
+  "maxFileSize",
+  "labels",
+  "initCollapsed",
+  "rowLabelField",
+  "component",
+  "components",
+  "repeatable",
+  "blocks",
+  "pluginOptions",
+]);
+
+/**
+ * Gather the properties the builder does not model into one bag.
+ *
+ * Reads own enumerable keys only, so an option named after an
+ * `Object.prototype` member is neither invented nor missed.
+ */
+function collectUnmodelledOptions(
+  field: object
+): Record<string, unknown> | undefined {
+  const carried: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(field)) {
+    if (BUILDER_MODELLED_FIELD_KEYS.has(key)) continue;
+    if (value === undefined) continue;
+    carried[key] = value;
+  }
+  return Object.keys(carried).length > 0 ? carried : undefined;
+}
+
+/**
+ * Write carried options back onto a rebuilt field.
+ *
+ * Defined rather than assigned, and never over a key the target already owns,
+ * so a carried option cannot reach an inherited setter or overwrite a property
+ * the builder just produced.
+ */
+export function applyCarriedOptions(
+  target: object,
+  carried: Record<string, unknown> | undefined
+): void {
+  if (!carried) return;
+  for (const [key, value] of Object.entries(carried)) {
+    if (Object.prototype.hasOwnProperty.call(target, key)) continue;
+    Object.defineProperty(target, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
 }
 
 /**
@@ -407,6 +500,8 @@ export function convertToBuilderField(
     // A blocks field's policy. Loading it is what makes writing it back
     // meaningful: without this the outbound branch always sees undefined.
     blocks: field.blocks,
+    // Options belonging to the field's own type, kept as declared.
+    pluginOptions: collectUnmodelledOptions(field),
   };
 
   // Nested fields

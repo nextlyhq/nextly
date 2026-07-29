@@ -42,8 +42,12 @@ import {
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
+import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
+import type { SingleConfig } from "../../singles/config/types";
+import { assertValidSingleConfig } from "../../singles/config/validate-single";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -237,7 +241,26 @@ export async function runBuild(
   result.collectionCount = collectionCount;
   logger.keyValue("Collections", collectionCount);
 
+  // Singles and field groups answer to the same declaration rules as collections,
+  // and a project can be made entirely of them. Validated before the
+  // no-collections return below, which would otherwise let an invalid
+  // declaration past the only check that would have caught it.
+  const entityValidation = validateSinglesAndFieldGroups(
+    configResult.config.singles ?? [],
+    configResult.config.fieldGroups ?? [],
+    context
+  );
+  result.errors.push(...entityValidation.errors);
+
   if (collectionCount === 0) {
+    if (entityValidation.errors.length > 0) {
+      reportDeclarationErrors(entityValidation.errors, context);
+      result.success = false;
+      result.durationMs = Date.now() - startTime;
+      logger.error(`Build failed in ${formatDuration(result.durationMs)}`);
+      logger.info("Fix the errors above and run `nextly build` again.");
+      process.exit(1);
+    }
     logger.warn("No collections defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
     return;
@@ -255,17 +278,17 @@ export async function runBuild(
   result.errors.push(...validationResult.errors);
   result.warnings.push(...validationResult.warnings);
 
-  if (validationResult.errors.length > 0) {
+  // Reported together: a build is valid only if every entity is, and a single
+  // or component error that did not fail the build would be a report the
+  // command prints and then ignores.
+  const declarationErrors = [
+    ...validationResult.errors,
+    ...entityValidation.errors,
+  ];
+
+  if (declarationErrors.length > 0) {
     result.success = false;
-    logger.error(
-      `Validation failed with ${formatCount(validationResult.errors.length, "error")}`
-    );
-    for (const error of validationResult.errors) {
-      const location = error.field
-        ? `${error.collection}.${error.field}`
-        : error.collection;
-      logger.item(`${location}: ${error.message}`, 1);
-    }
+    reportDeclarationErrors(declarationErrors, context);
   } else {
     logger.success(
       `Validated ${formatCount(collectionCount, "collection")} successfully`
@@ -467,6 +490,63 @@ function validateAllCollections(
   warnings.push(...relationshipValidation.warnings);
 
   return { errors, warnings };
+}
+
+/** Print declaration errors, naming the entity and field each belongs to. */
+function reportDeclarationErrors(
+  errors: BuildError[],
+  context: CommandContext
+): void {
+  const { logger } = context;
+  logger.error(`Validation failed with ${formatCount(errors.length, "error")}`);
+  for (const error of errors) {
+    const location = error.field
+      ? `${error.collection}.${error.field}`
+      : error.collection;
+    logger.item(`${location}: ${error.message}`, 1);
+  }
+}
+
+/**
+ * Run the comprehensive config validators over singles and field groups.
+ *
+ * Collections were already covered here; singles and field groups were not, so a
+ * declaration they alone carry — including one a plugin field type's own rules
+ * reject — reported success from `nextly build` and surfaced later at runtime.
+ * This is the one place the check is reliable, because the CLI registers plugin
+ * field types while loading the config, so the registry is populated by the
+ * time these run.
+ */
+function validateSinglesAndFieldGroups(
+  singles: SingleConfig[],
+  fieldGroups: FieldGroupConfig[],
+  context: CommandContext
+): { errors: BuildError[] } {
+  const { logger } = context;
+  const errors: BuildError[] = [];
+
+  for (const single of singles) {
+    logger.debug(`Validating single: ${single.slug}`);
+    try {
+      assertValidSingleConfig(single);
+    } catch (error) {
+      errors.push({ collection: single.slug, message: describeError(error) });
+    }
+  }
+
+  for (const fieldGroup of fieldGroups) {
+    logger.debug(`Validating field group: ${fieldGroup.slug}`);
+    try {
+      assertValidFieldGroupConfig(fieldGroup);
+    } catch (error) {
+      errors.push({
+        collection: fieldGroup.slug,
+        message: describeError(error),
+      });
+    }
+  }
+
+  return { errors };
 }
 
 /**

@@ -76,6 +76,7 @@ import {
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { createContext, type CommandContext } from "../program";
 import {
   getDialectDisplayName,
@@ -272,6 +273,48 @@ export async function runMigrateCreate(
     );
   }
   const { collections, singles, components } = merged;
+
+  // Checked on the FULL field objects, not the minimal projection below: that
+  // keeps only what DDL needs (name, type, required) and drops the very options
+  // a plugin type's rules read, so validating it would accept an invalid option
+  // because it looks absent, or reject a valid field whose option it cannot see.
+  //
+  // A migration is the one artifact that outlives the process that wrote it, so
+  // a declaration its own field type rejects would become a deployment that
+  // materializes the schema and then cannot boot on it.
+  //
+  // A Builder entity shadowed by a code-first one of the same slug contributes
+  // nothing to this migration, so it is skipped rather than failed on — a
+  // cleanup that changes no DDL is not worth blocking on.
+  // Shadowing is per KIND: the manifest allows the same slug on a collection, a
+  // single and a field group, and the merge resolves each kind separately. A
+  // single set of dropped slugs would filter out an unshadowed single named
+  // `home` because a collection of that name was shadowed, and it would then
+  // reach the migration unchecked.
+  const survivingOf = <T extends { slug: string }>(
+    list: readonly T[],
+    codeFirst: ReadonlyArray<{ slug: string }>
+  ): T[] => {
+    const shadowed = new Set(codeFirst.map(e => e.slug));
+    return list.filter(e => !shadowed.has(e.slug));
+  };
+
+  assertPluginFieldDeclarations({
+    collections: configResult.config.collections,
+    singles: configResult.config.singles,
+    fieldGroups: configResult.config.fieldGroups,
+  });
+  assertPluginFieldDeclarations({
+    collections: survivingOf(
+      manifest.collections,
+      configResult.config.collections
+    ),
+    singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
+    fieldGroups: survivingOf(
+      manifest.components,
+      configResult.config.fieldGroups ?? []
+    ),
+  });
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
   // survived the merge (code-first wins → shadowed UI slugs are skipped).

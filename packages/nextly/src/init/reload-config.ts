@@ -71,6 +71,7 @@ import {
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
+import type { PluginFieldType } from "../plugins/contributions";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";
@@ -554,7 +555,67 @@ function republishRecordingPolicies(
 // Reload entry point. resolver is optional and exists primarily for tests.
 // dispatcher is also test-only: injects a fake PromptDispatcher (e.g., one
 // that records prompts and auto-confirms) so tests don't need a real TTY.
-export async function reloadNextlyConfig(opts?: {
+/**
+ * Serialize reloads across every caller.
+ *
+ * The reload captures the field-type registry, then `loadConfig` clears and
+ * rebuilds that same process-global. Two runs overlapping would let one capture
+ * a registry the other is halfway through replacing, and an abandoned run would
+ * then restore a set that was never live. HMR already refuses to schedule while
+ * its own reload is pending, but `boot-apply` calls straight through without
+ * marking anything in flight, so HMR and boot can still meet.
+ *
+ * Serialized by queueing one trailing run, not by handing the caller the run
+ * already going. A caller arriving mid-run represents an edit that run may have
+ * read the file too early to see, and the HMR flag is drained before the call —
+ * so returning the in-flight promise would drop that edit until the next save
+ * or a restart. One trailing run is enough however many callers arrive: they
+ * all want the state after the last of them.
+ */
+const globalForReload = globalThis as unknown as {
+  __nextly_reloadInFlight?: Promise<void>;
+  __nextly_reloadQueued?: Promise<void>;
+};
+
+export function reloadNextlyConfig(opts?: {
+  resolver?: ServiceResolver;
+  dispatcher?: PromptDispatcher;
+}): Promise<void> {
+  // Checked before the running one: the queued run is cleared inside its own
+  // continuation, which is a microtask later than the running one's cleanup.
+  // A caller landing in between would otherwise start a second concurrent run
+  // alongside the queued one.
+  const queued = globalForReload.__nextly_reloadQueued;
+  if (queued) return queued;
+
+  const running = globalForReload.__nextly_reloadInFlight;
+  if (running) {
+    globalForReload.__nextly_reloadQueued = running
+      // A failed reload must not swallow the edit that arrived during it: the
+      // next config is read either way, and this caller sees its own outcome.
+      .catch(() => undefined)
+      .then(() => {
+        delete globalForReload.__nextly_reloadQueued;
+        return startReload(opts);
+      });
+    return globalForReload.__nextly_reloadQueued;
+  }
+
+  return startReload(opts);
+}
+
+function startReload(opts?: {
+  resolver?: ServiceResolver;
+  dispatcher?: PromptDispatcher;
+}): Promise<void> {
+  const started = runReload(opts).finally(() => {
+    delete globalForReload.__nextly_reloadInFlight;
+  });
+  globalForReload.__nextly_reloadInFlight = started;
+  return started;
+}
+
+async function runReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
 }): Promise<void> {
@@ -577,10 +638,43 @@ export async function reloadNextlyConfig(opts?: {
         webhookAuditEnabled?: boolean;
       }
     | undefined;
+  let previousFieldTypes: PluginFieldType[] | undefined;
+  let restoreFieldTypes: (() => void) | undefined;
+  /**
+   * Put the field-type registry back when a reload does not take effect.
+   *
+   * `loadConfig` swaps the process-global registry as it reads the new config,
+   * but a reload can still be abandoned after that — DI not ready, the live
+   * schema unreadable, a schema change deferred as unsafe. Those paths keep the
+   * previous config and metadata, so leaving the new types installed would run
+   * the abandoned reload's `validate`, storage mapping and `validateOptions`
+   * against a schema that never changed.
+   *
+   * Not called on the paths that simply had nothing to do: there the new config
+   * IS the live one, and its types belong in the registry.
+   */
+  const abandonReload = (): void => {
+    restoreFieldTypes?.();
+  };
   try {
     const { loadConfig, clearConfigCache } = await import(
       "../cli/utils/config-loader"
     );
+    const { allFieldTypes, clearFieldTypes, registerFieldType } = await import(
+      "../domains/schema/field-types/field-type-registry"
+    );
+    // `loadConfig` clears and repopulates the process-global field-type
+    // registry, so a reload that is then rejected would leave the new
+    // definitions installed under the retained config — writes would run the
+    // refused reload's `validate` and storage mapping until the next good one.
+    // The previous set is captured here and put back if anything below fails.
+    previousFieldTypes = allFieldTypes();
+    restoreFieldTypes = () => {
+      clearFieldTypes();
+      for (const fieldType of previousFieldTypes ?? []) {
+        registerFieldType(fieldType);
+      }
+    };
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (
@@ -593,7 +687,25 @@ export async function reloadNextlyConfig(opts?: {
         };
       }
     ).config;
+
+    // The reload repopulates the field-type registry through `loadConfig` but
+    // never goes back through `registerServices`, so the boot gate does not run
+    // again. Editing a plugin field's options while the dev server is up would
+    // otherwise materialize a declaration its own type rejects, and the app
+    // would only refuse it on the next restart — long after the schema changed.
+    const { assertPluginFieldDeclarations } = await import(
+      "../shared/lib/assert-plugin-field-declarations"
+    );
+    assertPluginFieldDeclarations({
+      collections: newConfig?.collections,
+      singles: newConfig?.singles,
+      fieldGroups: newConfig?.fieldGroups,
+    });
   } catch (err) {
+    // The registry was rebuilt from the config that just failed; put the
+    // working set back so the retained config keeps the behavior it was
+    // validated with.
+    abandonReload();
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to
     // load Nextly configuration."). Surface BOTH the public message
@@ -623,7 +735,12 @@ export async function reloadNextlyConfig(opts?: {
     );
     return;
   }
-  if (!newConfig) return;
+  // The loader returned without a config: the swap already happened inside it,
+  // and nothing below will run, so the new types must not outlive the attempt.
+  if (!newConfig) {
+    abandonReload();
+    return;
+  }
 
   // Republish the audit seam from the reloaded config, so toggling
   // `webhooks.audit` in nextly.config.ts takes effect on save without a restart.
@@ -659,9 +776,15 @@ export async function reloadNextlyConfig(opts?: {
       | undefined;
   } catch {
     // DI not initialised yet (init-time race). Nothing to do.
+    abandonReload();
     return;
   }
-  if (!adapter) return;
+  // Resolution can succeed and still hand back no adapter, which is the same
+  // outcome as it throwing: nothing below runs, so the reload never lands.
+  if (!adapter) {
+    abandonReload();
+    return;
+  }
 
   // Evict removed singles from the live default snapshot up front, before any
   // return/abort below, so a single dropped from the config can never
@@ -797,6 +920,7 @@ export async function reloadNextlyConfig(opts?: {
       `[Nextly HMR] Could not introspect live schema: ${msg}. ` +
         `No code-first schema changes were applied this cycle.`
     );
+    abandonReload();
     return;
   }
 
@@ -1025,6 +1149,9 @@ export async function reloadNextlyConfig(opts?: {
         collections: false,
         singles: false,
       });
+      // The physical tables still match the PREVIOUS config, so the previous
+      // field types are the ones that describe them.
+      abandonReload();
     }
     return;
   }
@@ -1445,6 +1572,11 @@ export async function reloadNextlyConfig(opts?: {
 
   if (!applyResult.success) {
     const code = applyResult.error.code;
+
+    // The DDL never landed, so the live tables still match the previous config
+    // and the previous field types are the ones that describe them. Same
+    // reasoning as the deferred-diff branch above.
+    abandonReload();
 
     // The DDL apply failed (needs-TTY confirmation, an executor error, ...), so
     // the field-tree syncs and the recording republish under `if (success)` were

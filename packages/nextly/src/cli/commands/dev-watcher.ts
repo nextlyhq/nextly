@@ -9,6 +9,7 @@
  */
 
 import { describeError } from "../../errors/index";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -57,6 +58,12 @@ export function createDebouncedSync(
     try {
       logger.newline();
       logger.header("Config Changed - Re-syncing");
+
+      // Every reload gets the same gate the first sync did. Editing a plugin
+      // field's options after the watcher starts would otherwise serialize the
+      // metadata and materialize the columns for a declaration its own type
+      // rejects — the state this check exists to keep out of the database.
+      assertPluginFieldDeclarations(configToSync.config);
 
       // Unconditional, so the orphan scan still runs when the config declares none of a
       // type: deleting the last entry of a kind is precisely what orphans its table, making
