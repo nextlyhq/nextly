@@ -11,6 +11,8 @@
  */
 import type { PluginFieldInstance } from "../../plugins/contributions";
 
+import { defineOwnProperty } from "./own-property";
+
 /** Whether a value is a `{}` literal, as opposed to a Date, class instance, or null. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
@@ -42,7 +44,7 @@ function detachValue(value: unknown): unknown {
   if (isPlainObject(value)) {
     const copy: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value)) {
-      copy[key] = detachValue(nested);
+      defineOwnProperty(copy, key, detachValue(nested));
     }
     return copy;
   }
@@ -64,7 +66,10 @@ export function detachedField(field: {
 }): PluginFieldInstance {
   const copy: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(field)) {
-    copy[key] = detachValue(value);
+    defineOwnProperty(copy, key, detachValue(value));
   }
+  // Spread defines rather than assigns, so an own `__proto__` carried by the
+  // copy survives this step; `type` and `name` are restated because they are
+  // the two the instance contract guarantees.
   return { ...copy, type: field.type, name: field.name };
 }
