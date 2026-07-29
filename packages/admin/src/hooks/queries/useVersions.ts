@@ -107,6 +107,12 @@ export interface UseVersionsOptions {
  *
  * The response carries no cursor of its own, so the next one is the oldest
  * `versionNo` on the page just received.
+ *
+ * Focus refetch is enabled explicitly (the provider turns it off app-wide, so
+ * `staleTime: 0` alone would not revalidate on focus): a save in another tab
+ * adds a version, and "Compare with current" reads the newest row from this
+ * list, so returning to the panel must revalidate the head or it would label a
+ * stale version as current.
  */
 export function useVersions({ scope, enabled = true }: UseVersionsOptions) {
   return useInfiniteQuery<VersionListResponse, Error>({
@@ -131,6 +137,9 @@ export function useVersions({ scope, enabled = true }: UseVersionsOptions) {
     // Saving the document adds a version, and the panel is opened on demand, so
     // each open re-reads rather than serving a list captured before the save.
     staleTime: 0,
+    // The provider disables focus refetch app-wide; re-enable it here so a save
+    // made in another tab is reflected when this panel regains focus (see above).
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -187,8 +196,10 @@ export interface UseVersionDiffOptions {
  * across schema edits. Rather than fingerprint every schema attribute that feeds
  * the diff, the query is treated as always stale: each time the compare view
  * mounts it revalidates, so an edited schema yields a fresh diff. Focus refetch
- * is left on (the default) for the same reason: a schema edited in another tab
- * is picked up on returning here rather than showing an obsolete classification.
+ * is enabled explicitly for the same reason: a schema edited in another tab is
+ * picked up on returning here rather than showing an obsolete classification.
+ * The provider disables focus refetch app-wide, so `staleTime: 0` alone would
+ * not revalidate on focus; opting back in has to be explicit.
  */
 export function useVersionDiff({
   scope,
@@ -211,6 +222,9 @@ export function useVersionDiff({
     },
     enabled: enabled && from !== null && to !== null && isAddressable(scope),
     staleTime: 0,
+    // The provider disables focus refetch app-wide; re-enable it here so a
+    // schema edited in another tab reclassifies the diff on return (see above).
+    refetchOnWindowFocus: true,
     // Toggling "Changed only" switches to a different cache entry; keep the
     // prior diff on screen while the new one loads rather than flashing a
     // skeleton over a comparison the user is already reading.
