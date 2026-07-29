@@ -362,8 +362,26 @@ export async function ensureCompanionTable(
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
     }
+    const mainColumns = physical.get(args.tableName) ?? new Set<string>();
+    // Columns the reconcile just ADDED to an existing companion. They arrive empty,
+    // so a field that was SHARED until now — its value on the main table, applying
+    // to every language — would start reading as null the moment it becomes
+    // localized. Copy it across before anything reads through the new column.
+    if (alreadyExists) {
+      const added = localizedFields
+        .map(f => toColumn(f.name))
+        .filter(
+          column => !companionColumns.has(column) && mainColumns.has(column)
+        );
+      await backfillAddedCompanionColumns(adapter, {
+        companionTableName,
+        tableName: args.tableName,
+        columns: added,
+        defaultLocale: args.defaultLocale,
+      });
+    }
     await seedCompanionFromMain(adapter, {
-      mainColumns: physical.get(args.tableName) ?? new Set(),
+      mainColumns,
       slug: args.slug,
       tableName: args.tableName,
       companionTableName,
@@ -463,6 +481,48 @@ async function seedCompanionFromMain(
     { onlyMissing: true }
   );
   if (seed) await adapter.executeQuery(seed);
+}
+
+/**
+ * Copy the main table's value into companion columns the reconcile has just added, for the
+ * DEFAULT language's rows only.
+ *
+ * This is narrower than the general seed and safe for the reason the general seed is not. The
+ * column is brand new on the companion, so no per-locale content exists in it that could be
+ * mislabelled, and the value being copied was SHARED until this save — language-neutral by
+ * definition, not a translation of anything. Whether the companion holds other rows is therefore
+ * irrelevant here, which is why this runs even in the state the seed refuses.
+ *
+ * Default language only: other languages fall back to it, so writing the same value into each
+ * would duplicate content rather than preserve it.
+ *
+ * Correlated scalar subquery because one statement then covers every dialect — verified on
+ * SQLite, Postgres and MySQL, where a join form would have needed three spellings.
+ */
+async function backfillAddedCompanionColumns(
+  adapter: CompanionWriteAdapter,
+  args: {
+    companionTableName: string;
+    tableName: string;
+    columns: string[];
+    defaultLocale?: string;
+  }
+): Promise<void> {
+  if (!args.defaultLocale || args.columns.length === 0) return;
+  const isMysql = adapter.dialect === "mysql";
+  const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+  const companion = q(args.companionTableName);
+  const main = q(args.tableName);
+  const placeholder = adapter.dialect === "postgresql" ? "$1" : "?";
+
+  for (const column of args.columns) {
+    await adapter.executeQuery(
+      `UPDATE ${companion} SET ${q(column)} = ` +
+        `(SELECT ${q(column)} FROM ${main} WHERE ${main}.${q("id")} = ${companion}.${q("_parent")}) ` +
+        `WHERE ${companion}.${q("_locale")} = ${placeholder}`,
+      [args.defaultLocale]
+    );
+  }
 }
 
 /** The slice of a Drizzle handle this needs: one bounded read of one table. */

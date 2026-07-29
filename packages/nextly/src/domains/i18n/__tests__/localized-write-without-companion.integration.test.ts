@@ -62,6 +62,17 @@ const posts = (localized: boolean) =>
     fields: [text({ name: "title", localized: true })],
   });
 
+/** Adds a second field that starts SHARED and later becomes localized. */
+const postsWithTagline = (taglineLocalized: boolean) =>
+  defineCollection({
+    slug: "i18nwin_posts",
+    localized: true,
+    fields: [
+      text({ name: "title", localized: true }),
+      text({ name: "tagline", localized: taglineLocalized }),
+    ],
+  });
+
 async function boot(
   localized: boolean,
   defaultLocale = localization.defaultLocale
@@ -329,6 +340,54 @@ describe("enabling localization on existing content (integration)", () => {
       "SELECT COUNT(*) AS n FROM dc_i18nwin_posts_locales WHERE _locale = 'es'"
     );
     expect(Number(rows[0]?.n)).toBe(1);
+  });
+
+  it("carries a newly localized field's shared value onto the companion", async () => {
+    // A field that was SHARED lives on the main table and applies to every language.
+    // Marking it localized adds a companion column, and that column starts empty —
+    // so without a backfill the value stops being returned the moment the field
+    // becomes translatable, even though it is still sitting on the main table.
+    //
+    // This runs in the state the general seed refuses (the companion already holds
+    // rows), and is safe for a different reason: the column is brand new, so there
+    // is no per-locale content in it that could be mislabelled.
+    process.env.DB_DIALECT = "sqlite";
+    const openWith = async (taglineLocalized: boolean): Promise<TestNextly> => {
+      const adapter = await createAdapter({
+        type: "sqlite",
+        url: `file:${dbPath}`,
+      } as Parameters<typeof createAdapter>[0]);
+      return createTestNextly({
+        adapter,
+        collections: [postsWithTagline(taglineLocalized)],
+        localization,
+      });
+    };
+
+    current = await openWith(false);
+    const created = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .createEntry(
+        { collectionName: "i18nwin_posts", overrideAccess: true },
+        { title: "Title", tagline: "Shared tagline" }
+      );
+    const id = (created.data as { id: string }).id;
+
+    // Localize `tagline`. The companion already exists and holds the title's rows,
+    // so this is precisely the case the empty-companion seed skips.
+    await current.destroy();
+    current = await openWith(true);
+    await current.destroy();
+    current = await openWith(true);
+
+    const read = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntry({
+        collectionName: "i18nwin_posts",
+        entryId: id,
+        overrideAccess: true,
+      });
+    expect((read.data as { tagline?: unknown }).tagline).toBe("Shared tagline");
   });
 
   it("seeds once and does not duplicate rows on later boots", async () => {
