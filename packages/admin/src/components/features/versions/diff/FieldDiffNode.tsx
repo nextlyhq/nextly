@@ -109,11 +109,24 @@ function TextSegmentSpan({ segment }: { segment: TextSegment }) {
   );
 }
 
-/** Before value, struck through to read as removed. */
-function BeforeValue({ field, value }: { field: FieldConfig; value: unknown }) {
+/**
+ * A screen-reader label ("Before" / "After") plus its value, struck through
+ * when it reads as removed. The label keeps the two sides distinguishable for
+ * assistive technology, which cannot perceive the strikethrough alone.
+ */
+function ValueSide({
+  label,
+  struck = false,
+  children,
+}: {
+  label: string;
+  struck?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="line-through text-muted-foreground">
-      <FieldValue field={field} value={value} />
+    <div className={struck ? "line-through text-muted-foreground" : undefined}>
+      <span className="sr-only">{label}: </span>
+      {children}
     </div>
   );
 }
@@ -151,21 +164,45 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "value": {
+      // A value node typed as a container is the engine's opaque fallback for a
+      // component or group whose schema no longer resolves; its value is the raw
+      // stored object. Render that plainly rather than through the typed kit,
+      // which would show an empty shell. Every other value is already normalized
+      // by the engine, so the kit renders it without normalizing a second time.
+      const isOpaqueContainer =
+        node.type === "group" || node.type === "component";
       const field = renderField(node);
+      const renderValue = (value: unknown) =>
+        isOpaqueContainer ? (
+          <code className="block text-sm break-words">
+            {formatUnknown(value)}
+          </code>
+        ) : (
+          <FieldValue field={field} value={value} preNormalized />
+        );
+
       let body: React.ReactNode;
       if (node.status === "added") {
-        body = <FieldValue field={field} value={node.after} />;
+        body = (
+          <ValueSide label="New value">{renderValue(node.after)}</ValueSide>
+        );
       } else if (node.status === "removed") {
-        body = <BeforeValue field={field} value={node.before} />;
+        body = (
+          <ValueSide label="Removed value" struck>
+            {renderValue(node.before)}
+          </ValueSide>
+        );
       } else if (node.status === "unchanged") {
         // Reachable only with "Changed only" off: nothing changed, so show the
-        // value once rather than striking a "before" that was never removed.
-        body = <FieldValue field={field} value={node.after} />;
+        // value once, unlabelled and not struck.
+        body = renderValue(node.after);
       } else {
         body = (
           <div className="flex flex-col gap-1">
-            <BeforeValue field={field} value={node.before} />
-            <FieldValue field={field} value={node.after} />
+            <ValueSide label="Before" struck>
+              {renderValue(node.before)}
+            </ValueSide>
+            <ValueSide label="After">{renderValue(node.after)}</ValueSide>
           </div>
         );
       }

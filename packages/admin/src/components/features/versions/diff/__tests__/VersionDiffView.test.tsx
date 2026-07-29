@@ -50,7 +50,7 @@ describe("VersionDiffView", () => {
       refetch: vi.fn(),
     });
 
-    render(<VersionDiffView scope={scope} from={1} to={2} fields={[]} />);
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
 
     expect(screen.getByText("Views")).toBeInTheDocument();
     expect(screen.getByText(/Comparing version/)).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("VersionDiffView", () => {
       refetch: vi.fn(),
     });
 
-    render(<VersionDiffView scope={scope} from={1} to={2} fields={[]} />);
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
 
     expect(screen.getByText(/identical/)).toBeInTheDocument();
   });
@@ -82,7 +82,7 @@ describe("VersionDiffView", () => {
       refetch: vi.fn(),
     });
 
-    render(<VersionDiffView scope={scope} from={1} to={2} fields={[]} />);
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
 
     expect(
       screen.getByRole("button", { name: /Try again/ })

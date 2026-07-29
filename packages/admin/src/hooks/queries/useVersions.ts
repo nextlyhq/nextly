@@ -18,8 +18,6 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import type { FieldConfig } from "nextly/config";
-import { useMemo } from "react";
 
 import { entryKeys } from "@admin/services/entryApi";
 import {
@@ -76,17 +74,15 @@ export const versionKeys = {
   detail: (scope: VersionScope, versionNo: number) =>
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
   diffs: () => [...versionKeys.all(), "diff"] as const,
-  // A diff is identified by every input that changes its result: the document
-  // (scope), the ordered version pair (from, to), whether unchanged fields are
-  // filtered out (modifiedOnly), and the current schema (schemaVersion). The
-  // snapshots are immutable but the server classifies them against the live
-  // schema, so an edited schema must read a fresh diff rather than a cached one.
+  // A diff is identified by the document (scope), the ordered version pair
+  // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
+  // The result also depends on the live schema, which the query treats as
+  // always stale rather than fold into the key (see useVersionDiff).
   diff: (
     scope: VersionScope,
     from: number,
     to: number,
-    modifiedOnly: boolean,
-    schemaVersion: string
+    modifiedOnly: boolean
   ) =>
     [
       ...versionKeys.diffs(),
@@ -94,7 +90,6 @@ export const versionKeys = {
       from,
       to,
       modifiedOnly,
-      schemaVersion,
     ] as const,
 };
 
@@ -175,40 +170,6 @@ export function useVersion({
   });
 }
 
-/**
- * A stable fingerprint of the current schema shape, folded into the diff cache
- * key. A server-computed diff classifies each field against the live schema, so
- * it is not immutable across schema edits; when the schema changes this string
- * changes and the same version pair reads a fresh diff instead of a stale one.
- */
-function schemaSignature(fields: FieldConfig[]): string {
-  const parts: string[] = [];
-  const walk = (list: FieldConfig[]) => {
-    for (const field of list) {
-      parts.push(`${field.name}:${field.type}`);
-      const inline = (field as { fields?: FieldConfig[] }).fields;
-      if (Array.isArray(inline)) walk(inline);
-      const componentFields = (field as { componentFields?: FieldConfig[] })
-        .componentFields;
-      if (Array.isArray(componentFields)) walk(componentFields);
-      const componentSchemas = (
-        field as {
-          componentSchemas?: Record<string, { fields?: FieldConfig[] }>;
-        }
-      ).componentSchemas;
-      if (componentSchemas) {
-        for (const key of Object.keys(componentSchemas).sort()) {
-          parts.push(`@${key}`);
-          const schemaFields = componentSchemas[key]?.fields;
-          if (Array.isArray(schemaFields)) walk(schemaFields);
-        }
-      }
-    }
-  };
-  walk(fields);
-  return parts.join("|");
-}
-
 export interface UseVersionDiffOptions {
   scope: VersionScope;
   /** Older version number; null disables the query. */
@@ -217,34 +178,29 @@ export interface UseVersionDiffOptions {
   to: number | null;
   /** Return only changed fields. */
   modifiedOnly?: boolean;
-  /**
-   * Current schema fields. Folded into the cache key so a schema edit reads a
-   * fresh diff rather than a stale one from the freshness window.
-   */
-  fields: FieldConfig[];
   enabled?: boolean;
 }
 
 /**
- * A diff of two versions. The snapshots are immutable, but the server computes
- * the diff against the current schema, so the cache key carries a schema
- * fingerprint alongside the pair: same pair and schema serve from cache, an
- * edited schema refetches.
+ * A diff of two versions. The snapshots are immutable, but the server classifies
+ * and renders them against the live schema, so the result is not immutable
+ * across schema edits. Rather than fingerprint every schema attribute that
+ * feeds the diff, the query is treated as always stale: each time the compare
+ * view mounts it revalidates, so an edited schema yields a fresh diff. It is not
+ * refetched on window focus, where nothing relevant has changed.
  */
 export function useVersionDiff({
   scope,
   from,
   to,
   modifiedOnly = false,
-  fields,
   enabled = true,
 }: UseVersionDiffOptions) {
-  const schemaVersion = useMemo(() => schemaSignature(fields), [fields]);
   return useQuery<VersionDiff, Error>({
     queryKey:
       from === null || to === null
         ? ([...versionKeys.diffs(), "none"] as const)
-        : versionKeys.diff(scope, from, to, modifiedOnly, schemaVersion),
+        : versionKeys.diff(scope, from, to, modifiedOnly),
     queryFn: () => {
       // Guarded by `enabled`; this is defence against a direct queryFn call.
       if (from === null || to === null) {
@@ -253,7 +209,8 @@ export function useVersionDiff({
       return versionApi.diff(scope, from, to, { modifiedOnly });
     },
     enabled: enabled && from !== null && to !== null && isAddressable(scope),
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
     // Toggling "Changed only" switches to a different cache entry; keep the
     // prior diff on screen while the new one loads rather than flashing a
     // skeleton over a comparison the user is already reading.

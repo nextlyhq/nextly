@@ -248,7 +248,6 @@ export function VersionHistorySheet({
               scope={scope}
               from={comparing.from}
               to={comparing.to}
-              fields={fields}
             />
           ) : selected !== null ? (
             <VersionPreview

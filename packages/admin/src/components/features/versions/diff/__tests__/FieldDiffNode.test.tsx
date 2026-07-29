@@ -109,6 +109,42 @@ describe("FieldDiffNode", () => {
     expect(screen.getByText("Published")).toBeInTheDocument();
   });
 
+  it("renders a schema-less container node's raw value, not an empty shell", () => {
+    // The engine emits an opaque `value` node (type group/component) when a
+    // stored component type is gone from the schema; its raw fields must show.
+    const node: FieldDiff = {
+      kind: "value",
+      name: "hero",
+      label: "Hero",
+      type: "component",
+      status: "changed",
+      before: { _componentType: "gone", headline: "Old headline" },
+      after: { _componentType: "gone", headline: "New headline" },
+    };
+    render(<FieldDiffNode node={node} />);
+
+    expect(screen.getByText(/Old headline/)).toBeInTheDocument();
+    expect(screen.getByText(/New headline/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not set/)).not.toBeInTheDocument();
+  });
+
+  it("labels before and after for assistive technology", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "views",
+      label: "Views",
+      type: "number",
+      status: "changed",
+      before: 1,
+      after: 2,
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // Screen readers cannot see the strikethrough, so each side is labelled.
+    expect(screen.getByText(/^Before/)).toBeInTheDocument();
+    expect(screen.getByText(/^After/)).toBeInTheDocument();
+  });
+
   it("shows only the new value for an added field", () => {
     const node: FieldDiff = {
       kind: "value",

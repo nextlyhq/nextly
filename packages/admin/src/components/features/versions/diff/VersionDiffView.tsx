@@ -8,7 +8,6 @@
  * @module components/features/versions/diff/VersionDiffView
  */
 
-import type { FieldConfig } from "nextly/config";
 import { useState } from "react";
 
 import {
@@ -29,12 +28,6 @@ export interface VersionDiffViewProps {
   from: number;
   /** Newer version being compared. */
   to: number;
-  /**
-   * Current schema fields. Not needed to render values (each node carries its
-   * own display config); passed to the query so a schema change busts the cached
-   * diff, whose classifications are computed against the live schema.
-   */
-  fields: FieldConfig[];
 }
 
 function DiffSkeleton() {
@@ -53,14 +46,9 @@ function DiffSkeleton() {
   );
 }
 
-export function VersionDiffView({
-  scope,
-  from,
-  to,
-  fields,
-}: VersionDiffViewProps) {
+export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
   const [modifiedOnly, setModifiedOnly] = useState(true);
-  const diff = useVersionDiff({ scope, from, to, modifiedOnly, fields });
+  const diff = useVersionDiff({ scope, from, to, modifiedOnly });
 
   return (
     <div className="flex flex-col">

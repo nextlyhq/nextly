@@ -580,17 +580,27 @@ export function FieldValueDisplay({
 export function FieldValue({
   field,
   value,
+  preNormalized = false,
 }: {
   field: FieldConfig;
   value: unknown;
+  /**
+   * Whether `value` has already passed through `normalizeStoredValue`. The
+   * version diff normalizes on the server, so re-normalizing here would run a
+   * JSON-backed value through the parser a second time and could flip a stored
+   * string to its JSON primitive. When set, the value is rendered as-is.
+   */
+  preNormalized?: boolean;
 }) {
-  const normalized = normalizeStoredValue(field, value);
+  const normalized = preNormalized ? value : normalizeStoredValue(field, value);
 
   // A `json` field may legitimately store the JSON primitive `null`, which
   // normalizes to the same value as an absent field. An absent key arrives as
   // `undefined`, while a stored null arrives as `null` (or as the characters
-  // "null" from a serialized column); only the first is treated as unset.
+  // "null" from a serialized column); only the first is treated as unset. A
+  // pre-normalized value has already resolved this upstream, so `null` is empty.
   const isStoredJsonNull =
+    !preNormalized &&
     field.type === "json" &&
     (value === null || (typeof value === "string" && value.trim() === "null"));
 
