@@ -8,6 +8,7 @@
  * @module components/features/versions/diff/VersionDiffView
  */
 
+import type { FieldConfig } from "nextly/config";
 import { useState } from "react";
 
 import {
@@ -20,7 +21,7 @@ import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
-import { FieldDiffNode } from "./FieldDiffNode";
+import { childKey, FieldDiffNode } from "./FieldDiffNode";
 
 export interface VersionDiffViewProps {
   scope: VersionScope;
@@ -28,6 +29,8 @@ export interface VersionDiffViewProps {
   from: number;
   /** Newer version being compared. */
   to: number;
+  /** Current schema fields, used to render each value by its real config. */
+  fields: FieldConfig[];
 }
 
 function DiffSkeleton() {
@@ -46,7 +49,12 @@ function DiffSkeleton() {
   );
 }
 
-export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
+export function VersionDiffView({
+  scope,
+  from,
+  to,
+  fields,
+}: VersionDiffViewProps) {
   const [modifiedOnly, setModifiedOnly] = useState(true);
   const diff = useVersionDiff({ scope, from, to, modifiedOnly });
 
@@ -95,7 +103,7 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
       ) : diff.data ? (
         <div className="px-4">
           {diff.data.fields.map(node => (
-            <FieldDiffNode key={node.name} node={node} />
+            <FieldDiffNode key={childKey(node)} node={node} fields={fields} />
           ))}
         </div>
       ) : null}

@@ -382,40 +382,49 @@ defineValueDisplay(["json"], ({ value }) => (
 // Containers
 // ============================================================
 
-function childFields(field: FieldConfig): FieldConfig[] {
+export function childFields(field: FieldConfig): FieldConfig[] {
   const nested = (field as { fields?: unknown }).fields;
   return Array.isArray(nested) ? (nested as FieldConfig[]) : [];
 }
 
 /**
- * Child fields for one component instance.
+ * Child fields for a container, given the component type its instance declares.
  *
  * A component field does not carry its children inline. The API enriches it
  * with `componentFields` when the field holds a single component type, and with
- * `componentSchemas` keyed by type when it is a dynamic zone — so the instance
- * decides which schema applies. Reading `field.fields` alone finds neither and
- * renders an empty shell.
+ * `componentSchemas` keyed by type when it is a dynamic zone — so the declared
+ * type decides which schema applies. An inline group carries `fields` directly
+ * and falls back to those. Reading `field.fields` alone finds neither component
+ * shape and renders an empty shell.
  */
-function componentChildFields(
+export function componentFieldsFor(
   field: FieldConfig,
-  instance: unknown
+  componentType: string | undefined
 ): FieldConfig[] {
   const enriched = field as {
     componentFields?: FieldConfig[];
     componentSchemas?: Record<string, { fields?: FieldConfig[] }>;
   };
 
+  if (componentType && enriched.componentSchemas?.[componentType]?.fields) {
+    return enriched.componentSchemas[componentType].fields;
+  }
+  if (Array.isArray(enriched.componentFields)) return enriched.componentFields;
+
+  return childFields(field);
+}
+
+/** Child fields for one component instance, keyed by its `_componentType`. */
+function componentChildFields(
+  field: FieldConfig,
+  instance: unknown
+): FieldConfig[] {
   const typeName =
     typeof instance === "object" && instance !== null
       ? (instance as { _componentType?: string })._componentType
       : undefined;
 
-  if (typeName && enriched.componentSchemas?.[typeName]?.fields) {
-    return enriched.componentSchemas[typeName].fields;
-  }
-  if (Array.isArray(enriched.componentFields)) return enriched.componentFields;
-
-  return childFields(field);
+  return componentFieldsFor(field, typeName);
 }
 
 /** A labelled stack of child values, used by every container type. */

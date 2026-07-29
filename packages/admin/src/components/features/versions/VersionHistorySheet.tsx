@@ -109,6 +109,9 @@ export function VersionHistorySheet({
   }, [open]);
 
   const list = useVersions({ scope, enabled: open });
+  // Destructured so the boundary-fetch effect can depend on the paging members
+  // by identity rather than on the whole query object, which changes each render.
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
 
   const restore = useRestoreVersion({
@@ -140,22 +143,51 @@ export function VersionHistorySheet({
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
 
-  // Compare targets for the version being previewed: the newest version (for
-  // "vs current") and the one immediately older in the list (for "vs previous").
-  // The list, not `selected - 1`, decides "previous", since retention can leave
-  // gaps in the numbering.
-  const latestVersionNo = versions[0]?.versionNo ?? null;
-  const selectedIndex =
-    selected === null ? -1 : versions.findIndex(v => v.versionNo === selected);
+  // Compare targets for the version being previewed. A comparison must stay
+  // within one locale (the server rejects a cross-locale pair), so both the
+  // "current" and "previous" targets are drawn only from versions sharing the
+  // selected row's locale. "Previous" is the next-older row in that set, not
+  // `selected - 1`, since retention can leave gaps in the numbering.
+  const selectedLocale =
+    selected === null
+      ? null
+      : (versions.find(v => v.versionNo === selected)?.locale ?? null);
+  const sameLocaleVersions =
+    selected === null
+      ? []
+      : versions.filter(
+          v => v.versionNo !== null && (v.locale ?? null) === selectedLocale
+        );
+  const latestVersionNo = sameLocaleVersions[0]?.versionNo ?? null;
+  const sameLocaleIndex = sameLocaleVersions.findIndex(
+    v => v.versionNo === selected
+  );
   const previousVersionNo =
-    selectedIndex >= 0
-      ? (versions[selectedIndex + 1]?.versionNo ?? null)
+    sameLocaleIndex >= 0
+      ? (sameLocaleVersions[sameLocaleIndex + 1]?.versionNo ?? null)
       : null;
   const canCompareCurrent =
     selected !== null &&
     latestVersionNo !== null &&
     selected !== latestVersionNo;
   const canComparePrevious = selected !== null && previousVersionNo !== null;
+
+  // When previewing the oldest loaded row while older versions remain unfetched,
+  // pull the next page so "Compare with previous" can resolve the preceding
+  // version instead of staying hidden until the list is paged by hand.
+  const atLoadedBottom = versions.at(-1)?.versionNo === selected;
+  useEffect(() => {
+    if (selected === null) return;
+    if (atLoadedBottom && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
+  }, [
+    selected,
+    atLoadedBottom,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  ]);
 
   // The row being renamed, so the dialog opens seeded with its current name
   // rather than blank.
@@ -206,6 +238,7 @@ export function VersionHistorySheet({
               scope={scope}
               from={comparing.from}
               to={comparing.to}
+              fields={fields}
             />
           ) : selected !== null ? (
             <VersionPreview
@@ -255,16 +288,16 @@ export function VersionHistorySheet({
                 />
               ))}
 
-              {list.hasNextPage ? (
+              {hasNextPage ? (
                 <div className="p-4">
                   <Button
                     variant="outline"
                     size="sm"
                     className="w-full"
-                    disabled={list.isFetchingNextPage}
-                    onClick={() => void list.fetchNextPage()}
+                    disabled={isFetchingNextPage}
+                    onClick={() => void fetchNextPage()}
                   >
-                    {list.isFetchingNextPage ? "Loading…" : "Load more"}
+                    {isFetchingNextPage ? "Loading…" : "Load more"}
                   </Button>
                 </div>
               ) : null}

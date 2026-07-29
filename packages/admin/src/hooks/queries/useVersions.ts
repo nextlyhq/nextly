@@ -12,6 +12,7 @@
  */
 
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -73,6 +74,10 @@ export const versionKeys = {
   detail: (scope: VersionScope, versionNo: number) =>
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
   diffs: () => [...versionKeys.all(), "diff"] as const,
+  // A diff is identified by every input that changes its result: the document
+  // (scope), the ordered version pair (from, to), and whether unchanged fields
+  // are filtered out (modifiedOnly). All four are part of the key so toggling
+  // the filter or picking a different pair reads a distinct cache entry.
   diff: (
     scope: VersionScope,
     from: number,
@@ -201,6 +206,10 @@ export function useVersionDiff({
     },
     enabled: enabled && from !== null && to !== null && isAddressable(scope),
     staleTime: 60_000,
+    // Toggling "Changed only" switches to a different cache entry; keep the
+    // prior diff on screen while the new one loads rather than flashing a
+    // skeleton over a comparison the user is already reading.
+    placeholderData: keepPreviousData,
   });
 }
 

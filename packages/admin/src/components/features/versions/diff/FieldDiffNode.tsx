@@ -8,6 +8,13 @@
  * relationships as added/removed target chips. All colours are theme tokens, so
  * it reads in light and dark alike.
  *
+ * A node carries only its name, type, and label, which is not enough to render
+ * a value faithfully: a `hasMany` field stores an array, a `select` maps stored
+ * codes to labels, a date field formats by its picker. So the current schema
+ * fields are threaded down alongside the tree and the real `FieldConfig` is
+ * resolved by name at each level, falling back to a minimal stand-in only when
+ * the field is no longer in the schema.
+ *
  * @module components/features/versions/diff/FieldDiffNode
  */
 
@@ -21,7 +28,10 @@ import type {
   TextSegment,
 } from "@admin/services/versionApi";
 
-import { FieldValue } from "../value-display/FieldValueDisplay";
+import {
+  componentFieldsFor,
+  FieldValue,
+} from "../value-display/FieldValueDisplay";
 
 type DiffStatus = FieldDiff["status"];
 
@@ -40,13 +50,31 @@ function StatusBadge({ status }: { status: DiffStatus }) {
   return <Badge variant={badge.variant}>{badge.label}</Badge>;
 }
 
-/** A minimal field for the value-display kit, from a node's name/type/label. */
-function nodeField(node: {
+/**
+ * A React key that stays unique across a component-type swap. When a dynamic
+ * zone item changes type and old and new schemas reuse a field name, the engine
+ * emits both a removed and an added sibling with that same `name`; keying by
+ * name alone collides, so the kind and status disambiguate the two sides.
+ */
+export function childKey(node: FieldDiff): string {
+  return `${node.kind}:${node.name}:${node.status}`;
+}
+
+/** A minimal stand-in field for a node whose schema field cannot be resolved. */
+function fallbackField(node: {
   name: string;
   type: string;
   label: string;
 }): FieldConfig {
   return { name: node.name, type: node.type, label: node.label } as FieldConfig;
+}
+
+/** The real schema field for a node by name, or a minimal stand-in. */
+function resolveField(
+  node: { name: string; type: string; label: string },
+  fields: FieldConfig[]
+): FieldConfig {
+  return fields.find(f => f.name === node.name) ?? fallbackField(node);
 }
 
 /** A labelled block wrapping one field's diff. */
@@ -115,7 +143,14 @@ function formatUnknown(value: unknown): string {
   }
 }
 
-export function FieldDiffNode({ node }: { node: FieldDiff }) {
+export function FieldDiffNode({
+  node,
+  fields,
+}: {
+  node: FieldDiff;
+  /** Current-level schema fields, so each value renders by its real config. */
+  fields: FieldConfig[];
+}) {
   switch (node.kind) {
     case "text": {
       return (
@@ -130,12 +165,16 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "value": {
-      const field = nodeField(node);
+      const field = resolveField(node, fields);
       let body: React.ReactNode;
       if (node.status === "added") {
         body = <FieldValue field={field} value={node.after} />;
       } else if (node.status === "removed") {
         body = <BeforeValue field={field} value={node.before} />;
+      } else if (node.status === "unchanged") {
+        // Reachable only with "Changed only" off: nothing changed, so show the
+        // value once rather than striking a "before" that was never removed.
+        body = <FieldValue field={field} value={node.after} />;
       } else {
         body = (
           <div className="flex flex-col gap-1">
@@ -181,11 +220,21 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "group": {
+      // A group or single component: its children come from the resolved field
+      // (inline `fields`, or the single component's `componentFields`).
+      const groupField = fields.find(f => f.name === node.name);
+      const childCfgs = groupField
+        ? componentFieldsFor(groupField, undefined)
+        : [];
       return (
         <FieldRow label={node.label} status={node.status}>
           <div className="pl-3 border-l border-border">
             {node.fields.map(child => (
-              <FieldDiffNode key={child.name} node={child} />
+              <FieldDiffNode
+                key={childKey(child)}
+                node={child}
+                fields={childCfgs}
+              />
             ))}
           </div>
         </FieldRow>
@@ -193,11 +242,12 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "list": {
+      const listField = fields.find(f => f.name === node.name);
       return (
         <FieldRow label={node.label} status={node.status}>
           <div className="flex flex-col gap-2">
             {node.items.map(item => (
-              <ListItemRow key={item.id} item={item} />
+              <ListItemRow key={item.id} item={item} listField={listField} />
             ))}
           </div>
         </FieldRow>
@@ -206,13 +256,15 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
 
     case "unknown": {
       // A field no longer in the schema: its type is unknown, so render the raw
-      // stored values plainly rather than guessing a typed display.
+      // stored values plainly rather than guessing a typed display. Show the
+      // struck "before" only when it was actually removed or changed; an
+      // unchanged value (reachable with "Changed only" off) reads once.
       return (
         <FieldRow label={node.name} status={node.status}>
           <p className="text-xs text-muted-foreground mb-1">
             This field is no longer in the schema.
           </p>
-          {node.status !== "added" ? (
+          {node.status === "removed" || node.status === "changed" ? (
             <code className="block text-sm break-words line-through text-muted-foreground">
               {formatUnknown(node.before)}
             </code>
@@ -228,23 +280,38 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
   }
 }
 
-function ListItemRow({ item }: { item: ListItemDiff }) {
+function ListItemRow({
+  item,
+  listField,
+}: {
+  item: ListItemDiff;
+  listField: FieldConfig | undefined;
+}) {
   const heading = item.componentType ?? "Item";
+  // The item's child fields depend on which component type it holds, so the
+  // list field's schema is resolved per item rather than once for the list.
+  const childCfgs = listField
+    ? componentFieldsFor(listField, item.componentType)
+    : [];
   return (
     <div className="rounded-md border border-border p-2">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-xs font-medium text-foreground">{heading}</span>
         <StatusBadge status={item.status} />
-        {item.hasMoved ? (
+        {item.hasMoved && item.fromIndex != null && item.toIndex != null ? (
           <Badge variant="outline">
-            Moved {item.fromIndex} &rarr; {item.toIndex}
+            Moved {item.fromIndex + 1} &rarr; {item.toIndex + 1}
           </Badge>
         ) : null}
       </div>
       {item.fields.length > 0 ? (
         <div className="pl-1">
           {item.fields.map(child => (
-            <FieldDiffNode key={child.name} node={child} />
+            <FieldDiffNode
+              key={childKey(child)}
+              node={child}
+              fields={childCfgs}
+            />
           ))}
         </div>
       ) : null}
