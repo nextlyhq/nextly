@@ -27,7 +27,10 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
-import { resolveSingleDocumentId } from "../../api/versions-access";
+import {
+  assertDiffVersionPair,
+  resolveSingleDocumentId,
+} from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
@@ -109,6 +112,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   setVersionLabelForDocument,
@@ -390,6 +394,29 @@ export const SINGLE_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  getSingleVersionDiff: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const from = Number(p.from);
+      const to = Number(p.to);
+      // Validate the version pair before resolving the live Single, so a
+      // malformed comparison fails as a validation error whether or not the
+      // Single has been materialized.
+      assertDiffVersionPair(from, to);
+      const entryId = await requireLiveSingleId(slug);
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from,
+        to,
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
     },
   },
   setSingleVersionLabel: {

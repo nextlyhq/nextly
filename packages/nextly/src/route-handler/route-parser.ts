@@ -841,6 +841,18 @@ function parseCollectionEntryVersionRoutes(
   routeParams.collectionName = id;
   routeParams.entryId = subId;
 
+  // `versions/diff?from=A&to=B` compares two versions. It is a read of history,
+  // authorized like reading a single version; `diff` can never collide with a
+  // version number, which is always numeric.
+  if (additionalParams[1] === "diff") {
+    return {
+      service: "collections",
+      operation: "single",
+      method: "getEntryVersionDiff",
+      routeParams,
+    };
+  }
+
   const versionNo = additionalParams[1];
   if (versionNo) {
     routeParams.versionNo = versionNo;
@@ -917,6 +929,17 @@ function parseSingleVersionRoutes(
   }
 
   routeParams.slug = id;
+
+  // `versions/diff?from=A&to=B` compares two versions; a read of history like
+  // reading one version. `diff` cannot collide with a numeric version number.
+  if (subId === "diff") {
+    return {
+      service: "singles",
+      operation: "single",
+      method: "getSingleVersionDiff",
+      routeParams,
+    };
+  }
 
   if (subId) {
     routeParams.versionNo = subId;
