@@ -355,7 +355,7 @@ export type UpdateSinglePayload = Omit<
  * Source of the Component definition.
  *
  * - `code`: Defined in code via `defineFieldGroup()` in a config file
- * - `ui`: Created through the Visual Component Builder in Admin UI
+ * - `ui`: Created through the Visual Field Group Builder in Admin UI
  *
  * Note: Unlike Collections/Singles, Components do not have a "built-in" source.
  */
@@ -399,7 +399,7 @@ export interface FieldGroupAdminOptions {
  * This interface includes all metadata fields needed for the Component
  * list page, including source tracking, migration status, and locked state.
  */
-export interface ApiComponent {
+export interface ApiFieldGroup {
   id: string;
   slug: string;
   label: string;

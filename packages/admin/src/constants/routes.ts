@@ -34,9 +34,9 @@ export const ROUTES = {
   BUILDER_SINGLES: "/admin/builder/singles",
   BUILDER_SINGLES_NEW: "/admin/builder/singles/new",
   BUILDER_SINGLES_EDIT: "/admin/builder/singles/[slug]",
-  BUILDER_COMPONENTS: "/admin/builder/components",
-  BUILDER_COMPONENTS_NEW: "/admin/builder/components/new",
-  BUILDER_COMPONENTS_EDIT: "/admin/builder/components/[slug]",
+  BUILDER_FIELD_GROUPS: "/admin/builder/field-groups",
+  BUILDER_FIELD_GROUPS_NEW: "/admin/builder/field-groups/new",
+  BUILDER_FIELD_GROUPS_EDIT: "/admin/builder/field-groups/[slug]",
 
   // ============================================================
   // Section landing pages (smart redirects).
@@ -45,12 +45,12 @@ export const ROUTES = {
   // hits one of these. The page is a router that picks the most-
   // recently-created record (sorted by `created` DESC), redirects to
   // its content URL, or renders the standard 404 when zero records
-  // exist. Components don't have a content surface, so /admin/components
-  // is a static redirect to /admin/builder/components instead.
+  // exist. Field groups have no content surface, so /admin/field-groups
+  // is a static redirect to /admin/builder/field-groups instead.
   // ============================================================
   COLLECTIONS: "/admin/collections",
   SINGLES: "/admin/singles",
-  COMPONENTS: "/admin/components",
+  FIELD_GROUPS: "/admin/field-groups",
 
   // ============================================================
   // Collection entries routes (dynamic collections).

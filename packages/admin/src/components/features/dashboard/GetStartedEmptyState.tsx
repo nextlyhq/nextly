@@ -31,7 +31,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   {
     label: "Create a component",
     description: "Reusable building blocks for layouts and rich text.",
-    href: ROUTES.BUILDER_COMPONENTS,
+    href: ROUTES.BUILDER_FIELD_GROUPS,
     Icon: Puzzle,
   },
   {

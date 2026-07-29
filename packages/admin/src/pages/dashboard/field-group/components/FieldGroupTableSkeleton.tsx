@@ -1,7 +1,7 @@
 /**
- * ComponentTableSkeleton Component
+ * FieldGroupTableSkeleton Component
  *
- * Loading skeleton for ComponentTable.
+ * Loading skeleton for FieldGroupTable.
  * Renders header, 8 rows, and footer skeleton bars inside a card matching the component table structure.
  * Unified with EntryTable skeleton pattern for consistency.
  *
@@ -26,7 +26,7 @@ const GrayBar = ({ className }: { className?: string }) => (
   />
 );
 
-export const ComponentTableSkeleton: React.FC = () => {
+export const FieldGroupTableSkeleton: React.FC = () => {
   const SKELETON_ROW_COUNT = 8;
   const columns = [
     "select",
@@ -112,4 +112,4 @@ export const ComponentTableSkeleton: React.FC = () => {
   );
 };
 
-ComponentTableSkeleton.displayName = "ComponentTableSkeleton";
+FieldGroupTableSkeleton.displayName = "FieldGroupTableSkeleton";

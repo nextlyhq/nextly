@@ -5,7 +5,7 @@
  * `labels.singular`/`plural` to the same name to keep the manifest entity
  * (which requires both when present) valid.
  *
- * @module lib/builder/to-manifest-entity-component
+ * @module lib/builder/to-manifest-entity-field-group
  */
 import {
   applyCommonSettings,
@@ -14,7 +14,7 @@ import {
   type ManifestEntity,
 } from "./to-manifest-entity";
 
-export function componentToManifestEntity(
+export function fieldGroupToManifestEntity(
   args: EntityToManifestArgs
 ): ManifestEntity {
   const entity: ManifestEntity = {

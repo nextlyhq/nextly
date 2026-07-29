@@ -9,7 +9,7 @@ import type { BuilderConfig } from "./builder-config";
 const KIND_LABEL: Record<BuilderConfig["kind"], string> = {
   collection: "collection",
   single: "single",
-  component: "component",
+  "field-group": "field group",
 };
 
 type Props = {

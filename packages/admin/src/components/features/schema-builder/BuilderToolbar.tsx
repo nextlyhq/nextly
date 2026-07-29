@@ -25,7 +25,7 @@ type Props = {
 const KIND_BREADCRUMB: Record<BuilderConfig["kind"], string> = {
   collection: "Collections",
   single: "Singles",
-  component: "Components",
+  "field-group": "Field Groups",
 };
 
 export function BuilderToolbar({

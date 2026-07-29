@@ -389,10 +389,10 @@ export function SubSidebarContent({
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
-                isActive={isActive(ROUTES.BUILDER_COMPONENTS)}
+                isActive={isActive(ROUTES.BUILDER_FIELD_GROUPS)}
                 className="justify-start px-3"
               >
-                <Link href={ROUTES.BUILDER_COMPONENTS}>
+                <Link href={ROUTES.BUILDER_FIELD_GROUPS}>
                   <Puzzle className="h-4 w-4" />
                   <span>Components</span>
                 </Link>
