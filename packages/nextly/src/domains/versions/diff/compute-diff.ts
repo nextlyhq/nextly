@@ -10,8 +10,11 @@
  * Field types map to nodes as: text-like -> word segments; scalar/media/single
  * relationship -> before/after values; group and single component -> nested
  * fields; repeatable and dynamic-zone -> items matched by stable id; many
- * relationship -> a set difference of ids (resolving ids to titles is task 022,
- * kept out so this stays pure). A password field is never emitted at any depth.
+ * relationship -> a set difference of targets by identity (rendering an id as a
+ * human title is a separate concern, kept out so this stays pure). A password
+ * field is never emitted at any depth, and any stored value that looks like a
+ * bcrypt hash is masked as a defense against a password field that was deleted
+ * or retyped since it was captured.
  *
  * @module domains/versions/diff/compute-diff
  */
@@ -27,6 +30,7 @@ import type {
   DiffStatus,
   FieldDiff,
   ListItemDiff,
+  RelationTarget,
   UnknownFieldDiff,
   VersionDiff,
 } from "./types";
@@ -47,6 +51,9 @@ interface NodeMeta {
 }
 
 // Persisted columns that are not user fields, so they never diff as content.
+// Also the exclusion set for unknown-key detection at every object level (a
+// component row's `id` is here; its `_componentType` is caught by the `_`
+// prefix rule).
 const SYSTEM_KEYS = new Set([
   "id",
   "createdAt",
@@ -55,9 +62,12 @@ const SYSTEM_KEYS = new Set([
   "status",
 ]);
 
-// Field types whose value is a single string diffed word by word. richText is
-// deliberately excluded: there is no server-side plain-text flattener, so v1
-// diffs it as a whole value (each side rendered read-only) rather than guessing.
+// Field types whose value is a single string diffed word by word. slug/url/phone
+// are not core field types but are string-valued (plugin field types, and the
+// admin value-display kit groups them with text), so word-diffing them is
+// correct; a type no field actually has simply never matches. richText is
+// excluded: there is no server-side plain-text flattener, so it diffs as a whole
+// value (each side rendered read-only) rather than guessing.
 const TEXT_TYPES = new Set([
   "text",
   "textarea",
@@ -67,6 +77,12 @@ const TEXT_TYPES = new Set([
   "url",
   "phone",
 ]);
+
+// A stored value matching bcrypt's format is a hashed password. Captured
+// passwords are hashed, so this masks one that slipped past redaction because
+// its field was deleted or retyped after capture.
+const BCRYPT_HASH = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+const SECRET_MASK = "[protected]";
 
 // ---- small typed structural accessors (no `any`) ----------------------------
 
@@ -119,21 +135,42 @@ function asText(value: unknown): string {
   return "";
 }
 
-/** A relationship/upload id, whether stored bare or as `{ relationTo, value }`. */
-function idOf(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number") return String(value);
-  if (value !== null && typeof value === "object") {
-    const rel = value as { value?: unknown; id?: unknown };
-    return asText(rel.value ?? rel.id);
-  }
-  return "";
+/** Replace a bcrypt-hash value with a mask so a leaked password never renders. */
+function maskSecret(value: unknown): unknown {
+  return typeof value === "string" && BCRYPT_HASH.test(value)
+    ? SECRET_MASK
+    : value;
 }
-function toIdList(value: unknown): string[] {
+
+// ---- relationship targets ---------------------------------------------------
+
+/** One relationship target as `{ id, relationTo? }`, or null if it has no id. */
+function toTarget(value: unknown): RelationTarget | null {
+  if (typeof value === "string") return value === "" ? null : { id: value };
+  if (typeof value === "number") return { id: String(value) };
+  if (value !== null && typeof value === "object") {
+    const rel = value as {
+      value?: unknown;
+      id?: unknown;
+      relationTo?: unknown;
+    };
+    const id = asText(rel.value ?? rel.id);
+    if (id === "") return null;
+    return typeof rel.relationTo === "string"
+      ? { id, relationTo: rel.relationTo }
+      : { id };
+  }
+  return null;
+}
+function toTargets(value: unknown): RelationTarget[] {
   if (value === null || value === undefined) return [];
   return (Array.isArray(value) ? value : [value])
-    .map(idOf)
-    .filter(id => id !== "");
+    .map(toTarget)
+    .filter((t): t is RelationTarget => t !== null);
+}
+/** Identity of a target: `relationTo` matters only when the relation is polymorphic. */
+function targetKey(target: RelationTarget): string {
+  return target.relationTo ? `${target.relationTo}:${target.id}` : target.id;
 }
 
 // ---- classification ---------------------------------------------------------
@@ -141,12 +178,9 @@ function toIdList(value: unknown): string[] {
 function isComponentField(field: FieldConfig): boolean {
   return field.type === "component";
 }
-/** A component field is a list when it is a dynamic zone or marked repeatable. */
+/** Cardinality is decided by `repeatable`; a non-repeatable field holds one value. */
 function isComponentList(field: FieldConfig): boolean {
-  return (
-    isComponentField(field) &&
-    (Array.isArray(componentSlugs(field)) || isRepeatable(field))
-  );
+  return isComponentField(field) && isRepeatable(field);
 }
 function isListField(field: FieldConfig): boolean {
   return field.type === "repeater" || isComponentList(field);
@@ -168,14 +202,35 @@ function isSetField(
   );
 }
 
+/** Child fields of a non-repeatable component value, resolved by its type. */
+function singleComponentChildFields(
+  field: FieldConfig,
+  before: unknown,
+  after: unknown
+): FieldConfig[] {
+  // Single-mode component: one fixed schema.
+  const single = enrichedComponentFields(field);
+  if (!Array.isArray(componentSlugs(field))) return single ?? [];
+  // Non-repeatable dynamic zone: the editor picked one type; resolve its schema
+  // from the stored discriminator (the after value, falling back to before).
+  const type =
+    componentTypeOf(asObject(after)) ?? componentTypeOf(asObject(before));
+  if (type === undefined) return [];
+  return enrichedComponentSchemas(field)?.[type]?.fields ?? [];
+}
+
 /**
  * The child fields a NAMELESS presentational container contributes to its
- * parent level. Only groups and single components nest fields; anything else
- * nameless has nothing to flatten.
+ * parent level. Only groups and single-mode components nest a fixed inline
+ * schema; anything else nameless has nothing to flatten.
  */
 function presentationalChildren(field: FieldConfig): FieldConfig[] | undefined {
   if (field.type === "group") return inlineFields(field);
-  if (isComponentField(field) && !isComponentList(field)) {
+  if (
+    isComponentField(field) &&
+    !isComponentList(field) &&
+    !Array.isArray(componentSlugs(field))
+  ) {
     return enrichedComponentFields(field);
   }
   return undefined;
@@ -197,8 +252,8 @@ function statusFromPresence(
 // ---- per-kind node builders (all take a resolved meta) ----------------------
 
 function textNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
-  const b = asText(before);
-  const a = asText(after);
+  const b = asText(maskSecret(before));
+  const a = asText(maskSecret(after));
   const status = statusFromPresence(
     before === "" ? null : before,
     after === "" ? null : after,
@@ -217,28 +272,44 @@ function valueNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
     ...meta,
     kind: "value",
     status: statusFromPresence(before, after, !dequal(before, after)),
-    before,
-    after,
+    before: maskSecret(before),
+    after: maskSecret(after),
   };
 }
 
 function setNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
-  const beforeIds = toIdList(before);
-  const afterIds = toIdList(after);
-  const beforeSet = new Set(beforeIds);
-  const afterSet = new Set(afterIds);
-  const added = afterIds.filter(id => !beforeSet.has(id));
-  const removed = beforeIds.filter(id => !afterSet.has(id));
+  const beforeTargets = toTargets(before);
+  const afterTargets = toTargets(after);
+  const beforeKeys = new Set(beforeTargets.map(targetKey));
+  const afterKeys = new Set(afterTargets.map(targetKey));
+  // Dedupe by identity so a duplicated stored id yields one set entry.
+  const added = dedupeTargets(
+    afterTargets.filter(t => !beforeKeys.has(targetKey(t)))
+  );
+  const removed = dedupeTargets(
+    beforeTargets.filter(t => !afterKeys.has(targetKey(t)))
+  );
   let status: DiffStatus = "unchanged";
   if (added.length > 0 || removed.length > 0) {
     status =
-      beforeIds.length === 0
+      beforeKeys.size === 0
         ? "added"
-        : afterIds.length === 0
+        : afterKeys.size === 0
           ? "removed"
           : "changed";
   }
   return { ...meta, kind: "set", status, added, removed };
+}
+function dedupeTargets(targets: RelationTarget[]): RelationTarget[] {
+  const seen = new Set<string>();
+  const out: RelationTarget[] = [];
+  for (const target of targets) {
+    const key = targetKey(target);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(target);
+  }
+  return out;
 }
 
 function groupNode(
@@ -278,9 +349,11 @@ function itemChildFields(
 }
 
 function itemDiff(match: ItemMatch, field: FieldConfig): ListItemDiff {
-  const source =
-    match.presence === "removed" ? match.beforeItem : match.afterItem;
-  const componentType = componentTypeOf(source);
+  const beforeType =
+    match.presence === "added" ? undefined : componentTypeOf(match.beforeItem);
+  const afterType =
+    match.presence === "removed" ? undefined : componentTypeOf(match.afterItem);
+  const componentType = afterType ?? beforeType;
   const childFields = itemChildFields(field, componentType);
 
   if (match.presence === "added") {
@@ -311,10 +384,17 @@ function itemDiff(match: ItemMatch, field: FieldConfig): ListItemDiff {
     childFields.length > 0
       ? collectNodes(childFields, match.beforeItem, match.afterItem)
       : [];
+  // A stable id whose component type changed is a real change even if the two
+  // schemas happen to share equal-valued field names.
+  const typeChanged =
+    beforeType !== undefined &&
+    afterType !== undefined &&
+    beforeType !== afterType;
   const contentChanged =
-    childFields.length > 0
+    typeChanged ||
+    (childFields.length > 0
       ? fields.some(n => n.status !== "unchanged")
-      : !dequal(match.beforeItem, match.afterItem);
+      : !dequal(match.beforeItem, match.afterItem));
   const hasMoved = match.fromIndex !== match.toIndex;
   return {
     id: match.id,
@@ -354,8 +434,8 @@ function unknownNode(
     kind: "unknown",
     name: key,
     status: statusFromPresence(before, after, !dequal(before, after)),
-    before,
-    after,
+    before: maskSecret(before),
+    after: maskSecret(after),
   };
 }
 
@@ -373,11 +453,29 @@ function diffField(
 
   if (isListField(field)) return listNode(meta, field, before, after);
   if (isGroupField(field)) {
-    const childFields =
-      field.type === "group"
-        ? (inlineFields(field) ?? [])
-        : (enrichedComponentFields(field) ?? []);
-    return groupNode(meta, childFields, before, after);
+    if (field.type === "group") {
+      return groupNode(meta, inlineFields(field) ?? [], before, after);
+    }
+    // Non-repeatable component. A single-mode component keeps a fixed schema; a
+    // dynamic zone whose stored type differs between versions is a whole-value
+    // change rather than a field-by-field one.
+    if (Array.isArray(componentSlugs(field))) {
+      const beforeType = componentTypeOf(asObject(before));
+      const afterType = componentTypeOf(asObject(after));
+      if (
+        beforeType !== undefined &&
+        afterType !== undefined &&
+        beforeType !== afterType
+      ) {
+        return valueNode(meta, before, after);
+      }
+    }
+    return groupNode(
+      meta,
+      singleComponentChildFields(field, before, after),
+      before,
+      after
+    );
   }
   if (isSetField(field, before, after)) return setNode(meta, before, after);
   if (TEXT_TYPES.has(field.type)) return textNode(meta, before, after);
@@ -388,7 +486,11 @@ function diffField(
  * Diff a list of field definitions against a before/after object. A nameless
  * presentational container contributes its children to this same level (its
  * values live flat on the parent), matching how the read UI flattens them. A
- * password is skipped at every depth.
+ * password is skipped at every depth; a field whose key is absent from both
+ * snapshots is skipped too, so a field redaction removed (its key is deleted)
+ * never reappears as an empty node. Keys present in a snapshot but absent from
+ * the schema surface as unknown nodes at THIS level, so a nested field deleted
+ * since capture still affects the result instead of vanishing.
  */
 function collectNodes(
   fields: FieldConfig[],
@@ -406,7 +508,17 @@ function collectNodes(
       continue;
     }
     if (field.type === "password") continue;
+    if (!(name in beforeObj) && !(name in afterObj)) continue;
     nodes.push(diffField(field, name, beforeObj[name], afterObj[name]));
+  }
+
+  const consumed = topLevelNames(fields);
+  const keys = new Set([...Object.keys(beforeObj), ...Object.keys(afterObj)]);
+  for (const key of keys) {
+    if (consumed.has(key) || SYSTEM_KEYS.has(key) || key.startsWith("_")) {
+      continue;
+    }
+    nodes.push(unknownNode(key, beforeObj[key], afterObj[key]));
   }
   return nodes;
 }
@@ -459,18 +571,6 @@ export function computeVersionDiff(
   opts: ComputeDiffOptions = {}
 ): VersionDiffBody {
   const nodes = collectNodes(fields, before, after);
-
-  // Keys present in a snapshot but absent from the current schema (a field
-  // deleted since capture) still surface, so a diff never silently hides a
-  // change. System columns and internal keys are not content.
-  const consumed = topLevelNames(fields);
-  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-  for (const key of keys) {
-    if (consumed.has(key) || SYSTEM_KEYS.has(key) || key.startsWith("_"))
-      continue;
-    nodes.push(unknownNode(key, before[key], after[key]));
-  }
-
   const hasChanges = nodes.some(n => n.status !== "unchanged");
   if (!opts.modifiedOnly) return { hasChanges, fields: nodes };
 

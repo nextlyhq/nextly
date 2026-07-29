@@ -112,7 +112,7 @@ describe("computeVersionDiff — per field kind", () => {
     }
   });
 
-  it("diffs a many relationship as an id set", () => {
+  it("diffs a many relationship as a target set", () => {
     const diff = computeVersionDiff(
       { tags: ["a", "b"] },
       { tags: ["b", "c"] },
@@ -121,9 +121,34 @@ describe("computeVersionDiff — per field kind", () => {
     expect(diff.fields[0]).toMatchObject({
       kind: "set",
       status: "changed",
-      added: ["c"],
-      removed: ["a"],
+      added: [{ id: "c" }],
+      removed: [{ id: "a" }],
     });
+  });
+
+  it("keeps relationTo in a polymorphic relationship's identity", () => {
+    // Same id in different collections is a different target, so a change of
+    // relationTo must register even when the id is unchanged.
+    const diff = computeVersionDiff(
+      { ref: [{ relationTo: "posts", value: "1" }] },
+      { ref: [{ relationTo: "pages", value: "1" }] },
+      [field({ name: "ref", type: "relationship", hasMany: true })]
+    );
+    expect(diff.fields[0]).toMatchObject({
+      kind: "set",
+      status: "changed",
+      added: [{ id: "1", relationTo: "pages" }],
+      removed: [{ id: "1", relationTo: "posts" }],
+    });
+  });
+
+  it("does not emit duplicate targets for a duplicated stored id", () => {
+    const diff = computeVersionDiff({ tags: [] }, { tags: ["a", "a"] }, [
+      field({ name: "tags", type: "relationship", hasMany: true }),
+    ]);
+    const node = diff.fields[0];
+    expect(node).toMatchObject({ kind: "set", status: "added" });
+    if (node.kind === "set") expect(node.added).toEqual([{ id: "a" }]);
   });
 
   it("surfaces a snapshot field absent from the current schema", () => {
@@ -215,6 +240,116 @@ describe("computeVersionDiff — never leaks a password", () => {
     expect(group.status).toBe("unchanged");
     if (group.kind === "group") {
       expect(group.fields.find(n => n.name === "pin")).toBeUndefined();
+    }
+  });
+});
+
+describe("computeVersionDiff — never leaks a password", () => {
+  it("masks a bcrypt hash left by a password field deleted from the schema", () => {
+    // The `legacy` field no longer exists in the schema, so its stored hash
+    // surfaces as an unknown key; it must be masked rather than exposed.
+    const hashA = "$2b$12$" + "a".repeat(53);
+    const hashB = "$2b$12$" + "b".repeat(53);
+    const diff = computeVersionDiff({ legacy: hashA }, { legacy: hashB }, []);
+    const node = diff.fields.find(n => n.name === "legacy");
+    // The change is surfaced, but neither hash is exposed.
+    expect(node).toMatchObject({ kind: "unknown", status: "changed" });
+    if (node && node.kind === "unknown") {
+      expect(node.before).toBe("[protected]");
+      expect(node.after).toBe("[protected]");
+    }
+  });
+});
+
+describe("computeVersionDiff — read-denied fields", () => {
+  it("omits a field redaction removed from both snapshots", () => {
+    // Redaction deletes a read-denied field's key; the diff must not reintroduce
+    // it as an empty node the way it renders a genuinely-empty field.
+    const fields = [
+      field({ name: "title", type: "text" }),
+      field({ name: "salary", type: "number" }),
+    ];
+    const diff = computeVersionDiff({ title: "t" }, { title: "t" }, fields);
+    expect(diff.fields.find(n => n.name === "salary")).toBeUndefined();
+    // A genuinely-empty field keeps its (null) key and still renders.
+    const withEmpty = computeVersionDiff(
+      { title: "t", salary: null },
+      { title: "t", salary: null },
+      fields
+    );
+    expect(withEmpty.fields.find(n => n.name === "salary")).toBeDefined();
+  });
+});
+
+describe("computeVersionDiff — components", () => {
+  it("treats a non-repeatable dynamic zone as a single value, not a list", () => {
+    const field_ = field({
+      name: "hero",
+      type: "component",
+      components: ["banner"],
+      componentSchemas: {
+        banner: { fields: [field({ name: "heading", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { hero: { id: "c1", _componentType: "banner", heading: "Old" } },
+      { hero: { id: "c1", _componentType: "banner", heading: "New" } },
+      [field_]
+    );
+    const node = diff.fields[0];
+    expect(node.kind).toBe("group");
+    expect(node.status).toBe("changed");
+    if (node.kind === "group") {
+      expect(node.fields.find(n => n.name === "heading")?.status).toBe(
+        "changed"
+      );
+    }
+  });
+
+  it("marks a matched list item whose component type changed", () => {
+    const layout = field({
+      name: "layout",
+      type: "component",
+      components: ["hero", "cta"],
+      repeatable: true,
+      componentSchemas: {
+        hero: { fields: [field({ name: "label", type: "text" })] },
+        cta: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    // Same stable id, different component type, coincidentally equal field value.
+    const diff = computeVersionDiff(
+      { layout: [{ id: "1", _componentType: "hero", label: "Go" }] },
+      { layout: [{ id: "1", _componentType: "cta", label: "Go" }] },
+      [layout]
+    );
+    const list = diff.fields[0];
+    if (list.kind === "list") {
+      expect(list.items[0].status).toBe("changed");
+    }
+  });
+
+  it("surfaces an unknown key removed from a nested group", () => {
+    // Only the removed nested child differs; without recursive unknown-key
+    // detection the parent would look unchanged and hasChanges would be false.
+    const fields = [
+      field({
+        name: "seo",
+        type: "group",
+        fields: [field({ name: "title", type: "text" })],
+      }),
+    ];
+    const diff = computeVersionDiff(
+      { seo: { title: "same", legacyKeyword: "old" } },
+      { seo: { title: "same", legacyKeyword: "new" } },
+      fields
+    );
+    expect(diff.hasChanges).toBe(true);
+    const group = diff.fields[0];
+    if (group.kind === "group") {
+      expect(group.fields.find(n => n.name === "legacyKeyword")?.status).toBe(
+        "changed"
+      );
     }
   });
 });

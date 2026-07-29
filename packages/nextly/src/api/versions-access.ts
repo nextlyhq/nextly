@@ -422,6 +422,26 @@ export async function resolveCurrentFields(
   }
 }
 
+/**
+ * Current fields enriched with resolved component sub-schemas, so the diff
+ * engine can walk into component fields. `enrichFieldsWithComponentSchemas`
+ * takes and returns a `Record`-based shape; the enriched result is a structural
+ * superset of `FieldConfig` (the same fields plus attached sub-schemas), which
+ * the engine reads structurally. The casts are isolated here rather than at the
+ * call site, matching the enrichment idiom the schema-detail routes use.
+ */
+async function resolveEnrichedFields(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  const rawFields = await resolveCurrentFields(scopeKind, slug);
+  const componentRegistry = getService("componentRegistryService");
+  const enriched = await componentRegistry.enrichFieldsWithComponentSchemas(
+    rawFields as unknown as Record<string, unknown>[]
+  );
+  return enriched as unknown as FieldConfig[];
+}
+
 /** A stored snapshot as a plain object, or an empty object if it is not one. */
 function snapshotObject(snapshot: unknown): Record<string, unknown> {
   return snapshot !== null &&
@@ -531,11 +551,7 @@ export async function diffDocumentVersions(args: {
   // Page scope has no HTTP diff surface; collection and single are the only
   // callers, so anything else resolves as a collection for field lookup.
   const lookupKind = args.scopeKind === "single" ? "single" : "collection";
-  const rawFields = await resolveCurrentFields(lookupKind, args.slug);
-  const componentRegistry = getService("componentRegistryService");
-  const fields = (await componentRegistry.enrichFieldsWithComponentSchemas(
-    rawFields as unknown as Record<string, unknown>[]
-  )) as unknown as FieldConfig[];
+  const fields = await resolveEnrichedFields(lookupKind, args.slug);
 
   const body = computeVersionDiff(
     snapshotObject(fromRow.snapshot),

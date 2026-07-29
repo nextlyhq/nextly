@@ -28,6 +28,24 @@ import {
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 
+// Re-export the response types so a consumer of this endpoint (including the
+// admin renderer) can import them through the published package rather than
+// deep-importing an internal module.
+export type {
+  DiffStatus,
+  FieldDiff,
+  GroupFieldDiff,
+  ListFieldDiff,
+  ListItemDiff,
+  RelationTarget,
+  SetFieldDiff,
+  TextFieldDiff,
+  TextSegment,
+  UnknownFieldDiff,
+  ValueFieldDiff,
+  VersionDiff,
+} from "../domains/versions/diff/types";
+
 /**
  * Context object for dynamic route handlers.
  * Next.js 15+ requires params to be a Promise.

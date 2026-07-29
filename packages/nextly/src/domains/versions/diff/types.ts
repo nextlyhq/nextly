@@ -50,14 +50,22 @@ export interface GroupFieldDiff extends FieldDiffBase {
 }
 
 /**
- * A many relationship / m2m field: a set difference of raw target ids.
- * Resolving ids to human titles is deliberately out of scope here (task 022,
- * reference hydration), which keeps this engine pure and dialect-free.
+ * One target of a relationship. `relationTo` is present only for a polymorphic
+ * relationship, where the same `id` can refer to rows in different collections,
+ * so it is part of the target's identity. Resolving `id` to a human title is a
+ * separate rendering concern, kept out of this engine so it stays pure and
+ * dialect-free.
  */
+export interface RelationTarget {
+  id: string;
+  relationTo?: string;
+}
+
+/** A many relationship field: a set difference of targets by identity. */
 export interface SetFieldDiff extends FieldDiffBase {
   kind: "set";
-  added: string[];
-  removed: string[];
+  added: RelationTarget[];
+  removed: RelationTarget[];
 }
 
 /**
