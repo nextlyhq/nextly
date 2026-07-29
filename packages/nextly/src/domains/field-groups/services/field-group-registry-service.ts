@@ -1,19 +1,19 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import type { FieldGroupAdminOptions } from "../../../components/config/types";
-import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../../components/config/validate-field-group";
 import { toDbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors";
+import type { FieldGroupAdminOptions } from "../../../field-groups/config/types";
+import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../../field-groups/config/validate-field-group";
 // PR 4 migration: switched the throw layer to NextlyError. Public messages now
 // follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
 // `logContext` so operators retain full diagnostic context.
-import { NextlyError } from "../../../errors";
 import type {
   DynamicFieldGroupInsert,
   DynamicFieldGroupRecord,
   FieldGroupMigrationStatus,
   FieldGroupSource,
-} from "../../../schemas/dynamic-components/types";
+} from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { BaseRegistryService } from "../../../shared/base-registry-service";
 import type {
@@ -28,7 +28,7 @@ import {
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
-import { teardownEntityComponentData } from "./teardown-entity-component-data";
+import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
 /**
  * A reference to a Component from a Collection, Single, or another Component.
@@ -96,7 +96,7 @@ export interface EnrichedFieldConfig extends Record<string, unknown> {
   componentSchemas?: Record<string, EnrichedComponentSchema>;
 }
 
-export class ComponentRegistryService extends BaseRegistryService<
+export class FieldGroupRegistryService extends BaseRegistryService<
   DynamicFieldGroupRecord,
   FieldGroupMigrationStatus
 > {

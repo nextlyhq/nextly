@@ -3,20 +3,20 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
-import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
+import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 
 import {
-  ComponentMutationService,
+  FieldGroupMutationService,
   type SaveComponentDataParams,
   type DeleteComponentDataParams,
-} from "./component-mutation-service";
+} from "./field-group-mutation-service";
 import {
-  ComponentQueryService,
+  FieldGroupQueryService,
   type PopulateComponentDataParams,
   type PopulateComponentDataManyParams,
-} from "./component-query-service";
+} from "./field-group-query-service";
 
 export type {
   SaveComponentDataParams,
@@ -25,27 +25,27 @@ export type {
   PopulateComponentDataManyParams,
 };
 
-export class ComponentDataService {
-  private readonly queryService: ComponentQueryService;
-  private readonly mutationService: ComponentMutationService;
+export class FieldGroupDataService {
+  private readonly queryService: FieldGroupQueryService;
+  private readonly mutationService: FieldGroupMutationService;
 
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    private readonly registryService: ComponentRegistryService,
+    private readonly registryService: FieldGroupRegistryService,
     relationshipService?: CollectionRelationshipService,
     // i18n: threaded to the query/mutation services so a localized embedded component
     // resolves/writes its translatable fields via `comp_<slug>_locales` per language.
     localization?: SanitizedLocalizationConfig
   ) {
-    this.queryService = new ComponentQueryService(
+    this.queryService = new FieldGroupQueryService(
       adapter,
       logger,
       registryService,
       relationshipService,
       localization
     );
-    this.mutationService = new ComponentMutationService(
+    this.mutationService = new FieldGroupMutationService(
       adapter,
       logger,
       registryService,

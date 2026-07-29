@@ -14,7 +14,7 @@
  *   type DynamicFieldGroupInsert,
  *   type FieldGroupSource,
  *   type FieldGroupMigrationStatus,
- * } from '@nextly/schemas/dynamic-components';
+ * } from '@nextly/schemas/dynamic-field-groups';
  * ```
  */
 

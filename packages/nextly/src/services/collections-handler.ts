@@ -29,8 +29,8 @@ import {
   type WhereFilter,
   type UserContext,
 } from "./collections/index";
-import type { ComponentDataService } from "./components/component-data-service";
-import type { ComponentRegistryService } from "./components/component-registry-service";
+import type { FieldGroupDataService } from "./field-groups/field-group-data-service";
+import type { FieldGroupRegistryService } from "./field-groups/field-group-registry-service";
 import { consoleLogger } from "./shared";
 import type { Logger } from "./shared";
 
@@ -163,8 +163,8 @@ export class CollectionsHandler {
 
     const accessControlService = new AccessControlService();
 
-    const componentDataService = container.has("componentDataService")
-      ? container.get<ComponentDataService>("componentDataService")
+    const fieldGroupDataService = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
       : undefined;
 
     // Shared post-response drain fast path (registered by the webhook services),
@@ -180,9 +180,9 @@ export class CollectionsHandler {
         ? container.get<CacheRevalidator>("cacheRevalidator")
         : undefined;
 
-    // Late-inject relationshipService if componentDataService was created before it was available
-    if (componentDataService) {
-      componentDataService.setRelationshipService(this.relationshipService);
+    // Late-inject relationshipService if fieldGroupDataService was created before it was available
+    if (fieldGroupDataService) {
+      fieldGroupDataService.setRelationshipService(this.relationshipService);
     }
 
     // The RBAC service the write gates evaluate `update`/`publish`/`unpublish`
@@ -203,7 +203,7 @@ export class CollectionsHandler {
       this.relationshipService,
       hookRegistry,
       accessControlService,
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       this.localization,
       retentionRunner,
@@ -379,10 +379,10 @@ export class CollectionsHandler {
     const data = result.data as Record<string, unknown> | null;
     if (result.success && data?.fields) {
       try {
-        const hasComponentRegistry = container.has("componentRegistryService");
+        const hasComponentRegistry = container.has("fieldGroupRegistryService");
         if (hasComponentRegistry) {
-          const componentRegistry = container.get<ComponentRegistryService>(
-            "componentRegistryService"
+          const componentRegistry = container.get<FieldGroupRegistryService>(
+            "fieldGroupRegistryService"
           );
 
           const enrichedFields =

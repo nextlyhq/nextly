@@ -9,9 +9,9 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import { assertValidFieldGroupConfig } from "../../components/config/validate-field-group";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
+import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type {
   FieldGroupDefinition,
   CreateFieldGroupArgs,
@@ -55,7 +55,7 @@ export function createFieldGroupsNamespace(
     async find(
       args: FindFieldGroupsArgs = {}
     ): Promise<ListResult<FieldGroupDefinition>> {
-      const result = await ctx.componentRegistryService.listComponents({
+      const result = await ctx.fieldGroupRegistryService.listComponents({
         source: args.source,
         migrationStatus: args.migrationStatus,
         locked: args.locked,
@@ -100,9 +100,8 @@ export function createFieldGroupsNamespace(
       }
 
       try {
-        const component = await ctx.componentRegistryService.getComponentBySlug(
-          args.slug
-        );
+        const component =
+          await ctx.fieldGroupRegistryService.getComponentBySlug(args.slug);
 
         if (!component) {
           if (config.disableErrors) {
@@ -174,7 +173,7 @@ export function createFieldGroupsNamespace(
       });
       const tableName = resolveComponentTableName(args.slug);
 
-      const component = await ctx.componentRegistryService.registerComponent({
+      const component = await ctx.fieldGroupRegistryService.registerComponent({
         slug: args.slug,
         label: args.label,
         tableName,
@@ -236,7 +235,7 @@ export function createFieldGroupsNamespace(
         updateData.admin = args.data.admin;
       }
 
-      const component = await ctx.componentRegistryService.updateComponent(
+      const component = await ctx.fieldGroupRegistryService.updateComponent(
         args.slug,
         updateData,
         { source: "ui" }
@@ -259,7 +258,7 @@ export function createFieldGroupsNamespace(
         });
       }
 
-      await ctx.componentRegistryService.deleteComponent(args.slug);
+      await ctx.fieldGroupRegistryService.deleteComponent(args.slug);
       // the deleted slug rather than `id` because components are addressed
       // by slug throughout this namespace.
       return {

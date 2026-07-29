@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { ComponentDataService } from "../../../services/components/component-data-service";
+import { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 
 import {
   createSilentLogger,
@@ -16,10 +16,10 @@ import {
   featureComponentMeta,
   heroComponentMeta,
   ctaComponentMeta,
-} from "./component-test-helpers";
+} from "./field-group-test-helpers";
 
 type ComponentDataTestCtx = {
-  service: ComponentDataService;
+  service: FieldGroupDataService;
   adapter: ReturnType<typeof createMockAdapter>;
   registry: ReturnType<typeof createMockComponentRegistry>;
   relationship: ReturnType<typeof createMockRelationshipService>;
@@ -33,17 +33,17 @@ function createCtx(
   const relationship = createMockRelationshipService();
   const logger = createSilentLogger();
 
-  const service = new ComponentDataService(
-    adapter as unknown as Parameters<typeof ComponentDataService>[0],
+  const service = new FieldGroupDataService(
+    adapter as unknown as Parameters<typeof FieldGroupDataService>[0],
     logger,
-    registry as unknown as Parameters<typeof ComponentDataService>[2],
-    relationship as unknown as Parameters<typeof ComponentDataService>[3]
+    registry as unknown as Parameters<typeof FieldGroupDataService>[2],
+    relationship as unknown as Parameters<typeof FieldGroupDataService>[3]
   );
 
   return { service, adapter, registry, relationship };
 }
 
-describe("ComponentDataService", () => {
+describe("FieldGroupDataService", () => {
   let ctx: ComponentDataTestCtx;
 
   beforeEach(() => {
@@ -1119,10 +1119,10 @@ describe("ComponentDataService", () => {
       ]);
 
       const logger = createSilentLogger();
-      const service = new ComponentDataService(
-        adapter as unknown as Parameters<typeof ComponentDataService>[0],
+      const service = new FieldGroupDataService(
+        adapter as unknown as Parameters<typeof FieldGroupDataService>[0],
         logger,
-        registry as unknown as Parameters<typeof ComponentDataService>[2]
+        registry as unknown as Parameters<typeof FieldGroupDataService>[2]
       );
 
       const lateRelationship = createMockRelationshipService();

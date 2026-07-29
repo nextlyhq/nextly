@@ -16,12 +16,12 @@
  * - Table name convention: `comp_` prefix (e.g., 'comp_seo')
  * - `admin.category` for sidebar grouping (instead of `admin.group`)
  *
- * @module schemas/dynamic-components/types
+ * @module schemas/dynamic-field-groups/types
  * @since 1.0.0
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { FieldGroupAdminOptions } from "../../components/config/types";
+import type { FieldGroupAdminOptions } from "../../field-groups/config/types";
 
 // ============================================================
 // Component Source & Status Types

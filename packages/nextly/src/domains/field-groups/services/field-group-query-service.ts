@@ -2,10 +2,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
-import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
-import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
+import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
@@ -28,7 +28,7 @@ import {
   toSnakeCase,
   shouldTreatAsJson,
   type ComponentRow,
-} from "./component-utils";
+} from "./field-group-utils";
 
 /**
  * Parameters for populating component data on a single parent entry.
@@ -140,14 +140,14 @@ function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return field.type === STORAGE_FORMAT.fieldType;
 }
 
-export class ComponentQueryService extends BaseService {
-  private readonly registryService: ComponentRegistryService;
+export class FieldGroupQueryService extends BaseService {
+  private readonly registryService: FieldGroupRegistryService;
   private relationshipService?: CollectionRelationshipService;
 
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    registryService: ComponentRegistryService,
+    registryService: FieldGroupRegistryService,
     relationshipService?: CollectionRelationshipService,
     // i18n: when set and an embedded component is localized, its translatable fields
     // resolve/write per language via the component's companion `comp_<slug>_locales` table.

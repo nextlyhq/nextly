@@ -14,7 +14,7 @@
  * - Table name convention: `comp_` prefix (e.g., 'comp_seo')
  * - `admin.category` for sidebar grouping
  *
- * @module schemas/dynamic-components/sqlite
+ * @module schemas/dynamic-field-groups/sqlite
  * @since 1.0.0
  *
  * @example
@@ -23,7 +23,7 @@
  *   dynamicFieldGroupsSqlite,
  *   type DynamicFieldGroupSqlite,
  *   type DynamicFieldGroupInsertSqlite,
- * } from '@nextly/schemas/dynamic-components/sqlite';
+ * } from '@nextly/schemas/dynamic-field-groups/sqlite';
  *
  * // Insert a new Component
  * const newComponent = await db.insert(dynamicFieldGroupsSqlite).values({
@@ -40,7 +40,7 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { FieldGroupAdminOptions } from "../../components/config/types";
+import type { FieldGroupAdminOptions } from "../../field-groups/config/types";
 import { STORAGE_FORMAT } from "../storage-format";
 
 import type { FieldGroupSource, FieldGroupMigrationStatus } from "./types";

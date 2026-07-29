@@ -19,7 +19,7 @@
  * ```typescript
  * // packages/plugin-foo/src/admin/register.ts
  * import { registerComponents } from '@nextlyhq/admin/lib/component-registry';
- * import { FooView, FooButton } from './components';
+ * import { FooView, FooButton } from './field-groups';
  *
  * export function registerFooComponents() {
  *   registerComponents({
@@ -98,7 +98,7 @@ export function registerFormBuilderComponents(components: {
  * ```typescript
  * // In plugin's admin/register.ts
  * import { registerPluginComponents } from '@nextlyhq/admin/lib/plugin-components';
- * import { MyView, MyButton } from './components';
+ * import { MyView, MyButton } from './field-groups';
  *
  * export function registerMyPlugin() {
  *   registerPluginComponents('@nextlyhq/plugin-my-plugin/admin', {

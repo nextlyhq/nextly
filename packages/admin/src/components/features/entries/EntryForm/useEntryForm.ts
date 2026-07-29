@@ -330,7 +330,7 @@ function getDefaultValues(
         }
       } else if (fieldType === "component") {
         // Component data from the API comes as an array (from
-        // ComponentDataService.populateComponentData) even for
+        // FieldGroupDataService.populateComponentData) even for
         // non-repeatable components. The form's dynamic-zone mode
         // (MultiComponentNonRepeatable) expects a single object with
         // _componentType at the top level. Unwrap single-element arrays.

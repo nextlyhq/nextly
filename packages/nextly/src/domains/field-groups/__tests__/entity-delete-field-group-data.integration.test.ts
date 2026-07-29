@@ -27,8 +27,8 @@ import { SchemaRegistry } from "../../../database/schema-registry";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
-import { ComponentSchemaService } from "../services/component-schema-service";
-import { teardownEntityComponentData } from "../services/teardown-entity-component-data";
+import { FieldGroupSchemaService } from "../services/field-group-schema-service";
+import { teardownEntityComponentData } from "../services/teardown-entity-field-group-data";
 
 interface TestAdapter {
   dialect: SupportedDialect;
@@ -85,7 +85,7 @@ for (const entry of DIALECTS) {
     // Component tables are resolved through the schema registry by adapter.select/delete,
     // exactly as at runtime, so the suite registers them the way the dispatcher does.
     let registry: SchemaRegistry;
-    let schemaService: ComponentSchemaService;
+    let schemaService: FieldGroupSchemaService;
 
     beforeAll(async () => {
       adapter = entry.make(entry.url as string);
@@ -94,8 +94,10 @@ for (const entry of DIALECTS) {
       (
         adapter as unknown as { setTableResolver(r: SchemaRegistry): void }
       ).setTableResolver(registry);
-      schemaService = new ComponentSchemaService(
-        entry.dialect as ConstructorParameters<typeof ComponentSchemaService>[0]
+      schemaService = new FieldGroupSchemaService(
+        entry.dialect as ConstructorParameters<
+          typeof FieldGroupSchemaService
+        >[0]
       );
     });
 

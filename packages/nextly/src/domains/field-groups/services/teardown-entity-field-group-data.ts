@@ -23,7 +23,7 @@
  * covers `comp_`-prefixed tables whose registry row was already removed, and the registry
  * covers registered components whose table has not been materialized yet.
  *
- * @module domains/components/services/teardown-entity-component-data
+ * @module domains/field-groups/services/teardown-entity-component-data
  */
 
 import type {

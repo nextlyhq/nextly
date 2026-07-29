@@ -17,9 +17,9 @@ import type { SingleEntryService } from "../../domains/singles/services/single-e
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
-import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
+import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../services/users/user-field-definition-service";
 
@@ -83,12 +83,12 @@ export function getSingleEntryServiceFromDI(): SingleEntryService | undefined {
 }
 
 export function getComponentRegistryFromDI():
-  | ComponentRegistryService
+  | FieldGroupRegistryService
   | undefined {
   try {
-    if (container.has("componentRegistryService")) {
-      return container.get<ComponentRegistryService>(
-        "componentRegistryService"
+    if (container.has("fieldGroupRegistryService")) {
+      return container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
       );
     }
   } catch {

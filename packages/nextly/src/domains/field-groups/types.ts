@@ -1,17 +1,17 @@
 export type {
   SaveComponentDataParams,
   DeleteComponentDataParams,
-} from "./services/component-mutation-service";
+} from "./services/field-group-mutation-service";
 
 export type {
   PopulateComponentDataParams,
   PopulateComponentDataManyParams,
-} from "./services/component-query-service";
+} from "./services/field-group-query-service";
 
 export type {
   ComponentRow,
   ComponentInstanceData,
-} from "./services/component-utils";
+} from "./services/field-group-utils";
 
 export type {
   ComponentReference,
@@ -22,6 +22,6 @@ export type {
   ListComponentsResult,
   EnrichedComponentSchema,
   EnrichedFieldConfig,
-} from "./services/component-registry-service";
+} from "./services/field-group-registry-service";
 
-export type { SupportedDialect as ComponentSupportedDialect } from "./services/component-schema-service";
+export type { SupportedDialect as ComponentSupportedDialect } from "./services/field-group-schema-service";

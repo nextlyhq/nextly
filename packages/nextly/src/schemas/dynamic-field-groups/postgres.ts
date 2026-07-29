@@ -1,7 +1,7 @@
 /**
- * MySQL Schema for Dynamic Components
+ * PostgreSQL Schema for Dynamic Components
  *
- * Defines the `dynamic_components` table schema for MySQL databases
+ * Defines the `dynamic_components` table schema for PostgreSQL databases
  * using Drizzle ORM. This schema stores metadata for both UI-created and
  * code-first Components with unified model fields for source tracking,
  * migration status, and versioning.
@@ -14,19 +14,19 @@
  * - Table name convention: `comp_` prefix (e.g., 'comp_seo')
  * - `admin.category` for sidebar grouping
  *
- * @module schemas/dynamic-components/mysql
+ * @module schemas/dynamic-field-groups/postgres
  * @since 1.0.0
  *
  * @example
  * ```typescript
  * import {
- *   dynamicFieldGroupsMysql,
- *   type DynamicFieldGroupMysql,
- *   type DynamicFieldGroupInsertMysql,
- * } from '@nextly/schemas/dynamic-components/mysql';
+ *   dynamicFieldGroupsPg,
+ *   type DynamicFieldGroupPg,
+ *   type DynamicFieldGroupInsertPg,
+ * } from '@nextly/schemas/dynamic-field-groups/postgres';
  *
  * // Insert a new Component
- * const newComponent = await db.insert(dynamicFieldGroupsMysql).values({
+ * const newComponent = await db.insert(dynamicFieldGroupsPg).values({
  *   slug: 'seo',
  *   label: 'SEO Metadata',
  *   tableName: 'comp_seo',
@@ -38,36 +38,52 @@
  */
 
 import {
-  mysqlTable,
+  pgTable,
+  uuid,
   varchar,
   text,
   boolean,
-  int,
-  datetime,
-  json,
+  integer,
+  timestamp,
+  jsonb,
   index,
-} from "drizzle-orm/mysql-core";
+} from "drizzle-orm/pg-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { FieldGroupAdminOptions } from "../../components/config/types";
+import type { FieldGroupAdminOptions } from "../../field-groups/config/types";
 import { STORAGE_FORMAT } from "../storage-format";
 
 import type { FieldGroupSource, FieldGroupMigrationStatus } from "./types";
 
 // ============================================================
-// Dynamic Components Table (MySQL)
+// Dynamic Components Table (PostgreSQL)
 // ============================================================
 
 /**
- * MySQL schema for the `dynamic_components` table.
+ * PostgreSQL schema for the `dynamic_components` table.
  *
  * Stores metadata for all Components (UI-created and code-first)
  * with unified model fields for:
  * - Source tracking (code, ui)
  * - Migration status (synced, pending, generated, applied)
  * - Schema versioning and change detection
+ *
+ * @example
+ * ```typescript
+ * // Query all code-first Components
+ * const codeComponents = await db
+ *   .select()
+ *   .from(dynamicFieldGroupsPg)
+ *   .where(eq(dynamicFieldGroupsPg.source, 'code'));
+ *
+ * // Find Components needing migration
+ * const pendingMigrations = await db
+ *   .select()
+ *   .from(dynamicFieldGroupsPg)
+ *   .where(eq(dynamicFieldGroupsPg.migrationStatus, 'pending'));
+ * ```
  */
-export const dynamicFieldGroupsMysql = mysqlTable(
+export const dynamicFieldGroupsPg = pgTable(
   STORAGE_FORMAT.registryTable,
   {
     // --------------------------------------------------------
@@ -75,9 +91,7 @@ export const dynamicFieldGroupsMysql = mysqlTable(
     // --------------------------------------------------------
 
     /** Unique identifier (UUID v4, auto-generated) */
-    id: varchar("id", { length: 36 })
-      .primaryKey()
-      .$defaultFn(() => crypto.randomUUID()),
+    id: uuid("id").primaryKey().defaultRandom(),
 
     // --------------------------------------------------------
     // Component Identity
@@ -85,6 +99,7 @@ export const dynamicFieldGroupsMysql = mysqlTable(
 
     /**
      * Unique slug identifier for the Component.
+     * Used in component field references and API operations.
      * Must be unique across all Components, Collections, AND Singles.
      */
     slug: varchar("slug", { length: 255 }).unique().notNull(),
@@ -92,11 +107,14 @@ export const dynamicFieldGroupsMysql = mysqlTable(
     /**
      * Display label for the Admin UI.
      * Components only need a singular label.
+     *
+     * @example 'SEO Metadata', 'Hero Section', 'Call To Action'
      */
     label: varchar("label", { length: 255 }).notNull(),
 
     /**
      * Database table name for this Component's data.
+     * Must be unique across all tables.
      * Convention: prefix with `comp_` (e.g., 'comp_seo').
      */
     tableName: varchar("table_name", { length: 255 }).unique().notNull(),
@@ -112,13 +130,13 @@ export const dynamicFieldGroupsMysql = mysqlTable(
      * Field configurations defining the Component's structure.
      * Supports all field types including nested component fields.
      */
-    fields: json("fields").$type<FieldConfig[]>().notNull(),
+    fields: jsonb("fields").$type<FieldConfig[]>().notNull(),
 
     /**
      * Admin UI configuration options.
      * Controls category grouping, icon, visibility, etc.
      */
-    admin: json("admin").$type<FieldGroupAdminOptions>(),
+    admin: jsonb("admin").$type<FieldGroupAdminOptions>(),
 
     // --------------------------------------------------------
     // Unified Model Fields
@@ -140,12 +158,16 @@ export const dynamicFieldGroupsMysql = mysqlTable(
      */
     locked: boolean("locked").default(false).notNull(),
 
-    // i18n: whether the component is localized (translatable fields live in the
-    // companion `comp_<slug>_locales` table). Mirrors dynamic_collections/singles.
+    /**
+     * i18n: whether the component is localized. When true, translatable fields live in
+     * the companion `comp_<slug>_locales` table and embedded instances resolve/write them
+     * per language (mirrors `dynamic_collections.localized` / `dynamic_singles.localized`).
+     */
     localized: boolean("localized").default(false).notNull(),
 
     /**
      * Path to the config file (code-first Components only).
+     * Used for syncing and displaying source location.
      * @example "src/components/seo.ts"
      */
     configPath: varchar("config_path", { length: 500 }),
@@ -164,10 +186,14 @@ export const dynamicFieldGroupsMysql = mysqlTable(
      * Schema version number, incremented on each change.
      * Starts at 1 for new Components.
      */
-    schemaVersion: int("schema_version").default(1).notNull(),
+    schemaVersion: integer("schema_version").default(1).notNull(),
 
     /**
      * Current migration status.
+     * - 'synced': Schema matches database
+     * - 'pending': Changes detected, migration needed
+     * - 'generated': Migration file created
+     * - 'applied': Migration applied to database
      */
     migrationStatus: varchar("migration_status", { length: 20 })
       .$type<FieldGroupMigrationStatus>()
@@ -176,25 +202,26 @@ export const dynamicFieldGroupsMysql = mysqlTable(
 
     /**
      * Reference to the last applied migration ID.
+     * Null for Components that haven't been migrated yet.
      */
-    lastMigrationId: varchar("last_migration_id", { length: 36 }),
+    lastMigrationId: uuid("last_migration_id"),
 
     // --------------------------------------------------------
     // Metadata
     // --------------------------------------------------------
 
     /** User ID who created the Component (optional) */
-    createdBy: varchar("created_by", { length: 36 }),
+    createdBy: uuid("created_by"),
 
     /** When the Component was created */
-    createdAt: datetime("created_at")
-      .notNull()
-      .$defaultFn(() => new Date()),
+    createdAt: timestamp("created_at", { withTimezone: false })
+      .defaultNow()
+      .notNull(),
 
     /** When the Component was last updated */
-    updatedAt: datetime("updated_at")
-      .notNull()
-      .$defaultFn(() => new Date()),
+    updatedAt: timestamp("updated_at", { withTimezone: false })
+      .defaultNow()
+      .notNull(),
   },
   table => [
     // --------------------------------------------------------
@@ -225,13 +252,19 @@ export const dynamicFieldGroupsMysql = mysqlTable(
 // ============================================================
 
 /**
- * MySQL-specific select type for dynamic Components.
+ * PostgreSQL-specific select type for dynamic Components.
+ *
+ * Inferred from the Drizzle schema, represents a full row
+ * from the `dynamic_components` table.
  */
-export type DynamicFieldGroupMysql =
-  typeof dynamicFieldGroupsMysql.$inferSelect;
+export type DynamicFieldGroupPg = typeof dynamicFieldGroupsPg.$inferSelect;
 
 /**
- * MySQL-specific insert type for dynamic Components.
+ * PostgreSQL-specific insert type for dynamic Components.
+ *
+ * Inferred from the Drizzle schema, represents the shape
+ * required for inserting a new row. Fields with defaults
+ * (id, timestamps, schemaVersion, etc.) are optional.
  */
-export type DynamicFieldGroupInsertMysql =
-  typeof dynamicFieldGroupsMysql.$inferInsert;
+export type DynamicFieldGroupInsertPg =
+  typeof dynamicFieldGroupsPg.$inferInsert;

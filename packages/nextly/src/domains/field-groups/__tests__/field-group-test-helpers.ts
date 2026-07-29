@@ -78,7 +78,7 @@ export function createMockTxContext(overrides: MockRecord = {}): MockRecord {
 }
 
 /**
- * Create a mock ComponentRegistryService that returns canned component metadata
+ * Create a mock FieldGroupRegistryService that returns canned component metadata
  * keyed by slug. Use `registerComponent(slug, meta)` to add new entries.
  */
 export function createMockComponentRegistry(): MockRecord {

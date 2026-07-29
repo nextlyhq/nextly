@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { teardownEntityComponentData } from "./teardown-entity-component-data";
+import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
 const UNREGISTERED =
   'Table "comp_ghost" not found in schema registry. Ensure setTableResolver() has been called during boot.';

@@ -9,7 +9,7 @@
 
 import type { SeederResult } from "../../database/seeders/index";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
-import type { SyncComponentResult } from "../../services/components/component-registry-service";
+import type { SyncComponentResult } from "../../services/field-groups/field-group-registry-service";
 import type { SyncSingleResult } from "../../services/singles/single-registry-service";
 import type { CommandContext } from "../program";
 import { formatCount, formatDuration } from "../utils/logger";

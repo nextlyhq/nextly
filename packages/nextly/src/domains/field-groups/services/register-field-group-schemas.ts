@@ -9,7 +9,7 @@
  * Reads the component list from `dynamic_components`, so it reflects whatever the database
  * actually holds rather than the config — which is what an orphan cleanup needs.
  *
- * @module domains/components/services/register-component-schemas
+ * @module domains/field-groups/services/register-component-schemas
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -19,8 +19,8 @@ import type { SchemaRegistry } from "../../../database/schema-registry";
 import type { Logger } from "../../../shared/types";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
-import { ComponentRegistryService } from "./component-registry-service";
-import { ComponentSchemaService } from "./component-schema-service";
+import { FieldGroupRegistryService } from "./field-group-registry-service";
+import { FieldGroupSchemaService } from "./field-group-schema-service";
 
 export interface RegisterComponentSchemasArgs {
   adapter: DrizzleAdapter;
@@ -40,8 +40,8 @@ export async function registerComponentSchemas(
 ): Promise<number> {
   const { adapter, registry, dialect, logger } = args;
 
-  const componentRegistry = new ComponentRegistryService(adapter, logger);
-  const schemaService = new ComponentSchemaService(dialect);
+  const componentRegistry = new FieldGroupRegistryService(adapter, logger);
+  const schemaService = new FieldGroupSchemaService(dialect);
 
   const components = await componentRegistry.getAllComponents();
 

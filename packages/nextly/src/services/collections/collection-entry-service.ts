@@ -50,7 +50,7 @@ import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
-import type { ComponentDataService } from "../components/component-data-service";
+import type { FieldGroupDataService } from "../field-groups/field-group-data-service";
 import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
@@ -89,7 +89,7 @@ export class CollectionEntryService extends BaseService {
     relationshipService: CollectionRelationshipService,
     hookRegistry: HookRegistry,
     accessControlService: AccessControlService,
-    componentDataService?: ComponentDataService,
+    fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
     localization?: SanitizedLocalizationConfig,
@@ -137,7 +137,7 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService,
+      fieldGroupDataService,
       localization
     );
     this.mutationService = new CollectionMutationService(
@@ -148,7 +148,7 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService,
+      fieldGroupDataService,
       localization
     );
     this.bulkService = new CollectionBulkService(

@@ -74,7 +74,7 @@ import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-c
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";
-import { ComponentSchemaService } from "../services/components/component-schema-service";
+import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
 
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 
@@ -432,7 +432,7 @@ async function syncCodeFirstMetadataOnly(
   // caller gates the recording policy on this before activating a new decision.
   try {
     const compReg = (await resolve(
-      "componentRegistryService"
+      "fieldGroupRegistryService"
     )) as ComponentRegistrySurface;
     const payload = buildComponentSyncPayload(newConfig.fieldGroups ?? []);
     if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
@@ -1081,7 +1081,7 @@ export async function reloadNextlyConfig(opts?: {
   // Same preservation for components created via the UI (registry-only).
   try {
     const componentRegistry = (await resolve(
-      "componentRegistryService"
+      "fieldGroupRegistryService"
     )) as ComponentRegistrySurface;
     if (typeof componentRegistry?.getAllComponents === "function") {
       const dbComponents = await componentRegistry.getAllComponents();
@@ -1254,7 +1254,7 @@ export async function reloadNextlyConfig(opts?: {
     // in step with the DDL changes the pipeline just applied.
     try {
       const compReg = (await resolve(
-        "componentRegistryService"
+        "fieldGroupRegistryService"
       )) as ComponentRegistrySurface;
       const codeFirstComponentConfigs = buildComponentSyncPayload(
         newConfig.fieldGroups ?? []
@@ -1358,12 +1358,12 @@ export async function reloadNextlyConfig(opts?: {
       // _parent_id. Using it here clobbered the correct boot-time descriptor,
       // breaking every component read (filter by _parent_id) and write (insert
       // _parent_*) after an HMR config reload.
-      const componentSchemaService = new ComponentSchemaService(dialect);
+      const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
         // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
         const localized = (comp as { localized?: boolean }).localized === true;
-        const table = componentSchemaService.generateRuntimeSchema(
+        const table = fieldGroupSchemaService.generateRuntimeSchema(
           comp.tableName,
           comp.fields,
           { localized }

@@ -30,7 +30,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
-import type { ComponentRegistryService } from "../services/components/component-registry-service";
+import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
@@ -55,9 +55,9 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
   return getService("singleRegistryService");
 }
 
-async function getComponentRegistry(): Promise<ComponentRegistryService> {
+async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
   await getCachedNextly();
-  return getService("componentRegistryService");
+  return getService("fieldGroupRegistryService");
 }
 
 /**

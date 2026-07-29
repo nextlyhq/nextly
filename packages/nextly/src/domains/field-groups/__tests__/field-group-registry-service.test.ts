@@ -4,15 +4,15 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // but the service now throws NextlyError. Swap the asserted error class so
 // the `rejects.toThrow(...)` instanceof check lines up with the new throw type.
 import { NextlyError } from "../../../errors";
-import { ComponentRegistryService } from "../../../services/components/component-registry-service";
+import { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 
 import {
   createSilentLogger,
   createMockAdapter,
-} from "./component-test-helpers";
+} from "./field-group-test-helpers";
 
 type RegistryTestCtx = {
-  service: ComponentRegistryService;
+  service: FieldGroupRegistryService;
   adapter: ReturnType<typeof createMockAdapter>;
 };
 
@@ -22,8 +22,8 @@ function createCtx(
   const adapter = createMockAdapter(adapterOverrides);
   const logger = createSilentLogger();
 
-  const service = new ComponentRegistryService(
-    adapter as unknown as Parameters<typeof ComponentRegistryService>[0],
+  const service = new FieldGroupRegistryService(
+    adapter as unknown as Parameters<typeof FieldGroupRegistryService>[0],
     logger
   );
 
@@ -55,7 +55,7 @@ function dbRow(
   };
 }
 
-describe("ComponentRegistryService", () => {
+describe("FieldGroupRegistryService", () => {
   let ctx: RegistryTestCtx;
 
   beforeEach(() => {
@@ -749,7 +749,7 @@ describe("ComponentRegistryService", () => {
   });
 });
 
-describe("ComponentRegistryService legacy table mismatch", () => {
+describe("FieldGroupRegistryService legacy table mismatch", () => {
   it("reports a stored name that no longer matches the config", async () => {
     // Storage is not repointed, but the mismatch must not pass silently:
     // registry-backed reads follow the stored name.
@@ -777,7 +777,7 @@ describe("ComponentRegistryService legacy table mismatch", () => {
   });
 });
 
-describe("ComponentRegistryService legacy pointer repair", () => {
+describe("FieldGroupRegistryService legacy pointer repair", () => {
   const fields = [{ name: "metaTitle", type: "text" }];
 
   function stubExisting(ctx: RegistryTestCtx, storedName: string) {
@@ -826,7 +826,7 @@ describe("ComponentRegistryService legacy pointer repair", () => {
   });
 });
 
-describe("ComponentRegistryService case-differing pointers", () => {
+describe("FieldGroupRegistryService case-differing pointers", () => {
   it("reports a pointer that differs only in case when its table exists", async () => {
     // PostgreSQL keeps `Comp_SEO` and `comp_seo` distinct, so a single listed
     // spelling says the other is absent — not that the server folded them.

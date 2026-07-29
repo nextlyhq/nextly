@@ -4,7 +4,7 @@ import { mergeSetupResultIntoConfig } from "../../cli/utils/config-loader";
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
-import type { FieldGroupConfig } from "../../components/config/types";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { SingleConfig } from "../../singles/config/types";
 import type { PluginContributions } from "../contributions";

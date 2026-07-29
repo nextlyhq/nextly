@@ -21,10 +21,10 @@ import type { RBACAccessControlService } from "../../domains/auth/services/rbac-
 import type { RolePermissionService } from "../../domains/auth/services/role-permission-service";
 import type { RoleService } from "../../domains/auth/services/role-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
-import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
+import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { MediaService } from "../../services/media/media-service";
 import type { SingleEntryService } from "../../services/singles/single-entry-service";
 import type { SingleRegistryService } from "../../services/singles/single-registry-service";
@@ -50,7 +50,7 @@ export interface NextlyContext {
   /** @internal */ readonly userAccountService: UserAccountService;
   /** @internal */ readonly userService: UserService;
   /** @internal */ readonly mediaService: MediaService;
-  /** @internal */ readonly componentRegistryService: ComponentRegistryService;
+  /** @internal */ readonly fieldGroupRegistryService: FieldGroupRegistryService;
   /** @internal */ readonly emailProviderService: EmailProviderService;
   /** @internal */ readonly emailTemplateService: EmailTemplateService;
   /** @internal */ readonly userFieldDefinitionService: UserFieldDefinitionService;

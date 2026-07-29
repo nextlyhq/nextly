@@ -1,5 +1,5 @@
 export {
-  ComponentRegistryService,
+  FieldGroupRegistryService,
   type ComponentReference,
   type UpdateComponentOptions,
   type CodeFirstComponentConfig,
@@ -8,4 +8,4 @@ export {
   type ListComponentsResult,
   type EnrichedComponentSchema,
   type EnrichedFieldConfig,
-} from "../../domains/components/services/component-registry-service";
+} from "../../domains/field-groups/services/field-group-registry-service";

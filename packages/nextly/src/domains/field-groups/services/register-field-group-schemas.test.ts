@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { registerComponentSchemas } from "./register-component-schemas";
+import { registerComponentSchemas } from "./register-field-group-schemas";
 
 const silentLogger = {
   debug: vi.fn(),

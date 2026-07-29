@@ -54,7 +54,7 @@ import type {
   CollectionRelationshipService,
   RelationshipDbExecutor,
 } from "../../../services/collections/collection-relationship-service";
-import type { ComponentDataService } from "../../../services/components/component-data-service";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -333,7 +333,7 @@ export class CollectionMutationService extends BaseService {
     private readonly relationshipService: CollectionRelationshipService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
-    private readonly componentDataService?: ComponentDataService,
+    private readonly fieldGroupDataService?: FieldGroupDataService,
     /**
      * Normalized localization config (i18n M5). When set and a collection is localized, writes
      * route translatable field values to the companion `_locales` row for the write's locale.
@@ -381,7 +381,7 @@ export class CollectionMutationService extends BaseService {
     // starve a small pool. Omit it (the default) when no transaction is open.
     executor?: unknown
   ): Promise<SensitiveFieldSource[]> {
-    const dataService = this.componentDataService;
+    const dataService = this.fieldGroupDataService;
     return expandComponentFields(fields, async slug =>
       dataService ? await dataService.getComponentFields(slug, executor) : null
     );
@@ -1187,9 +1187,9 @@ export class CollectionMutationService extends BaseService {
     // Read on the transaction's own connection. The registry lookup would
     // otherwise take a second pooled connection while this write transaction
     // still holds one, which stalls against a small pool.
-    const componentFields = this.componentDataService
+    const componentFields = this.fieldGroupDataService
       ? await resolveComponentFieldMap(schema, slug =>
-          this.componentDataService!.getComponentFields(slug, tx.getDrizzle())
+          this.fieldGroupDataService!.getComponentFields(slug, tx.getDrizzle())
         )
       : new Map<string, FieldConfig[]>();
     const resolve = (slug: string) => componentFields.get(slug);
@@ -1221,12 +1221,12 @@ export class CollectionMutationService extends BaseService {
     manyToMany: Record<string, string[]>;
   }> {
     const components: Record<string, unknown> = {};
-    if (this.componentDataService) {
+    if (this.fieldGroupDataService) {
       const componentFields = fields.filter(isFieldGroupField);
       if (componentFields.length > 0) {
         try {
           const populated =
-            await this.componentDataService.populateComponentData({
+            await this.fieldGroupDataService.populateComponentData({
               entry: { id: entryId },
               // Resolved parent table (custom `dbName` collections do not match
               // getTableName(slug)) so the read targets the right comp_ tables.
@@ -2228,10 +2228,10 @@ export class CollectionMutationService extends BaseService {
 
         // Save component field data to separate comp_{slug} tables
         if (
-          this.componentDataService &&
+          this.fieldGroupDataService &&
           Object.keys(componentFieldData).length > 0
         ) {
-          await this.componentDataService.saveComponentDataInTransaction(tx, {
+          await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
             parentId: entry.id as string,
             parentTable: tableName,
             fields: fields as unknown as FieldConfig[],
@@ -3053,10 +3053,7 @@ export class CollectionMutationService extends BaseService {
           const configuredLocales = new Set(
             this.localization?.locales.map(l => l.code) ?? []
           );
-          for (const [
-            locale,
-            priorLocaleStatus,
-          ] of priorCompanionStatuses) {
+          for (const [locale, priorLocaleStatus] of priorCompanionStatuses) {
             if (configuredLocales.size > 0 && !configuredLocales.has(locale))
               continue;
             if (priorLocaleStatus === "published") continue;
@@ -4356,7 +4353,8 @@ export class CollectionMutationService extends BaseService {
                   scopeSlug: params.collectionName,
                   entryId: params.entryId,
                 },
-                contentStatus: (preRestoreParent as { status?: unknown }).status,
+                contentStatus: (preRestoreParent as { status?: unknown })
+                  .status,
                 parts: await this.snapshotPartsFor(
                   {
                     parentRow: preRestoreParent,
@@ -4507,18 +4505,21 @@ export class CollectionMutationService extends BaseService {
 
           // Save component field data to separate comp_{slug} tables
           if (
-            this.componentDataService &&
+            this.fieldGroupDataService &&
             Object.keys(attemptComponentData).length > 0
           ) {
-            await this.componentDataService.saveComponentDataInTransaction(tx, {
-              parentId: params.entryId,
-              parentTable: tableName,
-              fields: fields as unknown as FieldConfig[],
-              data: attemptComponentData,
-              // i18n: thread the write locale so an embedded localized component writes
-              // translatable fields to its companion within the same transaction.
-              locale: params.locale,
-            });
+            await this.fieldGroupDataService.saveComponentDataInTransaction(
+              tx,
+              {
+                parentId: params.entryId,
+                parentTable: tableName,
+                fields: fields as unknown as FieldConfig[],
+                data: attemptComponentData,
+                // i18n: thread the write locale so an embedded localized component writes
+                // translatable fields to its companion within the same transaction.
+                locale: params.locale,
+              }
+            );
           }
 
           // Replace many-to-many junction rows inside the transaction so a
@@ -5325,12 +5326,15 @@ export class CollectionMutationService extends BaseService {
         // main row) still busts the correct tag.
         deletedSlugForRevalidation = readStringField(deletedDocument, "slug");
 
-        if (this.componentDataService) {
-          await this.componentDataService.deleteComponentDataInTransaction(tx, {
-            parentId: params.entryId,
-            parentTable: tableName,
-            fields: collectionFields,
-          });
+        if (this.fieldGroupDataService) {
+          await this.fieldGroupDataService.deleteComponentDataInTransaction(
+            tx,
+            {
+              parentId: params.entryId,
+              parentTable: tableName,
+              fields: collectionFields,
+            }
+          );
         }
 
         const deletedCount = await tx.delete(
@@ -6765,8 +6769,8 @@ export class CollectionMutationService extends BaseService {
       // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
       // Cascade delete component data before deleting the main entry
-      if (this.componentDataService) {
-        await this.componentDataService.deleteComponentDataInTransaction(tx, {
+      if (this.fieldGroupDataService) {
+        await this.fieldGroupDataService.deleteComponentDataInTransaction(tx, {
           parentId: params.entryId,
           parentTable: tableName,
           fields: collectionFields,
@@ -8307,8 +8311,8 @@ export class CollectionMutationService extends BaseService {
       // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
       // Cascade delete component data before deleting the main entry
-      if (this.componentDataService) {
-        await this.componentDataService.deleteComponentDataInTransaction(tx, {
+      if (this.fieldGroupDataService) {
+        await this.fieldGroupDataService.deleteComponentDataInTransaction(tx, {
           parentId: entryId,
           parentTable: tableName,
           fields: collectionFields,

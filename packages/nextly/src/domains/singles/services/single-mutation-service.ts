@@ -45,7 +45,7 @@ import {
   type CollectionAccessRules,
   isSuperAdminContext,
 } from "../../../services/access";
-import type { ComponentDataService } from "../../../services/components/component-data-service";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
@@ -200,7 +200,7 @@ export class SingleMutationService extends BaseService {
     logger: Logger,
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
-    private readonly componentDataService?: ComponentDataService,
+    private readonly fieldGroupDataService?: FieldGroupDataService,
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, writes route translatable field
     // values to the companion `single_<slug>_locales` row for the write's locale.
@@ -215,7 +215,7 @@ export class SingleMutationService extends BaseService {
       logger,
       singleRegistryService,
       hookRegistry,
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       localization
     );
@@ -356,7 +356,7 @@ export class SingleMutationService extends BaseService {
     // right generation (post-write: just saved; pre-write: prior). A read
     // failure fails the write instead of shipping an incomplete payload.
     const components: Record<string, unknown> = {};
-    if (this.componentDataService) {
+    if (this.fieldGroupDataService) {
       const componentFields = fieldConfigs.filter(
         (f): f is typeof f & { name: string } =>
           isFieldGroupField(f) && !!f.name
@@ -364,7 +364,7 @@ export class SingleMutationService extends BaseService {
       if (componentFields.length > 0) {
         try {
           const populated =
-            await this.componentDataService.populateComponentData({
+            await this.fieldGroupDataService.populateComponentData({
               entry: { id: entryId },
               parentTable,
               fields: fieldConfigs,
@@ -1185,9 +1185,7 @@ export class SingleMutationService extends BaseService {
                 // — otherwise this would add a companion round trip to every
                 // localized update while the write holds its row lock.
                 previousCompanionRowExists = await companionRowExists(
-                  tx.getDrizzle<
-                    Parameters<typeof companionRowExists>[0]
-                  >(),
+                  tx.getDrizzle<Parameters<typeof companionRowExists>[0]>(),
                   companion.table,
                   existingDoc.id,
                   writeLocale
@@ -1263,7 +1261,7 @@ export class SingleMutationService extends BaseService {
             let wroteLocalizedComponents = false;
             if (
               snapshotLocale !== undefined &&
-              this.componentDataService &&
+              this.fieldGroupDataService &&
               this.localization !== undefined &&
               Object.keys(componentFieldData).length > 0
             ) {
@@ -1287,7 +1285,7 @@ export class SingleMutationService extends BaseService {
                   // comp_* row for every locale. So a write that changes only a
                   // localized component's shared fields is NOT per-locale.
                   if (
-                    !(await this.componentDataService.isComponentLocalized(
+                    !(await this.fieldGroupDataService.isComponentLocalized(
                       slug,
                       tx.getDrizzle()
                     ))
@@ -1295,7 +1293,7 @@ export class SingleMutationService extends BaseService {
                     continue;
                   }
                   const componentFields =
-                    (await this.componentDataService.getComponentFields(
+                    (await this.fieldGroupDataService.getComponentFields(
                       slug,
                       tx.getDrizzle()
                     )) ?? [];
@@ -1417,7 +1415,7 @@ export class SingleMutationService extends BaseService {
               // Mark the pre-restore snapshot as needed the moment this is a
               // versioned restore, independent of the component service: the
               // "Before restore" capture below is gated on this map existing, so
-              // tying it to `componentDataService` would skip the whole snapshot
+              // tying it to `fieldGroupDataService` would skip the whole snapshot
               // in a boot without that service and lose the replaced parent-row
               // content — the exact data loss this capture exists to prevent.
               // The component subtrees are read only when the service is present.
@@ -1428,10 +1426,10 @@ export class SingleMutationService extends BaseService {
                 (f): f is typeof f & { name: string } =>
                   isFieldGroupField(f) && !!f.name
               );
-              if (this.componentDataService && preComponentFields.length > 0) {
+              if (this.fieldGroupDataService && preComponentFields.length > 0) {
                 try {
                   const populated =
-                    await this.componentDataService.populateComponentData({
+                    await this.fieldGroupDataService.populateComponentData({
                       entry: { id: existingDoc.id },
                       parentTable: singleMeta.tableName,
                       fields: fieldConfigs,
@@ -1465,7 +1463,8 @@ export class SingleMutationService extends BaseService {
                   throw NextlyError.internal({
                     cause: err instanceof Error ? err : undefined,
                     logContext: {
-                      reason: "version-snapshot-single-prerestore-component-read",
+                      reason:
+                        "version-snapshot-single-prerestore-component-read",
                       slug,
                     },
                   });
@@ -1483,10 +1482,10 @@ export class SingleMutationService extends BaseService {
             // write locale is threaded so an embedded localized component stores
             // its translatable fields to the companion for this language.
             if (
-              this.componentDataService &&
+              this.fieldGroupDataService &&
               Object.keys(attemptComponentData).length > 0
             ) {
-              await this.componentDataService.saveComponentDataInTransaction(
+              await this.fieldGroupDataService.saveComponentDataInTransaction(
                 tx,
                 {
                   parentId: existingDoc.id,
@@ -1675,7 +1674,7 @@ export class SingleMutationService extends BaseService {
               // subtrees with no in-memory overlay. A read failure fails the
               // capture (rolls back) rather than persisting an incomplete snapshot.
               const components: Record<string, unknown> = {};
-              if (this.componentDataService) {
+              if (this.fieldGroupDataService) {
                 const componentFields = fieldConfigs.filter(
                   (f): f is typeof f & { name: string } =>
                     isFieldGroupField(f) && !!f.name
@@ -1683,7 +1682,7 @@ export class SingleMutationService extends BaseService {
                 if (componentFields.length > 0) {
                   try {
                     const populated =
-                      await this.componentDataService.populateComponentData({
+                      await this.fieldGroupDataService.populateComponentData({
                         entry: { id: existingDoc.id },
                         parentTable: singleMeta.tableName,
                         fields: fieldConfigs,
@@ -1746,9 +1745,9 @@ export class SingleMutationService extends BaseService {
               // Read on the transaction's own connection: the registry lookup
               // would otherwise take a second pooled connection while this
               // write transaction still holds one, stalling a small pool.
-              const snapshotComponentSchemas = this.componentDataService
+              const snapshotComponentSchemas = this.fieldGroupDataService
                 ? await resolveComponentFieldMap(fieldConfigs, slug =>
-                    this.componentDataService!.getComponentFields(
+                    this.fieldGroupDataService!.getComponentFields(
                       slug,
                       tx.getDrizzle()
                     )
@@ -1915,7 +1914,9 @@ export class SingleMutationService extends BaseService {
                 // resolves null, and a restore treats the snapshot as shared-only
                 // and drops the seeded defaults. The overlay only runs on a
                 // default-locale write, so `snapshotLocale` is the default locale.
-                locale: isLocaleSpecificSnapshot ? (snapshotLocale ?? null) : null,
+                locale: isLocaleSpecificSnapshot
+                  ? (snapshotLocale ?? null)
+                  : null,
                 sourceVersionNo: options.sourceVersionNo ?? null,
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
@@ -1965,8 +1966,8 @@ export class SingleMutationService extends BaseService {
               ? await expandComponentFields(
                   fieldConfigs,
                   async componentSlug =>
-                    this.componentDataService
-                      ? await this.componentDataService.getComponentFields(
+                    this.fieldGroupDataService
+                      ? await this.fieldGroupDataService.getComponentFields(
                           componentSlug,
                           tx.getDrizzle()
                         )

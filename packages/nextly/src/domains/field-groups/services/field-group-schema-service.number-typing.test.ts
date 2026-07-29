@@ -3,9 +3,9 @@ import { describe, it, expect } from "vitest";
 import type { FieldConfig } from "../../../collections/fields/types";
 
 import {
-  ComponentSchemaService,
+  FieldGroupSchemaService,
   type SupportedDialect,
-} from "./component-schema-service";
+} from "./field-group-schema-service";
 
 // Identifier quote per dialect, so assertions can tie a column type to its name.
 const QUOTE: Record<SupportedDialect, string> = {
@@ -23,7 +23,7 @@ const numberField = (extra: Record<string, unknown> = {}): FieldConfig =>
   ({ name: "value", type: "number", ...extra }) as unknown as FieldConfig;
 
 function columnSql(dialect: SupportedDialect, field: FieldConfig): string {
-  return new ComponentSchemaService(dialect).generateMigrationSQL(
+  return new FieldGroupSchemaService(dialect).generateMigrationSQL(
     "comp_widget",
     [field]
   );
@@ -34,7 +34,7 @@ function columnSql(dialect: SupportedDialect, field: FieldConfig): string {
 // the column type the runtime and the generated Drizzle schema build for it —
 // a mismatch means the created table can never match the desired schema, so
 // every later diff re-alters the same column.
-describe("ComponentSchemaService number column typing", () => {
+describe("FieldGroupSchemaService number column typing", () => {
   // The default: whole numbers, so an integer column rather than a float that
   // would silently round-trip 1 as 1.0.
   it("types a default number field as an integer column (not real/double)", () => {
@@ -94,9 +94,9 @@ describe("ComponentSchemaService number column typing", () => {
 // physical column is chosen by dbType/precision/scale rather than `type`, those
 // have to participate in that comparison or a storage change silently leaves
 // the old column in place.
-describe("ComponentSchemaService number storage change detection", () => {
+describe("FieldGroupSchemaService number storage change detection", () => {
   const alterSql = (before: FieldConfig, after: FieldConfig): string =>
-    new ComponentSchemaService("postgresql").generateAlterTableMigration(
+    new FieldGroupSchemaService("postgresql").generateAlterTableMigration(
       "comp_widget",
       [before],
       [after]

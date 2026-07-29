@@ -14,7 +14,7 @@
  * - Permission seeding via PermissionSeedService
  * - Transaction-scoped registration for atomic multi-step flows
  *
- * Key differences from CollectionRegistryService and ComponentRegistryService:
+ * Key differences from CollectionRegistryService and FieldGroupRegistryService:
  * - Singles use a singular `label` string (no plural form)
  * - Singles use `single_` table prefix instead of `dc_` or `comp_`
  * - Delete requires `force: true` (Singles should persist)

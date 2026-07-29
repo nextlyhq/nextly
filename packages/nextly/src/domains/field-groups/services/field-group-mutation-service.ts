@@ -14,9 +14,9 @@ import { toDbError } from "../../../database/errors";
 // and the `instanceof ServiceError` rethrow guards become `NextlyError.is(...)`
 // so any error type travelling through the shim is preserved.
 import { NextlyError } from "../../../errors";
-import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
+import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
@@ -36,7 +36,7 @@ import {
   shouldTreatAsJson,
   type ComponentRow,
   type ComponentInstanceData,
-} from "./component-utils";
+} from "./field-group-utils";
 
 /**
  * Parameters for saving component data as part of a parent entry operation.
@@ -75,13 +75,13 @@ function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return field.type === STORAGE_FORMAT.fieldType;
 }
 
-export class ComponentMutationService extends BaseService {
-  private readonly registryService: ComponentRegistryService;
+export class FieldGroupMutationService extends BaseService {
+  private readonly registryService: FieldGroupRegistryService;
 
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    registryService: ComponentRegistryService,
+    registryService: FieldGroupRegistryService,
     // i18n: when set and an embedded component is localized, translatable field values are
     // routed to the component's companion `comp_<slug>_locales` row for the write locale.
     private readonly localization?: SanitizedLocalizationConfig
