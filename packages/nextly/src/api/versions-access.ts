@@ -379,7 +379,7 @@ export async function redactSnapshotForUser(
   // read path. Capture already strips password values, but a field converted to
   // `password` after a snapshot was written — or history imported from before
   // that rule existed — would otherwise hand back a value the live read hides.
-  const fields = await resolveFieldsForRedaction(scopeKind, slug);
+  const fields = await resolveCurrentFields(scopeKind, slug);
   if (fields.length > 0) {
     stripPasswordFieldValues(entry, fields);
   }
@@ -394,11 +394,12 @@ export async function redactSnapshotForUser(
 }
 
 /**
- * Current field configs for an entity, used to decide what to strip. A lookup
- * failure yields an empty list: redaction then falls back to field-level access
- * alone rather than failing the request.
+ * Current field configs for an entity. Used by redaction to decide what to
+ * strip, and by the diff orchestration as the schema to walk. A lookup failure
+ * yields an empty list rather than failing the request (redaction then falls
+ * back to field-level access alone; a diff falls back to raw-key comparison).
  */
-async function resolveFieldsForRedaction(
+export async function resolveCurrentFields(
   scopeKind: "collection" | "single",
   slug: string
 ): Promise<FieldConfig[]> {
