@@ -22,6 +22,8 @@
  * @module domains/field-groups/migration/session
  */
 
+import { randomUUID } from "node:crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   TransactionContext,
@@ -91,20 +93,27 @@ export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
  * two runs would rename the same objects and rewrite the same rows.
  */
 export async function withMigrationSession<T>(
-  args: { adapter: DrizzleAdapter; dialect: MigrationDialect; owner: string },
+  args: { adapter: DrizzleAdapter; dialect: MigrationDialect; label: string },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
-  const { adapter, dialect, owner } = args;
+  const { adapter, dialect, label } = args;
 
-  if (owner.length === 0) {
+  if (label.length === 0) {
     throw NextlyError.internal({
-      logContext: { reason: "migration lock owner must be a non-empty string" },
+      logContext: { reason: "migration lock label must be a non-empty string" },
     });
   }
 
+  // The claim is made unique here rather than trusted from the caller. A label
+  // alone cannot be relied on: two processes resuming the same migration would
+  // naturally pass the same one, and an occupied row that matched would let
+  // both run, with the first to finish releasing the claim out from under the
+  // second. Uniqueness by construction removes that whole class of mistake.
+  const claim = `${label}#${randomUUID()}`;
+
   await ensureLockRow(adapter, dialect);
 
-  const acquired = await acquire(adapter, owner);
+  const acquired = await acquire(adapter, claim);
   if (!acquired.ok) {
     // Raised outside the transaction on purpose: the adapters route every error
     // escaping a transaction callback through `classifyError`, which rewraps
@@ -126,7 +135,7 @@ export async function withMigrationSession<T>(
       inTransaction: work => adapter.transaction(work),
     });
   } finally {
-    await release(adapter, owner);
+    await release(adapter, claim);
   }
 }
 
@@ -155,13 +164,31 @@ async function ensureLockRow(
     await adapter.transaction(async ctx =>
       ctx.insert(MIGRATION_LOCK_TABLE, { id: LOCK_ROW_ID, owner: null })
     );
+    return;
   } catch {
-    // Two processes seeding at once: the primary key decides, and the loser
-    // proceeds to contend for the row that now exists.
+    // Losing a seed race is expected: the primary key decides and the loser
+    // contends for the row that now exists. Any other failure is not expected,
+    // and cannot be told apart from it portably, so instead of guessing at the
+    // error the row is re-read below and required to exist.
+  }
+
+  const seeded = await adapter.transaction(async ctx =>
+    ctx.selectOne<{ id: number }>(MIGRATION_LOCK_TABLE, {
+      where: lockRowWhere(),
+    })
+  );
+  if (!seeded) {
+    // Continuing here would leave nothing to lock, and a claim written against
+    // an absent row would update nothing while still looking successful.
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration could not establish its lock row; refusing to run unprotected",
+      logContext: { reason: "migration lock row could not be established" },
+    });
   }
 }
 
-type Acquisition = { ok: true } | { ok: false; heldBy: string };
+type Acquisition = { ok: true } | { ok: false; heldBy: string | null };
 
 /**
  * Claim the row, or report who holds it.
@@ -171,7 +198,7 @@ type Acquisition = { ok: true } | { ok: false; heldBy: string };
  */
 async function acquire(
   adapter: DrizzleAdapter,
-  owner: string
+  claim: string
 ): Promise<Acquisition> {
   return adapter.transaction(async ctx => {
     // Serializes contenders: everyone else waits here until this transaction
@@ -183,24 +210,38 @@ async function acquire(
       { where: lockRowWhere() }
     );
 
-    const heldBy = row?.owner ?? null;
-    if (heldBy !== null && heldBy !== owner) {
-      return { ok: false, heldBy };
+    // Any occupied row refuses, including one that appears to be ours. Claims
+    // are unique per invocation, so a match would mean something other than
+    // this call wrote it.
+    if (row === null || row.owner !== null) {
+      return { ok: false, heldBy: row?.owner ?? null };
     }
 
-    await ctx.update(MIGRATION_LOCK_TABLE, { owner }, lockRowWhere());
+    await ctx.update(MIGRATION_LOCK_TABLE, { owner: claim }, lockRowWhere());
+
+    // Read back rather than trusting the write. `update` reports affected rows
+    // inconsistently across dialects, and an absent row would otherwise update
+    // nothing and still look like a successful claim, running the migration
+    // with no exclusion at all.
+    const after = await ctx.selectOne<{ owner: string | null }>(
+      MIGRATION_LOCK_TABLE,
+      { where: lockRowWhere() }
+    );
+    if (after?.owner !== claim) {
+      return { ok: false, heldBy: after?.owner ?? null };
+    }
     return { ok: true };
   });
 }
 
 /** Release only what we hold, so a late finaliser cannot free someone else's run. */
-async function release(adapter: DrizzleAdapter, owner: string): Promise<void> {
+async function release(adapter: DrizzleAdapter, claim: string): Promise<void> {
   await adapter.transaction(async ctx => {
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
     await ctx.update(
       MIGRATION_LOCK_TABLE,
       { owner: null },
-      lockRowWhere(owner)
+      lockRowWhere(claim)
     );
   });
 }

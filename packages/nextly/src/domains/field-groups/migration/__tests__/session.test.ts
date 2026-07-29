@@ -102,12 +102,12 @@ describe("field-group migration session", () => {
     const h = createAdapter({ heldBy: null });
     const seen: (string | null)[] = [];
     await withMigrationSession(
-      { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+      { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
       async () => {
         seen.push(h.owner());
       }
     );
-    expect(seen).toEqual(["run-1"]);
+    expect(seen[0]).toMatch(/^run-1#/);
     expect(h.owner()).toBeNull();
   });
 
@@ -115,7 +115,7 @@ describe("field-group migration session", () => {
     const h = createAdapter({ heldBy: null });
     await expect(
       withMigrationSession(
-        { adapter: h.adapter, dialect: "mysql", owner: "run-1" },
+        { adapter: h.adapter, dialect: "mysql", label: "run-1" },
         async () => {
           throw NextlyError.internal({ logContext: { reason: "boom" } });
         }
@@ -131,7 +131,7 @@ describe("field-group migration session", () => {
     const ran = vi.fn();
     await expect(
       withMigrationSession(
-        { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
         async () => ran()
       )
     ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
@@ -147,7 +147,7 @@ describe("field-group migration session", () => {
     const h = createAdapter({ heldBy: "other-run" });
     try {
       await withMigrationSession(
-        { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
         async () => undefined
       );
       expect.fail("expected a refusal");
@@ -166,7 +166,7 @@ describe("field-group migration session", () => {
     const h = createAdapter({ heldBy: null });
     let openDuringRun = 0;
     await withMigrationSession(
-      { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+      { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
       async session => {
         await session.inTransaction(async () => {
           openDuringRun = h.peakOpen();
@@ -184,12 +184,12 @@ describe("field-group migration session", () => {
     async dialect => {
       const h = createAdapter({ heldBy: null });
       await withMigrationSession(
-        { adapter: h.adapter, dialect, owner: "run-1" },
+        { adapter: h.adapter, dialect, label: "run-1" },
         async () => {
           const second = createAdapter({ heldBy: h.owner() });
           await expect(
             withMigrationSession(
-              { adapter: second.adapter, dialect, owner: "run-2" },
+              { adapter: second.adapter, dialect, label: "run-2" },
               async () => undefined
             )
           ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
@@ -202,7 +202,7 @@ describe("field-group migration session", () => {
     for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
       const h = createAdapter({ heldBy: null });
       await withMigrationSession(
-        { adapter: h.adapter, dialect, owner: "run-1" },
+        { adapter: h.adapter, dialect, label: "run-1" },
         async () => undefined
       );
       expect(h.ddl.join("\n")).toContain(MIGRATION_LOCK_TABLE);
@@ -213,7 +213,7 @@ describe("field-group migration session", () => {
   it("seeds the lock row when the table is new", async () => {
     const h = createAdapter();
     await withMigrationSession(
-      { adapter: h.adapter, dialect: "sqlite", owner: "run-1" },
+      { adapter: h.adapter, dialect: "sqlite", label: "run-1" },
       async () => undefined
     );
     expect(h.ctx.insert).toHaveBeenCalled();
@@ -223,12 +223,14 @@ describe("field-group migration session", () => {
   // continue to contend rather than crash on the duplicate.
   it("tolerates losing the race to seed the row", async () => {
     const h = createAdapter();
-    h.ctx.insert.mockImplementationOnce(async () => {
+    // The winner's row exists by the time our insert is rejected.
+    h.ctx.insert.mockImplementationOnce(async (_t: string) => {
+      await h.ctx.insert(MIGRATION_LOCK_TABLE, { id: 1, owner: null });
       throw new Error("duplicate key");
     });
     await expect(
       withMigrationSession(
-        { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
         async () => undefined
       )
     ).resolves.toBeUndefined();
@@ -238,7 +240,7 @@ describe("field-group migration session", () => {
     const h = createAdapter({ heldBy: null });
     await expect(
       withMigrationSession(
-        { adapter: h.adapter, dialect: "postgresql", owner: "" },
+        { adapter: h.adapter, dialect: "postgresql", label: "" },
         async () => undefined
       )
     ).rejects.toThrowError(NextlyError);
@@ -251,7 +253,7 @@ describe("field-group migration session", () => {
   it("releases only a lock it still owns", async () => {
     const h = createAdapter({ heldBy: null });
     await withMigrationSession(
-      { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+      { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
       async () => {
         // Someone else takes the row over while this run is in flight.
         h.ctx.update(
@@ -262,6 +264,80 @@ describe("field-group migration session", () => {
       }
     );
     expect(h.owner()).toBe("run-2");
+  });
+
+  // A label is not an identity. Two processes resuming the same migration
+  // would naturally pass the same one, and an occupied row that matched would
+  // let both run while the first to finish released the claim under the second.
+  it("refuses an occupied row even when the label is identical", async () => {
+    const h = createAdapter({ heldBy: null });
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "postgresql", label: "resume" },
+      async () => {
+        const second = createAdapter({ heldBy: h.owner() });
+        await expect(
+          withMigrationSession(
+            { adapter: second.adapter, dialect: "postgresql", label: "resume" },
+            async () => undefined
+          )
+        ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+      }
+    );
+  });
+
+  it("claims under a token unique to the invocation, not the label", async () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 2; i += 1) {
+      const h = createAdapter({ heldBy: null });
+      await withMigrationSession(
+        { adapter: h.adapter, dialect: "sqlite", label: "same" },
+        async () => {
+          seen.add(h.owner() ?? "");
+        }
+      );
+    }
+    expect(seen.size).toBe(2);
+  });
+
+  // A seed that fails for any reason other than losing the race leaves nothing
+  // to lock. Claiming against an absent row updates nothing yet would still
+  // look successful, running the migration with no exclusion at all.
+  it("refuses to run when the lock row could not be established", async () => {
+    const h = createAdapter();
+    h.ctx.insert.mockImplementation(async () => {
+      throw new Error("connection reset");
+    });
+    const ran = vi.fn();
+    try {
+      await withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => ran()
+      );
+      expect.fail("expected a refusal");
+    } catch (error) {
+      // Asserting the reason, not just the code: acquisition would refuse an
+      // absent row too, so a generic assertion here cannot tell whether the
+      // seed check did anything.
+      expect((error as NextlyError).logContext?.reason).toMatch(
+        /lock row could not be established/
+      );
+    }
+    expect(ran).not.toHaveBeenCalled();
+  });
+
+  // A write that silently affects nothing must not read as a claim. Trusting
+  // the update would run the migration believing it held a lock it never took.
+  it("refuses when the claim does not actually land on the row", async () => {
+    const h = createAdapter({ heldBy: null });
+    h.ctx.update.mockImplementation(async () => []);
+    const ran = vi.fn();
+    await expect(
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => ran()
+      )
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    expect(ran).not.toHaveBeenCalled();
   });
 
   it("uses a lock table distinct from the schema pipeline's", () => {

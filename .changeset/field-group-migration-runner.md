@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-More groundwork for the upcoming field group storage migration: the run now holds a migration lock on a single connection for its whole duration, and records a step only after checking the database reached the state that step intended. Nothing calls this yet, so there is no change in behaviour in this release.
+More groundwork for the upcoming field group storage migration: a migration run now claims a durable lock row for its duration, so a second run refuses instead of starting alongside it, and records a step only after checking the database reached the state that step intended. Nothing calls this yet, so there is no change in behaviour in this release.
