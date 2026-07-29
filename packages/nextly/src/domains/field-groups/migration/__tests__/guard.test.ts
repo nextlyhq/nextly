@@ -14,15 +14,26 @@ const IN_FLIGHT: MigratingState = {
   direction: "up",
   migrationId: "run-1",
   step: 4,
-  manifestHash: "hash-1",
+  plan: { manifestHash: "hash-1", planHash: "plan-1" },
 };
 
 function probe(over: Partial<StorageProbe> = {}): StorageProbe {
   return {
     targetRegistryPresent: false,
     legacyRegistryPresent: true,
+    migratedObjects: null,
     ...over,
   };
+}
+
+/** A probe over a database whose migrated objects all checked out. */
+function verifiedProbe(over: Partial<StorageProbe> = {}): StorageProbe {
+  return probe({
+    targetRegistryPresent: true,
+    legacyRegistryPresent: false,
+    migratedObjects: { complete: true },
+    ...over,
+  });
 }
 
 /**
@@ -51,15 +62,42 @@ describe("field-group storage verdict", () => {
     });
   });
 
-  it("uses migrated storage once the marker and the registry agree", () => {
+  it("uses migrated storage once the marker, registry and objects all agree", () => {
     const verdict = resolveStorageVerdict({
       state: MIGRATED,
-      probe: probe({
-        targetRegistryPresent: true,
-        legacyRegistryPresent: false,
-      }),
+      probe: verifiedProbe(),
     });
     expect(verdict).toEqual({ action: "use-field-groups-v2" });
+  });
+
+  // The registry existing proves only that the registry exists. Serving on that
+  // alone would read content out of data tables nobody checked for.
+  it("refuses migrated storage that was never structurally verified", () => {
+    const refusal = captureRefusal(() =>
+      resolveStorageVerdict({
+        state: MIGRATED,
+        probe: verifiedProbe({ migratedObjects: null }),
+      })
+    );
+    expect(refusal.logContext?.reason).toMatch(/not structurally verified/);
+  });
+
+  // A partial restore leaves the registry pointing at tables that are gone. The
+  // read path turns a missing data table into an empty result, so without this
+  // the site comes up serving blank content and reporting no error at all.
+  it("refuses when objects the registry references are missing", () => {
+    const refusal = captureRefusal(() =>
+      resolveStorageVerdict({
+        state: MIGRATED,
+        probe: verifiedProbe({
+          migratedObjects: { complete: false, missing: ["fg_hero"] },
+        }),
+      })
+    );
+    expect(refusal.logContext?.reason).toMatch(/missing or unmigrated/);
+    // Naming what is missing is the point: an operator needs to know which
+    // objects to restore, not merely that something is wrong.
+    expect(refusal.logContext?.missing).toEqual(["fg_hero"]);
   });
 
   // The host application shares this database. A table wearing our target name
@@ -91,22 +129,39 @@ describe("field-group storage verdict", () => {
   // step is wasteful, and skipping one leaves an object unrenamed.
   it("resumes at the step after the last verified one", () => {
     expect(resolveStorageVerdict({ state: IN_FLIGHT, probe: probe() })).toEqual(
-      { action: "resume", step: 5, manifestHash: "hash-1" }
+      {
+        action: "resume",
+        step: 5,
+        direction: "up",
+        migrationId: "run-1",
+        plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      }
     );
   });
 
-  // A step number only means something against the plan it was checked off
-  // under, so the resumed run is handed that plan's hash to compare against
-  // rather than being left to look it up.
-  it("carries the interrupted run's manifest hash into the resume", () => {
+  // Everything a resume needs travels with the verdict. Without the direction
+  // it could run the wrong step list; without the id `advanceStep` rejects it;
+  // without the plan it cannot tell whether the step still means what it meant.
+  it("carries the interrupted run's full identity into the resume", () => {
     const verdict = resolveStorageVerdict({
       state: IN_FLIGHT,
       probe: probe(),
     });
     expect(verdict).toMatchObject({
       action: "resume",
-      manifestHash: IN_FLIGHT.manifestHash,
+      direction: IN_FLIGHT.direction,
+      migrationId: IN_FLIGHT.migrationId,
+      plan: IN_FLIGHT.plan,
     });
+  });
+
+  // A `down` run interrupted at step 4 is not a `up` run interrupted at step 4,
+  // and the verdict is the only thing telling them apart.
+  it("distinguishes an interrupted down run from an interrupted up run", () => {
+    const down: MigratingState = { ...IN_FLIGHT, direction: "down" };
+    expect(
+      resolveStorageVerdict({ state: down, probe: probe() })
+    ).toMatchObject({ action: "resume", direction: "down" });
   });
 
   // An interrupted run is interpretable only by the step list, whatever the
@@ -118,7 +173,7 @@ describe("field-group storage verdict", () => {
           state: IN_FLIGHT,
           probe: probe({ targetRegistryPresent: target }),
         })
-      ).toEqual({ action: "resume", step: 5, manifestHash: "hash-1" });
+      ).toMatchObject({ action: "resume", step: 5 });
     }
   });
 

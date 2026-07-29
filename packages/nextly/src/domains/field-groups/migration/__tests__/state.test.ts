@@ -4,7 +4,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
 import {
   advanceStep,
-  assertManifestUnchanged,
+  assertPlanUnchanged,
   beginMigration,
   FIELD_GROUP_MIGRATION_KEY,
   MIGRATION_MARKER_VERSION,
@@ -53,14 +53,29 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      manifestHash: "hash-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
     await expect(readMigrationState(meta)).resolves.toEqual({
       status: "migrating",
       direction: "up",
       migrationId: "run-1",
       step: 0,
-      manifestHash: "hash-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+    });
+  });
+
+  // Both halves of the plan identity survive a step being checked off; losing
+  // either would leave a later resume unable to tell whether it still applies.
+  it("preserves the plan identity across steps", async () => {
+    const { meta } = createMeta();
+    await beginMigration(meta, {
+      direction: "up",
+      migrationId: "run-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+    });
+    await advanceStep(meta, { migrationId: "run-1", step: 1 });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
   });
 
@@ -72,7 +87,7 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      manifestHash: "hash-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
     expect(read()).toMatchObject({ status: "migrating", step: 0 });
     expect(meta.set).toHaveBeenCalledWith(
@@ -86,7 +101,7 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      manifestHash: "hash-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
     await advanceStep(meta, { migrationId: "run-1", step: 1 });
     await advanceStep(meta, { migrationId: "run-1", step: 2 });
@@ -101,7 +116,7 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      manifestHash: "hash-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
     await expect(
       advanceStep(meta, { migrationId: "run-1", step: 2 })
@@ -117,7 +132,7 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      manifestHash: "hash-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
     await expect(
       advanceStep(meta, { migrationId: "run-2", step: 1 })
@@ -129,7 +144,7 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      manifestHash: "hash-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
     await settleMigration(meta, "field-groups-v2");
     await expect(readMigrationState(meta)).resolves.toEqual({
@@ -187,6 +202,18 @@ describe("field-group migration marker", () => {
         direction: "up",
         migrationId: "r",
         step: 0,
+        planHash: "p",
+      },
+    ],
+    [
+      "in-flight without a plan hash",
+      {
+        version: 1,
+        status: "migrating",
+        direction: "up",
+        migrationId: "r",
+        step: 0,
+        manifestHash: "h",
       },
     ],
   ])("refuses a corrupt marker: %s", async (_label, stored) => {
@@ -222,26 +249,55 @@ describe("field-group migration marker", () => {
   });
 });
 
-// Step numbers index into a plan. Resuming step N against a plan that no longer
-// describes the same objects would rename or verify the wrong ones, and there
-// is no way to reconcile the two, so the mismatch is refused outright.
-describe("field-group migration manifest guard", () => {
+// Step numbers index into a plan. Resuming step N against a plan that is no
+// longer the same plan would rename or verify the wrong thing, and there is no
+// way to reconcile the two, so any mismatch is refused outright.
+describe("field-group migration plan guard", () => {
+  const PLAN = { manifestHash: "hash-1", planHash: "plan-1" };
+
+  function refusalFrom(current: {
+    manifestHash: string;
+    planHash: string;
+  }): NextlyError {
+    try {
+      assertPlanUnchanged({ recorded: PLAN, current });
+    } catch (error) {
+      if (NextlyError.is(error)) return error;
+      expect.fail(`expected a NextlyError, received ${String(error)}`);
+    }
+    expect.fail("expected a refusal, but the call returned normally");
+  }
+
   it("allows a resume whose plan is unchanged", () => {
     expect(() =>
-      assertManifestUnchanged({ recorded: "hash-1", current: "hash-1" })
+      assertPlanUnchanged({ recorded: PLAN, current: { ...PLAN } })
     ).not.toThrow();
   });
 
-  it("refuses a resume whose plan changed", () => {
-    try {
-      assertManifestUnchanged({ recorded: "hash-1", current: "hash-2" });
-      expect.fail("expected a refusal");
-    } catch (error) {
-      expect(NextlyError.is(error)).toBe(true);
-      expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
-      expect((error as NextlyError).logContext?.reason).toMatch(
-        /manifest changed/
-      );
-    }
+  // The application's schema moved: step N now names different objects.
+  it("refuses a resume whose object map changed", () => {
+    const refusal = refusalFrom({ ...PLAN, manifestHash: "hash-2" });
+    expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
+    expect(refusal.logContext?.reason).toMatch(/object map changed/);
+  });
+
+  // Nextly itself was upgraded and its steps were added, removed or reordered.
+  // The database's own objects are untouched, so the manifest hash still
+  // matches; only the plan hash catches this, and without it a resume would
+  // continue at a step number that now means a different operation.
+  it("refuses a resume whose step list changed under an unchanged object map", () => {
+    const refusal = refusalFrom({ ...PLAN, planHash: "plan-2" });
+    expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
+    expect(refusal.logContext?.reason).toMatch(/step list changed/);
+  });
+
+  // The two causes are reported separately because they send an operator to
+  // different places: their own schema history, or the Nextly upgrade.
+  it("names which half of the plan moved", () => {
+    expect(
+      refusalFrom({ ...PLAN, manifestHash: "hash-2" }).logContext?.reason
+    ).not.toEqual(
+      refusalFrom({ ...PLAN, planHash: "plan-2" }).logContext?.reason
+    );
   });
 });

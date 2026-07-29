@@ -42,18 +42,40 @@ export interface SettledState {
 }
 
 /**
+ * What a run was planned against.
+ *
+ * A step is recorded as a number, and a number only indexes into a plan. Two
+ * independent things can change that plan out from under an interrupted run,
+ * and either one makes the recorded step mean something different:
+ *
+ * - `manifestHash` covers the object map: which tables, columns and stored keys
+ *   this database's field groups resolve to. It moves when the application's
+ *   schema changes.
+ * - `planHash` covers the ordered step list the running build produces. It
+ *   moves when Nextly itself is upgraded and steps are added, removed or
+ *   reordered, which can happen while the application's schema is untouched.
+ *
+ * Neither subsumes the other, so both are recorded and both are compared.
+ */
+export interface MigrationPlanIdentity {
+  manifestHash: string;
+  planHash: string;
+}
+
+/**
  * A run is in flight, or died in flight.
  *
  * `step` is the last step whose postcondition verified, so a resume starts at
- * `step + 1`. `manifestHash` pins the object map the run was planned against;
- * resuming against a different map is refused rather than reconciled.
+ * `step + 1`. `direction` and `migrationId` are recorded because a resume needs
+ * both: the direction selects the step list, and `advanceStep` refuses an id it
+ * does not recognise.
  */
 export interface MigratingState {
   status: "migrating";
   direction: MigrationDirection;
   migrationId: string;
   step: number;
-  manifestHash: string;
+  plan: MigrationPlanIdentity;
 }
 
 export type MigrationState = SettledState | MigratingState;
@@ -67,6 +89,7 @@ interface StoredMarker {
   migrationId?: string;
   step?: number;
   manifestHash?: string;
+  planHash?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -120,7 +143,7 @@ export async function readMigrationState(
   }
 
   if (marker.status === "migrating") {
-    const { direction, migrationId, step, manifestHash } = marker;
+    const { direction, migrationId, step, manifestHash, planHash } = marker;
     if (direction !== "up" && direction !== "down") {
       throw markerCorrupt("in-flight marker carries no known direction");
     }
@@ -133,7 +156,16 @@ export async function readMigrationState(
     if (typeof manifestHash !== "string" || manifestHash.length === 0) {
       throw markerCorrupt("in-flight marker carries no manifest hash");
     }
-    return { status: "migrating", direction, migrationId, step, manifestHash };
+    if (typeof planHash !== "string" || planHash.length === 0) {
+      throw markerCorrupt("in-flight marker carries no plan hash");
+    }
+    return {
+      status: "migrating",
+      direction,
+      migrationId,
+      step,
+      plan: { manifestHash, planHash },
+    };
   }
 
   throw markerCorrupt(`unknown marker status ${String(marker.status)}`);
@@ -151,7 +183,7 @@ export async function beginMigration(
   args: {
     direction: MigrationDirection;
     migrationId: string;
-    manifestHash: string;
+    plan: MigrationPlanIdentity;
   }
 ): Promise<void> {
   const marker: StoredMarker = {
@@ -160,7 +192,8 @@ export async function beginMigration(
     direction: args.direction,
     migrationId: args.migrationId,
     step: 0,
-    manifestHash: args.manifestHash,
+    manifestHash: args.plan.manifestHash,
+    planHash: args.plan.planHash,
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
@@ -209,37 +242,58 @@ export async function advanceStep(
     direction: current.direction,
     migrationId: current.migrationId,
     step: args.step,
-    manifestHash: current.manifestHash,
+    manifestHash: current.plan.manifestHash,
+    planHash: current.plan.planHash,
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
 
 /**
- * Refuse to resume a run whose plan no longer describes the same objects.
+ * Refuse to resume a run whose plan is no longer the plan that was interrupted.
  *
  * Steps are identified by position, and a position only means something
- * relative to the manifest it was planned against. If the object map changed
- * between the interrupted run and this one — a deployment, an edited schema, a
- * field group added or removed — then step N now names different objects than
- * the step N that was checked off, and continuing would rename or verify the
- * wrong ones. There is no safe reconciliation, so this refuses.
+ * relative to the plan it was checked off under. Two different changes can
+ * invalidate it, and they are reported separately because they point an
+ * operator at different causes:
  *
- * Callers must invoke this once they have rebuilt the plan and can supply its
- * hash, which is necessarily after the resume decision itself is made.
+ * - The object map moved: the application's schema changed between the
+ *   interrupted run and this one, so step N now names different objects.
+ * - The step list moved: Nextly was upgraded and its steps were added, removed
+ *   or reordered, so step N is a different operation even though the database's
+ *   own objects are untouched.
+ *
+ * Neither is reconcilable, so both refuse. Callers invoke this once they have
+ * rebuilt the plan and can supply its identity, which is necessarily after the
+ * resume decision itself is made.
  */
-export function assertManifestUnchanged(args: {
-  recorded: string;
-  current: string;
+export function assertPlanUnchanged(args: {
+  recorded: MigrationPlanIdentity;
+  current: MigrationPlanIdentity;
 }): void {
-  if (args.recorded === args.current) return;
-  throw NextlyError.serviceUnavailable({
-    logMessage:
-      "field-group migration cannot resume: the plan changed since the interrupted run",
-    logContext: {
-      reason: "migration manifest changed since the interrupted run",
-      recorded: args.recorded,
-      current: args.current,
-    },
+  if (args.recorded.manifestHash !== args.current.manifestHash) {
+    throw planMoved(
+      "migration object map changed since the interrupted run",
+      args.recorded.manifestHash,
+      args.current.manifestHash
+    );
+  }
+  if (args.recorded.planHash !== args.current.planHash) {
+    throw planMoved(
+      "migration step list changed since the interrupted run",
+      args.recorded.planHash,
+      args.current.planHash
+    );
+  }
+}
+
+function planMoved(
+  reason: string,
+  recorded: string,
+  current: string
+): NextlyError {
+  return NextlyError.serviceUnavailable({
+    logMessage: `field-group migration cannot resume: ${reason}`,
+    logContext: { reason, recorded, current },
   });
 }
 

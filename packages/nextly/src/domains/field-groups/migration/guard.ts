@@ -19,7 +19,22 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 
-import type { MigrationState } from "./state";
+import type {
+  MigrationDirection,
+  MigrationPlanIdentity,
+  MigrationState,
+} from "./state";
+
+/**
+ * Whether every object the migrated registry points at is actually there and
+ * actually migrated.
+ *
+ * `missing` names what was not found, so a refusal tells an operator which
+ * objects to restore rather than only that something is wrong.
+ */
+export type MigratedObjectsVerification =
+  | { complete: true }
+  | { complete: false; missing: string[] };
 
 /** What the caller found in the database. Gathering it is dialect-specific. */
 export interface StorageProbe {
@@ -27,21 +42,38 @@ export interface StorageProbe {
   targetRegistryPresent: boolean;
   /** A registry table carrying the pre-migration name exists. */
   legacyRegistryPresent: boolean;
+  /**
+   * The result of checking the objects the migrated registry references, not
+   * just the registry itself.
+   *
+   * `null` means no such check was performed. That is never sufficient to serve
+   * migrated storage: the registry existing says nothing about whether the data
+   * tables it points at survived, and the read path treats a missing data table
+   * as an empty result rather than an error.
+   */
+  migratedObjects: MigratedObjectsVerification | null;
 }
 
 /**
  * What the caller should do next.
  *
- * The resume verdict carries the manifest hash the interrupted run was planned
- * against rather than leaving it in the marker for the caller to look up. A
- * resumed step is only meaningful against that same plan, so the value the
- * caller must check is handed to it alongside the step it would otherwise run
- * blind. See `assertManifestUnchanged`.
+ * The resume verdict carries everything a resume needs rather than leaving it
+ * in the marker to be looked up separately: `direction` selects which step list
+ * the step number indexes into, `migrationId` is the identity `advanceStep`
+ * checks against, and `plan` is what the rebuilt plan must match. A consumer
+ * that follows this type cannot resume in the wrong direction, mint an id that
+ * will be rejected, or skip the plan comparison. See `assertPlanUnchanged`.
  */
 export type StorageVerdict =
   | { action: "use-legacy" }
   | { action: "use-field-groups-v2" }
-  | { action: "resume"; step: number; manifestHash: string };
+  | {
+      action: "resume";
+      step: number;
+      direction: MigrationDirection;
+      migrationId: string;
+      plan: MigrationPlanIdentity;
+    };
 
 /**
  * Resolve state plus probe into an instruction, or throw.
@@ -57,12 +89,15 @@ export function resolveStorageVerdict(args: {
 
   if (state.status === "migrating") {
     // A run died in flight. Resuming is the only safe move: the objects are in
-    // a state only the step list can interpret. The recorded manifest hash
-    // travels with the step so the resumed run can refuse a changed plan.
+    // a state only the step list can interpret. The run's own identity travels
+    // with the step so the resumed run picks the right list, keeps the same id,
+    // and can refuse a plan that moved underneath it.
     return {
       action: "resume",
       step: state.step + 1,
-      manifestHash: state.manifestHash,
+      direction: state.direction,
+      migrationId: state.migrationId,
+      plan: state.plan,
     };
   }
 
@@ -75,6 +110,26 @@ export function resolveStorageVerdict(args: {
       throw refuse(
         "marker reports a completed migration but the migrated registry is absent",
         { generation: state.generation, probe }
+      );
+    }
+    // The registry existing proves only that the registry exists. The objects
+    // it points at are what content is actually read from, and the read path
+    // treats a missing data table as an empty result rather than an error, so
+    // an unverified or incomplete rename would serve blank content instead of
+    // failing. Nothing short of a full structural check earns a v2 verdict.
+    if (probe.migratedObjects === null) {
+      throw refuse(
+        "migrated storage was not structurally verified before use",
+        { generation: state.generation, probe }
+      );
+    }
+    if (!probe.migratedObjects.complete) {
+      throw refuse(
+        "objects the migrated registry references are missing or unmigrated",
+        {
+          generation: state.generation,
+          missing: probe.migratedObjects.missing,
+        }
       );
     }
     return { action: "use-field-groups-v2" };
