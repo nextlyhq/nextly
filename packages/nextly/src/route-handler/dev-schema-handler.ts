@@ -6,8 +6,8 @@
  *   DELETE /admin/api/_dev/schema/collection/:slug    remove a collection
  *   POST   /admin/api/_dev/schema/single             upsert a single
  *   DELETE /admin/api/_dev/schema/single/:slug        remove a single
- *   POST   /admin/api/_dev/schema/component          upsert a component
- *   DELETE /admin/api/_dev/schema/component/:slug     remove a component
+ *   POST   /admin/api/_dev/schema/field-group          upsert a component
+ *   DELETE /admin/api/_dev/schema/field-group/:slug     remove a component
  *
  * Each write loads the current manifest, applies the change, re-validates the
  * whole manifest (Layer 4 — `mutateManifest` throws NEXTLY_UI_SCHEMA_INVALID on
@@ -34,7 +34,7 @@ import { getHandlerConfig } from "./auth-handler";
 const KIND_BY_SEGMENT: Record<string, ManifestKind> = {
   collection: "collections",
   single: "singles",
-  component: "components",
+  "field-group": "components",
 };
 
 function notFound(): Response {
