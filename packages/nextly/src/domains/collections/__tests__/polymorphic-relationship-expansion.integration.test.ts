@@ -14,7 +14,7 @@
  * driver rejects the bound parameter.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 
 import {
   checkbox,
@@ -22,8 +22,10 @@ import {
   relationship,
   text,
 } from "../../../config";
+import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
@@ -37,12 +39,13 @@ afterEach(async () => {
 type Handler = CollectionsHandler;
 
 /** `refs.target` may point at either collection, so it stores the pair. */
-async function bootPolymorphic(): Promise<{
+async function bootPolymorphic(dialect: TestDialect): Promise<{
   handler: Handler;
   postRefId: string;
   pageRefId: string;
 }> {
   current = await createTestNextly({
+    dialect,
     collections: [
       defineCollection({
         slug: "posts",
@@ -107,9 +110,9 @@ async function readTarget(
   return (result.data as { target?: Record<string, unknown> }).target;
 }
 
-describe("polymorphic relationship expansion (integration)", () => {
+describeEachDialect("polymorphic relationship expansion", dialect => {
   it("expands a value pointing at the first declared target", async () => {
-    const { handler, postRefId } = await bootPolymorphic();
+    const { handler, postRefId } = await bootPolymorphic(dialect);
 
     const target = await readTarget(handler, postRefId);
 
@@ -125,7 +128,7 @@ describe("polymorphic relationship expansion (integration)", () => {
   // to the posts table. Only a value that points at a LATER target proves the
   // collection is read from the value.
   it("expands a value pointing at a later declared target", async () => {
-    const { handler, pageRefId } = await bootPolymorphic();
+    const { handler, pageRefId } = await bootPolymorphic(dialect);
 
     const target = await readTarget(handler, pageRefId);
 
@@ -139,7 +142,7 @@ describe("polymorphic relationship expansion (integration)", () => {
   // and resolves the collection separately from the read above — so it needs
   // its own coverage, including a batch that spans both collections at once.
   it("expands values from several collections in one listing", async () => {
-    const { handler } = await bootPolymorphic();
+    const { handler } = await bootPolymorphic(dialect);
 
     const result = await handler.listEntries({
       collectionName: "refs",
@@ -167,6 +170,7 @@ describe("polymorphic relationship expansion (integration)", () => {
   // evaluated must be that collection's, not the first declared target's.
   it("judges a populated row by its own collection's field rules", async () => {
     current = await createTestNextly({
+      dialect,
       collections: [
         defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
         defineCollection({
@@ -238,6 +242,7 @@ describe("polymorphic relationship expansion (integration)", () => {
   // written turns any writable relationship into a reader for any table.
   it("refuses to populate from a collection the field never declared", async () => {
     current = await createTestNextly({
+      dialect,
       collections: [
         defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
         defineCollection({ slug: "pages", fields: [text({ name: "title" })] }),
@@ -290,7 +295,7 @@ describe("polymorphic relationship expansion (integration)", () => {
   // field's first declared target. So reading at depth and saving the document
   // back unchanged has to leave the reference pointing where it did.
   it("survives a read-then-write round trip at depth", async () => {
-    const { handler, pageRefId } = await bootPolymorphic();
+    const { handler, pageRefId } = await bootPolymorphic(dialect);
 
     const read = await handler.getEntry({
       collectionName: "refs",
@@ -322,7 +327,7 @@ describe("polymorphic relationship expansion (integration)", () => {
   });
 
   it("keeps the pair intact when no expansion was asked for", async () => {
-    const { handler, postRefId } = await bootPolymorphic();
+    const { handler, postRefId } = await bootPolymorphic(dialect);
 
     const result = await handler.getEntry({
       collectionName: "refs",
