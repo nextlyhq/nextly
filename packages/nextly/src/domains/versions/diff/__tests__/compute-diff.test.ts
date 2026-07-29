@@ -122,6 +122,25 @@ describe("computeVersionDiff — per field kind", () => {
     }
   });
 
+  it("classifies a json object-to-null edit as a two-sided change", () => {
+    // A stored json `null` is a value, not absence: object -> null is a change,
+    // not a removal, even though normalization collapses null the same either way.
+    const diff = computeVersionDiff({ cfg: { a: 1 } }, { cfg: null }, [
+      field({ name: "cfg", type: "json" }),
+    ]);
+    expect(diff.fields[0]).toMatchObject({ kind: "value", status: "changed" });
+  });
+
+  it("classifies an absent-to-json-null edit as added", () => {
+    const diff = computeVersionDiff({}, { cfg: null }, [
+      field({ name: "cfg", type: "json" }),
+    ]);
+    expect(diff.fields.find(n => n.name === "cfg")).toMatchObject({
+      kind: "value",
+      status: "added",
+    });
+  });
+
   it("diffs a text field into word segments", () => {
     const diff = computeVersionDiff(
       { title: "hello world" },
@@ -352,10 +371,32 @@ describe("computeVersionDiff — never leaks a password", () => {
     expect(node).not.toHaveProperty("after");
   });
 
-  it("withholds the value of a container whose children left the schema", () => {
-    // A group/component that remains in the schema but has no child fields (all
-    // deleted) cannot prove access to its stored children, so its value is
-    // withheld exactly like a dropped field rather than dumped opaquely.
+  it("withholds the whole value of a component whose type is gone", () => {
+    // A dynamic-zone component whose stored type is no longer in the schema is
+    // unresolved, so the whole value is withheld like a dropped field.
+    const zone = field({
+      name: "block",
+      type: "component",
+      components: ["hero"],
+      componentSchemas: {
+        hero: { fields: [field({ name: "headline", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { block: { _componentType: "gone", secret: "x" } },
+      { block: { _componentType: "gone", secret: "y" } },
+      [zone]
+    );
+    const node = diff.fields.find(n => n.name === "block");
+    expect(node?.kind).toBe("unknown");
+    expect(node).not.toHaveProperty("before");
+    expect(node).not.toHaveProperty("after");
+  });
+
+  it("withholds stray values in a resolved but empty container", () => {
+    // A group that still resolves but has no fields (its children were deleted)
+    // is a real empty container; its stray stored key surfaces as a withheld
+    // unknown child rather than exposing the value.
     const emptyGroup = field({ name: "meta", type: "group", fields: [] });
     const diff = computeVersionDiff(
       { meta: { removedChild: "secret-old" } },
@@ -363,9 +404,21 @@ describe("computeVersionDiff — never leaks a password", () => {
       [emptyGroup]
     );
     const node = diff.fields.find(n => n.name === "meta");
-    expect(node?.kind).toBe("unknown");
-    expect(node).not.toHaveProperty("before");
-    expect(node).not.toHaveProperty("after");
+    expect(node?.kind).toBe("group");
+    if (node?.kind === "group") {
+      const child = node.fields.find(n => n.name === "removedChild");
+      expect(child?.kind).toBe("unknown");
+      expect(child).not.toHaveProperty("before");
+      expect(child).not.toHaveProperty("after");
+    }
+  });
+
+  it("shows a valid empty container without a schema-unavailable warning", () => {
+    const emptyGroup = field({ name: "meta", type: "group", fields: [] });
+    const diff = computeVersionDiff({ meta: {} }, { meta: {} }, [emptyGroup]);
+    const node = diff.fields.find(n => n.name === "meta");
+    expect(node?.kind).toBe("group");
+    if (node?.kind === "group") expect(node.fields).toEqual([]);
   });
 });
 

@@ -278,16 +278,20 @@ function singleComponentChildFields(
   field: FieldConfig,
   before: unknown,
   after: unknown
-): FieldConfig[] {
-  // Single-mode component: one fixed schema.
-  const single = enrichedComponentFields(field);
-  if (!Array.isArray(componentSlugs(field))) return single ?? [];
+): FieldConfig[] | undefined {
+  // Single-mode component: one fixed schema. `undefined` when it is not enriched
+  // (the component type is gone) — distinct from an enriched but empty schema.
+  if (!Array.isArray(componentSlugs(field)))
+    return enrichedComponentFields(field);
   // Non-repeatable dynamic zone: the editor picked one type; resolve its schema
-  // from the stored discriminator (the after value, falling back to before).
+  // from the stored discriminator (the after value, falling back to before). A
+  // type absent from the schema map is unresolved (`undefined`); a resolved type
+  // keeps its fields, which may legitimately be empty.
   const type =
     componentTypeOf(asObject(after)) ?? componentTypeOf(asObject(before));
-  if (type === undefined) return [];
-  return enrichedComponentSchemas(field)?.[type]?.fields ?? [];
+  if (type === undefined) return undefined;
+  const schema = enrichedComponentSchemas(field)?.[type];
+  return schema ? (schema.fields ?? []) : undefined;
 }
 
 /**
@@ -346,16 +350,37 @@ function valueNode(
   meta: NodeMeta,
   before: unknown,
   after: unknown,
-  display?: FieldDisplay
+  display?: FieldDisplay,
+  status?: DiffStatus
 ): FieldDiff {
   return {
     ...meta,
     kind: "value",
-    status: statusFromPresence(before, after, !dequal(before, after)),
+    status: status ?? statusFromPresence(before, after, !dequal(before, after)),
     before: maskSecret(before),
     after: maskSecret(after),
     ...(display ? { display } : {}),
   };
+}
+
+/**
+ * Status for a `json` value. A json field can hold the primitive `null` as a
+ * real value, which normalization collapses to the same `null` as an absent
+ * key. Classifying from raw key presence keeps the two apart, so an object-to-
+ * null edit reads as a two-sided change rather than a removal.
+ */
+function jsonPresenceStatus(
+  rawBefore: unknown,
+  rawAfter: unknown,
+  before: unknown,
+  after: unknown
+): DiffStatus {
+  const beforeAbsent = rawBefore === undefined;
+  const afterAbsent = rawAfter === undefined;
+  if (beforeAbsent && afterAbsent) return "unchanged";
+  if (beforeAbsent) return "added";
+  if (afterAbsent) return "removed";
+  return dequal(before, after) ? "unchanged" : "changed";
 }
 
 function setNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
@@ -395,16 +420,19 @@ function dedupeTargets(targets: RelationTarget[]): RelationTarget[] {
 
 function groupNode(
   meta: NodeMeta,
-  childFields: FieldConfig[],
+  childFields: FieldConfig[] | undefined,
   before: unknown,
   after: unknown,
   ctx: WalkContext
 ): FieldDiff {
-  // No resolvable child schema (its children were deleted): the stored object
-  // may hold a since-removed child whose access rule can no longer be found, so
-  // it is treated exactly like a dropped field and its value is withheld rather
-  // than dumped opaquely.
-  if (childFields.length === 0) return unknownNode(meta.name, before, after);
+  // An UNRESOLVED schema (its component type is gone) may hold a since-removed
+  // child whose access rule can no longer be found, so the whole value is
+  // withheld like a dropped field rather than dumped opaquely. A RESOLVED but
+  // empty schema (a group or component validly scaffolded with no fields) is a
+  // real empty container: it is diffed normally below, so its unknown-key pass
+  // still withholds any stray stored value while a genuinely empty one shows
+  // nothing rather than a false "schema unavailable" warning.
+  if (childFields === undefined) return unknownNode(meta.name, before, after);
   const fields = collectNodes(childFields, before, after, ctx);
   const changed = fields.some(n => n.status !== "unchanged");
   return {
@@ -648,6 +676,16 @@ function diffField(
   // word-diffed; fall through to a value comparison.
   if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {
     return textNode(meta, before, after);
+  }
+  if (field.type === "json") {
+    // Classify from raw presence: a stored json `null` is a value, not absence.
+    return valueNode(
+      meta,
+      before,
+      after,
+      pickFieldDisplay(field),
+      jsonPresenceStatus(rawBefore, rawAfter, before, after)
+    );
   }
   return valueNode(meta, before, after, pickFieldDisplay(field));
 }
