@@ -82,6 +82,9 @@ export function getSingleEntryServiceFromDI(): SingleEntryService | undefined {
   return undefined;
 }
 
+// The container key moved to `fieldGroupRegistryService` with the service, but
+// this helper keeps its name because callers reach it through the component
+// field type, whose stored spelling has not changed.
 export function getComponentRegistryFromDI():
   | FieldGroupRegistryService
   | undefined {

@@ -4,7 +4,7 @@
  * Provides dialect-agnostic types and dialect-specific schemas for the
  * `dynamic_components` metadata table.
  *
- * @module schemas/dynamic-components
+ * @module schemas/dynamic-field-groups
  * @since 1.0.0
  *
  * @example

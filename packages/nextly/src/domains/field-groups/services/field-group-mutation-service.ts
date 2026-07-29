@@ -9,10 +9,9 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import { toDbError } from "../../../database/errors";
-// PR 4 migration: ServiceError throws replaced with NextlyError. The legacy
-// `ServiceError.fromDatabaseError` boundary maps to `NextlyError.fromDatabaseError`,
-// and the `instanceof ServiceError` rethrow guards become `NextlyError.is(...)`
-// so any error type travelling through the shim is preserved.
+// Database failures cross this boundary through `NextlyError.fromDatabaseError`,
+// and rethrow guards use `NextlyError.is(...)` so an error travelling through
+// the shim keeps its original type.
 import { NextlyError } from "../../../errors";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";

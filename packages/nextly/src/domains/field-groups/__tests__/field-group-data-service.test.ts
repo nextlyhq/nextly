@@ -34,10 +34,16 @@ function createCtx(
   const logger = createSilentLogger();
 
   const service = new FieldGroupDataService(
-    adapter as unknown as Parameters<typeof FieldGroupDataService>[0],
+    adapter as unknown as ConstructorParameters<
+      typeof FieldGroupDataService
+    >[0],
     logger,
-    registry as unknown as Parameters<typeof FieldGroupDataService>[2],
-    relationship as unknown as Parameters<typeof FieldGroupDataService>[3]
+    registry as unknown as ConstructorParameters<
+      typeof FieldGroupDataService
+    >[2],
+    relationship as unknown as ConstructorParameters<
+      typeof FieldGroupDataService
+    >[3]
   );
 
   return { service, adapter, registry, relationship };
@@ -1120,9 +1126,13 @@ describe("FieldGroupDataService", () => {
 
       const logger = createSilentLogger();
       const service = new FieldGroupDataService(
-        adapter as unknown as Parameters<typeof FieldGroupDataService>[0],
+        adapter as unknown as ConstructorParameters<
+          typeof FieldGroupDataService
+        >[0],
         logger,
-        registry as unknown as Parameters<typeof FieldGroupDataService>[2]
+        registry as unknown as ConstructorParameters<
+          typeof FieldGroupDataService
+        >[2]
       );
 
       const lateRelationship = createMockRelationshipService();

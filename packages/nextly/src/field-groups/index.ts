@@ -9,7 +9,7 @@
  * - `FieldGroupConfig` — Type definitions for Component configurations
  * - Validation functions for Component configurations
  *
- * @module components
+ * @module field-groups
  * @since 1.0.0
  *
  * @example

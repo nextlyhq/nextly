@@ -5,9 +5,9 @@ import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import type { FieldGroupAdminOptions } from "../../../field-groups/config/types";
 import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../../field-groups/config/validate-field-group";
-// PR 4 migration: switched the throw layer to NextlyError. Public messages now
-// follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
-// `logContext` so operators retain full diagnostic context.
+// Throws NextlyError so public messages stay generic and never echo a slug,
+// while identifiers (slug, source, refs) travel in `logContext` and operators
+// keep full diagnostic context.
 import type {
   DynamicFieldGroupInsert,
   DynamicFieldGroupRecord,
@@ -174,7 +174,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     const existing = await this.getComponentBySlug(data.slug);
     if (existing) {
-      // §13.8: generic public message; the conflicting slug stays out of the
+      // Generic public message; the conflicting slug stays out of the
       // wire and lives in logContext for operator visibility.
       throw NextlyError.duplicate({
         logContext: { reason: "component-slug-conflict", slug: data.slug },
@@ -243,7 +243,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     );
 
     if (existing) {
-      // §13.8: same as registerComponent — generic public message; slug in logContext.
+      // As in registerComponent: generic public message, slug in logContext.
       throw NextlyError.duplicate({
         logContext: { reason: "component-slug-conflict", slug: data.slug },
       });
@@ -300,7 +300,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     const existing = await this.getComponent(slug);
 
     if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN per §13.8 — slug and source go to logContext only.
+      // Generic FORBIDDEN; slug and source go to logContext only.
       throw NextlyError.forbidden({
         logContext: {
           reason: "component-locked",
@@ -366,7 +366,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       );
 
       if (results.length === 0) {
-        // §13.8: generic "Not found." — slug in logContext.
+        // Generic "Not found."; slug in logContext.
         throw NextlyError.notFound({ logContext: { slug } });
       }
 
@@ -402,7 +402,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     const references = await this.findComponentReferences(slug);
 
     if (references.length > 0) {
-      // §13.8: CONFLICT factory carries a stable generic public message.
+      // The CONFLICT factory carries a stable generic public message.
       // The structured `references` payload is operator-only — putting it on
       // logContext keeps it out of the wire while preserving full debug info.
       throw NextlyError.conflict({

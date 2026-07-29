@@ -4,7 +4,7 @@
  * Services for managing Component (reusable field group) metadata and
  * instance data stored in `comp_{slug}` tables.
  *
- * @module domains/components
+ * @module domains/field-groups
  * @since 1.0.0
  */
 

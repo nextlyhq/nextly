@@ -12,7 +12,7 @@
  * - Separate database table per component type (comp_{slug})
  * - Dual creation: Code-First (defineFieldGroup) and Schema Builder
  *
- * @module components/config/types
+ * @module field-groups/config/types
  * @since 1.0.0
  */
 

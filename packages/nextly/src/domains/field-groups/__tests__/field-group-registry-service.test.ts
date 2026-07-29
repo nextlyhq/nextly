@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// PR 4 migration: assertions previously checked `instanceof ServiceError`,
-// but the service now throws NextlyError. Swap the asserted error class so
-// the `rejects.toThrow(...)` instanceof check lines up with the new throw type.
+// The service throws NextlyError, so `rejects.toThrow(...)` asserts against
+// that class for the instanceof check to line up with the thrown type.
 import { NextlyError } from "../../../errors";
 import { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 
@@ -23,7 +22,9 @@ function createCtx(
   const logger = createSilentLogger();
 
   const service = new FieldGroupRegistryService(
-    adapter as unknown as Parameters<typeof FieldGroupRegistryService>[0],
+    adapter as unknown as ConstructorParameters<
+      typeof FieldGroupRegistryService
+    >[0],
     logger
   );
 

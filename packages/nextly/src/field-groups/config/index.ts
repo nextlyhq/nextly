@@ -4,7 +4,7 @@
  * Re-exports all component configuration types, helpers, and validation
  * functions for external consumption.
  *
- * @module components/config
+ * @module field-groups/config
  * @since 1.0.0
  */
 

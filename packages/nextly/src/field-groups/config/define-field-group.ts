@@ -14,7 +14,7 @@
  * - Support all field types including nested components (max depth: 3)
  * - Separate database table per component type (comp_{slug})
  *
- * @module components/config/define-field-group
+ * @module field-groups/config/define-field-group
  * @since 1.0.0
  *
  * @example
