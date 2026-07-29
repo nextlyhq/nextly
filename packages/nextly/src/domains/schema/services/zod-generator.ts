@@ -40,7 +40,13 @@ import {
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 
-import { isPluginDataField, pluginZodSchema } from "./plugin-codegen";
+import {
+  asStorageEquivalentField,
+  isPluginDataField,
+  pluginCodegenImports,
+  pluginStorageFieldType,
+  pluginZodSchema,
+} from "./plugin-codegen";
 
 /** What a blocks field accepts when it declares no kinds of its own. */
 const DEFAULT_BLOCKS_DOCUMENT_KIND = "page";
@@ -149,7 +155,7 @@ export class ZodGenerator {
    * @returns Generated schema with code, filename, and metadata
    */
   generateSchema(collection: DynamicCollectionRecord): GeneratedZodSchema {
-    const imports = this.generateImports();
+    const imports = this.generateImports(collection);
     const schemas = this.generateSchemaDefinitions(collection);
     const types = this.generateTypes
       ? this.generateTypeExports(collection)
@@ -216,9 +222,16 @@ export class ZodGenerator {
 
   /**
    * Generates import statements for the schema file.
+   *
+   * A plugin field type's Zod expression may name a type it declared imports
+   * for — `z.custom<Rating>()` is the shape this is here to support. Emitted
+   * only for the types this collection actually declares, so an unused
+   * registration adds nothing, and the file would otherwise reference an
+   * identifier it never imported and break the consuming app's build.
    */
-  private generateImports(): string {
-    return `import { z } from "zod";`;
+  private generateImports(collection: DynamicCollectionRecord): string {
+    const pluginImports = pluginCodegenImports([collection]);
+    return [`import { z } from "zod";`, ...pluginImports].join("\n");
   }
 
   // ============================================================
@@ -424,8 +437,18 @@ export class ZodGenerator {
     // type that stays silent still yields no schema rather than a loose one.
     else {
       const contributed = pluginZodSchema(field);
-      if (contributed === undefined) return null;
-      zodSchema = contributed;
+      if (contributed !== undefined) {
+        zodSchema = contributed;
+      } else {
+        // No schema of its own, but the registry knows what it stores.
+        // Re-entered as the storage primitive's built-in type rather than
+        // dropping a field whose value is persisted either way.
+        const storageType = pluginStorageFieldType(field);
+        if (storageType === undefined) return null;
+        return this.generateFieldSchema(
+          asStorageEquivalentField(field, storageType)
+        );
+      }
     }
 
     // Apply modifiers
@@ -742,8 +765,22 @@ export class ZodGenerator {
         // Same for a nested plugin type: skipping it would drop the value from
         // the row's schema even though it is stored.
         const contributed = pluginZodSchema(field);
-        if (contributed === undefined) continue;
-        zodSchema = contributed;
+        if (contributed !== undefined) {
+          zodSchema = contributed;
+        } else {
+          const storageType = pluginStorageFieldType(field);
+          const asStorage =
+            storageType === undefined
+              ? null
+              : this.generateFieldSchema(
+                  asStorageEquivalentField(field, storageType)
+                );
+          if (asStorage === null) continue;
+          // The nested builder emits `name: schema` itself, so the line the
+          // shared path produced is reused verbatim.
+          fieldSchemas.push(asStorage.trim().replace(/,$/, ""));
+          continue;
+        }
       }
 
       // Apply optional if not required

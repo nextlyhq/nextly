@@ -10,10 +10,13 @@
  *
  * @module domains/schema/services/plugin-codegen
  */
+import type { BlockFieldCatalogType } from "../../../collections/fields/catalog";
+import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../../collections/fields/catalog";
 import type {
   PluginFieldCodegenImport,
   PluginFieldInstance,
 } from "../../../plugins/contributions";
+import { detachedField } from "../../../shared/lib/detached-field";
 import { getFieldType } from "../field-types/field-type-registry";
 
 /** A field as the generators hold it: a type, maybe a name, maybe children. */
@@ -35,6 +38,19 @@ function codegenFor(field: CodegenField) {
 }
 
 /**
+ * The field as its own type sees it: options folded into one flat view.
+ *
+ * The Schema Builder writes unmodelled options into `pluginOptions`, so a
+ * callback reading `field.ratingScale` would find it on a code-first field and
+ * lose it the moment an ordinary save moved it into the container. The same
+ * view `validate` and `validateOptions` are given, built by the same helper, so
+ * generated output cannot depend on where an option happened to be stored.
+ */
+function optionView(field: CodegenField): PluginFieldInstance {
+  return detachedField(field as unknown as { name?: string; type: string });
+}
+
+/**
  * The TypeScript type a plugin field type declares, or nothing.
  *
  * The field is passed as declared so a type can narrow its output to the
@@ -42,7 +58,42 @@ function codegenFor(field: CodegenField) {
  */
 export function pluginTsType(field: CodegenField): string | undefined {
   const emit = codegenFor(field)?.tsType;
-  return emit?.(field as unknown as PluginFieldInstance);
+  return emit?.(optionView(field));
+}
+
+/**
+ * The built-in field type a plugin type stores as, for a type that contributes
+ * no rendering of its own.
+ *
+ * Generating such a field as `unknown`, or omitting it, would lose what the
+ * registry already knows: a `number`-backed type stores a number whether or not
+ * its author wrote a `tsType`. Substituting the storage primitive's built-in
+ * type lets both generators reuse the branch they already have for it, which is
+ * the same substitution the write path makes when it applies the primitive's
+ * rules to a custom type.
+ */
+export function pluginStorageFieldType(
+  field: CodegenField
+): BlockFieldCatalogType | undefined {
+  if (typeof field.type !== "string") return undefined;
+  const registered = getFieldType(field.type);
+  if (!registered) return undefined;
+  return STORAGE_PRIMITIVE_AS_FIELD_TYPE[registered.storage];
+}
+
+/**
+ * The same field, retyped as the built-in its plugin type stores as.
+ *
+ * The generators dispatch on `type`, so re-entering with it substituted makes
+ * them emit the primitive's shape while every other option on the field stays
+ * visible. Spread through a record because a field config is a union of
+ * per-type shapes and TypeScript will not spread one directly.
+ */
+export function asStorageEquivalentField<T extends CodegenField>(
+  field: T,
+  storageType: BlockFieldCatalogType
+): T {
+  return { ...(field as Record<string, unknown>), type: storageType } as T;
 }
 
 /**
@@ -60,7 +111,7 @@ export function isPluginDataField(field: CodegenField): boolean {
 /** The Zod expression a plugin field type declares, or nothing. */
 export function pluginZodSchema(field: CodegenField): string | undefined {
   const emit = codegenFor(field)?.zodSchema;
-  return emit?.(field as unknown as PluginFieldInstance);
+  return emit?.(optionView(field));
 }
 
 /** Every field in a tree, container children included. */

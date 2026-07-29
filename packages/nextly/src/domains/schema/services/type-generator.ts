@@ -48,8 +48,10 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 
 import {
+  asStorageEquivalentField,
   isPluginDataField,
   pluginCodegenImports,
+  pluginStorageFieldType,
   pluginTsType,
 } from "./plugin-codegen";
 
@@ -736,7 +738,26 @@ export class TypeGenerator {
     // state its own rendering; asked once, because the callback is plugin code
     // and nothing requires it to be pure.
     else {
-      tsType = pluginTsType(field) ?? "unknown";
+      const contributed = pluginTsType(field);
+      if (contributed !== undefined) {
+        tsType = contributed;
+      } else {
+        // No rendering of its own, but the registry still knows what it stores.
+        // Re-entered as the storage primitive's built-in type so the branch
+        // above emits it, rather than degrading a number-backed type to
+        // `unknown` for want of a callback.
+        const storageType = pluginStorageFieldType(field);
+        const asStorage =
+          storageType === undefined
+            ? null
+            : this.generateFieldType(
+                asStorageEquivalentField(field, storageType),
+                allCollections,
+                allComponents
+              );
+        if (asStorage !== null) return asStorage;
+        tsType = "unknown";
+      }
     }
 
     return `  ${fieldName}${optional}: ${tsType};`;

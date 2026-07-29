@@ -13,8 +13,6 @@
  * @module domains/schema/field-types/field-type-registry
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
-
 import type { FieldSurface } from "../../../collections/fields/catalog";
 import { DEFAULT_FIELD_SURFACES } from "../../../collections/fields/catalog";
 import { ALL_FIELD_TYPES } from "../../../collections/fields/types";
@@ -27,20 +25,32 @@ const globalForFieldTypes = globalThis as unknown as {
 };
 
 /**
- * The registry an operation reads, when it declared one of its own.
+ * Reads the registry the running operation pinned for itself, if any.
  *
  * The live set below belongs to whichever config was loaded last. That is right
- * for serving requests and wrong for work that is already underway against an
- * earlier config: `db:sync --watch` reloads on save, and a reload clears and
- * rebuilds the live set while the previous sync may still be materializing
- * columns. Resolution runs deep inside the schema pipeline — `classifyFieldKind`
- * calls this from beneath `getColumnDescriptor` — so an operation pins its
- * registry for the length of its async run instead of threading one through
- * every frame in between.
+ * for serving requests and wrong for work already underway against an earlier
+ * config: `db:sync --watch` reloads on save, and a reload clears and rebuilds
+ * the live set while the previous sync may still be materializing columns.
+ *
+ * Held as an indirection rather than reading an `AsyncLocalStorage` here,
+ * because this module is reachable from `nextly/config` and so ends up in the
+ * browser bundle, where a `node:async_hooks` import cannot resolve. The storage
+ * lives in a Node-only module that installs itself when the CLI loads it; in a
+ * browser nothing installs one and every lookup reads the live set, which is
+ * the only set that exists there.
  */
-const scopedFieldTypes = new AsyncLocalStorage<
-  ReadonlyMap<string, PluginFieldType>
->();
+type ScopedFieldTypeReader = () =>
+  | ReadonlyMap<string, PluginFieldType>
+  | undefined;
+
+let readScopedFieldTypes: ScopedFieldTypeReader | undefined;
+
+/** Install the scope reader. Called by the Node-only scope module on load. */
+export function installScopedFieldTypeReader(
+  reader: ScopedFieldTypeReader
+): void {
+  readScopedFieldTypes = reader;
+}
 
 /** The live set, which registration and clearing always act on. */
 function liveStore(): Map<string, PluginFieldType> {
@@ -52,22 +62,7 @@ function liveStore(): Map<string, PluginFieldType> {
 
 /** What a lookup resolves against: the operation's own set, else the live one. */
 function store(): ReadonlyMap<string, PluginFieldType> {
-  return scopedFieldTypes.getStore() ?? liveStore();
-}
-
-/**
- * Run `operation` with `fieldTypes` as the registry every lookup inside it sees.
- *
- * Scoped rather than installed, so a reload replacing the live set midway
- * through changes nothing for work already running, and the operation cannot
- * leave a stale set behind for anyone else.
- */
-export function runWithFieldTypes<T>(
-  fieldTypes: ReadonlyMap<string, PluginFieldType> | undefined,
-  operation: () => T
-): T {
-  if (!fieldTypes) return operation();
-  return scopedFieldTypes.run(fieldTypes, operation);
+  return readScopedFieldTypes?.() ?? liveStore();
 }
 
 /** Register a custom field type. Throws on collision with a built-in or another plugin. */

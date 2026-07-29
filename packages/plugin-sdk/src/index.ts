@@ -64,7 +64,9 @@ export type { FieldConfig } from "nextly";
  * content of its own — block props, form submissions — applies the same rules a
  * write does instead of reimplementing `required`, the per-type checks and
  * every plugin field type's own `validate`.
- * @public
+ * @experimental No first-party plugin depends on it yet — core's block props
+ *   are its only caller — so it has not met the graduation bar in
+ *   STABILITY.md. It graduates once the page builder owns block props.
  */
 export { validateFieldValues } from "nextly";
 export type {

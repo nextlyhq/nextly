@@ -403,10 +403,25 @@ function collectUnmodelledOptions(
   field: object
 ): Record<string, unknown> | undefined {
   const carried: Record<string, unknown> = {};
+
+  // Defined rather than assigned, for the same reason the write below defines:
+  // a manifest deserialized from JSON can hold an own `__proto__` key, and
+  // assigning it would set this object's prototype instead of collecting the
+  // option — which would drop it on the next save, from the very container that
+  // promises any name is legal.
+  const collect = (key: string, value: unknown): void => {
+    if (value === undefined) return;
+    Object.defineProperty(carried, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+
   for (const [key, value] of Object.entries(field)) {
     if (BUILDER_MODELLED_FIELD_KEYS.has(key)) continue;
-    if (value === undefined) continue;
-    carried[key] = value;
+    collect(key, value);
   }
 
   // The container's entries win over any of the same name sitting directly on
@@ -414,10 +429,7 @@ function collectUnmodelledOptions(
   // the meaning the surrounding schema gives that name.
   const container = (field as { pluginOptions?: unknown }).pluginOptions;
   if (container !== null && typeof container === "object") {
-    for (const [key, value] of Object.entries(container)) {
-      if (value === undefined) continue;
-      carried[key] = value;
-    }
+    for (const [key, value] of Object.entries(container)) collect(key, value);
   }
 
   return Object.keys(carried).length > 0 ? carried : undefined;

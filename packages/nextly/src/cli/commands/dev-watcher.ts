@@ -8,7 +8,7 @@
  * @module cli/commands/dev-watcher
  */
 
-import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-registry";
+import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { CommandContext } from "../program";

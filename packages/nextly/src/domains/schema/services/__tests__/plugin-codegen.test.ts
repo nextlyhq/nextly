@@ -47,6 +47,13 @@ const OPAQUE: PluginFieldType = {
   component: "@acme/opaque/admin#OpaqueInput",
 };
 
+/** Number-backed and silent, where the storage fallback is worth something. */
+const TALLY: PluginFieldType = {
+  type: "tally",
+  storage: "number",
+  component: "@acme/tally/admin#TallyInput",
+};
+
 const collection = (fields: unknown[]) =>
   ({
     slug: "posts",
@@ -71,7 +78,18 @@ describe("plugin field types in the TypeScript generator", () => {
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
   });
 
-  it("falls back for a type that contributes no rendering", () => {
+  it("falls back to what the type stores when it renders nothing", () => {
+    registerFieldType(TALLY);
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "hits", type: "tally" }]),
+    ]);
+
+    // The registry knows a `number`-backed type stores a number, with or
+    // without a `tsType`, so degrading it to `unknown` would discard that.
+    expect(file.code).toContain("hits?: number;");
+  });
+
+  it("uses the json storage shape for a json-backed silent type", () => {
     registerFieldType(OPAQUE);
     const file = new TypeGenerator().generateTypesFile([
       collection([{ name: "blob", type: "opaque-thing" }]),
@@ -79,6 +97,23 @@ describe("plugin field types in the TypeScript generator", () => {
 
     expect(file.code).toContain("blob?: unknown;");
     expect(file.code).not.toContain("@acme/opaque");
+  });
+
+  it("reads an option the Schema Builder moved into the container", () => {
+    registerFieldType(RATING);
+    const file = new TypeGenerator().generateTypesFile([
+      collection([
+        {
+          name: "score",
+          type: "star-rating",
+          pluginOptions: { ratingScale: { max: 7 } },
+        },
+      ]),
+    ]);
+
+    // An ordinary save relocates unmodelled options, so a callback reading the
+    // raw field would silently start emitting the un-narrowed type.
+    expect(file.code).toContain("score?: Rating<7>;");
   });
 
   it("imports nothing for a registered type no field uses", () => {
@@ -126,12 +161,45 @@ describe("plugin field types in the Zod generator", () => {
     expect(schema.code).toContain("z.number().min(0).max(5)");
   });
 
-  it("omits a type that contributes no schema, rather than guessing one", () => {
-    registerFieldType(OPAQUE);
+  it("falls back to the storage primitive's schema when it declares none", () => {
+    registerFieldType(TALLY);
     const schema = new ZodGenerator().generateSchema(
-      collection([{ name: "blob", type: "opaque-thing" }])
+      collection([{ name: "hits", type: "tally" }])
     );
 
-    expect(schema.code).not.toContain("blob");
+    // Dropping the field would leave a stored value with nothing validating it.
+    expect(schema.code).toContain("hits");
+    expect(schema.code).toContain("z.number()");
+  });
+
+  it("emits the imports its expression relies on", () => {
+    registerFieldType(RATING);
+    const schema = new ZodGenerator().generateSchema(
+      collection([
+        { name: "score", type: "star-rating", ratingScale: { max: 5 } },
+      ])
+    );
+
+    // The expression may name a type — `z.custom<Rating>()` — and the file
+    // would otherwise reference an identifier it never imported.
+    expect(schema.code).toContain(
+      'import type { Rating } from "@acme/ratings";'
+    );
+  });
+
+  it("reads an option the Schema Builder moved into the container", () => {
+    registerFieldType(RATING);
+    const schema = new ZodGenerator().generateSchema(
+      collection([
+        {
+          name: "score",
+          type: "star-rating",
+          pluginOptions: { ratingScale: { max: 7 } },
+          required: true,
+        },
+      ])
+    );
+
+    expect(schema.code).toContain("z.number().min(0).max(7)");
   });
 });

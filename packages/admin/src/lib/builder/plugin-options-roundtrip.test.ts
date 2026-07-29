@@ -128,6 +128,23 @@ describe("plugin field options round-trip through the builder", () => {
     });
   });
 
+  it("carries a container option named after a prototype accessor", () => {
+    // A manifest deserialized from JSON can hold this as an own key. Assigning
+    // it while collecting would set the bag's prototype instead, and the option
+    // would disappear on the next save from the container that promises any
+    // name is legal.
+    const stored = JSON.parse(
+      '{"name":"rating","type":"star-rating","pluginOptions":{"__proto__":{"tainted":true}}}'
+    ) as Parameters<typeof convertToBuilderField>[0];
+
+    const carried = convertToBuilderField(stored, 0).pluginOptions ?? {};
+
+    expect(Object.prototype.hasOwnProperty.call(carried, "__proto__")).toBe(
+      true
+    );
+    expect(Object.getPrototypeOf(carried)).toBe(Object.prototype);
+  });
+
   it("leaves the bag off a field that declares nothing extra", () => {
     const plain = {
       name: "title",

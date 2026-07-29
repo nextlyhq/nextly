@@ -14,9 +14,9 @@ import {
   clearFieldTypes,
   getFieldType,
   registerFieldType,
-  runWithFieldTypes,
   snapshotFieldTypes,
 } from "../field-type-registry";
+import { runWithFieldTypes } from "../field-type-scope";
 
 const RATING: PluginFieldType = {
   type: "star-rating",
