@@ -16,7 +16,11 @@ import { teardownEntityComponentData } from "../../domains/field-groups/services
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
-import { describeError, immediateMessage } from "../../errors/index";
+import {
+  describeError,
+  immediateMessage,
+  NextlyError,
+} from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
@@ -840,6 +844,7 @@ export async function ensureLocalizedCompanions(
     ],
   ];
 
+  const failures: string[] = [];
   for (const [group, resolveTableName] of groups) {
     for (const entity of group) {
       if (!entity.slug || entity.localized !== true) continue;
@@ -861,13 +866,29 @@ export async function ensureLocalizedCompanions(
           status: entity.status === true,
         },
         error => {
-          logger.warn(
+          logger.error(
             `Could not prepare the translations table for "${entity.slug}" (${tableName}_locales). ` +
               `Writes in a non-default locale will be refused until it exists: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
+          failures.push(entity.slug!);
         }
       );
     }
+  }
+  // Fail the command. Exiting 0 here would tell deployment automation the schema is
+  // in step while the registry advertises localization the database cannot store, so
+  // every translation write is refused — unlike a failure from the main auto-sync
+  // pipeline, which does stop the run. Boot and the HMR reload stay best-effort by
+  // passing no reporter: they must not refuse to start over a companion.
+  if (failures.length > 0) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `Could not prepare the translations table for: ${failures.join(", ")}. Writes in a non-default locale will be refused until it exists.`,
+      logContext: {
+        cause: "companion-provisioning-failed",
+        entities: failures,
+      },
+    });
   }
 }

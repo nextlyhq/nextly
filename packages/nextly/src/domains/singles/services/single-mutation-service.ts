@@ -230,6 +230,30 @@ export class SingleMutationService extends BaseService {
   // ============================================================
 
   /**
+   * Whether the main table still carries a localized column — the only state in which
+   * the pre-companion fallback can actually persist anything. Probed rather than read
+   * from the runtime schema, because that schema already omits the column for a Single
+   * localized from creation, which is exactly the case being distinguished.
+   */
+  private async mainHasLocalizedColumn(
+    tableName: string,
+    columnName: string | undefined
+  ): Promise<boolean> {
+    if (!columnName) return false;
+    const isMysql = this.adapter.dialect === "mysql";
+    const table = isMysql ? `\`${tableName}\`` : `"${tableName}"`;
+    const column = isMysql ? `\`${columnName}\`` : `"${columnName}"`;
+    try {
+      await this.adapter.executeQuery(`SELECT ${column} FROM ${table} LIMIT 0`);
+      return true;
+    } catch {
+      // A missing column is the answer this asks for. Any other failure surfaces on
+      // the write that follows, on the same connection.
+      return false;
+    }
+  }
+
+  /**
    * Read a Single's FULL companion translation state for one locale, keyed by
    * companion column — every localized field carries its stored value or is
    * absent (untranslated). Used to assemble the default-locale view for a
@@ -1090,6 +1114,30 @@ export class SingleMutationService extends BaseService {
             // belong on the main table, which is the same pre-migration fallback
             // collections use — and by then the write locale is guaranteed to be
             // the default one, because the guard above refuses any other.
+            // The fallback is only real when the main table STILL has those columns.
+            // A Single localized from creation (or one whose migration already ran)
+            // keeps them only on the companion, and the registered runtime table omits
+            // them — so putting the values back into `mainPayload` writes keys the ORM
+            // does not recognise: they are ignored, `updated_at` is still set, and the
+            // write reports success having saved nothing.
+            if (companion && !companionPhysicallyExists) {
+              const onMain = await this.mainHasLocalizedColumn(
+                singleMeta.tableName,
+                companion.localizedFields[0]?.column
+              );
+              if (!onMain) {
+                throw NextlyError.conflict({
+                  reason: "state",
+                  message:
+                    "Translations are not ready for this single yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+                  logContext: {
+                    cause: "localized-write-without-companion",
+                    single: singleMeta.slug,
+                    companionTable: companion.companionTableName,
+                  },
+                });
+              }
+            }
             const { main: mainPayload, companion: companionData } =
               companion && companionPhysicallyExists
                 ? splitLocalizedWrite(updatePayload, companion.localizedFields)

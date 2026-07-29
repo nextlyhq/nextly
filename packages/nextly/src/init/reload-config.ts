@@ -1195,6 +1195,13 @@ async function runReload(opts?: {
   // not surface as a schema diff — so run the idempotent metadata sync before
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
+  // Also provision on the no-DDL path. A missing `_locales` table produces no schema
+  // diff — companion tables are excluded from it — so `hasChanges` stays false and the
+  // reload would return before ever reaching the call after the apply, which is exactly
+  // the missing-companion state this repairs. Idempotent, so running it here and after
+  // a successful apply costs one existence probe per localized entity.
+  await ensureLocalizedCompanionsForReload(adapter, newConfig);
+
   if (!hasChanges) {
     // Only sync when the schema is genuinely in step (every entity had a zero-op
     // diff). If a real schema change was deferred (unsafe/needs review) or a diff

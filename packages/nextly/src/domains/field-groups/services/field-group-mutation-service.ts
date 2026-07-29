@@ -100,14 +100,19 @@ export class FieldGroupMutationService extends BaseService {
    * The caller writes `main` to the instance row and, after it has the instance id, upserts
    * the companion via {@link upsertLocalizedComponent}.
    */
-  private splitLocalizedComponent(
+  private async splitLocalizedComponent(
     meta: DynamicFieldGroupRecord,
-    data: Record<string, unknown>
-  ): {
+    data: Record<string, unknown>,
+    locale: string | undefined,
+    writeAdapter: {
+      dialect: SupportedDialect;
+      executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    } = this.adapter
+  ): Promise<{
     schema: ReturnType<typeof buildCompanionSchema>;
     main: Record<string, unknown>;
     companion: Record<string, unknown>;
-  } {
+  }> {
     if (!this.localization || meta.localized !== true) {
       return { schema: null, main: data, companion: {} };
     }
@@ -119,6 +124,32 @@ export class FieldGroupMutationService extends BaseService {
       status: false,
     });
     if (!schema) return { schema: null, main: data, companion: {} };
+    // Probe BEFORE splitting. Splitting first and then discovering the companion is
+    // absent strands the translatable values: they leave the main payload and the
+    // upsert that would have taken them is skipped, so the write reports success
+    // having saved nothing. Checking here also means the refusal is raised before
+    // the caller opens its transaction, where the adapters' `classifyError` would
+    // turn a `NextlyError` into an opaque database error and lose the 409.
+    if (
+      !(await companionTableExists(writeAdapter, schema.companionTableName))
+    ) {
+      const writeLocale = resolveRequestedLocale(this.localization, locale);
+      if (writeLocale !== this.localization.defaultLocale) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            fieldGroupTable: schema.companionTableName,
+            locale: writeLocale,
+          },
+        });
+      }
+      // Default language: keep the values on the existing main-table column, the
+      // same pre-companion fallback collections and singles preserve.
+      return { schema: null, main: data, companion: {} };
+    }
     const { main, companion } = splitLocalizedWrite(
       data,
       schema.localizedFields
@@ -184,27 +215,6 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     if (Object.keys(companionData).length === 0) return;
     const writeLocale = resolveRequestedLocale(this.localization!, locale);
-    // Refuse rather than fail opaquely when the companion is not there yet. By this
-    // point the translatable values have already been split OUT of the main payload,
-    // so there is nowhere else for them to go: the upsert below would hit a missing
-    // table and surface a raw database error, and because the component path is not
-    // transactional the shared fields may already have been committed. A localized
-    // field group embedded under a NON-localized parent reaches here even when the
-    // collection and single guards pass, since those only check their own companion.
-    if (
-      !(await companionTableExists(writeAdapter, schema.companionTableName))
-    ) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message:
-          "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
-        logContext: {
-          cause: "localized-write-without-companion",
-          fieldGroupTable: schema.companionTableName,
-          locale: writeLocale,
-        },
-      });
-    }
     await upsertCompanionRow(
       writeAdapter,
       schema.companionTableName,
@@ -414,9 +424,10 @@ export class FieldGroupMutationService extends BaseService {
 
       // i18n: split translatable values out of the main comp_ write — they live on the
       // companion. `main === data` when the component isn't localized (unchanged path).
-      const { schema, main, companion } = this.splitLocalizedComponent(
+      const { schema, main, companion } = await this.splitLocalizedComponent(
         componentMeta,
-        data
+        data,
+        locale
       );
 
       let instanceId: string;
@@ -516,9 +527,10 @@ export class FieldGroupMutationService extends BaseService {
       );
 
       // i18n: split translatable values out of the main comp_ write (companion-owned).
-      const { schema, main, companion } = this.splitLocalizedComponent(
+      const { schema, main, companion } = await this.splitLocalizedComponent(
         componentMeta,
-        data
+        data,
+        locale
       );
 
       let instanceId: string;
@@ -607,9 +619,10 @@ export class FieldGroupMutationService extends BaseService {
         // i18n: split translatable values out per instance (companion-owned). The
         // diff-by-id update keeps the instance id stable, so companion rows for OTHER
         // locales survive a re-save in one locale.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           componentMeta,
-          instance
+          instance,
+          locale
         );
 
         await this.prepareInstanceForWrite(
@@ -721,9 +734,10 @@ export class FieldGroupMutationService extends BaseService {
         const instance = instances[i];
         const instanceId = instance.id;
         // i18n: split translatable values out (companion-owned) per instance.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           componentMeta,
-          instance
+          instance,
+          locale
         );
 
         await this.prepareInstanceForWrite(
@@ -888,9 +902,10 @@ export class FieldGroupMutationService extends BaseService {
         const componentFields = meta.fields;
         const instanceId = instance.id;
         // i18n: split translatable values out per instance using its own component meta.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           meta,
-          instance
+          instance,
+          locale
         );
 
         await this.prepareInstanceForWrite(
@@ -1042,9 +1057,10 @@ export class FieldGroupMutationService extends BaseService {
         const componentFields = meta.fields;
         const instanceId = instance.id;
         // i18n: split translatable values out per instance using its own component meta.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           meta,
-          instance
+          instance,
+          locale
         );
 
         await this.prepareInstanceForWrite(

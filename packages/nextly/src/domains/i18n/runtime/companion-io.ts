@@ -243,9 +243,11 @@ export async function companionHasStatusColumn(
 
 /**
  * Boot/db:sync helper: physically create the companion `<tableName>_locales` table if it does
- * not already exist, and seed it from the main table when localization is being turned on for an
- * entity that already holds content. Idempotent and safe to run on every boot — a no-op once the
- * table exists and is seeded (or when the entity has no translatable fields). This is the
+ * not already exist. CREATION ONLY — the table is left empty, so an entity that already holds
+ * content on its main table will read null for every localized field until that content is
+ * copied across; a successful return is not evidence that it was. Idempotent and safe to run on
+ * every boot — a no-op once the table exists (or when the entity has no translatable fields).
+ * This is the
  * db:sync/dev-boot counterpart to the migration-owned companion creation (`nextly migrate`), so a
  * code-first localized collection / single / component gets a working companion without a manual
  * migrate step. Best-effort: a failure (e.g. main table not yet created) is swallowed so it
