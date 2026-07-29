@@ -8,10 +8,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  component,
   defineCollection,
-  defineComponent,
+  defineFieldGroup,
   defineSingle,
+  fieldGroup,
   relationship,
   text,
 } from "../../../config";
@@ -399,8 +399,8 @@ describe("restoreVersion (integration)", () => {
           fields: [text({ name: "name" })],
         }),
       ],
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "byline",
           fields: [relationship({ name: "author", relationTo: "authors" })],
         }),
@@ -411,7 +411,7 @@ describe("restoreVersion (integration)", () => {
           versions: true,
           fields: [
             text({ name: "title" }),
-            component({ name: "byline", component: "byline" }),
+            fieldGroup({ name: "byline", component: "byline" }),
           ],
         }),
       ],

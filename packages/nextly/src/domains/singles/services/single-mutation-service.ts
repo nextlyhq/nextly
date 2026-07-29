@@ -1402,7 +1402,7 @@ export class SingleMutationService extends BaseService {
               // must read before the restore overwrites them.
               const preComponentFields = fieldConfigs.filter(
                 (f): f is typeof f & { name: string } =>
-                  isComponentField(f) && !!f.name
+                  isFieldGroupField(f) && !!f.name
               );
               if (this.componentDataService && preComponentFields.length > 0) {
                 try {
