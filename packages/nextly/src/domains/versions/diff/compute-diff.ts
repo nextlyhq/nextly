@@ -29,6 +29,7 @@ import { diffText } from "./text-diff";
 import type {
   DiffStatus,
   FieldDiff,
+  FieldDisplay,
   ListItemDiff,
   RelationTarget,
   UnknownFieldDiff,
@@ -118,6 +119,35 @@ function isRepeatable(field: FieldConfig): boolean {
 }
 function isHasMany(field: FieldConfig): boolean {
   return (field as { hasMany?: boolean }).hasMany === true;
+}
+
+/**
+ * The display-relevant configuration a value node needs to render faithfully.
+ * Copies only plain data the read UI reads (cardinality, relation targets,
+ * option labels, date picker), never functions such as access rules, and
+ * reconstructs nested objects so nothing extra rides along.
+ */
+function pickFieldDisplay(field: FieldConfig): FieldDisplay | undefined {
+  const f = field as {
+    hasMany?: boolean;
+    relationTo?: string | string[];
+    options?: { label?: string; value?: unknown }[];
+    admin?: { date?: { pickerAppearance?: string } };
+  };
+  const display: FieldDisplay = {};
+  if (f.hasMany === true) display.hasMany = true;
+  if (f.relationTo !== undefined) display.relationTo = f.relationTo;
+  if (Array.isArray(f.options)) {
+    display.options = f.options.map(o => ({
+      label: o?.label,
+      value: o?.value,
+    }));
+  }
+  const pickerAppearance = f.admin?.date?.pickerAppearance;
+  if (typeof pickerAppearance === "string") {
+    display.admin = { date: { pickerAppearance } };
+  }
+  return Object.keys(display).length > 0 ? display : undefined;
 }
 function enrichedComponentFields(
   field: FieldConfig
@@ -248,16 +278,20 @@ function singleComponentChildFields(
   field: FieldConfig,
   before: unknown,
   after: unknown
-): FieldConfig[] {
-  // Single-mode component: one fixed schema.
-  const single = enrichedComponentFields(field);
-  if (!Array.isArray(componentSlugs(field))) return single ?? [];
+): FieldConfig[] | undefined {
+  // Single-mode component: one fixed schema. `undefined` when it is not enriched
+  // (the component type is gone) — distinct from an enriched but empty schema.
+  if (!Array.isArray(componentSlugs(field)))
+    return enrichedComponentFields(field);
   // Non-repeatable dynamic zone: the editor picked one type; resolve its schema
-  // from the stored discriminator (the after value, falling back to before).
+  // from the stored discriminator (the after value, falling back to before). A
+  // type absent from the schema map is unresolved (`undefined`); a resolved type
+  // keeps its fields, which may legitimately be empty.
   const type =
     componentTypeOf(asObject(after)) ?? componentTypeOf(asObject(before));
-  if (type === undefined) return [];
-  return enrichedComponentSchemas(field)?.[type]?.fields ?? [];
+  if (type === undefined) return undefined;
+  const schema = enrichedComponentSchemas(field)?.[type];
+  return schema ? (schema.fields ?? []) : undefined;
 }
 
 /**
@@ -312,14 +346,41 @@ function textNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
   };
 }
 
-function valueNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
+function valueNode(
+  meta: NodeMeta,
+  before: unknown,
+  after: unknown,
+  display?: FieldDisplay,
+  status?: DiffStatus
+): FieldDiff {
   return {
     ...meta,
     kind: "value",
-    status: statusFromPresence(before, after, !dequal(before, after)),
+    status: status ?? statusFromPresence(before, after, !dequal(before, after)),
     before: maskSecret(before),
     after: maskSecret(after),
+    ...(display ? { display } : {}),
   };
+}
+
+/**
+ * Status for a `json` value. A json field can hold the primitive `null` as a
+ * real value, which normalization collapses to the same `null` as an absent
+ * key. Classifying from raw key presence keeps the two apart, so an object-to-
+ * null edit reads as a two-sided change rather than a removal.
+ */
+function jsonPresenceStatus(
+  rawBefore: unknown,
+  rawAfter: unknown,
+  before: unknown,
+  after: unknown
+): DiffStatus {
+  const beforeAbsent = rawBefore === undefined;
+  const afterAbsent = rawAfter === undefined;
+  if (beforeAbsent && afterAbsent) return "unchanged";
+  if (beforeAbsent) return "added";
+  if (afterAbsent) return "removed";
+  return dequal(before, after) ? "unchanged" : "changed";
 }
 
 function setNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
@@ -359,14 +420,19 @@ function dedupeTargets(targets: RelationTarget[]): RelationTarget[] {
 
 function groupNode(
   meta: NodeMeta,
-  childFields: FieldConfig[],
+  childFields: FieldConfig[] | undefined,
   before: unknown,
   after: unknown,
   ctx: WalkContext
 ): FieldDiff {
-  // With no resolvable child schema, fall back to an opaque value comparison
-  // rather than reporting a group with no fields.
-  if (childFields.length === 0) return valueNode(meta, before, after);
+  // An UNRESOLVED schema (its component type is gone) may hold a since-removed
+  // child whose access rule can no longer be found, so the whole value is
+  // withheld like a dropped field rather than dumped opaquely. A RESOLVED but
+  // empty schema (a group or component validly scaffolded with no fields) is a
+  // real empty container: it is diffed normally below, so its unknown-key pass
+  // still withholds any stray stored value while a genuinely empty one shows
+  // nothing rather than a false "schema unavailable" warning.
+  if (childFields === undefined) return unknownNode(meta.name, before, after);
   const fields = collectNodes(childFields, before, after, ctx);
   const changed = fields.some(n => n.status !== "unchanged");
   return {
@@ -484,6 +550,11 @@ function itemDiff(
   return {
     id: match.id,
     componentType,
+    // Carry the type transition so a same-id row that swapped component type is
+    // legible even when neither component has field values to diff.
+    ...(typeChanged
+      ? { componentTypeBefore: beforeType, componentTypeAfter: afterType }
+      : {}),
     status: contentChanged ? "changed" : "unchanged",
     hasMoved: hasMoved ? true : undefined,
     fromIndex: match.fromIndex,
@@ -522,12 +593,13 @@ function unknownNode(
   before: unknown,
   after: unknown
 ): UnknownFieldDiff {
+  // Presence still classifies the change, but the value is never emitted: a
+  // field gone from the schema has no findable access rule, so its history
+  // cannot be proven readable and must not leave the server.
   return {
     kind: "unknown",
     name: key,
     status: statusFromPresence(before, after, !dequal(before, after)),
-    before: maskSecret(before),
-    after: maskSecret(after),
   };
 }
 
@@ -574,6 +646,12 @@ function diffField(
           ...meta,
           kind: "group",
           status: statusFromPresence(before, after, true),
+          // Carry the type transition so a swap still shows what changed even
+          // when neither component instance has field values to diff.
+          ...(beforeType !== undefined
+            ? { componentTypeBefore: beforeType }
+            : {}),
+          ...(afterType !== undefined ? { componentTypeAfter: afterType } : {}),
           fields: componentSwapFields(
             field,
             beforeType,
@@ -599,7 +677,17 @@ function diffField(
   if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {
     return textNode(meta, before, after);
   }
-  return valueNode(meta, before, after);
+  if (field.type === "json") {
+    // Classify from raw presence: a stored json `null` is a value, not absence.
+    return valueNode(
+      meta,
+      before,
+      after,
+      pickFieldDisplay(field),
+      jsonPresenceStatus(rawBefore, rawAfter, before, after)
+    );
+  }
+  return valueNode(meta, before, after, pickFieldDisplay(field));
 }
 
 /**

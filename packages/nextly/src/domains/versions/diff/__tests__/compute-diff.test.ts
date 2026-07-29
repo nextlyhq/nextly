@@ -28,6 +28,119 @@ describe("computeVersionDiff — per field kind", () => {
     });
   });
 
+  it("carries display config on a value node for faithful client rendering", () => {
+    const diff = computeVersionDiff(
+      { scores: [1, 2], state: "draft" },
+      { scores: [1, 2, 3], state: "pub" },
+      [
+        field({ name: "scores", type: "number", hasMany: true }),
+        field({
+          name: "state",
+          type: "select",
+          options: [
+            { label: "Draft", value: "draft" },
+            { label: "Published", value: "pub" },
+          ],
+        }),
+      ]
+    );
+    expect(diff.fields.find(f => f.name === "scores")).toMatchObject({
+      kind: "value",
+      display: { hasMany: true },
+    });
+    expect(diff.fields.find(f => f.name === "state")).toMatchObject({
+      kind: "value",
+      display: {
+        options: [
+          { label: "Draft", value: "draft" },
+          { label: "Published", value: "pub" },
+        ],
+      },
+    });
+  });
+
+  it("omits display config when a field has none", () => {
+    const diff = computeVersionDiff({ views: 1 }, { views: 2 }, [
+      field({ name: "views", type: "number" }),
+    ]);
+    const node = diff.fields[0];
+    expect(node.kind).toBe("value");
+    if (node.kind === "value") expect(node.display).toBeUndefined();
+  });
+
+  it("carries the component type transition on a dynamic-zone swap", () => {
+    const zone = field({
+      name: "block",
+      type: "component",
+      components: ["hero", "cta"],
+      componentSchemas: {
+        hero: { fields: [field({ name: "headline", type: "text" })] },
+        cta: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    // Both instances carry only their discriminator: no field values to diff, so
+    // the type change is the only visible change and must survive on the node.
+    const diff = computeVersionDiff(
+      { block: { _componentType: "hero" } },
+      { block: { _componentType: "cta" } },
+      [zone]
+    );
+    expect(diff.fields[0]).toMatchObject({
+      kind: "group",
+      status: "changed",
+      componentTypeBefore: "hero",
+      componentTypeAfter: "cta",
+    });
+  });
+
+  it("carries the type transition on a repeatable zone item that swaps type", () => {
+    const zone = field({
+      name: "blocks",
+      type: "component",
+      repeatable: true,
+      components: ["hero", "cta"],
+      componentSchemas: {
+        hero: { fields: [field({ name: "headline", type: "text" })] },
+        cta: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    // Same row id, changed discriminator: the swap must survive on the item.
+    const diff = computeVersionDiff(
+      { blocks: [{ id: "1", _componentType: "hero" }] },
+      { blocks: [{ id: "1", _componentType: "cta" }] },
+      [zone]
+    );
+    const node = diff.fields[0];
+    expect(node.kind).toBe("list");
+    if (node.kind === "list") {
+      expect(node.items[0]).toMatchObject({
+        id: "1",
+        status: "changed",
+        componentTypeBefore: "hero",
+        componentTypeAfter: "cta",
+      });
+    }
+  });
+
+  it("classifies a json object-to-null edit as a two-sided change", () => {
+    // A stored json `null` is a value, not absence: object -> null is a change,
+    // not a removal, even though normalization collapses null the same either way.
+    const diff = computeVersionDiff({ cfg: { a: 1 } }, { cfg: null }, [
+      field({ name: "cfg", type: "json" }),
+    ]);
+    expect(diff.fields[0]).toMatchObject({ kind: "value", status: "changed" });
+  });
+
+  it("classifies an absent-to-json-null edit as added", () => {
+    const diff = computeVersionDiff({}, { cfg: null }, [
+      field({ name: "cfg", type: "json" }),
+    ]);
+    expect(diff.fields.find(n => n.name === "cfg")).toMatchObject({
+      kind: "value",
+      status: "added",
+    });
+  });
+
   it("diffs a text field into word segments", () => {
     const diff = computeVersionDiff(
       { title: "hello world" },
@@ -245,19 +358,67 @@ describe("computeVersionDiff — never leaks a password", () => {
 });
 
 describe("computeVersionDiff — never leaks a password", () => {
-  it("masks a bcrypt hash left by a password field deleted from the schema", () => {
-    // The `legacy` field no longer exists in the schema, so its stored hash
-    // surfaces as an unknown key; it must be masked rather than exposed.
+  it("withholds the value of a field deleted from the schema", () => {
+    // The `legacy` field no longer exists in the schema, so its stored value has
+    // no verifiable access rule. The change surfaces, but the value is withheld
+    // entirely rather than masked, so nothing can leak.
     const hashA = "$2b$12$" + "a".repeat(53);
     const hashB = "$2b$12$" + "b".repeat(53);
     const diff = computeVersionDiff({ legacy: hashA }, { legacy: hashB }, []);
     const node = diff.fields.find(n => n.name === "legacy");
-    // The change is surfaced, but neither hash is exposed.
     expect(node).toMatchObject({ kind: "unknown", status: "changed" });
-    if (node && node.kind === "unknown") {
-      expect(node.before).toBe("[protected]");
-      expect(node.after).toBe("[protected]");
+    expect(node).not.toHaveProperty("before");
+    expect(node).not.toHaveProperty("after");
+  });
+
+  it("withholds the whole value of a component whose type is gone", () => {
+    // A dynamic-zone component whose stored type is no longer in the schema is
+    // unresolved, so the whole value is withheld like a dropped field.
+    const zone = field({
+      name: "block",
+      type: "component",
+      components: ["hero"],
+      componentSchemas: {
+        hero: { fields: [field({ name: "headline", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { block: { _componentType: "gone", secret: "x" } },
+      { block: { _componentType: "gone", secret: "y" } },
+      [zone]
+    );
+    const node = diff.fields.find(n => n.name === "block");
+    expect(node?.kind).toBe("unknown");
+    expect(node).not.toHaveProperty("before");
+    expect(node).not.toHaveProperty("after");
+  });
+
+  it("withholds stray values in a resolved but empty container", () => {
+    // A group that still resolves but has no fields (its children were deleted)
+    // is a real empty container; its stray stored key surfaces as a withheld
+    // unknown child rather than exposing the value.
+    const emptyGroup = field({ name: "meta", type: "group", fields: [] });
+    const diff = computeVersionDiff(
+      { meta: { removedChild: "secret-old" } },
+      { meta: { removedChild: "secret-new" } },
+      [emptyGroup]
+    );
+    const node = diff.fields.find(n => n.name === "meta");
+    expect(node?.kind).toBe("group");
+    if (node?.kind === "group") {
+      const child = node.fields.find(n => n.name === "removedChild");
+      expect(child?.kind).toBe("unknown");
+      expect(child).not.toHaveProperty("before");
+      expect(child).not.toHaveProperty("after");
     }
+  });
+
+  it("shows a valid empty container without a schema-unavailable warning", () => {
+    const emptyGroup = field({ name: "meta", type: "group", fields: [] });
+    const diff = computeVersionDiff({ meta: {} }, { meta: {} }, [emptyGroup]);
+    const node = diff.fields.find(n => n.name === "meta");
+    expect(node?.kind).toBe("group");
+    if (node?.kind === "group") expect(node.fields).toEqual([]);
   });
 });
 
@@ -355,19 +516,19 @@ describe("computeVersionDiff — components", () => {
 });
 
 describe("computeVersionDiff — round-2 hardening", () => {
-  it("masks a bcrypt hash nested inside a removed (opaque) node", () => {
+  it("withholds a value nested inside an opaque removed node", () => {
     const hash = "$2b$12$" + "c".repeat(53);
-    // `oldBlock` is absent from the schema, so it surfaces as one opaque
-    // unknown node; the nested hash must still be masked.
+    // `oldBlock` is absent from the schema, so it surfaces as one opaque unknown
+    // node; its value, and any nested secret, is withheld entirely.
     const diff = computeVersionDiff(
       { oldBlock: { id: "1", secret: hash } },
       { oldBlock: { id: "1", secret: hash } },
       []
     );
     const node = diff.fields.find(n => n.name === "oldBlock");
-    if (node && node.kind === "unknown") {
-      expect((node.before as { secret?: string }).secret).toBe("[protected]");
-    }
+    expect(node?.kind).toBe("unknown");
+    expect(node).not.toHaveProperty("before");
+    expect(node).not.toHaveProperty("after");
   });
 
   it("marks a list item that gained a component discriminator", () => {
