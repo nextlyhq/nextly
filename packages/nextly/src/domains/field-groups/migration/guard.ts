@@ -19,6 +19,7 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 
+import { MAX_MIGRATION_STEP } from "./state";
 import type {
   MigrationDirection,
   MigrationPlanIdentity,
@@ -88,6 +89,17 @@ export function resolveStorageVerdict(args: {
   const { state, probe } = args;
 
   if (state.status === "migrating") {
+    if (state.step >= MAX_MIGRATION_STEP) {
+      // The next position could not be recorded even if its step ran, so a
+      // resume from here can never make progress. Refusing belongs at this
+      // point rather than in the read: the read must keep accepting every step
+      // the writer is allowed to store, or a legitimately recorded marker
+      // becomes unreadable, which is the same dead end from the other side.
+      throw refuse(
+        "the interrupted run stopped at a position it cannot advance past",
+        { step: state.step, max: MAX_MIGRATION_STEP }
+      );
+    }
     // A run died in flight. Resuming is the only safe move: the objects are in
     // a state only the step list can interpret. The run's own identity travels
     // with the step so the resumed run picks the right list, keeps the same id,
@@ -154,6 +166,18 @@ export function resolveStorageVerdict(args: {
     // and proceeding would rename over data we do not own.
     throw refuse(
       "an object using the migrated storage name exists but no migration recorded it",
+      { generation: state.generation, probe }
+    );
+  }
+
+  if (state.recorded && !probe.legacyRegistryPresent) {
+    // A marker that explicitly records legacy storage was written after a run
+    // that left a legacy registry behind, so its absence is unexplained. This
+    // is the mirror of the migrated case, and refusing keeps the two symmetric.
+    // An untouched database is excluded on purpose: it has no marker and no
+    // registry yet, and creating one is ordinary first-run behaviour.
+    throw refuse(
+      "marker records legacy storage but the legacy registry is absent",
       { generation: state.generation, probe }
     );
   }

@@ -2,12 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { resolveStorageVerdict, type StorageProbe } from "../guard";
+import { MAX_MIGRATION_STEP } from "../state";
 import type { MigratingState, MigrationState } from "../state";
 
-const LEGACY: MigrationState = { status: "settled", generation: "legacy" };
+// An untouched database: no marker was ever written.
+const FRESH: MigrationState = {
+  status: "settled",
+  generation: "legacy",
+  recorded: false,
+};
+// A marker that explicitly settled back at legacy, i.e. after a rollback.
+const ROLLED_BACK: MigrationState = {
+  status: "settled",
+  generation: "legacy",
+  recorded: true,
+};
 const MIGRATED: MigrationState = {
   status: "settled",
   generation: "field-groups-v2",
+  recorded: true,
 };
 const IN_FLIGHT: MigratingState = {
   status: "migrating",
@@ -57,7 +70,7 @@ function captureRefusal(run: () => unknown): NextlyError {
 // refuse rather than pick a side.
 describe("field-group storage verdict", () => {
   it("uses legacy storage on an untouched database", () => {
-    expect(resolveStorageVerdict({ state: LEGACY, probe: probe() })).toEqual({
+    expect(resolveStorageVerdict({ state: FRESH, probe: probe() })).toEqual({
       action: "use-legacy",
     });
   });
@@ -121,11 +134,43 @@ describe("field-group storage verdict", () => {
     // envelope stays generic so a refusal never leaks storage internals.
     const refusal = captureRefusal(() =>
       resolveStorageVerdict({
-        state: LEGACY,
+        state: FRESH,
         probe: probe({ targetRegistryPresent: true }),
       })
     );
     expect(refusal.logContext?.reason).toMatch(/no migration recorded it/);
+  });
+
+  // An untouched database has no registry yet and creating one is ordinary
+  // first-run behaviour, so absence here is expected rather than suspicious.
+  it("allows a fresh database with no registry at all", () => {
+    expect(
+      resolveStorageVerdict({
+        state: FRESH,
+        probe: probe({ legacyRegistryPresent: false }),
+      })
+    ).toEqual({ action: "use-legacy" });
+  });
+
+  // A marker that explicitly settled at legacy was written after a run that
+  // left a registry behind, so its absence is unexplained. This is the mirror
+  // of the migrated case: same shape of evidence, same refusal.
+  it("refuses when a recorded legacy marker has no legacy registry", () => {
+    const refusal = captureRefusal(() =>
+      resolveStorageVerdict({
+        state: ROLLED_BACK,
+        probe: probe({ legacyRegistryPresent: false }),
+      })
+    );
+    expect(refusal.logContext?.reason).toMatch(/legacy registry is absent/);
+  });
+
+  // The distinction only matters when the registry is missing; with one present
+  // a rolled-back database is served exactly like a fresh one.
+  it("serves a rolled-back database whose legacy registry survived", () => {
+    expect(
+      resolveStorageVerdict({ state: ROLLED_BACK, probe: probe() })
+    ).toEqual({ action: "use-legacy" });
   });
 
   // A newer marker over an older database: a restore from backup that did not
@@ -190,10 +235,33 @@ describe("field-group storage verdict", () => {
     }
   });
 
+  // `advanceStep` will not record a position past the bound, so a resume from
+  // the last recordable step could never check off the work it did. Better to
+  // say so than to hand back a verdict that runs and then cannot be saved.
+  it("refuses to resume from a position it could never advance past", () => {
+    const stuck: MigratingState = { ...IN_FLIGHT, step: MAX_MIGRATION_STEP };
+    const refusal = captureRefusal(() =>
+      resolveStorageVerdict({ state: stuck, probe: probe() })
+    );
+    expect(refusal.logContext?.reason).toMatch(/cannot advance past/);
+  });
+
+  // One below the bound still resumes: the derived step is exactly the highest
+  // recordable one, so the read, resume and write bounds line up.
+  it("still resumes from the last position whose successor can be recorded", () => {
+    const nearly: MigratingState = {
+      ...IN_FLIGHT,
+      step: MAX_MIGRATION_STEP - 1,
+    };
+    expect(
+      resolveStorageVerdict({ state: nearly, probe: probe() })
+    ).toMatchObject({ action: "resume", step: MAX_MIGRATION_STEP });
+  });
+
   it("reports refusals as retryable-unavailable, not as a client error", () => {
     const refusal = captureRefusal(() =>
       resolveStorageVerdict({
-        state: LEGACY,
+        state: FRESH,
         probe: probe({ targetRegistryPresent: true }),
       })
     );

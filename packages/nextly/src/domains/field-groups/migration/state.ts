@@ -45,8 +45,9 @@ export type MigrationDirection = "up" | "down";
 /**
  * Storage generation.
  *
- * `legacy` is also what an untouched database reports: absent and legacy are
- * the same starting position, so a first run needs no special case.
+ * `legacy` is also what an untouched database reports, so a first run needs no
+ * special case for the generation itself. The two are not interchangeable
+ * though, and `SettledState.recorded` keeps them apart.
  */
 export type StorageGeneration = "legacy" | "field-groups-v2";
 
@@ -54,6 +55,17 @@ export type StorageGeneration = "legacy" | "field-groups-v2";
 export interface SettledState {
   status: "settled";
   generation: StorageGeneration;
+  /**
+   * Whether a marker actually said this, or it is the default an untouched
+   * database reports.
+   *
+   * Both read as `legacy`, but they are not the same claim, and one decision
+   * turns on the difference: an untouched database legitimately has no registry
+   * yet, whereas a marker that explicitly records legacy storage was written
+   * after a run that left one behind, so a missing registry there is
+   * unexplained rather than expected.
+   */
+  recorded: boolean;
 }
 
 /**
@@ -128,7 +140,7 @@ export async function readMigrationState(
 ): Promise<MigrationState> {
   const entry = await meta.getEntry<unknown>(FIELD_GROUP_MIGRATION_KEY);
   if (!entry.present) {
-    return { status: "settled", generation: "legacy" };
+    return { status: "settled", generation: "legacy", recorded: false };
   }
 
   if (entry.value === null || entry.value === undefined) {
@@ -154,7 +166,11 @@ export async function readMigrationState(
     ) {
       throw markerCorrupt("settled marker carries no known generation");
     }
-    return { status: "settled", generation: marker.generation };
+    return {
+      status: "settled",
+      generation: marker.generation,
+      recorded: true,
+    };
   }
 
   if (marker.status === "migrating") {
@@ -212,6 +228,13 @@ export async function beginMigration(
     plan: MigrationPlanIdentity;
   }
 ): Promise<void> {
+  // The writer holds itself to the reader's invariants. Persisting a marker the
+  // next read would reject leaves the database unavailable with no way forward,
+  // and an empty identifier is the easiest way to do that by accident.
+  requireIdentifier(args.migrationId, "migrationId");
+  requireIdentifier(args.plan.manifestHash, "manifestHash");
+  requireIdentifier(args.plan.planHash, "planHash");
+
   const marker: StoredMarker = {
     version: MIGRATION_MARKER_VERSION,
     status: "migrating",
@@ -222,6 +245,18 @@ export async function beginMigration(
     planHash: args.plan.planHash,
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
+}
+
+// Mirrors the non-empty check `readMigrationState` applies, so the two cannot
+// drift into a writer that produces markers its own reader refuses.
+function requireIdentifier(value: string, field: string): void {
+  if (typeof value === "string" && value.length > 0) return;
+  throw NextlyError.internal({
+    logContext: {
+      reason: "migration marker identifier must be a non-empty string",
+      field,
+    },
+  });
 }
 
 /**

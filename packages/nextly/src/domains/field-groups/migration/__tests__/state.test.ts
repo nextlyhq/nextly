@@ -46,6 +46,7 @@ describe("field-group migration marker", () => {
     await expect(readMigrationState(meta)).resolves.toEqual({
       status: "settled",
       generation: "legacy",
+      recorded: false,
     });
   });
 
@@ -78,6 +79,31 @@ describe("field-group migration marker", () => {
     await expect(readMigrationState(meta)).resolves.toMatchObject({
       plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
+  });
+
+  // The writer holds itself to the reader's invariants. Writing an empty
+  // identifier would succeed and then be rejected by the very next read,
+  // turning a successful begin into an unavailable database.
+  it.each([
+    ["migrationId", { migrationId: "", manifestHash: "h", planHash: "p" }],
+    ["manifestHash", { migrationId: "r", manifestHash: "", planHash: "p" }],
+    ["planHash", { migrationId: "r", manifestHash: "h", planHash: "" }],
+  ])("refuses to begin a run with an empty %s", async (_label, fields) => {
+    const { meta, read } = createMeta();
+    await expect(
+      beginMigration(meta, {
+        direction: "up",
+        migrationId: fields.migrationId,
+        plan: {
+          manifestHash: fields.manifestHash,
+          planHash: fields.planHash,
+        },
+      })
+    ).rejects.toThrowError(NextlyError);
+    // Nothing may reach storage: a marker written here is exactly the
+    // unreadable state the check exists to prevent.
+    expect(read()).toBe(ABSENT);
+    expect(meta.set).not.toHaveBeenCalled();
   });
 
   // The first write must land before any statement runs, because MySQL commits
@@ -173,6 +199,7 @@ describe("field-group migration marker", () => {
     await expect(readMigrationState(meta)).resolves.toEqual({
       status: "settled",
       generation: "field-groups-v2",
+      recorded: true,
     });
   });
 
@@ -298,6 +325,7 @@ describe("field-group migration marker", () => {
     await expect(readMigrationState(meta)).resolves.toEqual({
       status: "settled",
       generation: "legacy",
+      recorded: false,
     });
   });
 });
