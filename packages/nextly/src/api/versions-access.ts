@@ -22,6 +22,7 @@ import { checkSingleAccess } from "../domains/singles";
 import type { UserContext } from "../domains/singles/types";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
+import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -559,6 +560,12 @@ export async function diffDocumentVersions(args: {
     fields,
     { modifiedOnly: args.modifiedOnly }
   );
+
+  // Resolve relationship and upload ids in the diff to display labels through
+  // the same access-checked path a read uses: an unreadable target stays a bare
+  // id. Labels attach beside the ids rather than replacing them, so the diff
+  // wire stays id-stable for any non-admin consumer of this surface.
+  await hydrateDiffReferences(body.fields, args.user);
 
   return {
     from: args.from,

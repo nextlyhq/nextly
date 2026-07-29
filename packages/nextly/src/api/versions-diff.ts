@@ -39,6 +39,8 @@ export type {
   ListFieldDiff,
   ListItemDiff,
   RelationTarget,
+  ResolvedMedia,
+  ResolvedReference,
   SetFieldDiff,
   TextFieldDiff,
   TextSegment,

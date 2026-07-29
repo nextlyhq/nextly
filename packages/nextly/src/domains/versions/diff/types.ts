@@ -54,6 +54,29 @@ export interface FieldDisplay {
   admin?: { date?: { pickerAppearance?: string } };
 }
 
+/** Media detail a history view renders for a resolved upload reference. */
+export interface ResolvedMedia {
+  filename: string | null;
+  url: string | null;
+  thumbnailUrl: string | null;
+  mimeType: string | null;
+}
+
+/**
+ * A relationship or upload reference resolved to display data, attached
+ * ADDITIVELY beside the raw id and never replacing it: the id stays the durable,
+ * machine-facing datum every consumer relies on, and the label is only what a
+ * history view shows. `label` is null when the target is unreadable or
+ * unlabelled, so the id remains the fallback; `media` is present only for an
+ * upload. Resolution is access-checked one layer up, so an unreadable target
+ * arrives unlabelled rather than exposing a title the viewer may not read.
+ */
+export interface ResolvedReference {
+  id: string;
+  label: string | null;
+  media?: ResolvedMedia;
+}
+
 /** Non-text scalars hand back both sides raw; the client renders each side. */
 export interface ValueFieldDiff extends FieldDiffBase {
   kind: "value";
@@ -65,6 +88,13 @@ export interface ValueFieldDiff extends FieldDiffBase {
    * display-relevant configuration.
    */
   display?: FieldDisplay;
+  /**
+   * For a relationship or upload field, its before/after id resolved to a
+   * display label. Additive: absent when the field is not a reference or was not
+   * hydrated, and the raw id in `before`/`after` is unchanged either way.
+   */
+  beforeRef?: ResolvedReference | null;
+  afterRef?: ResolvedReference | null;
 }
 
 /** A group or single component: a nested list of field diffs. */
@@ -92,6 +122,12 @@ export interface GroupFieldDiff extends FieldDiffBase {
 export interface RelationTarget {
   id: string;
   relationTo?: string;
+  /**
+   * The target resolved to a display label, attached additively when hydrated.
+   * Null when the target is unreadable or unlabelled, leaving the id as the
+   * fallback the renderer shows.
+   */
+  label?: string | null;
 }
 
 /** A many relationship field: a set difference of targets by identity. */
@@ -99,6 +135,14 @@ export interface SetFieldDiff extends FieldDiffBase {
   kind: "set";
   added: RelationTarget[];
   removed: RelationTarget[];
+  /**
+   * Display config for the field, chiefly its `relationTo` target(s), so the
+   * client and the reference hydrator know which collection a non-polymorphic
+   * target belongs to without re-deriving it from the live schema (a target
+   * carries its own `relationTo` only when the relation is polymorphic). Absent
+   * when the field carries no display-relevant configuration.
+   */
+  display?: FieldDisplay;
 }
 
 /**

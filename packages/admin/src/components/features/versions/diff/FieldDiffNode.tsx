@@ -22,6 +22,7 @@ import type {
   FieldDiff,
   ListItemDiff,
   RelationTarget,
+  ResolvedReference,
   TextSegment,
   ValueFieldDiff,
 } from "@admin/services/versionApi";
@@ -132,49 +133,80 @@ function ValueSide({
 }
 
 /**
- * The before/after presentation shared by scalar and dropped-field values:
- * added shows one value, removed shows one struck value, changed shows both
- * labelled, and unchanged shows the value once. `renderValue` decides how a
- * single side is drawn (the typed kit for a live field, raw text for a dropped
- * one), so the labelling stays in one place.
+ * The before/after presentation shared by scalar and reference values: added
+ * shows one value, removed shows one struck value, changed shows both labelled,
+ * and unchanged shows the value once. `renderSide` draws a single side (the
+ * typed kit for a scalar, a resolved label for a reference), so the labelling
+ * stays in one place while each side can consult its own resolved data.
  */
 function BeforeAfter({
   status,
-  before,
-  after,
-  renderValue,
+  renderSide,
 }: {
   status: DiffStatus;
-  before: unknown;
-  after: unknown;
-  renderValue: (value: unknown) => React.ReactNode;
+  renderSide: (side: "before" | "after") => React.ReactNode;
 }) {
   if (status === "added") {
-    return <ValueSide label="New value">{renderValue(after)}</ValueSide>;
+    return <ValueSide label="New value">{renderSide("after")}</ValueSide>;
   }
   if (status === "removed") {
     return (
       <ValueSide label="Removed value" struck>
-        {renderValue(before)}
+        {renderSide("before")}
       </ValueSide>
     );
   }
   if (status === "unchanged") {
     // Nothing changed: show the value once, unlabelled and not struck.
-    return <>{renderValue(after)}</>;
+    return <>{renderSide("after")}</>;
   }
   return (
     <div className="flex flex-col gap-1">
       <ValueSide label="Before" struck>
-        {renderValue(before)}
+        {renderSide("before")}
       </ValueSide>
-      <ValueSide label="After">{renderValue(after)}</ValueSide>
+      <ValueSide label="After">{renderSide("after")}</ValueSide>
     </div>
   );
 }
 
+/** Stable React key for a target: its identity, not its (possibly shared) label. */
+function targetKey(target: RelationTarget): string {
+  return target.relationTo ? `${target.relationTo}:${target.id}` : target.id;
+}
+
+/**
+ * A target's display text: its resolved label when readable, otherwise its id.
+ * A polymorphic target keeps its collection prefix so the same id in different
+ * collections stays distinguishable.
+ */
 function targetLabel(target: RelationTarget): string {
-  return target.relationTo ? `${target.relationTo}: ${target.id}` : target.id;
+  const display = target.label ?? target.id;
+  return target.relationTo ? `${target.relationTo}: ${display}` : display;
+}
+
+/**
+ * One resolved relationship or upload reference. Media shows a thumbnail and
+ * filename; a relationship shows its label, or its id (muted) when the target is
+ * unreadable or unlabelled, so a reference is never silently dropped.
+ */
+function ReferenceValue({ reference }: { reference: ResolvedReference }) {
+  if (reference.media) {
+    const src = reference.media.thumbnailUrl ?? reference.media.url;
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        {src ? (
+          <img src={src} alt="" className="h-5 w-5 rounded object-cover" />
+        ) : null}
+        <span>{reference.media.filename ?? reference.id}</span>
+      </span>
+    );
+  }
+  return reference.label != null ? (
+    <span>{reference.label}</span>
+  ) : (
+    <span className="text-muted-foreground">{reference.id}</span>
+  );
 }
 
 export function FieldDiffNode({ node }: { node: FieldDiff }) {
@@ -196,15 +228,23 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
       // without normalizing a second time. A schema-less container never reaches
       // here: the engine emits it as an unknown node so its value stays hidden.
       const field = renderField(node);
+      const isReference =
+        node.type === "relationship" || node.type === "upload";
       return (
         <FieldRow label={node.label} status={node.status}>
           <BeforeAfter
             status={node.status}
-            before={node.before}
-            after={node.after}
-            renderValue={value => (
-              <FieldValue field={field} value={value} preNormalized />
-            )}
+            renderSide={side => {
+              const value = side === "before" ? node.before : node.after;
+              const reference =
+                side === "before" ? node.beforeRef : node.afterRef;
+              // A resolved reference renders its label; anything else (a scalar,
+              // or a reference past the resolve cap) falls back to the raw value.
+              if (isReference && reference) {
+                return <ReferenceValue reference={reference} />;
+              }
+              return <FieldValue field={field} value={value} preNormalized />;
+            }}
           />
         </FieldRow>
       );
@@ -218,7 +258,7 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">Removed</span>
                 {node.removed.map(target => (
-                  <Badge key={targetLabel(target)} variant="destructive">
+                  <Badge key={targetKey(target)} variant="destructive">
                     {targetLabel(target)}
                   </Badge>
                 ))}
@@ -228,7 +268,7 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">Added</span>
                 {node.added.map(target => (
-                  <Badge key={targetLabel(target)} variant="success">
+                  <Badge key={targetKey(target)} variant="success">
                     {targetLabel(target)}
                   </Badge>
                 ))}

@@ -383,7 +383,12 @@ function jsonPresenceStatus(
   return dequal(before, after) ? "unchanged" : "changed";
 }
 
-function setNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
+function setNode(
+  meta: NodeMeta,
+  before: unknown,
+  after: unknown,
+  display?: FieldDisplay
+): FieldDiff {
   const beforeTargets = toTargets(before);
   const afterTargets = toTargets(after);
   const beforeKeys = new Set(beforeTargets.map(targetKey));
@@ -404,7 +409,14 @@ function setNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
           ? "removed"
           : "changed";
   }
-  return { ...meta, kind: "set", status, added, removed };
+  return {
+    ...meta,
+    kind: "set",
+    status,
+    added,
+    removed,
+    ...(display ? { display } : {}),
+  };
 }
 function dedupeTargets(targets: RelationTarget[]): RelationTarget[] {
   const seen = new Set<string>();
@@ -671,7 +683,9 @@ function diffField(
       componentCtx
     );
   }
-  if (isSetField(field, before, after)) return setNode(meta, before, after);
+  if (isSetField(field, before, after)) {
+    return setNode(meta, before, after, pickFieldDisplay(field));
+  }
   // A hasMany text field stores an ARRAY, not a single string, so it cannot be
   // word-diffed; fall through to a value comparison.
   if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {
