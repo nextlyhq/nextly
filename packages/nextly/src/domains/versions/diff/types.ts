@@ -36,11 +36,35 @@ export interface TextFieldDiff extends FieldDiffBase {
   segments: TextSegment[];
 }
 
+/**
+ * Display-relevant field configuration a value node carries so the client
+ * renders it faithfully without re-deriving it from the live schema. The engine
+ * already holds the correct `FieldConfig` for every node it emits (per-schema
+ * even across a dynamic-zone type swap, and after flattening nameless groups),
+ * so recording this here is both correct and simpler than a client re-walk.
+ *
+ * Only plain, serialisable data is included, never access rules or other
+ * functions: the cardinality, relation targets, option labels, and date picker
+ * that decide how a stored value reads.
+ */
+export interface FieldDisplay {
+  hasMany?: boolean;
+  relationTo?: string | string[];
+  options?: { label?: string; value?: unknown }[];
+  admin?: { date?: { pickerAppearance?: string } };
+}
+
 /** Non-text scalars hand back both sides raw; the client renders each side. */
 export interface ValueFieldDiff extends FieldDiffBase {
   kind: "value";
   before: unknown;
   after: unknown;
+  /**
+   * Display config for the field, so the client renders cardinality, option
+   * labels, and date formatting faithfully. Absent when the field carries no
+   * display-relevant configuration.
+   */
+  display?: FieldDisplay;
 }
 
 /** A group or single component: a nested list of field diffs. */

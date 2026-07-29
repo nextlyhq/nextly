@@ -28,6 +28,46 @@ describe("computeVersionDiff — per field kind", () => {
     });
   });
 
+  it("carries display config on a value node for faithful client rendering", () => {
+    const diff = computeVersionDiff(
+      { scores: [1, 2], state: "draft" },
+      { scores: [1, 2, 3], state: "pub" },
+      [
+        field({ name: "scores", type: "number", hasMany: true }),
+        field({
+          name: "state",
+          type: "select",
+          options: [
+            { label: "Draft", value: "draft" },
+            { label: "Published", value: "pub" },
+          ],
+        }),
+      ]
+    );
+    expect(diff.fields.find(f => f.name === "scores")).toMatchObject({
+      kind: "value",
+      display: { hasMany: true },
+    });
+    expect(diff.fields.find(f => f.name === "state")).toMatchObject({
+      kind: "value",
+      display: {
+        options: [
+          { label: "Draft", value: "draft" },
+          { label: "Published", value: "pub" },
+        ],
+      },
+    });
+  });
+
+  it("omits display config when a field has none", () => {
+    const diff = computeVersionDiff({ views: 1 }, { views: 2 }, [
+      field({ name: "views", type: "number" }),
+    ]);
+    const node = diff.fields[0];
+    expect(node.kind).toBe("value");
+    if (node.kind === "value") expect(node.display).toBeUndefined();
+  });
+
   it("diffs a text field into word segments", () => {
     const diff = computeVersionDiff(
       { title: "hello world" },

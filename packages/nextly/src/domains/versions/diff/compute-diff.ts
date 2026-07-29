@@ -29,6 +29,7 @@ import { diffText } from "./text-diff";
 import type {
   DiffStatus,
   FieldDiff,
+  FieldDisplay,
   ListItemDiff,
   RelationTarget,
   UnknownFieldDiff,
@@ -118,6 +119,35 @@ function isRepeatable(field: FieldConfig): boolean {
 }
 function isHasMany(field: FieldConfig): boolean {
   return (field as { hasMany?: boolean }).hasMany === true;
+}
+
+/**
+ * The display-relevant configuration a value node needs to render faithfully.
+ * Copies only plain data the read UI reads (cardinality, relation targets,
+ * option labels, date picker), never functions such as access rules, and
+ * reconstructs nested objects so nothing extra rides along.
+ */
+function pickFieldDisplay(field: FieldConfig): FieldDisplay | undefined {
+  const f = field as {
+    hasMany?: boolean;
+    relationTo?: string | string[];
+    options?: { label?: string; value?: unknown }[];
+    admin?: { date?: { pickerAppearance?: string } };
+  };
+  const display: FieldDisplay = {};
+  if (f.hasMany === true) display.hasMany = true;
+  if (f.relationTo !== undefined) display.relationTo = f.relationTo;
+  if (Array.isArray(f.options)) {
+    display.options = f.options.map(o => ({
+      label: o?.label,
+      value: o?.value,
+    }));
+  }
+  const pickerAppearance = f.admin?.date?.pickerAppearance;
+  if (typeof pickerAppearance === "string") {
+    display.admin = { date: { pickerAppearance } };
+  }
+  return Object.keys(display).length > 0 ? display : undefined;
 }
 function enrichedComponentFields(
   field: FieldConfig
@@ -312,13 +342,19 @@ function textNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
   };
 }
 
-function valueNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
+function valueNode(
+  meta: NodeMeta,
+  before: unknown,
+  after: unknown,
+  display?: FieldDisplay
+): FieldDiff {
   return {
     ...meta,
     kind: "value",
     status: statusFromPresence(before, after, !dequal(before, after)),
     before: maskSecret(before),
     after: maskSecret(after),
+    ...(display ? { display } : {}),
   };
 }
 
@@ -599,7 +635,7 @@ function diffField(
   if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {
     return textNode(meta, before, after);
   }
-  return valueNode(meta, before, after);
+  return valueNode(meta, before, after, pickFieldDisplay(field));
 }
 
 /**
