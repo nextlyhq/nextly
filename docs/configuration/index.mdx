@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Configure your Nextly application with collections, singles, components, fields, storage, security, and more.
+description: Configure your Nextly application with collections, singles, field groups, fields, storage, security, and more.
 ---
 
 Nextly is configured through a single `nextly.config.ts` file at the root of your project. That file is the source of truth for your content model, database output paths, storage backends, security settings, email, and admin panel branding.
@@ -35,19 +35,19 @@ export default defineConfig({
 | [Nextly config](/docs/configuration/nextly-config) | Every option in `defineConfig()` with types and defaults |
 | [Collections](/docs/configuration/collections) | Content types with multiple entries (blog posts, products, media) |
 | [Singles](/docs/configuration/singles) | One-off documents (site settings, header, footer) |
-| [Components](/docs/configuration/components) | Reusable field groups embedded in collections and singles |
+| [Field Groups](/docs/configuration/field-groups) | Reusable field groups embedded in collections and singles |
 | [Fields](/docs/configuration/fields) | Field types, options, validation, and helpers |
 | [Environment variables](/docs/configuration/environment) | Every environment variable Nextly reads |
 
 ## Visual Schema Builder vs code-first
 
-Collections, singles, and components can also be created visually in the Visual Schema Builder (the "Schema Builder" link inside the admin panel). The Schema Builder writes the same `CollectionConfig`, `SingleConfig`, and `FieldGroupConfig` shapes documented in this section, so anything you build visually maps 1:1 to a `defineCollection`, `defineSingle`, or `defineFieldGroup` call.
+Collections, singles, and field groups can also be created visually in the Visual Schema Builder (the "Schema Builder" link inside the admin panel). The Schema Builder writes the same `CollectionConfig`, `SingleConfig`, and `FieldGroupConfig` shapes documented in this section, so anything you build visually maps 1:1 to a `defineCollection`, `defineSingle`, or `defineFieldGroup` call.
 
 ## Next steps
 
 - [Nextly config reference](/docs/configuration/nextly-config) — every top-level option in `defineConfig()`
 - [Collections](/docs/configuration/collections) — content types with multiple entries
 - [Singles](/docs/configuration/singles) — single-document content like site settings
-- [Components](/docs/configuration/components) — reusable field groups for collections and singles
+- [Field Groups](/docs/configuration/field-groups) — reusable field groups for collections and singles
 - [Fields](/docs/configuration/fields) — every available field type
 - [Environment variables](/docs/configuration/environment) — what to set in `.env`
