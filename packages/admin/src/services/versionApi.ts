@@ -9,8 +9,26 @@
  * @module services/versionApi
  */
 
+import type {
+  FieldDiff,
+  ListItemDiff,
+  RelationTarget,
+  TextSegment,
+  VersionDiff,
+} from "nextly/api/versions-diff";
+
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { ListResponse } from "@admin/lib/api/response-types";
+
+// The diff wire types live in core (the engine produces them); re-exported here
+// so admin components import them from the same place as the other version types.
+export type {
+  FieldDiff,
+  ListItemDiff,
+  RelationTarget,
+  TextSegment,
+  VersionDiff,
+};
 
 /**
  * Which document's history to read.
@@ -141,4 +159,25 @@ export const versionApi = {
       `${basePath(scope)}/${versionNo}`,
       { label }
     ),
+
+  /**
+   * Compare two versions. A read of history, gated and field-redacted exactly
+   * like reading one version; both versions must share a locale. `from`/`to`
+   * are ordered older -> newer by the caller.
+   */
+  diff: (
+    scope: VersionScope,
+    from: number,
+    to: number,
+    opts: { modifiedOnly?: boolean } = {}
+  ): Promise<VersionDiff> => {
+    const search = new URLSearchParams({
+      from: String(from),
+      to: String(to),
+    });
+    if (opts.modifiedOnly) search.set("modifiedOnly", "1");
+    return protectedApi.get<VersionDiff>(
+      `${basePath(scope)}/diff?${search.toString()}`
+    );
+  },
 };

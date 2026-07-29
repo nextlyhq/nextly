@@ -32,6 +32,7 @@ import {
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
+import { VersionDiffView } from "./diff/VersionDiffView";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionPreview } from "./VersionPreview";
@@ -82,6 +83,12 @@ export function VersionHistorySheet({
   liveStatus = null,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
+  // The version pair being compared (older -> newer), or null when not
+  // comparing. Compare is a third mode of the panel alongside list and preview.
+  const [comparing, setComparing] = useState<{
+    from: number;
+    to: number;
+  } | null>(null);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
   // The version being renamed, which is not necessarily the one being previewed
   // — an editor can name a row without opening it.
@@ -92,6 +99,7 @@ export function VersionHistorySheet({
   useEffect(() => {
     if (!open) {
       setSelected(null);
+      setComparing(null);
       setConfirmingRestore(false);
       // The rename dialog is mounted outside the panel, so closing the panel
       // does not close it. Left set, it would stay on screen over a dismissed
@@ -132,6 +140,23 @@ export function VersionHistorySheet({
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
 
+  // Compare targets for the version being previewed: the newest version (for
+  // "vs current") and the one immediately older in the list (for "vs previous").
+  // The list, not `selected - 1`, decides "previous", since retention can leave
+  // gaps in the numbering.
+  const latestVersionNo = versions[0]?.versionNo ?? null;
+  const selectedIndex =
+    selected === null ? -1 : versions.findIndex(v => v.versionNo === selected);
+  const previousVersionNo =
+    selectedIndex >= 0
+      ? (versions[selectedIndex + 1]?.versionNo ?? null)
+      : null;
+  const canCompareCurrent =
+    selected !== null &&
+    latestVersionNo !== null &&
+    selected !== latestVersionNo;
+  const canComparePrevious = selected !== null && previousVersionNo !== null;
+
   // The row being renamed, so the dialog opens seeded with its current name
   // rather than blank.
   const renamingVersion =
@@ -164,7 +189,11 @@ export function VersionHistorySheet({
       >
         <SheetHeader className="p-4 border-b border-border">
           <SheetTitle>
-            {selected === null ? "Version history" : `Version ${selected}`}
+            {comparing !== null
+              ? `Compare ${comparing.from} → ${comparing.to}`
+              : selected === null
+                ? "Version history"
+                : `Version ${selected}`}
           </SheetTitle>
           <SheetDescription className="sr-only">
             Past versions of this document, newest first.
@@ -172,7 +201,13 @@ export function VersionHistorySheet({
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto">
-          {selected !== null ? (
+          {comparing !== null ? (
+            <VersionDiffView
+              scope={scope}
+              from={comparing.from}
+              to={comparing.to}
+            />
+          ) : selected !== null ? (
             <VersionPreview
               versionNo={selected}
               fields={fields}
@@ -237,8 +272,17 @@ export function VersionHistorySheet({
           )}
         </div>
 
-        <div className="p-4 border-t border-border flex items-center gap-2">
-          {selected !== null ? (
+        <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
+          {comparing !== null ? (
+            // Compare returns to the version that was on screen, not the list.
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setComparing(null)}
+            >
+              Back
+            </Button>
+          ) : selected !== null ? (
             <>
               <Button
                 variant="outline"
@@ -247,8 +291,30 @@ export function VersionHistorySheet({
               >
                 Back to history
               </Button>
-              {/* Offered only from the preview: restoring is easier to get
-                  right having seen what the version actually holds. */}
+              {/* Compare is offered from the preview, where a version is already
+                  chosen: against the one before it, and against the current. */}
+              {canComparePrevious && previousVersionNo !== null ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setComparing({ from: previousVersionNo, to: selected })
+                  }
+                >
+                  Compare with previous
+                </Button>
+              ) : null}
+              {canCompareCurrent && latestVersionNo !== null ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setComparing({ from: selected, to: latestVersionNo })
+                  }
+                >
+                  Compare with current
+                </Button>
+              ) : null}
               {/* Available only once the snapshot is on screen: restoring is
                   offered from the preview so the choice is made having seen
                   what the version holds, which a skeleton or an error is not. */}

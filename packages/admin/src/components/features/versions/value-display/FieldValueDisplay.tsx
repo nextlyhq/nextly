@@ -541,28 +541,8 @@ export function FieldValueDisplay({
   dense = false,
   className,
 }: FieldValueDisplayProps) {
-  const normalized = normalizeStoredValue(field, value);
   const label =
     (field as { label?: string }).label ?? field.name ?? "Untitled field";
-
-  // A `json` field may legitimately store the JSON primitive `null`, which
-  // normalizes to the same value as an absent field. The two are separable at
-  // this boundary: an absent key arrives as `undefined`, while a stored null
-  // arrives as `null` (or as the characters "null" from a serialized column).
-  // Only the first is treated as unset.
-  const isStoredJsonNull =
-    field.type === "json" &&
-    (value === null || (typeof value === "string" && value.trim() === "null"));
-
-  const render = registry.get(field.type);
-  const body =
-    normalized === null && !isStoredJsonNull ? (
-      <EmptyValue />
-    ) : (
-      (render?.({ value: normalized, field }) ?? (
-        <PlainText>{toText(normalized)}</PlainText>
-      ))
-    );
 
   return (
     <div
@@ -576,7 +556,41 @@ export function FieldValueDisplay({
       >
         {label}
       </span>
-      <div className={dense ? "text-sm" : "text-base"}>{body}</div>
+      <div className={dense ? "text-sm" : "text-base"}>
+        <FieldValue field={field} value={value} />
+      </div>
     </div>
+  );
+}
+
+/**
+ * A field's stored value rendered read-only by its type, WITHOUT a label. The
+ * diff renderer reuses this so it can supply its own label and status badge
+ * without a second label from the value itself.
+ */
+export function FieldValue({
+  field,
+  value,
+}: {
+  field: FieldConfig;
+  value: unknown;
+}) {
+  const normalized = normalizeStoredValue(field, value);
+
+  // A `json` field may legitimately store the JSON primitive `null`, which
+  // normalizes to the same value as an absent field. An absent key arrives as
+  // `undefined`, while a stored null arrives as `null` (or as the characters
+  // "null" from a serialized column); only the first is treated as unset.
+  const isStoredJsonNull =
+    field.type === "json" &&
+    (value === null || (typeof value === "string" && value.trim() === "null"));
+
+  if (normalized === null && !isStoredJsonNull) return <EmptyValue />;
+
+  const render = registry.get(field.type);
+  return (
+    render?.({ value: normalized, field }) ?? (
+      <PlainText>{toText(normalized)}</PlainText>
+    )
   );
 }

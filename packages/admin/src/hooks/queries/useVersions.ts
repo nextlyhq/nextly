@@ -24,6 +24,7 @@ import {
   type RestoreVersionResponse,
   type SetVersionLabelResponse,
   type VersionDetail,
+  type VersionDiff,
   type VersionListResponse,
   type VersionScope,
 } from "@admin/services/versionApi";
@@ -71,6 +72,20 @@ export const versionKeys = {
   details: () => [...versionKeys.all(), "detail"] as const,
   detail: (scope: VersionScope, versionNo: number) =>
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
+  diffs: () => [...versionKeys.all(), "diff"] as const,
+  diff: (
+    scope: VersionScope,
+    from: number,
+    to: number,
+    modifiedOnly: boolean
+  ) =>
+    [
+      ...versionKeys.diffs(),
+      ...scopeKey(scope),
+      from,
+      to,
+      modifiedOnly,
+    ] as const,
 };
 
 // ============================================================
@@ -146,6 +161,45 @@ export function useVersion({
       return versionApi.get(scope, versionNo);
     },
     enabled: enabled && versionNo !== null && isAddressable(scope),
+    staleTime: 60_000,
+  });
+}
+
+export interface UseVersionDiffOptions {
+  scope: VersionScope;
+  /** Older version number; null disables the query. */
+  from: number | null;
+  /** Newer version number; null disables the query. */
+  to: number | null;
+  /** Return only changed fields. */
+  modifiedOnly?: boolean;
+  enabled?: boolean;
+}
+
+/**
+ * A diff of two versions. Both snapshots are immutable, so the result is stable
+ * for as long as the pair and options hold and can be cached like a version.
+ */
+export function useVersionDiff({
+  scope,
+  from,
+  to,
+  modifiedOnly = false,
+  enabled = true,
+}: UseVersionDiffOptions) {
+  return useQuery<VersionDiff, Error>({
+    queryKey:
+      from === null || to === null
+        ? ([...versionKeys.diffs(), "none"] as const)
+        : versionKeys.diff(scope, from, to, modifiedOnly),
+    queryFn: () => {
+      // Guarded by `enabled`; this is defence against a direct queryFn call.
+      if (from === null || to === null) {
+        throw new Error("Two version numbers are required");
+      }
+      return versionApi.diff(scope, from, to, { modifiedOnly });
+    },
+    enabled: enabled && from !== null && to !== null && isAddressable(scope),
     staleTime: 60_000,
   });
 }
