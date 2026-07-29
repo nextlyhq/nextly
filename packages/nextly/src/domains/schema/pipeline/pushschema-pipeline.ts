@@ -58,6 +58,7 @@ import {
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
+import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
 import {
@@ -708,12 +709,22 @@ export class PushSchemaPipeline {
         classificationResult.events
       );
 
-      const allResolvedOps =
+      const renameResolvedOps =
         this.testHooks._resolvedOpsOverride ??
         applyResolutionsToOperations(
           operations,
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
+      // make_optional must reach the OPERATIONS too, not only `desired`: the
+      // fast-path emitters (and the kit-path table pre-creation) generate
+      // their SQL from these ops, so an unpatched add_column would still say
+      // NOT NULL despite the admin's resolution — failing the apply on a
+      // populated table or landing the column as required.
+      const allResolvedOps = applyMakeOptionalToOperations(
+        renameResolvedOps,
+        dispatchResult.resolutions,
+        classificationResult.events
+      );
 
       // A UI save owns only the entity being edited. Drop any operation that
       // targets a code-first/plugin-owned table so the Schema Builder can never
@@ -1072,11 +1083,17 @@ export class PushSchemaPipeline {
         // index. On PG and MySQL that batch is transactional; SQLite runs
         // without a transaction by design, so a failing restore there is
         // reported but the rebuild it followed has already landed.
+        //
+        // The ops are handed over ONLY on the kit route: the restore's
+        // ops-replay exists because drizzle-kit never creates dynamic-table
+        // indexes, but the fast path emits every add_index itself, so
+        // replaying them would issue the same CREATE INDEX twice — fatal on
+        // MySQL, which has no IF NOT EXISTS for indexes.
         const restore = indexRestoreStatements(
           desiredSnapshot,
           dialect,
           safe,
-          resolvedOps
+          useFastPath ? [] : resolvedOps
         );
 
         try {
