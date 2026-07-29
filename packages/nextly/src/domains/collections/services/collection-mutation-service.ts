@@ -66,7 +66,11 @@ import {
   attachFieldValidators,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
-import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
+import {
+  coerceDateFieldsToDate,
+  normalizeRelationshipFields,
+  relationshipValidationView,
+} from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
@@ -110,7 +114,6 @@ import {
   toCamelCase,
   isJsonFieldType,
   isRelationshipField,
-  normalizeRelationshipValue,
   normalizeNestedRelationships,
   normalizeUploadFields,
   getTableName,
@@ -753,6 +756,25 @@ export class CollectionMutationService extends BaseService {
     if (args.status === "published" && args.previousStatus !== "published") {
       emitDocumentEvent("published", args.collection, docBase);
     }
+  }
+
+  /**
+   * The document a validator is shown.
+   *
+   * A relationship read at a populating depth comes back as the related row,
+   * and a multi-target one wrapped with the collection it names. A field's
+   * public value is the document id, and a custom validator is written against
+   * that — handed a row it compares an object to a string, or calls a string
+   * method on it and throws.
+   *
+   * Reduced on a detached copy rather than in place, because the submitted
+   * shape is what the hooks between here and storage still expect to see.
+   */
+  private validationView(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Record<string, unknown> {
+    return relationshipValidationView(data, fields as unknown as FieldConfig[]);
   }
 
   /**
@@ -1898,7 +1920,7 @@ export class CollectionMutationService extends BaseService {
           params.locale
         );
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
@@ -1940,28 +1962,13 @@ export class CollectionMutationService extends BaseService {
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
-      fields.forEach(field => {
-        if (isRelationshipField(field.type) && finalData[field.name] != null) {
-          const isPolymorphic =
-            Array.isArray(field.options?.target) ||
-            Array.isArray(field.relationTo);
-          const hasMany =
-            field.hasMany === true ||
-            field.options?.relationType === "manyToMany";
-
-          let normalized = normalizeRelationshipValue(
-            finalData[field.name],
-            isPolymorphic
-          );
-
-          // Single relationships: unwrap arrays to a single value
-          if (!hasMany && Array.isArray(normalized)) {
-            normalized = normalized.length > 0 ? normalized[0] : null;
-          }
-
-          finalData[field.name] = normalized;
-        }
-      });
+      // Walks containers too: a reference left populated inside a group or
+      // repeater is serialized to JSON as the row and never read back as a
+      // reference.
+      normalizeRelationshipFields(
+        finalData,
+        fields as unknown as FieldConfig[]
+      );
 
       // Normalize upload field values (extract IDs from populated media objects)
       normalizeUploadFields(finalData, fields);
@@ -2508,7 +2515,18 @@ export class CollectionMutationService extends BaseService {
             entry,
             params.collectionName,
             fields,
-            { depth }
+            {
+              depth,
+              // Related rows carry the TARGET collection's own field rules, and
+              // the response redaction below runs against THIS collection's
+              // schema, so it cannot reach inside a populated row. A writer
+              // supplied a relationship id, not the related row's protected
+              // columns, so a mutation response is a read of that row and is
+              // judged the same way a GET would judge it.
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+            }
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
@@ -3800,7 +3818,7 @@ export class CollectionMutationService extends BaseService {
           params.locale
         );
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
@@ -3838,28 +3856,13 @@ export class CollectionMutationService extends BaseService {
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
-      fields.forEach(field => {
-        if (isRelationshipField(field.type) && finalData[field.name] != null) {
-          const isPolymorphic =
-            Array.isArray(field.options?.target) ||
-            Array.isArray(field.relationTo);
-          const hasMany =
-            field.hasMany === true ||
-            field.options?.relationType === "manyToMany";
-
-          let normalized = normalizeRelationshipValue(
-            finalData[field.name],
-            isPolymorphic
-          );
-
-          // Single relationships: unwrap arrays to a single value
-          if (!hasMany && Array.isArray(normalized)) {
-            normalized = normalized.length > 0 ? normalized[0] : null;
-          }
-
-          finalData[field.name] = normalized;
-        }
-      });
+      // Walks containers too: a reference left populated inside a group or
+      // repeater is serialized to JSON as the row and never read back as a
+      // reference.
+      normalizeRelationshipFields(
+        finalData,
+        fields as unknown as FieldConfig[]
+      );
 
       // Normalize upload field values (extract IDs from populated media objects)
       normalizeUploadFields(finalData, fields);
@@ -5043,7 +5046,18 @@ export class CollectionMutationService extends BaseService {
             updated,
             params.collectionName,
             fields,
-            { depth }
+            {
+              depth,
+              // Related rows carry the TARGET collection's own field rules, and
+              // the response redaction below runs against THIS collection's
+              // schema, so it cannot reach inside a populated row. A writer
+              // supplied a relationship id, not the related row's protected
+              // columns, so a mutation response is a read of that row and is
+              // judged the same way a GET would judge it.
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+            }
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
@@ -5668,7 +5682,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
@@ -5709,28 +5723,13 @@ export class CollectionMutationService extends BaseService {
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
-      fields.forEach(field => {
-        if (isRelationshipField(field.type) && finalData[field.name] != null) {
-          const isPolymorphic =
-            Array.isArray(field.options?.target) ||
-            Array.isArray(field.relationTo);
-          const hasMany =
-            field.hasMany === true ||
-            field.options?.relationType === "manyToMany";
-
-          let normalized = normalizeRelationshipValue(
-            finalData[field.name],
-            isPolymorphic
-          );
-
-          // Single relationships: unwrap arrays to a single value
-          if (!hasMany && Array.isArray(normalized)) {
-            normalized = normalized.length > 0 ? normalized[0] : null;
-          }
-
-          finalData[field.name] = normalized;
-        }
-      });
+      // Walks containers too: a reference left populated inside a group or
+      // repeater is serialized to JSON as the row and never read back as a
+      // reference.
+      normalizeRelationshipFields(
+        finalData,
+        fields as unknown as FieldConfig[]
+      );
 
       // Normalize upload field values (extract IDs from populated media objects)
       normalizeUploadFields(finalData, fields);
@@ -6212,7 +6211,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
@@ -6249,28 +6248,13 @@ export class CollectionMutationService extends BaseService {
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
-      fields.forEach(field => {
-        if (isRelationshipField(field.type) && finalData[field.name] != null) {
-          const isPolymorphic =
-            Array.isArray(field.options?.target) ||
-            Array.isArray(field.relationTo);
-          const hasMany =
-            field.hasMany === true ||
-            field.options?.relationType === "manyToMany";
-
-          let normalized = normalizeRelationshipValue(
-            finalData[field.name],
-            isPolymorphic
-          );
-
-          // Single relationships: unwrap arrays to a single value
-          if (!hasMany && Array.isArray(normalized)) {
-            normalized = normalized.length > 0 ? normalized[0] : null;
-          }
-
-          finalData[field.name] = normalized;
-        }
-      });
+      // Walks containers too: a reference left populated inside a group or
+      // repeater is serialized to JSON as the row and never read back as a
+      // reference.
+      normalizeRelationshipFields(
+        finalData,
+        fields as unknown as FieldConfig[]
+      );
 
       // Normalize upload field values (extract IDs from populated media objects)
       normalizeUploadFields(finalData, fields);
@@ -7082,7 +7066,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
@@ -7123,28 +7107,13 @@ export class CollectionMutationService extends BaseService {
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
-      fields.forEach(field => {
-        if (isRelationshipField(field.type) && finalData[field.name] != null) {
-          const isPolymorphic =
-            Array.isArray(field.options?.target) ||
-            Array.isArray(field.relationTo);
-          const hasMany =
-            field.hasMany === true ||
-            field.options?.relationType === "manyToMany";
-
-          let normalized = normalizeRelationshipValue(
-            finalData[field.name],
-            isPolymorphic
-          );
-
-          // Single relationships: unwrap arrays to a single value
-          if (!hasMany && Array.isArray(normalized)) {
-            normalized = normalized.length > 0 ? normalized[0] : null;
-          }
-
-          finalData[field.name] = normalized;
-        }
-      });
+      // Walks containers too: a reference left populated inside a group or
+      // repeater is serialized to JSON as the row and never read back as a
+      // reference.
+      normalizeRelationshipFields(
+        finalData,
+        fields as unknown as FieldConfig[]
+      );
 
       // Normalize upload field values (extract IDs from populated media objects)
       normalizeUploadFields(finalData, fields);
@@ -7695,7 +7664,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
@@ -7734,28 +7703,13 @@ export class CollectionMutationService extends BaseService {
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
-      fields.forEach(field => {
-        if (isRelationshipField(field.type) && finalData[field.name] != null) {
-          const isPolymorphic =
-            Array.isArray(field.options?.target) ||
-            Array.isArray(field.relationTo);
-          const hasMany =
-            field.hasMany === true ||
-            field.options?.relationType === "manyToMany";
-
-          let normalized = normalizeRelationshipValue(
-            finalData[field.name],
-            isPolymorphic
-          );
-
-          // Single relationships: unwrap arrays to a single value
-          if (!hasMany && Array.isArray(normalized)) {
-            normalized = normalized.length > 0 ? normalized[0] : null;
-          }
-
-          finalData[field.name] = normalized;
-        }
-      });
+      // Walks containers too: a reference left populated inside a group or
+      // repeater is serialized to JSON as the row and never read back as a
+      // reference.
+      normalizeRelationshipFields(
+        finalData,
+        fields as unknown as FieldConfig[]
+      );
 
       // Normalize upload field values (extract IDs from populated media objects)
       normalizeUploadFields(finalData, fields);

@@ -119,6 +119,21 @@ export function normalizeRelationshipValue(
 }
 
 /**
+ * The id a multi-target reference points at, whichever form it arrives in.
+ *
+ * A read at depth serves the populated row under `value`, so a document saved
+ * back unchanged hands that row here; storing it as-is would put a whole
+ * object in the column. An unpopulated reference already carries the id.
+ */
+function referenceTargetId(value: unknown): unknown {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const { id } = value as Record<string, unknown>;
+    if (typeof id === "string") return id;
+  }
+  return value;
+}
+
+/**
  * Normalizes a single relationship item.
  */
 export function normalizeRelationshipItem(
@@ -139,7 +154,7 @@ export function normalizeRelationshipItem(
     if (isPolymorphic && "relationTo" in obj && "value" in obj) {
       return {
         relationTo: obj.relationTo,
-        value: obj.value,
+        value: referenceTargetId(obj.value),
       };
     }
 
@@ -151,7 +166,7 @@ export function normalizeRelationshipItem(
     if ("relationTo" in obj && "value" in obj) {
       return {
         relationTo: obj.relationTo,
-        value: obj.value,
+        value: referenceTargetId(obj.value),
       };
     }
   }
