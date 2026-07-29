@@ -77,9 +77,9 @@ describe("pre-resolution drop_index — PostgreSQL constraint-backed uniques", (
   it("drops a constraint-owned unique before its column without failing the apply", async () => {
     await resetTable();
 
-    // The op pair a removed `unique: true` field produces. drop_index is
-    // ordered first by the executor; before the constraint-aware template
-    // this raised "cannot drop index ... because constraint ... requires it".
+    // The op pair a removed `unique: true` field produces. The executor
+    // orders drop_index first, so the constraint-owned index has to be
+    // droppable while its column is still present.
     const ops: Operation[] = [
       {
         type: "drop_index",
