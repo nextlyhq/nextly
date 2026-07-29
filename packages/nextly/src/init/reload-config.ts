@@ -580,6 +580,22 @@ export async function reloadNextlyConfig(opts?: {
     | undefined;
   let previousFieldTypes: PluginFieldType[] | undefined;
   let restoreFieldTypes: (() => void) | undefined;
+  /**
+   * Put the field-type registry back when a reload does not take effect.
+   *
+   * `loadConfig` swaps the process-global registry as it reads the new config,
+   * but a reload can still be abandoned after that — DI not ready, the live
+   * schema unreadable, a schema change deferred as unsafe. Those paths keep the
+   * previous config and metadata, so leaving the new types installed would run
+   * the abandoned reload's `validate`, storage mapping and `validateOptions`
+   * against a schema that never changed.
+   *
+   * Not called on the paths that simply had nothing to do: there the new config
+   * IS the live one, and its types belong in the registry.
+   */
+  const abandonReload = (): void => {
+    restoreFieldTypes?.();
+  };
   try {
     const { loadConfig, clearConfigCache } = await import(
       "../cli/utils/config-loader"
@@ -629,7 +645,7 @@ export async function reloadNextlyConfig(opts?: {
     // The registry was rebuilt from the config that just failed; put the
     // working set back so the retained config keeps the behavior it was
     // validated with.
-    restoreFieldTypes?.();
+    abandonReload();
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to
     // load Nextly configuration."). Surface BOTH the public message
@@ -695,6 +711,7 @@ export async function reloadNextlyConfig(opts?: {
       | undefined;
   } catch {
     // DI not initialised yet (init-time race). Nothing to do.
+    abandonReload();
     return;
   }
   if (!adapter) return;
@@ -833,6 +850,7 @@ export async function reloadNextlyConfig(opts?: {
       `[Nextly HMR] Could not introspect live schema: ${msg}. ` +
         `No code-first schema changes were applied this cycle.`
     );
+    abandonReload();
     return;
   }
 
@@ -1061,6 +1079,9 @@ export async function reloadNextlyConfig(opts?: {
         collections: false,
         singles: false,
       });
+      // The physical tables still match the PREVIOUS config, so the previous
+      // field types are the ones that describe them.
+      abandonReload();
     }
     return;
   }
