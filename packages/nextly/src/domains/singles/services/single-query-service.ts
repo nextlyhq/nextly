@@ -742,6 +742,7 @@ export class SingleQueryService extends BaseService {
             enforceFieldAccess: enforceRelatedFieldAccess,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,
+            authenticatedScope: options.authenticatedScope,
           },
           // Read errors otherwise become empty component values, which reads to a
           // rule exactly like a component that holds nothing.
