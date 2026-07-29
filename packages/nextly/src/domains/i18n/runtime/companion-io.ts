@@ -176,6 +176,57 @@ export async function upsertCompanionRow(
   );
 }
 
+/**
+ * Adapter surface for asking about a table's PHYSICAL shape: the Drizzle handle, which the
+ * shared introspection helper needs. Separate from {@link CompanionWriteAdapter} so the
+ * read/write helpers, which never introspect, keep their narrower contract.
+ */
+export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
+  getDrizzle<T = unknown>(): T;
+}
+
+/**
+ * Whether the main table still physically carries `columnName`.
+ *
+ * This answers one question for every entity type: **can the pre-companion fallback actually
+ * persist anything?** While the companion is missing, a write in the default language is meant
+ * to stay on the main table — but that is only true for an entity whose columns are still
+ * there. An entity localized from creation (or one whose migration has run) keeps them only on
+ * the companion, and its registered runtime table omits them, so the write carries keys the
+ * table has no columns for. Measured on all three dialects, that surfaces as a driver error
+ * and a 500 rather than a wrong value — the write does not quietly commit. Answering the
+ * question up front turns that opaque failure into a refusal the caller can act on.
+ *
+ * Goes through the same introspection the schema pipeline uses rather than a `SELECT ... LIMIT 0`
+ * probe. That matters beyond convention: a probe cannot tell "this column does not exist" from
+ * "the database is unreachable", so a transient failure would read as a missing column and
+ * produce a misleading "translations are not ready" refusal instead of the real error.
+ * Introspection fails loudly, and this deliberately does not catch.
+ *
+ * MUST be called before the caller opens its transaction. It borrows a connection from the pool,
+ * so running it inside one waits for a connection that cannot be released until that transaction
+ * finishes — starvation on a small pool. Resolving it first also keeps a refusal exactly as
+ * raised: errors leaving a transaction callback pass through the adapter's error classification,
+ * which rewraps anything that is not already a `DatabaseError`.
+ */
+export async function mainTableHasColumn(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string,
+  columnName: string | undefined
+): Promise<boolean> {
+  if (!columnName) return false;
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  const table = snapshot.tables.find(t => t.name === tableName);
+  return table?.columns.some(c => c.name === columnName) === true;
+}
+
 // Whether a probe error is a verified "this TABLE does not exist" for the
 // current dialect, as opposed to a transient/connection/permission error or a
 // different missing resource (a missing DATABASE, schema, column, or role). The

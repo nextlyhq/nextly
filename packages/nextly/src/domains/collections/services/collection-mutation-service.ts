@@ -89,7 +89,10 @@ import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
-import { companionTableExists as sharedCompanionTableExists } from "../../i18n/runtime/companion-io";
+import {
+  companionTableExists as sharedCompanionTableExists,
+  mainTableHasColumn,
+} from "../../i18n/runtime/companion-io";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
@@ -973,6 +976,32 @@ export class CollectionMutationService extends BaseService {
             collection: collectionName,
             locale: requested,
             defaultLocale: this.localization.defaultLocale,
+            companionTable: companion.companionTableName,
+          },
+        });
+      }
+      // The default language keeps the fallback, but only where it can actually
+      // work. A collection localized from creation keeps its translatable columns
+      // solely on the companion, and the generated main-table schema omits them, so
+      // returning null here would leave those values in the main payload for a table
+      // that has no columns for them. That write cannot land: it reaches the driver
+      // and fails as a 500. Refusing here says the same thing in terms the caller can
+      // act on, and says it before anything is attempted.
+      const fallbackPossible = await mainTableHasColumn(
+        this.adapter,
+        // The companion is always `<main>_locales`, so the main table is its stem.
+        companion.companionTableName.replace(/_locales$/, ""),
+        companion.localizedFields[0]?.column
+      );
+      if (!fallbackPossible) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            collection: collectionName,
+            locale: requested,
             companionTable: companion.companionTableName,
           },
         });
@@ -2231,6 +2260,16 @@ export class CollectionMutationService extends BaseService {
       // collection opted out of recording), so the post-commit fast drain is
       // scheduled only for a write that recorded something.
       let recorded = false;
+      // Verify every localized field group in this payload can actually be written
+      // BEFORE the transaction opens. Inside it the probes would borrow a second
+      // connection and deadlock a single-connection pool, and a NextlyError raised in
+      // the callback is reclassified by the adapter into an opaque database error —
+      // so the actionable 409 would never reach the caller.
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: fields as unknown as FieldConfig[],
+        data: componentFieldData,
+        locale: params.locale,
+      });
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -4233,6 +4272,16 @@ export class CollectionMutationService extends BaseService {
       // resolves, so a rolled-back attempt (a version conflict) or a commit
       // failure never flags a durable event that isn't there.
       let recorded = false;
+      // Verify every localized field group in this payload can actually be written
+      // BEFORE the transaction opens. Inside it the probes would borrow a second
+      // connection and deadlock a single-connection pool, and a NextlyError raised in
+      // the callback is reclassified by the adapter into an opaque database error —
+      // so the actionable 409 would never reach the caller.
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: fields as unknown as FieldConfig[],
+        data: componentFieldData,
+        locale: params.locale,
+      });
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;

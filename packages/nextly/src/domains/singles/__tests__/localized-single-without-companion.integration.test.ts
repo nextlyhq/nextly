@@ -22,8 +22,11 @@ import { defineSingle, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+
+import type { SingleEntryService } from "../services/single-entry-service";
 
 let dir: string;
 let dbPath: string;
@@ -97,4 +100,68 @@ describe("localized single without a companion table (integration)", () => {
     );
     expect(rows[0]?.headline).toBe("Edited while the companion was missing");
   });
+
+  it("refuses a default-language write when the main table never had the column", async () => {
+    // Localized from creation, so `headline` only ever existed on the companion and the
+    // main table has no column to fall back to. The case above cannot show this: there
+    // the Single started life unlocalized, so its legacy main column is still present and
+    // the fallback genuinely works.
+    current = await boot(true);
+    await current.adapter.executeQuery(
+      "DROP TABLE IF EXISTS single_swin_settings_locales"
+    );
+
+    await expect(
+      current.nextly.updateSingle({
+        slug: "swin_settings",
+        data: { headline: "Edited while the companion was missing" },
+        locale: "en",
+      } as Parameters<typeof current.nextly.updateSingle>[0])
+    ).rejects.toThrow(/Translations are not ready/);
+  });
 });
+
+/**
+ * The same refusal, on a real server, for a Single localized from creation — the case the
+ * SQLite pair above cannot cover, because there the Single starts life unlocalized and so
+ * keeps a usable main column.
+ *
+ * This pins the refusal down to an actionable 409 on every dialect. It asserts the status
+ * code rather than the message because the message is the weaker signal: when a
+ * `NextlyError` reaches an adapter's `classifyError` it is rewrapped, but the original
+ * `message` is copied onto the wrapper, so the text alone cannot tell a clean refusal from
+ * a rewrapped one.
+ *
+ * Note what this does NOT cover: the write path also resolves this before opening its
+ * transaction, so the probe cannot wait on a connection the transaction itself holds. That
+ * matters only on a single-connection pool, where the symptom is a hang rather than a
+ * wrong value, so it is left to the pool's own configuration rather than pinned here.
+ */
+describe.each(getConfiguredTestDialects())(
+  "localized single without a companion table on %s (integration)",
+  dialect => {
+    it("refuses a default-language write with an actionable 409", async () => {
+      current = await createTestNextly({
+        dialect,
+        singles: [settings(true)],
+        localization,
+      });
+
+      await current.adapter.executeQuery(
+        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`single_swin_settings_locales`" : '"single_swin_settings_locales"'}`
+      );
+
+      const result = await current
+        .getService<SingleEntryService>("singleEntryService")
+        .update(
+          "swin_settings",
+          { headline: "Edited while the companion was missing" },
+          { locale: "en" }
+        );
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(409);
+      expect(result.message).toMatch(/Translations are not ready/);
+    });
+  }
+);

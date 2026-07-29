@@ -29,6 +29,7 @@ import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
   companionTableExists,
+  mainTableHasColumn,
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
@@ -104,10 +105,14 @@ export class FieldGroupMutationService extends BaseService {
     meta: DynamicFieldGroupRecord,
     data: Record<string, unknown>,
     locale: string | undefined,
-    writeAdapter: {
+    // Present only on the in-transaction path, where the `*InTx` variants pass the
+    // transaction's own adapter. Its presence is therefore the signal for "a parent
+    // transaction is already open", which is what decides whether introspecting from
+    // here is safe. Omitted on the pooled path.
+    txAdapter?: {
       dialect: SupportedDialect;
       executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-    } = this.adapter
+    }
   ): Promise<{
     schema: ReturnType<typeof buildCompanionSchema>;
     main: Record<string, unknown>;
@@ -116,6 +121,7 @@ export class FieldGroupMutationService extends BaseService {
     if (!this.localization || meta.localized !== true) {
       return { schema: null, main: data, companion: {} };
     }
+    const writeAdapter = txAdapter ?? this.adapter;
     const schema = buildCompanionSchema({
       slug: meta.slug,
       tableName: meta.tableName,
@@ -127,9 +133,10 @@ export class FieldGroupMutationService extends BaseService {
     // Probe BEFORE splitting. Splitting first and then discovering the companion is
     // absent strands the translatable values: they leave the main payload and the
     // upsert that would have taken them is skipped, so the write reports success
-    // having saved nothing. Checking here also means the refusal is raised before
-    // the caller opens its transaction, where the adapters' `classifyError` would
-    // turn a `NextlyError` into an opaque database error and lose the 409.
+    // having saved nothing. Checking here also means the refusal is raised before the
+    // caller opens its transaction, so it leaves exactly as raised rather than through
+    // the adapter's error classification, which rewraps anything that is not already a
+    // `DatabaseError`.
     if (
       !(await companionTableExists(writeAdapter, schema.companionTableName))
     ) {
@@ -146,8 +153,35 @@ export class FieldGroupMutationService extends BaseService {
           },
         });
       }
-      // Default language: keep the values on the existing main-table column, the
-      // same pre-companion fallback collections and singles preserve.
+      // Default language keeps the pre-companion fallback — but only where it can
+      // actually work. A field group whose main `comp_*` table never had these
+      // columns (localized from creation, or already migrated) would otherwise take
+      // this branch and hand the values to a table with nowhere to put them, which
+      // fails at the driver as a 500. Refusing turns that into an answer the caller
+      // can act on.
+      // Only introspect on the pooled path. Inside a parent transaction this would
+      // borrow a second connection and deadlock a single-connection pool — and it does
+      // not need to, because `assertLocalizedFieldGroupsWritable` has already answered
+      // the same question before that transaction opened.
+      const fallbackPossible =
+        txAdapter !== undefined ||
+        (await mainTableHasColumn(
+          this.adapter,
+          meta.tableName,
+          schema.localizedFields[0]?.column
+        ));
+      if (!fallbackPossible) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            fieldGroupTable: schema.companionTableName,
+            locale: writeLocale,
+          },
+        });
+      }
       return { schema: null, main: data, companion: {} };
     }
     const { main, companion } = splitLocalizedWrite(
@@ -290,6 +324,59 @@ export class FieldGroupMutationService extends BaseService {
             locale,
           });
         }
+      }
+    }
+  }
+
+  /**
+   * Answer, BEFORE the caller opens its transaction, whether every localized field group in
+   * this payload can actually be written.
+   *
+   * Two reasons it cannot wait until the write itself. The probes borrow a connection from the
+   * pool, so running them inside the parent transaction waits for a connection that cannot be
+   * released until that transaction finishes; and answering here keeps a refusal exactly as
+   * raised, rather than passing it through the adapter's error classification on the way out of
+   * a transaction callback, which rewraps anything that is not already a `DatabaseError`.
+   *
+   * Idempotent and read-only — it introspects and probes, and writes nothing.
+   */
+  async assertLocalizedFieldGroupsWritable(
+    params: Pick<SaveComponentDataParams, "fields" | "data" | "locale">
+  ): Promise<void> {
+    if (!this.localization) return;
+    for (const field of params.fields) {
+      if (!isFieldGroupField(field)) continue;
+      const value = params.data[field.name];
+      if (value === undefined || value === null) continue;
+      // Mirror `saveComponentData`'s dispatch exactly, including its precedence: a field
+      // carrying both `components` and `component` is written as a dynamic zone, so
+      // deciding `component` first here would check a type the write never touches.
+      //
+      // For a dynamic zone the type travels per instance, so the PAYLOAD decides what is
+      // written, not the field's list of permitted types. Walking the permitted list
+      // instead would probe types absent from this write — and would refuse a perfectly
+      // good save whenever some other permitted type happened to be missing its
+      // companion. Deduplicated, because a zone commonly repeats one type.
+      const slugs = new Set<string>();
+      if (field.components && field.components.length > 0) {
+        for (const instance of Array.isArray(value) ? value : []) {
+          const type = (instance as Record<string, unknown> | null)?.[
+            STORAGE_FORMAT.wireTypeKey
+          ];
+          if (typeof type === "string" && field.components.includes(type)) {
+            slugs.add(type);
+          }
+        }
+      } else if (field.component) {
+        slugs.add(field.component);
+      }
+      for (const slug of slugs) {
+        const meta = await this.registryService.getComponentBySlug(slug);
+        if (!meta || meta.localized !== true) continue;
+        // Reuse the same split the write performs: it raises the 409 when the
+        // companion is missing and the fallback is unavailable, which is exactly the
+        // decision needed here — and on the pooled adapter, outside any transaction.
+        await this.splitLocalizedComponent(meta, {}, params.locale);
       }
     }
   }
@@ -530,7 +617,11 @@ export class FieldGroupMutationService extends BaseService {
       const { schema, main, companion } = await this.splitLocalizedComponent(
         componentMeta,
         data,
-        locale
+        locale,
+        // Probe on the TRANSACTION's connection, never the pool: the parent
+        // transaction already holds one, and a single-connection pool would
+        // deadlock waiting for a second.
+        this.txWriteAdapter(tx)
       );
 
       let instanceId: string;
@@ -737,7 +828,11 @@ export class FieldGroupMutationService extends BaseService {
         const { schema, main, companion } = await this.splitLocalizedComponent(
           componentMeta,
           instance,
-          locale
+          locale,
+          // Probe on the TRANSACTION's connection, never the pool: the parent
+          // transaction already holds one, and a single-connection pool would
+          // deadlock waiting for a second.
+          this.txWriteAdapter(tx)
         );
 
         await this.prepareInstanceForWrite(
@@ -1060,7 +1155,11 @@ export class FieldGroupMutationService extends BaseService {
         const { schema, main, companion } = await this.splitLocalizedComponent(
           meta,
           instance,
-          locale
+          locale,
+          // Probe on the TRANSACTION's connection, never the pool: the parent
+          // transaction already holds one, and a single-connection pool would
+          // deadlock waiting for a second.
+          this.txWriteAdapter(tx)
         );
 
         await this.prepareInstanceForWrite(

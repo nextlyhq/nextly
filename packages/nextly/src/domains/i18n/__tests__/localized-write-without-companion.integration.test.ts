@@ -27,7 +27,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import {
   createTestNextly,
@@ -68,6 +73,26 @@ const posts = (localized: boolean) =>
     slug: "i18nwin_posts",
     localized,
     fields: [text({ name: "title", localized: true })],
+  });
+
+/**
+ * Same shape plus a genuinely SHARED field. `localized: false` is load-bearing: in a
+ * localized collection a text field localizes by default (`defaultLocalizedForType`), so
+ * without the explicit flag `author` would live on the companion too and the main table
+ * would have no column at all.
+ *
+ * That distinction is the whole point of this fixture. With a real shared column the
+ * UPDATE still has something valid to write, which is the shape that can commit a partial
+ * row rather than failing outright.
+ */
+const mixedPosts = (localized: boolean) =>
+  defineCollection({
+    slug: "i18nwin_mixed",
+    localized,
+    fields: [
+      text({ name: "title", localized: true }),
+      text({ name: "author", localized: false }),
+    ],
   });
 
 async function boot(localized: boolean): Promise<TestNextly> {
@@ -237,5 +262,167 @@ describe.each(getConfiguredTestDialects())(
       expect(translated.statusCode).toBe(409);
       expect(translated.message).toMatch(/Translations are not ready/);
     });
+
+    it("refuses a default-locale update when the main table never had the column", async () => {
+      // The other half of the same window. The default language keeps the pre-companion
+      // fallback, so the split hands its values back to the main payload — but a
+      // collection localized from creation never had those columns on the main table.
+      // Without the guard the write reaches the driver and dies there: measured at 409
+      // with it, 500 without, on every dialect. The content is not lost, but the caller
+      // is told nothing it can act on.
+      current = await createTestNextly({
+        dialect,
+        collections: [posts(true)],
+        localization,
+      });
+
+      const created = await current
+        .getService<CollectionsHandler>("collectionsHandler")
+        .createEntry(
+          {
+            collectionName: "i18nwin_posts",
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "Original" }
+        );
+      expect(created.success).toBe(true);
+      const id = (created.data as { id: string }).id;
+
+      await current.adapter.executeQuery(
+        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_posts_locales`" : '"dc_i18nwin_posts_locales"'}`
+      );
+
+      const updated = await current
+        .getService<CollectionsHandler>("collectionsHandler")
+        .updateEntry(
+          {
+            collectionName: "i18nwin_posts",
+            entryId: id,
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "Edited" }
+        );
+
+      expect(updated.success).toBe(false);
+      expect(updated.statusCode).toBe(409);
+      expect(updated.message).toMatch(/Translations are not ready/);
+    });
+
+    it("does not half-apply the write when a shared field accompanies the translation", async () => {
+      // A real shared column alongside the translatable one is the shape most likely to
+      // commit a partial write, because `author` on its own would make a perfectly valid
+      // UPDATE. Measured: it still does not — the statement carries `title` too, the main
+      // table has no such column, and the whole statement fails as a 500. So the guard's
+      // contribution here is an actionable 409 in place of a driver error, not the
+      // prevention of a silent half-write.
+      //
+      // The `author` assertion holds that line: were the write ever to become partial,
+      // keeping the shared half and dropping the translation, this is what would catch it.
+      current = await createTestNextly({
+        dialect,
+        collections: [mixedPosts(true)],
+        localization,
+      });
+
+      const created = await current
+        .getService<CollectionsHandler>("collectionsHandler")
+        .createEntry(
+          {
+            collectionName: "i18nwin_mixed",
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "Original", author: "Ada" }
+        );
+      expect(created.success).toBe(true);
+      const id = (created.data as { id: string }).id;
+
+      await current.adapter.executeQuery(
+        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_mixed_locales`" : '"dc_i18nwin_mixed_locales"'}`
+      );
+
+      const updated = await current
+        .getService<CollectionsHandler>("collectionsHandler")
+        .updateEntry(
+          {
+            collectionName: "i18nwin_mixed",
+            entryId: id,
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "Edited", author: "Grace" }
+        );
+
+      expect(updated.success).toBe(false);
+      expect(updated.statusCode).toBe(409);
+
+      // The refusal has to be total. A half-applied write that keeps the shared field and
+      // drops the translation is exactly the loss this guard exists to prevent.
+      const rows = await current.adapter.executeQuery<{ author: string }>(
+        `SELECT author FROM ${dialect === "mysql" ? "`dc_i18nwin_mixed`" : '"dc_i18nwin_mixed"'}`
+      );
+      expect(rows[0]?.author).toBe("Ada");
+    });
   }
 );
+
+/**
+ * A dynamic zone permits several field-group types, but a write only touches the ones its
+ * payload actually contains. The pre-transaction guard has to scope itself the same way.
+ *
+ * Scoping it to the PERMITTED list instead refuses a perfectly good save whenever any other
+ * allowed type is missing its companion — a type this write was never going to touch. The
+ * parent collection here is NOT localized, which is also the case that reaches this guard
+ * without passing through the collection or single ones.
+ */
+describe("dynamic zone whose unused field group has no companion (integration)", () => {
+  it("saves a block type whose companion exists while another permitted type's is missing", async () => {
+    current = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "znok",
+          localized: true,
+          fields: [text({ name: "heading", localized: true })],
+        }),
+        defineFieldGroup({
+          slug: "znbroken",
+          localized: true,
+          fields: [text({ name: "caption", localized: true })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "i18nwin_zone",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({
+              name: "layout",
+              components: ["znok", "znbroken"],
+              repeatable: true,
+            }),
+          ],
+        }),
+      ],
+      localization,
+    });
+
+    // Only the type this write does NOT use loses its companion.
+    await current.adapter.executeQuery(
+      "DROP TABLE IF EXISTS comp_znbroken_locales"
+    );
+
+    const created = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .createEntry(
+        { collectionName: "i18nwin_zone", overrideAccess: true, locale: "en" },
+        {
+          title: "Page",
+          layout: [{ _componentType: "znok", heading: "Hello" }],
+        }
+      );
+
+    expect(created.success).toBe(true);
+  });
+});

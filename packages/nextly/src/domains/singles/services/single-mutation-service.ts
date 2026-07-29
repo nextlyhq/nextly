@@ -81,6 +81,7 @@ import {
 import {
   buildCompanionSchema,
   companionTableExists,
+  mainTableHasColumn,
   splitLocalizedWrite,
   upsertCompanionRow,
   type CompanionSchema,
@@ -228,30 +229,6 @@ export class SingleMutationService extends BaseService {
   // ============================================================
   // Webhook helpers
   // ============================================================
-
-  /**
-   * Whether the main table still carries a localized column — the only state in which
-   * the pre-companion fallback can actually persist anything. Probed rather than read
-   * from the runtime schema, because that schema already omits the column for a Single
-   * localized from creation, which is exactly the case being distinguished.
-   */
-  private async mainHasLocalizedColumn(
-    tableName: string,
-    columnName: string | undefined
-  ): Promise<boolean> {
-    if (!columnName) return false;
-    const isMysql = this.adapter.dialect === "mysql";
-    const table = isMysql ? `\`${tableName}\`` : `"${tableName}"`;
-    const column = isMysql ? `\`${columnName}\`` : `"${columnName}"`;
-    try {
-      await this.adapter.executeQuery(`SELECT ${column} FROM ${table} LIMIT 0`);
-      return true;
-    } catch {
-      // A missing column is the answer this asks for. Any other failure surfaces on
-      // the write that follows, on the same connection.
-      return false;
-    }
-  }
 
   /**
    * Read a Single's FULL companion translation state for one locale, keyed by
@@ -889,34 +866,53 @@ export class SingleMutationService extends BaseService {
               companion.companionTableName
             )
           : false;
-      // A localized single whose companion table does not exist yet has nowhere
-      // to put a NON-default locale's values: the split below moves them out of
-      // the main payload and the companion upsert is then skipped, so the
-      // translation is silently dropped while the write reports success. The
-      // window is real — `db:sync` flips the registry's `localized` flag in its
-      // own process before the running server creates the companion — so refuse
-      // rather than discard the user's content. Default-locale values stay on
-      // the main table until the companion exists, which is intended.
-      if (
-        companion &&
-        !companionPhysicallyExists &&
-        this.localization &&
-        writeLocale !== undefined &&
-        writeLocale !== this.localization.defaultLocale
-      ) {
-        throw NextlyError.conflict({
-          reason: "state",
-          message:
-            "Translations are not ready for this single yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
-          logContext: {
-            cause: "localized-write-without-companion",
-            single: singleMeta.slug,
-            locale: writeLocale,
-            defaultLocale: this.localization.defaultLocale,
-            companionTable: companion.companionTableName,
-          },
-        });
+      // A localized single whose companion table does not exist yet has nowhere to put
+      // a NON-default locale's values: the split below moves them out of the main
+      // payload and the companion upsert is then skipped, so the translation is
+      // silently dropped while the write reports success. The window is real —
+      // `db:sync` flips the registry's `localized` flag in its own process before the
+      // running server creates the companion — so refuse rather than discard.
+      //
+      // The DEFAULT locale keeps the pre-companion fallback, but only where it can
+      // actually work: an entity localized from creation keeps its translatable
+      // columns solely on the companion, and its registered runtime table omits them,
+      // so those keys would be dropped by the ORM while `updated_at` still moved.
+      //
+      // Both checks run HERE, before `adapter.transaction` opens. Introspecting from
+      // inside it would borrow a second connection while the transaction holds one,
+      // which on a small pool means waiting for a connection that cannot be released
+      // until this transaction finishes. Resolving it first also keeps the refusal
+      // exactly as raised: errors leaving a transaction callback pass through the
+      // adapter's error classification, which rewraps anything that is not already a
+      // `DatabaseError`.
+      if (companion && !companionPhysicallyExists && this.localization) {
+        // Captured so the closure below keeps the narrowed type.
+        const defaultLocale = this.localization.defaultLocale;
+        const refuse = (): never => {
+          throw NextlyError.conflict({
+            reason: "state",
+            message:
+              "Translations are not ready for this single yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+            logContext: {
+              cause: "localized-write-without-companion",
+              single: singleMeta.slug,
+              locale: writeLocale,
+              defaultLocale,
+              companionTable: companion.companionTableName,
+            },
+          });
+        };
+        if (writeLocale !== undefined && writeLocale !== defaultLocale) {
+          refuse();
+        }
+        const fallbackPossible = await mainTableHasColumn(
+          this.adapter,
+          singleMeta.tableName,
+          companion.localizedFields[0]?.column
+        );
+        if (!fallbackPossible) refuse();
       }
+
       // Same pre-transaction, pooled probe for the auto-create default seed: it
       // is keyed on the DEFAULT locale (not the write locale), so it needs its
       // own existence check rather than reusing `companionPhysicallyExists`.
@@ -927,6 +923,19 @@ export class SingleMutationService extends BaseService {
           )
         : false;
       let updatedRows: SingleDocument[];
+      // Verify every localized field group in this payload can actually be written
+      // BEFORE the transaction opens. Inside it the probes would borrow a second
+      // connection while the transaction holds one, which on a small pool means
+      // waiting for a connection that cannot be released until it finishes. It also
+      // keeps the refusal exactly as raised: errors leaving a transaction callback
+      // pass through the adapter's error classification, which rewraps anything that
+      // is not already a `DatabaseError`.
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: fieldConfigs,
+        data: componentFieldData,
+        locale: options.locale,
+      });
+
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -1107,37 +1116,10 @@ export class SingleMutationService extends BaseService {
             // above (before validation); the split reuses them. Done inside the
             // closure so a retry re-splits the freshly-timestamped payload.
             // Only split when the companion physically exists. Splitting first and
-            // then skipping the companion upsert (which is gated on the same flag
-            // below) would drop the translatable values on the floor: they leave
-            // `mainPayload` and are never written anywhere, so the write reports
-            // success having saved nothing. While the table is absent those values
-            // belong on the main table, which is the same pre-migration fallback
-            // collections use — and by then the write locale is guaranteed to be
-            // the default one, because the guard above refuses any other.
-            // The fallback is only real when the main table STILL has those columns.
-            // A Single localized from creation (or one whose migration already ran)
-            // keeps them only on the companion, and the registered runtime table omits
-            // them — so putting the values back into `mainPayload` writes keys the ORM
-            // does not recognise: they are ignored, `updated_at` is still set, and the
-            // write reports success having saved nothing.
-            if (companion && !companionPhysicallyExists) {
-              const onMain = await this.mainHasLocalizedColumn(
-                singleMeta.tableName,
-                companion.localizedFields[0]?.column
-              );
-              if (!onMain) {
-                throw NextlyError.conflict({
-                  reason: "state",
-                  message:
-                    "Translations are not ready for this single yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
-                  logContext: {
-                    cause: "localized-write-without-companion",
-                    single: singleMeta.slug,
-                    companionTable: companion.companionTableName,
-                  },
-                });
-              }
-            }
+            // then skipping the companion upsert (gated on the same flag below) would
+            // drop the translatable values on the floor. While the table is absent
+            // they stay on the main table — the pre-companion fallback — which the
+            // pre-transaction guard above has already proven is actually possible.
             const { main: mainPayload, companion: companionData } =
               companion && companionPhysicallyExists
                 ? splitLocalizedWrite(updatePayload, companion.localizedFields)
