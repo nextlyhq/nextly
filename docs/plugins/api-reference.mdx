@@ -178,7 +178,7 @@ fieldTypes: [
 | Key | What it is |
 |---|---|
 | `data` | The write payload, for rules spanning fields. On update this is the patch, not the merged stored entry. Always the top-level payload, even for a field nested in a repeater row. |
-| `req` | Request context; carries `user` when authenticated. Empty for a field inside a component instance. |
+| `req` | Request context; carries `user` when authenticated. Empty for a field inside a field group instance. |
 | `field` | The instance, so you can read the options your type declares. A detached copy: records, arrays, dates, sets and maps are rebuilt, so editing them changes nothing. Functions and class instances stay shared — treat it as read-only. |
 | `path` | Where this field sits in the write (`"stars"`, `"rows[1].stars"`). |
 | `mode` | `"create"` or `"update"`. |
@@ -207,7 +207,7 @@ Anything you return outside `true | string | PluginFieldIssue[]` is a refusal,
 as is throwing — a validator that forgets to return fails the write rather than
 silently accepting everything.
 
-**Where it runs.** The entry, single, and component write paths. A type offered
+**Where it runs.** The entry, single, and field group write paths. A type offered
 on the `users`, `forms`, or `blocks` surface does **not** run it yet: those
 surfaces validate through their own paths. A disabled plugin keeps its field
 types registered (its collections are retained) but its `validate` does not

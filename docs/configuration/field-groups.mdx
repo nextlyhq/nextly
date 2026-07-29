@@ -20,7 +20,7 @@ Key characteristics:
 <Tabs items={["Code-first", "Visual Schema Builder"]}>
 <Tab value="Code-first">
 
-Use `defineFieldGroup()` from `nextly` to create components in TypeScript:
+Use `defineFieldGroup()` from `nextly` to create field groups in TypeScript:
 
 ```typescript title="src/field-groups/seo.ts"
 import {
@@ -72,26 +72,26 @@ Only `slug` and `fields` are required.
 
 | Option | Type | Required | Description |
 |---|---|---|---|
-| `slug` | `string` | Yes | Unique identifier across components, collections, and singles. Used as the DB table prefix (`comp_{slug}`). Must be URL-friendly. |
+| `slug` | `string` | Yes | Unique identifier across field groups, collections, and singles. Used as the DB table prefix (`comp_{slug}`). Must be URL-friendly. |
 | `fields` | `FieldConfig[]` | Yes | Array of [field definitions](/docs/configuration/fields). |
 | `label` | `{ singular: string }` | No | Display name in the admin UI. Auto-generated from slug if omitted (e.g. `social-link` → `Social Link`). |
-| `admin.category` | `string` | No | Category that groups components in the sidebar and selector modal (e.g. `"Shared"`, `"Blocks"`). |
-| `admin.icon` | `string` | No | Lucide icon name shown in sidebar and component selector. |
-| `admin.description` | `string` | No | Help text in the component selector modal. |
+| `admin.category` | `string` | No | Category that groups field groups in the sidebar and selector modal (e.g. `"Shared"`, `"Blocks"`). |
+| `admin.icon` | `string` | No | Lucide icon name shown in sidebar and field group selector. |
+| `admin.description` | `string` | No | Help text in the field group selector modal. |
 | `admin.hidden` | `boolean` | No | Hide from admin navigation. Still usable in code and via API. |
-| `admin.imageURL` | `string` | No | Preview image URL shown in the component selector. |
+| `admin.imageURL` | `string` | No | Preview image URL shown in the field group selector. |
 | `description` | `string` | No | General description; falls back to `admin.description`. |
 | `custom` | `Record<string, unknown>` | No | Arbitrary metadata for plugins or custom code. Not persisted. |
 
-> **Components do not have hooks or access control of their own.** They inherit hook execution and access checks from the collection or single they're embedded in.
+> **Field groups do not have hooks or access control of their own.** They inherit hook execution and access checks from the collection or single they're embedded in.
 
 ## Using field groups in collections and singles
 
-Once defined, embed a field group in any collection or single using the `component` field helper. There are three usage modes.
+Once defined, embed a field group in any collection or single using the `fieldGroup()` field helper. There are three usage modes.
 
 ### Single field group (fixed type)
 
-Embed exactly one instance of a specific component type:
+Embed exactly one instance of a specific field group:
 
 ```typescript title="src/collections/pages.ts"
 import { defineCollection, fieldGroup, text, richText } from "nextly";
@@ -108,7 +108,7 @@ export default defineCollection({
 
 ### Dynamic zone (multiple field group types)
 
-Let editors choose from several component types — ideal for flexible page builders:
+Let editors choose from several field group types, which suits flexible page builders:
 
 ```typescript title="src/collections/pages.ts"
 import { defineCollection, fieldGroup, text } from "nextly";
@@ -128,7 +128,7 @@ export default defineCollection({
 
 ### Repeatable single field group
 
-An array of the same component type — for example, a list of feature cards:
+An array of the same field group, for example a list of feature cards:
 
 ```typescript title="src/collections/landing-pages.ts"
 import { defineCollection, fieldGroup, text } from "nextly";
@@ -209,6 +209,6 @@ export default defineFieldGroup({
 
 ## Next steps
 
-- [Fields](/docs/configuration/fields) — all field types available inside components
-- [Collections](/docs/configuration/collections) — where components are most commonly used
-- [Singles](/docs/configuration/singles) — embed components in single-document content
+- [Fields](/docs/configuration/fields) — all field types available inside field groups
+- [Collections](/docs/configuration/collections) — where field groups are most commonly used
+- [Singles](/docs/configuration/singles) — embed field groups in single-document content
