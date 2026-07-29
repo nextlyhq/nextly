@@ -18,7 +18,7 @@ describe("fieldGroups.create derives its table name", () => {
       migrationStatus: "pending",
     });
     const ctx = {
-      componentRegistryService: { registerComponent },
+      fieldGroupRegistryService: { registerComponent },
       logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     };
     return { ctx, registerComponent };

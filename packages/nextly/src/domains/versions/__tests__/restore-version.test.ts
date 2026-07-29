@@ -41,7 +41,7 @@ vi.mock("../../../di", () => ({
         return { update: updateSingleSpy };
       case "collectionRegistryService":
         return { getCollectionBySlug: collectionSpy };
-      case "componentRegistryService":
+      case "fieldGroupRegistryService":
         return { getComponentBySlug: componentSpy };
       case "config":
         return configSpy();

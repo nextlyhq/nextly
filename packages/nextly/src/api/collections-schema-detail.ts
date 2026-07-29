@@ -37,7 +37,7 @@ import {
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import { getHandlerConfig } from "../route-handler/auth-handler";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
-import type { ComponentRegistryService } from "../services/components/component-registry-service";
+import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
@@ -62,9 +62,9 @@ async function getCollectionRegistry(): Promise<CollectionRegistryService> {
   return getService("collectionRegistryService");
 }
 
-async function getComponentRegistry(): Promise<ComponentRegistryService> {
+async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
   await getCachedNextly();
-  return getService("componentRegistryService");
+  return getService("fieldGroupRegistryService");
 }
 
 /**

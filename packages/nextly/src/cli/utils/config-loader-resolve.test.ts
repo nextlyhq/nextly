@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { FieldGroupConfig } from "../../components/config/types";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { SingleConfig } from "../../singles/config/types";
 

@@ -5,9 +5,9 @@ import type {
   FieldTypeCategory,
 } from "../collections/fields/catalog";
 import type { FieldConfig } from "../collections/fields/types";
-import type { FieldGroupConfig } from "../components/config/types";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { EmailProviderAdapter } from "../domains/email/types";
+import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
 import type {

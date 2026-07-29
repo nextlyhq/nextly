@@ -24,7 +24,7 @@ import { clampLimit } from "../domains/collections/query/query-parser";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
-import type { ComponentRegistryService } from "../services/components/component-registry-service";
+import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { assertValidFieldsPayload } from "./fields-payload";
@@ -33,9 +33,9 @@ import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
-async function getComponentRegistry(): Promise<ComponentRegistryService> {
+async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
   await getCachedNextly();
-  return getService("componentRegistryService");
+  return getService("fieldGroupRegistryService");
 }
 
 const createComponentSchema = z.object({

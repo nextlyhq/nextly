@@ -12,7 +12,6 @@
 
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { FieldGroupConfig } from "../../components/config/types";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
   LocalizationConfig,
@@ -23,6 +22,7 @@ import type {
   ResolvedWebhookRetentionConfig,
   WebhookRetentionConfig,
 } from "../../domains/webhooks/retention-config";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";

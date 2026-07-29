@@ -20,7 +20,6 @@ import { randomBytes } from "node:crypto";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
-import type { FieldGroupConfig } from "../components/config/types";
 import { createAdapter } from "../database/factory";
 import {
   createDatabaseStatement,
@@ -47,6 +46,7 @@ import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-polic
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
+import type { FieldGroupConfig } from "../field-groups/config/types";
 import { resetFilterRegistry } from "../filters";
 import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
 import type { HookRegistry } from "../hooks/hook-registry";

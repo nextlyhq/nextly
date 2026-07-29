@@ -12,7 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
-import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
+import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
@@ -21,10 +21,10 @@ import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
-  ComponentRegistryService,
+  FieldGroupRegistryService,
   type CodeFirstComponentConfig,
   type SyncComponentResult,
-} from "../../services/components/component-registry-service";
+} from "../../services/field-groups/field-group-registry-service";
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
   SingleRegistryService,
@@ -288,7 +288,7 @@ export async function syncComponents(
     debug: (msg: string) => logger.debug(msg),
   };
 
-  const componentRegistry = new ComponentRegistryService(
+  const componentRegistry = new FieldGroupRegistryService(
     adapter as unknown as DrizzleAdapter,
     serviceLogger
   );
@@ -709,7 +709,7 @@ async function handleRemovedSingles(
  */
 async function detectRemovedComponents(
   codeComponents: CodeFirstComponentConfig[],
-  registry: ComponentRegistryService
+  registry: FieldGroupRegistryService
 ): Promise<OrphanRecord[]> {
   const dbComponents = await registry.getAllComponents({ source: "code" });
   const codeSlugs = new Set(codeComponents.map(c => c.slug));
