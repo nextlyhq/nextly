@@ -354,6 +354,125 @@ describe("computeVersionDiff — components", () => {
   });
 });
 
+describe("computeVersionDiff — round-2 hardening", () => {
+  it("masks a bcrypt hash nested inside a removed (opaque) node", () => {
+    const hash = "$2b$12$" + "c".repeat(53);
+    // `oldBlock` is absent from the schema, so it surfaces as one opaque
+    // unknown node; the nested hash must still be masked.
+    const diff = computeVersionDiff(
+      { oldBlock: { id: "1", secret: hash } },
+      { oldBlock: { id: "1", secret: hash } },
+      []
+    );
+    const node = diff.fields.find(n => n.name === "oldBlock");
+    if (node && node.kind === "unknown") {
+      expect((node.before as { secret?: string }).secret).toBe("[protected]");
+    }
+  });
+
+  it("marks a list item that gained a component discriminator", () => {
+    const layout = field({
+      name: "layout",
+      type: "component",
+      components: ["hero"],
+      repeatable: true,
+      componentSchemas: {
+        hero: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { layout: [{ id: "1", label: "Go" }] }, // older row, no discriminator
+      { layout: [{ id: "1", _componentType: "hero", label: "Go" }] },
+      [layout]
+    );
+    const list = diff.fields[0];
+    if (list.kind === "list") expect(list.items[0].status).toBe("changed");
+  });
+
+  it("surfaces a removed field named like a system key at a nested level", () => {
+    const fields = [
+      field({
+        name: "meta",
+        type: "group",
+        fields: [field({ name: "title", type: "text" })],
+      }),
+    ];
+    // `status` inside the group is not a framework column; removed from the
+    // schema, its change must still surface.
+    const diff = computeVersionDiff(
+      { meta: { title: "same", status: "old" } },
+      { meta: { title: "same", status: "new" } },
+      fields
+    );
+    expect(diff.hasChanges).toBe(true);
+    const group = diff.fields[0];
+    if (group.kind === "group") {
+      expect(group.fields.find(n => n.name === "status")?.status).toBe(
+        "changed"
+      );
+    }
+  });
+
+  it("still excludes the top-level status framework column", () => {
+    const diff = computeVersionDiff(
+      { title: "same", status: "draft" },
+      { title: "same", status: "published" },
+      [field({ name: "title", type: "text" })]
+    );
+    expect(diff.fields.find(n => n.name === "status")).toBeUndefined();
+    expect(diff.hasChanges).toBe(false);
+  });
+
+  it("omits a component child that declares a read rule", () => {
+    const layout = field({
+      name: "layout",
+      type: "component",
+      components: ["card"],
+      repeatable: true,
+      componentSchemas: {
+        card: {
+          fields: [
+            field({ name: "title", type: "text" }),
+            field({
+              name: "secret",
+              type: "text",
+              access: { read: () => false },
+            }),
+          ],
+        },
+      },
+    });
+    const diff = computeVersionDiff(
+      {
+        layout: [{ id: "1", _componentType: "card", title: "t", secret: "A" }],
+      },
+      {
+        layout: [{ id: "1", _componentType: "card", title: "t", secret: "B" }],
+      },
+      [layout]
+    );
+    const list = diff.fields[0];
+    if (list.kind === "list") {
+      const item = list.items[0];
+      expect(item.fields.find(n => n.name === "secret")).toBeUndefined();
+      expect(item.status).toBe("unchanged");
+    }
+  });
+
+  it("keeps a top-level field declaring a read rule (redaction handles those)", () => {
+    const fields = [
+      field({ name: "title", type: "text" }),
+      field({ name: "gated", type: "text", access: { read: () => true } }),
+    ];
+    const diff = computeVersionDiff(
+      { title: "t", gated: "A" },
+      { title: "t", gated: "B" },
+      fields
+    );
+    expect(diff.fields.find(n => n.name === "gated")?.status).toBe("changed");
+  });
+});
+
 describe("computeVersionDiff — modifiedOnly", () => {
   it("drops unchanged nodes when asked", () => {
     const fields = [

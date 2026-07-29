@@ -50,10 +50,7 @@ interface NodeMeta {
   type: string;
 }
 
-// Persisted columns that are not user fields, so they never diff as content.
-// Also the exclusion set for unknown-key detection at every object level (a
-// component row's `id` is here; its `_componentType` is caught by the `_`
-// prefix rule).
+// Framework-managed columns on a top-level document, never user content.
 const SYSTEM_KEYS = new Set([
   "id",
   "createdAt",
@@ -61,6 +58,24 @@ const SYSTEM_KEYS = new Set([
   "createdBy",
   "status",
 ]);
+
+// The only framework keys on a NESTED row (a component or repeater item). A
+// user field named like a top-level system column (`status` on a collection
+// with no lifecycle, say) must still surface when removed, so the broader set
+// applies at the top level only; `_componentType` is caught by the `_` prefix.
+const NESTED_SYSTEM_KEYS = new Set(["id"]);
+
+/** Where in the tree a walk is: the top document, and/or inside a component. */
+interface WalkContext {
+  top: boolean;
+  /**
+   * True once the walk has descended through a component. Redaction never runs
+   * there (the field-function registry holds no component-child functions), so
+   * the engine omits any field declaring a read rule rather than risk exposing
+   * a value the caller may not read.
+   */
+  inComponent: boolean;
+}
 
 // Field types whose value is a single string diffed word by word. slug/url/phone
 // are not core field types but are string-valued (plugin field types, and the
@@ -135,11 +150,31 @@ function asText(value: unknown): string {
   return "";
 }
 
-/** Replace a bcrypt-hash value with a mask so a leaked password never renders. */
+/**
+ * Replace bcrypt-hash values with a mask so a leaked password never renders,
+ * recursing into arrays and objects: an opaque node (a removed component, or a
+ * dynamic-zone type swap rendered as a whole value) can carry a hash nested
+ * several levels down.
+ */
 function maskSecret(value: unknown): unknown {
-  return typeof value === "string" && BCRYPT_HASH.test(value)
-    ? SECRET_MASK
-    : value;
+  if (typeof value === "string") {
+    return BCRYPT_HASH.test(value) ? SECRET_MASK : value;
+  }
+  if (Array.isArray(value)) return value.map(maskSecret);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
+      out[key] = maskSecret(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Whether a field declares a read-access rule (a function or a serialized rule). */
+function hasReadAccessRule(field: FieldConfig): boolean {
+  const read = (field as { access?: { read?: unknown } }).access?.read;
+  return read !== undefined && read !== null;
 }
 
 // ---- relationship targets ---------------------------------------------------
@@ -316,12 +351,13 @@ function groupNode(
   meta: NodeMeta,
   childFields: FieldConfig[],
   before: unknown,
-  after: unknown
+  after: unknown,
+  ctx: WalkContext
 ): FieldDiff {
   // With no resolvable child schema, fall back to an opaque value comparison
   // rather than reporting a group with no fields.
   if (childFields.length === 0) return valueNode(meta, before, after);
-  const fields = collectNodes(childFields, before, after);
+  const fields = collectNodes(childFields, before, after, ctx);
   const changed = fields.some(n => n.status !== "unchanged");
   return {
     ...meta,
@@ -348,7 +384,11 @@ function itemChildFields(
   return [];
 }
 
-function itemDiff(match: ItemMatch, field: FieldConfig): ListItemDiff {
+function itemDiff(
+  match: ItemMatch,
+  field: FieldConfig,
+  ctx: WalkContext
+): ListItemDiff {
   const beforeType =
     match.presence === "added" ? undefined : componentTypeOf(match.beforeItem);
   const afterType =
@@ -364,7 +404,7 @@ function itemDiff(match: ItemMatch, field: FieldConfig): ListItemDiff {
       toIndex: match.toIndex,
       fields:
         childFields.length > 0
-          ? collectNodes(childFields, {}, match.afterItem)
+          ? collectNodes(childFields, {}, match.afterItem, ctx)
           : [],
     };
   }
@@ -376,20 +416,18 @@ function itemDiff(match: ItemMatch, field: FieldConfig): ListItemDiff {
       fromIndex: match.fromIndex,
       fields:
         childFields.length > 0
-          ? collectNodes(childFields, match.beforeItem, {})
+          ? collectNodes(childFields, match.beforeItem, {}, ctx)
           : [],
     };
   }
   const fields =
     childFields.length > 0
-      ? collectNodes(childFields, match.beforeItem, match.afterItem)
+      ? collectNodes(childFields, match.beforeItem, match.afterItem, ctx)
       : [];
   // A stable id whose component type changed is a real change even if the two
-  // schemas happen to share equal-valued field names.
-  const typeChanged =
-    beforeType !== undefined &&
-    afterType !== undefined &&
-    beforeType !== afterType;
+  // schemas share equal-valued field names; a discriminator appearing on a
+  // previously-untagged (older or imported) item counts too.
+  const typeChanged = beforeType !== afterType;
   const contentChanged =
     typeChanged ||
     (childFields.length > 0
@@ -411,12 +449,19 @@ function listNode(
   meta: NodeMeta,
   field: FieldConfig,
   before: unknown,
-  after: unknown
+  after: unknown,
+  ctx: WalkContext
 ): FieldDiff {
   const beforeArr = asArray(before);
   const afterArr = asArray(after);
   const { items: matches } = reconcileById(beforeArr, afterArr);
-  const items = matches.map(m => itemDiff(m, field));
+  // A repeater's rows keep the current context; a component list descends into
+  // a component subtree.
+  const itemCtx: WalkContext =
+    field.type === "repeater"
+      ? { top: false, inComponent: ctx.inComponent }
+      : { top: false, inComponent: true };
+  const items = matches.map(m => itemDiff(m, field, itemCtx));
   const changed = items.some(i => i.status !== "unchanged" || i.hasMoved);
   let status: DiffStatus = "unchanged";
   if (beforeArr.length === 0 && afterArr.length > 0) status = "added";
@@ -445,36 +490,39 @@ function diffField(
   field: FieldConfig,
   name: string,
   rawBefore: unknown,
-  rawAfter: unknown
+  rawAfter: unknown,
+  ctx: WalkContext
 ): FieldDiff {
   const meta: NodeMeta = { name, label: field.label ?? name, type: field.type };
   const before = normalizeStoredValue(field, rawBefore);
   const after = normalizeStoredValue(field, rawAfter);
 
-  if (isListField(field)) return listNode(meta, field, before, after);
+  if (isListField(field)) return listNode(meta, field, before, after, ctx);
   if (isGroupField(field)) {
+    // A named group's value is a nested object (no longer the top level), but it
+    // is not itself a component subtree.
     if (field.type === "group") {
-      return groupNode(meta, inlineFields(field) ?? [], before, after);
+      return groupNode(meta, inlineFields(field) ?? [], before, after, {
+        top: false,
+        inComponent: ctx.inComponent,
+      });
     }
+    const componentCtx: WalkContext = { top: false, inComponent: true };
     // Non-repeatable component. A single-mode component keeps a fixed schema; a
-    // dynamic zone whose stored type differs between versions is a whole-value
-    // change rather than a field-by-field one.
+    // dynamic zone whose stored type differs between versions — including a
+    // discriminator that appeared or disappeared — is a whole-value change
+    // rather than a field-by-field one.
     if (Array.isArray(componentSlugs(field))) {
       const beforeType = componentTypeOf(asObject(before));
       const afterType = componentTypeOf(asObject(after));
-      if (
-        beforeType !== undefined &&
-        afterType !== undefined &&
-        beforeType !== afterType
-      ) {
-        return valueNode(meta, before, after);
-      }
+      if (beforeType !== afterType) return valueNode(meta, before, after);
     }
     return groupNode(
       meta,
       singleComponentChildFields(field, before, after),
       before,
-      after
+      after,
+      componentCtx
     );
   }
   if (isSetField(field, before, after)) return setNode(meta, before, after);
@@ -495,7 +543,8 @@ function diffField(
 function collectNodes(
   fields: FieldConfig[],
   before: unknown,
-  after: unknown
+  after: unknown,
+  ctx: WalkContext
 ): FieldDiff[] {
   const beforeObj = asObject(before);
   const afterObj = asObject(after);
@@ -504,18 +553,29 @@ function collectNodes(
     const name = field.name;
     if (name === undefined || name === "") {
       const inner = presentationalChildren(field);
-      if (inner) nodes.push(...collectNodes(inner, beforeObj, afterObj));
+      if (inner) {
+        // A nameless container's children live flat on THIS object, so the
+        // level (top-ness) is unchanged; only component-ness may change.
+        const innerCtx: WalkContext = isComponentField(field)
+          ? { top: ctx.top, inComponent: true }
+          : { top: ctx.top, inComponent: ctx.inComponent };
+        nodes.push(...collectNodes(inner, beforeObj, afterObj, innerCtx));
+      }
       continue;
     }
     if (field.type === "password") continue;
+    // Redaction never ran inside a component, so a field declaring a read rule
+    // there is omitted rather than risk exposing a value the caller may not read.
+    if (ctx.inComponent && hasReadAccessRule(field)) continue;
     if (!(name in beforeObj) && !(name in afterObj)) continue;
-    nodes.push(diffField(field, name, beforeObj[name], afterObj[name]));
+    nodes.push(diffField(field, name, beforeObj[name], afterObj[name], ctx));
   }
 
+  const systemKeys = ctx.top ? SYSTEM_KEYS : NESTED_SYSTEM_KEYS;
   const consumed = topLevelNames(fields);
   const keys = new Set([...Object.keys(beforeObj), ...Object.keys(afterObj)]);
   for (const key of keys) {
-    if (consumed.has(key) || SYSTEM_KEYS.has(key) || key.startsWith("_")) {
+    if (consumed.has(key) || systemKeys.has(key) || key.startsWith("_")) {
       continue;
     }
     nodes.push(unknownNode(key, beforeObj[key], afterObj[key]));
@@ -570,7 +630,10 @@ export function computeVersionDiff(
   fields: FieldConfig[],
   opts: ComputeDiffOptions = {}
 ): VersionDiffBody {
-  const nodes = collectNodes(fields, before, after);
+  const nodes = collectNodes(fields, before, after, {
+    top: true,
+    inComponent: false,
+  });
   const hasChanges = nodes.some(n => n.status !== "unchanged");
   if (!opts.modifiedOnly) return { hasChanges, fields: nodes };
 
