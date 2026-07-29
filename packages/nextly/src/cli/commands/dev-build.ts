@@ -792,6 +792,12 @@ export async function ensureLocalizedCompanions(
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+  // Same policy `performAutoSync` applies: production never gets unattended schema
+  // changes, and this issues DDL and can copy rows. Enforced here rather than at
+  // each call site so no caller can reintroduce the hole. In production the
+  // companion is `nextly migrate`'s job, and the write guard keeps a non-default
+  // write from destroying content until it runs.
+  if (process.env.NODE_ENV === "production") return;
   const dialect = adapter.getCapabilities().dialect;
   const { ensureCompanionTable } = await import(
     "../../domains/i18n/runtime/companion-io"

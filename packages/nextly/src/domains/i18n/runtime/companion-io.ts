@@ -349,6 +349,15 @@ export async function ensureCompanionTable(
       dialect: args.dialect,
       status: args.status === true,
       companionExists: alreadyExists,
+      // The PHYSICAL `_status` state, which is what decides whether turning
+      // Draft/Published on for an already-localized entity needs the column added.
+      // Omitting it left the companion without `_status` while the runtime schema
+      // was built with `hasStatus: true`, so the next per-locale status read or
+      // write hit a missing column. Undefined while the table does not exist yet,
+      // where the CREATE already includes it.
+      companionHasStatus: alreadyExists
+        ? companionColumns.has("_status")
+        : undefined,
     });
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
@@ -387,18 +396,20 @@ export async function ensureCompanionTable(
  *
  * Deliberately narrow, because this runs unattended on every boot and sync:
  *
- *  - only while the companion holds NO row in a non-default language. That is what separates a
- *    transition still in progress from an entity that has been localized for a while, and the
- *    two need opposite treatment. Mid-transition the main columns are the default language and
- *    backfilling them is the whole point. Once real translations exist, the main columns are
- *    frozen leftovers that stopped being updated when writes moved to the companion — seeding
- *    from them would be fabrication. Changing `localization.defaultLocale` afterwards is the
- *    sharp case: switching `en` to `fr` would otherwise invent French rows holding stale English
- *    text and suppress the fallback that would have shown the real value.
- *  - only for main rows that have NO row in the default language yet, so it never overwrites a
- *    translation and is safe to re-run. Row-level rather than table-level: a companion that
- *    already holds one such row (someone edited a single entry mid-transition) must not stop
- *    every other row from being backfilled, or those stay unreadable forever.
+ *  - only while the companion is COMPLETELY EMPTY. Nothing weaker is sound. The main columns
+ *    carry no record of which language they hold, so the only safe moment to declare them the
+ *    default is when no per-locale content exists at all and there is therefore nothing that
+ *    could be mislabelled. Narrowing this to "no row in a NON-default language" looks equivalent
+ *    and is not: a companion holding only partial French rows, read after `defaultLocale` moves
+ *    from `en` to `fr`, contains no non-French row, so stale English main columns would be
+ *    seeded as French. Inferring the transition from the CURRENT default is what makes that
+ *    possible, so this does not infer it at all.
+ *    The cost is that a companion which already holds one row is never backfilled, and any entry
+ *    still missing its default-language row stays unreadable until the operator acts. That is the
+ *    right side to err on: unreadable content is intact on the main table and recoverable, while
+ *    a fabricated translation is silently wrong and nearly undetectable.
+ *  - even then, only for main rows with no row in the default language, so a retry or a
+ *    concurrent write cannot produce a duplicate.
  *  - only for localized columns that are STILL on the main table, read from the introspected
  *    shape. After the columns are dropped there is nothing left to copy.
  *  - it does NOT drop those columns afterwards. That is the destructive half of the transition
@@ -406,7 +417,7 @@ export async function ensureCompanionTable(
  *    again does not require it, and doing it here would route around that gate.
  */
 async function seedCompanionFromMain(
-  adapter: CompanionWriteAdapter,
+  adapter: CompanionProvisionAdapter,
   args: {
     /** Physical columns the main table currently has, from the caller's introspection. */
     mainColumns: Set<string>;
@@ -435,9 +446,9 @@ async function seedCompanionFromMain(
   });
   if (!spec) return;
 
-  // The transition test. See the note above: once any other language has a row,
-  // the main columns are stale leftovers rather than the default language.
-  if (await companionHasTranslations(adapter, args)) return;
+  // The transition test. See the note above: any per-locale content at all means
+  // the main columns can no longer be safely declared to be the default language.
+  if (!(await companionIsEmpty(adapter, args))) return;
 
   const columnsOnMain = spec.columns
     .filter(column => args.mainColumns.has(column.name))
@@ -454,22 +465,41 @@ async function seedCompanionFromMain(
   if (seed) await adapter.executeQuery(seed);
 }
 
+/** The slice of a Drizzle handle this needs: one bounded read of one table. */
+interface CompanionRowReader {
+  select(): {
+    from(table: unknown): { limit(n: number): PromiseLike<unknown[]> };
+  };
+}
+
 /**
- * Whether the companion already holds a row in some language other than the default — the signal
- * that this entity is past its transition and its main columns are no longer the default language.
+ * Whether the companion holds no rows at all — the only state in which the main columns can be
+ * declared to be the default language without inferring anything (see the note on the seed).
+ *
+ * Goes through Drizzle rather than assembling SQL: the companion table object is built from the
+ * same descriptor the runtime registers, so quoting and dialect differences are the ORM's problem
+ * rather than being re-implemented here.
  */
-async function companionHasTranslations(
-  adapter: CompanionWriteAdapter,
-  args: { companionTableName: string; defaultLocale?: string }
+async function companionIsEmpty(
+  adapter: CompanionProvisionAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    localizedFields: CompanionFieldLike[];
+    dialect: SupportedDialect;
+    status: boolean;
+  }
 ): Promise<boolean> {
-  const isMysql = adapter.dialect === "mysql";
-  const table = isMysql
-    ? `\`${args.companionTableName}\``
-    : `"${args.companionTableName}"`;
-  const locale = isMysql ? "`_locale`" : `"_locale"`;
-  const rows = await adapter.executeQuery(
-    `SELECT 1 FROM ${table} WHERE ${locale} <> ${adapter.dialect === "postgresql" ? "$1" : "?"} LIMIT 1`,
-    [args.defaultLocale]
-  );
-  return rows.length > 0;
+  const companion = buildCompanionRuntimeTable({
+    slug: args.slug,
+    tableName: args.tableName,
+    fields: args.localizedFields,
+    dialect: args.dialect,
+    localized: true,
+    status: args.status,
+  });
+  if (!companion) return false;
+  const db = adapter.getDrizzle<CompanionRowReader>();
+  const rows = await db.select().from(companion.table).limit(1);
+  return rows.length === 0;
 }

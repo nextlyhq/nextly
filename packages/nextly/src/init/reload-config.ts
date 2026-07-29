@@ -98,7 +98,10 @@ type LoggerLike = {
 // adapter-drizzle would couple this module to the adapter package.
 interface AdapterLike {
   readonly dialect: "postgresql" | "mysql" | "sqlite";
-  getDrizzle(): unknown;
+  getDrizzle<T = unknown>(): T;
+  // Needed to provision the localized companion below: creating it is DDL, and
+  // seeding it from the main table is a write.
+  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
 type CollectionDef = {
@@ -552,6 +555,87 @@ function republishRecordingPolicies(
   );
 }
 
+/**
+ * Create and seed the `_locales` companion of every localized collection, single and field group
+ * in the reloaded config.
+ *
+ * The reload path is the `next dev` counterpart to the CLI's `ensureLocalizedCompanions`: it is
+ * where a config edit lands when the app is running under plain `next dev` rather than
+ * `nextly db:sync --watch`. `ensureCompanionTable` is idempotent, so entities that already have
+ * their companion cost one introspection each.
+ *
+ * Never throws: a companion that cannot be provisioned must not take down a config reload. The
+ * write guard in the mutation services is what protects content in the meantime.
+ */
+async function ensureLocalizedCompanionsForReload(
+  adapter: AdapterLike,
+  config: {
+    collections?: unknown[];
+    singles?: unknown[];
+    fieldGroups?: unknown[];
+    localization?: { defaultLocale?: string };
+  }
+): Promise<void> {
+  // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
+  if (process.env.NODE_ENV === "production") return;
+
+  const { ensureCompanionTable } = await import(
+    "../domains/i18n/runtime/companion-io"
+  );
+  const { resolveCollectionTableName, resolveComponentTableName } =
+    await import("../domains/schema/utils/resolve-table-name");
+  const { resolveSingleTableName } = await import(
+    "../domains/singles/services/resolve-single-table-name"
+  );
+
+  type Localizable = {
+    slug?: string;
+    dbName?: string;
+    localized?: boolean;
+    status?: boolean;
+    fields?: { name: string; type: string; localized?: boolean }[];
+  };
+  const groups: [Localizable[], (e: Localizable) => string][] = [
+    [
+      (config.collections ?? []) as Localizable[],
+      e => resolveCollectionTableName(e.slug!, e.dbName),
+    ],
+    [
+      (config.singles ?? []) as Localizable[],
+      e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
+    ],
+    [
+      (config.fieldGroups ?? []) as Localizable[],
+      e => resolveComponentTableName(e.slug!),
+    ],
+  ];
+
+  const defaultLocale = config.localization?.defaultLocale;
+  for (const [entities, resolveTableName] of groups) {
+    for (const entity of entities) {
+      if (!entity.slug || entity.localized !== true) continue;
+      await ensureCompanionTable(
+        adapter,
+        {
+          slug: entity.slug,
+          tableName: resolveTableName(entity),
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          status: entity.status === true,
+          defaultLocale,
+        },
+        error => {
+          console.warn(
+            `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
+              `Writes in a non-default locale will be refused until it exists: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+    }
+  }
+}
+
 // Reload entry point. resolver is optional and exists primarily for tests.
 // dispatcher is also test-only: injects a fake PromptDispatcher (e.g., one
 // that records prompts and auto-confirms) so tests don't need a real TTY.
@@ -636,6 +720,7 @@ async function runReload(opts?: {
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        localization?: { defaultLocale?: string };
       }
     | undefined;
   let previousFieldTypes: PluginFieldType[] | undefined;
@@ -1404,6 +1489,16 @@ async function runReload(opts?: {
       collections: collectionSynced && componentSynced,
       singles: singleSynced && componentSynced,
     });
+
+    // Physically provision the `_locales` companion of every localized entity
+    // before the runtime descriptors below register it. `next dev` routes config
+    // edits here rather than through the CLI watcher, so without this, turning on
+    // localization during ordinary HMR registered a companion the database did
+    // not have: the admin rendered the full localization UI, non-default writes
+    // were refused, and the main columns could still be dropped before anything
+    // had copied them across. Seeding is part of the same call, which is why it
+    // must run before the drop the schema apply may perform.
+    await ensureLocalizedCompanionsForReload(adapter, newConfig);
 
     // Pre-compute fresh Drizzle table objects for all affected collections,
     // singles, and components. Synchronous (schema generation, no DB I/O).

@@ -214,11 +214,16 @@ describe("enabling localization on existing content (integration)", () => {
     expect(await physicalTitle(current)).toBe("Original");
   });
 
-  it("backfills entries the companion is missing, not just an empty one", async () => {
-    // The seed is per-row, not per-table. A companion that already holds a row for
-    // ONE entry — someone edited a single entry in the default language — must not
-    // stop every other entry from being backfilled; gating on "the companion is
-    // empty" would leave the rest reading null permanently.
+  it("leaves a partly populated companion alone, keeping the main values intact", async () => {
+    // Once ANY per-locale row exists, the main columns can no longer be declared to
+    // be the default language: nothing records which language they hold, and the
+    // rows present may be in another one. Backfilling the remaining entries would
+    // therefore risk labelling their content as a language it is not.
+    //
+    // The cost is that those entries keep reading null until an operator acts, and
+    // that is the right side to err on — unreadable content is still intact on the
+    // main table and recoverable, whereas a mislabelled translation is silently
+    // wrong. This test pins both halves: no backfill, and no data loss.
     current = await boot(false);
     const handler = () =>
       current!.getService<CollectionsHandler>("collectionsHandler");
@@ -245,14 +250,25 @@ describe("enabling localization on existing content (integration)", () => {
     await current.destroy();
     current = await boot(true);
 
-    for (const [index, title] of ["First", "Second", "Third"].entries()) {
-      const read = await handler().getEntry({
-        collectionName: "i18nwin_posts",
-        entryId: ids[index],
-        overrideAccess: true,
-      });
-      expect((read.data as { title?: unknown }).title).toBe(title);
-    }
+    // The entry whose row survived still reads; the other two do not get one.
+    const kept = await handler().getEntry({
+      collectionName: "i18nwin_posts",
+      entryId: ids[0],
+      overrideAccess: true,
+    });
+    expect((kept.data as { title?: unknown }).title).toBe("First");
+
+    const rows = await current.adapter.executeQuery<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM dc_i18nwin_posts_locales"
+    );
+    expect(Number(rows[0]?.n)).toBe(1);
+
+    // Nothing was lost: the values the other two entries had are still on main,
+    // so an operator can complete the transition without recovering from backups.
+    const physical = await current.adapter.executeQuery<{ title: string }>(
+      "SELECT title FROM dc_i18nwin_posts ORDER BY title"
+    );
+    expect(physical.map(r => r.title)).toEqual(["First", "Second", "Third"]);
   });
 
   it("does not fabricate rows from stale columns after the default language changes", async () => {
