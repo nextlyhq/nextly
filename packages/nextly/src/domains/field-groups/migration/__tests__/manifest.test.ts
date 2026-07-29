@@ -233,6 +233,37 @@ describe("field-group migration manifest", () => {
     ).not.toThrow();
   });
 
+  // A companion name is derived, not stored, so it can collide with another
+  // row's stored table name. `comp_hero`'s companion computes to
+  // `comp_hero_locales`, which an author could have chosen as their own table.
+  // The unique constraint on `table_name` does not prevent it, because the
+  // companion is not a registry row. Two rows then claim one physical table.
+  it("refuses when a companion name aliases another row's table", () => {
+    try {
+      buildMigrationManifest([
+        row({ slug: "hero", tableName: "comp_hero", hasCompanion: true }),
+        row({ slug: "archive", tableName: "comp_hero_locales" }),
+      ]);
+      expect.fail("expected a refusal");
+    } catch (error) {
+      expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
+      expect((error as NextlyError).logContext?.reason).toMatch(
+        /claimed by more than one field group/
+      );
+    }
+  });
+
+  // The check must not fire on the ordinary case. No self-collision is possible
+  // -- a name cannot equal itself plus a suffix -- so a lone row with a
+  // companion has to plan cleanly.
+  it("does not refuse a lone row that has a companion", () => {
+    expect(() =>
+      buildMigrationManifest([
+        row({ slug: "hero", tableName: "comp_hero", hasCompanion: true }),
+      ])
+    ).not.toThrow();
+  });
+
   // Renaming a table away frees its name, so two rows swapping prefixes is not
   // a conflict.
   it("allows a target whose occupant is itself renamed away", () => {

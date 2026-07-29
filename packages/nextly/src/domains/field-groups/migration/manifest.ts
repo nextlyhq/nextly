@@ -148,6 +148,8 @@ export function invertManifest(
 export function buildMigrationManifest(
   rows: readonly RegistryRow[]
 ): MigrationManifest {
+  assertNoAliasedCompanion(rows);
+
   const entries: ManifestEntry[] = [];
 
   // Sorted by the stored table name so the plan is stable across runs. Step
@@ -244,6 +246,43 @@ export function hashManifest(entries: readonly ManifestEntry[]): string {
  */
 function fold(name: string): string {
   return name.toLowerCase();
+}
+
+/**
+ * Refuse when one physical table is claimed by two field groups.
+ *
+ * A companion name is derived from its owner's table name, not stored, so it can
+ * land on a name an author chose for a different group: `comp_hero`'s companion
+ * computes to `comp_hero_locales`, which was a legal `dbName`. The unique
+ * constraint on `table_name` does not prevent it, because the companion is not a
+ * registry row.
+ *
+ * Left unchecked the collision hides rather than fails: the aliased row's stored
+ * name appears among the sources this plan renames, so it reads as intentionally
+ * renamed away, passes every conflict check, and has its table moved out from
+ * under it. Ownership of a table cannot be shared, so this refuses.
+ */
+function assertNoAliasedCompanion(rows: readonly RegistryRow[]): void {
+  const owners = new Map<string, string>();
+  for (const row of rows) owners.set(fold(row.tableName), row.slug);
+
+  for (const row of rows) {
+    if (!row.hasCompanion) continue;
+    // No self-collision is possible: a name cannot equal itself plus a suffix,
+    // so any owner found here is necessarily a different group.
+    const companion = fold(`${row.tableName}${STORAGE_FORMAT.companionSuffix}`);
+    const owner = owners.get(companion);
+    if (owner === undefined) continue;
+    throw NextlyError.serviceUnavailable({
+      logMessage: `field-group migration cannot plan: ${companion} is claimed by more than one field group`,
+      logContext: {
+        reason: "storage name is claimed by more than one field group",
+        table: companion,
+        companionOf: row.slug,
+        storedBy: owner,
+      },
+    });
+  }
 }
 
 /**
