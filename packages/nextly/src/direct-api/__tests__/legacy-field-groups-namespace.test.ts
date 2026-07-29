@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { installLegacyFieldGroupsNamespaceGuard } from "../legacy-field-groups-namespace";
 import { Nextly, nextly } from "../nextly";
 
 // The namespace was renamed rather than aliased, so an untyped caller upgrading
@@ -46,6 +47,23 @@ describe("the pre-rename field groups namespace", () => {
 
     expect(typeof instance.fieldGroups.find).toBe("function");
     expect(typeof nextly.fieldGroups.find).toBe("function");
+  });
+
+  // `getNextly()` from `init.ts` returns a plain object literal rather than a
+  // `Nextly`, so it is guarded by direct installation instead of inheriting the
+  // prototype accessor. That target shape is exercised here: an own accessor on
+  // a plain object behaves differently under spread than a prototype one.
+  it("guards a plain object without making it uncopyable", () => {
+    const instance: Record<string, unknown> = { fieldGroups: { find() {} } };
+    installLegacyFieldGroupsNamespaceGuard(instance);
+
+    expect(() => instance.components).toThrowError(
+      /'nextly\.components' is now 'nextly\.fieldGroups'/
+    );
+    expect(Object.keys(instance)).not.toContain("components");
+    expect(() => ({ ...instance })).not.toThrow();
+    expect(() => JSON.stringify(instance)).not.toThrow();
+    expect(instance.fieldGroups).toBeDefined();
   });
 
   // The accessor is non-enumerable so that merely copying either surface does

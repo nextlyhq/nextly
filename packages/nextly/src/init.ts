@@ -41,6 +41,7 @@ import {
   registerServices,
   shutdownServices,
 } from "./di/register";
+import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { getNextly as getDirectAPI } from "./direct-api/nextly";
 import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import { NextlyError } from "./errors/nextly-error";
@@ -346,6 +347,12 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         },
       };
 
+      // This instance is a plain object rather than a `Nextly`, so it does not
+      // inherit the class guard: without this, reaching for the pre-rename
+      // namespace here would produce the bare TypeError the guard exists to
+      // replace, on the very entry point the docs recommend.
+      installLegacyFieldGroupsNamespaceGuard(instance);
+
       globalForInit.__nextly_cachedInstance = instance;
 
       // F1 PR 2: open the HMR WebSocket lazily after first init succeeds.
@@ -447,6 +454,7 @@ export async function getCachedNextly(): Promise<Nextly> {
         globalForInit.__nextly_cachedInstance = null;
       },
     };
+    installLegacyFieldGroupsNamespaceGuard(instance);
     globalForInit.__nextly_cachedInstance = instance;
     return instance;
   }
