@@ -63,6 +63,7 @@ import type { Command } from "commander";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
+import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import {
@@ -296,24 +297,31 @@ export async function runDbSync(
     // use them, and the syncs below serialize those fields and materialize
     // their columns. Only the field types' own rules run, so this cannot newly
     // refuse a schema that syncs fine today.
-    assertPluginFieldDeclarations(configResult.config);
+    // Pinned to the types this config registered, like every re-sync. In watch
+    // mode `loadConfig` starts the file watcher before returning, so a save
+    // during connection, core-table setup, or this first sync would rebuild the
+    // live registry while these calls are still materializing the config they
+    // started from.
+    await runWithFieldTypes(configResult.fieldTypes, async () => {
+      assertPluginFieldDeclarations(configResult.config);
 
-    await syncCollections(configResult, adapter, options, context);
-    await syncSingles(configResult, adapter, options, context);
-    await syncComponents(configResult, adapter, options, context);
+      await syncCollections(configResult, adapter, options, context);
+      await syncSingles(configResult, adapter, options, context);
+      await syncComponents(configResult, adapter, options, context);
 
-    if (collectionCount === 0) {
-      logger.warn("No collections defined in config");
-      logger.info("Add collections to your nextly.config.ts to get started.");
-    }
+      if (collectionCount === 0) {
+        logger.warn("No collections defined in config");
+        logger.info("Add collections to your nextly.config.ts to get started.");
+      }
 
-    // Step 5.6: Sync user_ext table (always — handles both code and UI fields)
-    await syncUserFields(configResult, adapter, options, context);
+      // Step 5.6: Sync user_ext table (always — handles both code and UI fields)
+      await syncUserFields(configResult, adapter, options, context);
 
-    // Step 5.7: Seed permissions for collections and singles (always, idempotent).
-    // demo content seeding moved to a Payload-style admin-triggered POST
-    // route in the project itself (src/app/admin/api/seed/route.ts).
-    await performPermissionSeeding(adapter, options, context);
+      // Step 5.7: Seed permissions for collections and singles (always, idempotent).
+      // demo content seeding moved to a Payload-style admin-triggered POST
+      // route in the project itself (src/app/admin/api/seed/route.ts).
+      await performPermissionSeeding(adapter, options, context);
+    });
 
     // Step 7: Watch mode (only makes sense with collections or singles)
     if (options.watch && (collectionCount > 0 || singleCount > 0)) {

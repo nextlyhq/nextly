@@ -167,7 +167,15 @@ export async function runGenerateTypes(
     logger.keyValue("User Fields", userFieldCount);
   }
 
-  if (collectionCount === 0 && singleCount === 0 && componentCount === 0) {
+  // User fields alone are enough to generate for: the `User` interface carries
+  // them, and stopping here would leave an app with no output, or a stale file
+  // from a previous run.
+  if (
+    collectionCount === 0 &&
+    singleCount === 0 &&
+    componentCount === 0 &&
+    userFieldCount === 0
+  ) {
     logger.warn("No collections, singles, or components defined in config");
     logger.info(
       "Add collections, singles, or components to your nextly.config.ts to generate types."

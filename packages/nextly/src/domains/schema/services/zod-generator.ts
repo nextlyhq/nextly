@@ -130,6 +130,9 @@ export interface ZodGeneratorOptions {
  */
 export class ZodGenerator {
   private readonly generateTypes: boolean;
+
+  /** Expressions the plugin callbacks returned during this run; see below. */
+  private pluginExpressions: string[] = [];
   private readonly includeComments: boolean;
   private readonly schemaPrefix: string;
 
@@ -155,16 +158,18 @@ export class ZodGenerator {
    * @returns Generated schema with code, filename, and metadata
    */
   generateSchema(collection: DynamicCollectionRecord): GeneratedZodSchema {
+    this.pluginExpressions = [];
     const schemas = this.generateSchemaDefinitions(collection);
     const types = this.generateTypes
       ? this.generateTypeExports(collection)
       : "";
 
-    // Built after the body, so a plugin import is emitted only when the output
-    // actually references it.
+    // Built after the body, so a plugin import is emitted only when one of the
+    // plugin expressions actually references it. Searching the whole body would
+    // match the generator's own declarations instead.
     const imports = this.generateImports(
       collection,
-      [schemas, types].filter(Boolean).join("\n")
+      this.pluginExpressions.join("\n")
     );
 
     const code = [imports, "", schemas, types].filter(Boolean).join("\n");
@@ -478,6 +483,7 @@ export class ZodGenerator {
     else {
       const contributed = pluginZodSchema(field);
       if (contributed !== undefined) {
+        this.pluginExpressions.push(contributed);
         zodSchema = contributed;
       } else {
         // No schema of its own, but the registry knows what it stores.

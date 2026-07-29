@@ -207,6 +207,16 @@ export class TypeGenerator {
   private readonly filename: string;
   private readonly moduleToAugment: string;
 
+  /**
+   * Expressions the plugin callbacks returned during this run.
+   *
+   * Imports are filtered to the names these reference. Searching the whole
+   * generated body instead would match the generator's own declarations — a
+   * collection interface named `Posts` makes an unused `Posts` import look
+   * used — so only what the plugins emitted is considered.
+   */
+  private pluginExpressions: string[] = [];
+
   constructor(options: TypeGeneratorOptions = {}) {
     this.includeComments = options.includeComments ?? true;
     this.generateInputTypes = options.generateInputTypes ?? true;
@@ -239,6 +249,7 @@ export class TypeGenerator {
     eventNames: string[] = []
   ): GeneratedTypesFile {
     const lines: string[] = [];
+    this.pluginExpressions = [];
 
     // File header
     lines.push("/* tslint:disable */");
@@ -347,7 +358,7 @@ export class TypeGenerator {
     );
     if (emitsBlockDocument) reserved.add("BlockDocument");
 
-    const body = lines.slice(importSlot).join("\n");
+    const body = this.pluginExpressions.join("\n");
     const imports: string[] = [];
     // A blocks field is typed as the engine's document, imported from `nextly`
     // rather than the engine package so the generated file resolves against the
@@ -759,6 +770,7 @@ export class TypeGenerator {
     else {
       const contributed = pluginTsType(field);
       if (contributed !== undefined) {
+        this.pluginExpressions.push(contributed);
         tsType = contributed;
       } else {
         // No rendering of its own, but the registry still knows what it stores.
@@ -841,6 +853,7 @@ export class TypeGenerator {
         // field of a since-removed plugin type is.
         const contributed = pluginTsType(field);
         if (contributed !== undefined) {
+          this.pluginExpressions.push(contributed);
           tsType = contributed;
           break;
         }

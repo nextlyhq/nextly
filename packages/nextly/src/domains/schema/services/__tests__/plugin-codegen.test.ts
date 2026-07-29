@@ -316,6 +316,27 @@ describe("codegen import collisions", () => {
     expect(messages.join(" ")).toContain("'Posts'");
   });
 
+  it("does not refuse a colliding name the output never references", () => {
+    registerFieldType({
+      type: "maybe-posts",
+      storage: "text",
+      component: "@acme/mp/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Posts"], from: "@acme/mp" }],
+        // Declared for a branch this collection never takes, so nothing is
+        // imported and there is nothing to collide with.
+        tsType: field =>
+          (field as { fancy?: unknown }).fancy === true ? "Posts" : "string",
+      },
+    });
+
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "p", type: "maybe-posts" }]),
+    ]);
+
+    expect(file.code).not.toContain("@acme/mp");
+  });
+
   it("refuses an import named after a generated input alias", () => {
     registerFieldType({
       type: "input-ish",

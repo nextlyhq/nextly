@@ -177,6 +177,10 @@ export function pluginCodegenImports(
     for (const entry of imports) {
       const names = byModule.get(entry.from) ?? new Set<string>();
       for (const name of entry.names) {
+        // Discarded before any collision check: a name the emitted output never
+        // references is not going to be imported, so it cannot collide with
+        // anything and must not refuse a generation that would be valid.
+        if (!used(name)) continue;
         // Whatever this particular run declares or imports for itself — the
         // caller knows, because it is the thing emitting them. An import
         // sharing one of those names conflicts with the local declaration
@@ -216,11 +220,10 @@ export function pluginCodegenImports(
   }
 
   return [...byModule.entries()]
-    .map(([from, names]) => [from, [...names].filter(used)] as const)
-    .filter(([, names]) => names.length > 0)
+    .filter(([, names]) => names.size > 0)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(
       ([from, names]) =>
-        `import type { ${names.sort().join(", ")} } from "${from}";`
+        `import type { ${[...names].sort().join(", ")} } from "${from}";`
     );
 }

@@ -17,7 +17,10 @@ import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
-import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
+import {
+  isPluginOptionContainer,
+  RESERVED_PLUGIN_OPTION_KEYS,
+} from "../../plugins/plugin-options";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 /**
@@ -158,10 +161,13 @@ export type FieldNode = {
   label?: string;
   /**
    * Options belonging to the field's own plugin type, which core never reads.
-   * Declared so the parsed result carries it statically; a name used here is
-   * free of the keys around it, which is the reason the container exists.
+   *
+   * Typed loosely because the value is passed through rather than rebuilt: a
+   * schema that reconstructed it would lose an own `__proto__` or refuse an own
+   * `constructor`. Read it with `pluginOptionContainer`, which checks the shape
+   * at the point of use.
    */
-  pluginOptions?: Record<string, unknown>;
+  pluginOptions?: unknown;
   required?: boolean;
   unique?: boolean;
   index?: boolean;
@@ -237,24 +243,36 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // because the shape above is applied to every field whatever its type,
       // so an option sharing a name with one of these keys would be judged as
       // that key instead. Core never looks inside, which is what lets any name
-      // be used here — including the ones declared alongside it. A loose object
-      // rather than `z.record`, which refuses one carrying an own `constructor`
-      // key — another name this container has to accept — and unlike a custom
-      // check it still converts to the JSON Schema the editor integration reads.
+      // be used here — including the ones declared alongside it. Passed through
+      // rather than reconstructed: `z.record` refuses a container carrying an
+      // own `constructor`, and `z.looseObject` copies by assignment, so an own
+      // `__proto__` becomes the copy's prototype and every option is lost with
+      // it. Checking an untouched value keeps both names usable, and unlike a
+      // custom type it still converts to the JSON Schema the editor reads.
       pluginOptions: z
-        .looseObject({})
-        .refine(
-          held =>
-            !Object.keys(held).some(key =>
-              RESERVED_PLUGIN_OPTION_KEYS.has(key)
-            ),
-          {
-            message:
-              "pluginOptions cannot hold 'type' or 'name': those state which " +
-              "field the type is looking at, so an option under either name " +
-              "would never reach it",
+        .unknown()
+        .superRefine((held, ctx) => {
+          if (held === undefined) return;
+          if (!isPluginOptionContainer(held)) {
+            ctx.addIssue({
+              code: "custom",
+              message: "pluginOptions must be an object",
+            });
+            return;
           }
-        )
+          const reserved = Object.keys(held).filter(key =>
+            RESERVED_PLUGIN_OPTION_KEYS.has(key)
+          );
+          if (reserved.length > 0) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                `pluginOptions cannot hold ${reserved.join(" or ")}: those ` +
+                "state which field the type is looking at, so an option " +
+                "under either name would never reach it",
+            });
+          }
+        })
         .optional(),
       required: z.boolean().optional(),
       unique: z.boolean().optional(),

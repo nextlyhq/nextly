@@ -125,6 +125,22 @@ describe("the plugin options container", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("keeps an option named __proto__ and the container's own prototype", () => {
+    // A schema that rebuilt the container by assignment would take this key as
+    // the copy's prototype: the option vanishes and the container stops being a
+    // plain object, so every other option in it is dropped too.
+    const parsed = uiSchemaFieldSchema.safeParse(
+      JSON.parse(
+        '{"name":"score","type":"star-rating","pluginOptions":{"__proto__":{"t":1},"ratingScale":{"max":5}}}'
+      )
+    );
+
+    expect(parsed.success).toBe(true);
+    const held = (parsed.success ? parsed.data.pluginOptions : {}) as object;
+    expect(Object.prototype.hasOwnProperty.call(held, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(held)).toBe(Object.prototype);
+  });
+
   it("refuses a container that is not an object", () => {
     const parsed = uiSchemaFieldSchema.safeParse({
       name: "score",
