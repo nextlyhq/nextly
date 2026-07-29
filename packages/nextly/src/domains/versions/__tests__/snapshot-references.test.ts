@@ -134,7 +134,7 @@ describe("hydrateSnapshotReferences", () => {
       fields({
         name: "meta",
         type: "group",
-        fields: [{ name: "owner", type: "relationship", relationTo: "users" }],
+        fields: [{ name: "owner", type: "relationship", relationTo: "people" }],
       }),
       user
     );
@@ -166,5 +166,47 @@ describe("hydrateSnapshotReferences", () => {
 
     expect(getEntrySpy).not.toHaveBeenCalled();
     expect(snapshot.title).toBe("Hello");
+  });
+
+  it("resolves a relationship inside a component instance", async () => {
+    const snapshot: Record<string, unknown> = {
+      blocks: [{ _componentType: "quote", cite: "a1" }],
+    };
+
+    await hydrateSnapshotReferences(
+      snapshot,
+      fields({
+        name: "blocks",
+        type: "component",
+        componentSchemas: {
+          quote: {
+            fields: [
+              { name: "cite", type: "relationship", relationTo: "authors" },
+            ],
+          },
+        },
+      }),
+      user
+    );
+
+    expect((snapshot.blocks as unknown[])[0]).toEqual({
+      _componentType: "quote",
+      cite: { id: "a1", label: "T-a1" },
+    });
+  });
+
+  it("descends a nameless presentational group", async () => {
+    const snapshot: Record<string, unknown> = { owner: "o1" };
+
+    await hydrateSnapshotReferences(
+      snapshot,
+      fields({
+        type: "group",
+        fields: [{ name: "owner", type: "relationship", relationTo: "people" }],
+      }),
+      user
+    );
+
+    expect(snapshot.owner).toEqual({ id: "o1", label: "T-o1" });
   });
 });

@@ -52,6 +52,11 @@ export interface FieldDisplay {
   relationTo?: string | string[];
   options?: { label?: string; value?: unknown }[];
   admin?: { date?: { pickerAppearance?: string } };
+  /**
+   * The relationship's configured display column (`targetLabelField`), carried
+   * so reference hydration can honor it instead of the default label candidates.
+   */
+  labelField?: string;
 }
 
 /** Non-text scalars hand back both sides raw; the client renders each side. */

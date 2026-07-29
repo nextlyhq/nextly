@@ -138,7 +138,7 @@ describe("hydrateDiffReferences", () => {
             status: "added",
             before: null,
             after: "o1",
-            display: { relationTo: "users" },
+            display: { relationTo: "people" },
           },
         ],
       },

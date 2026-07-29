@@ -86,7 +86,7 @@ export const GET = withErrorHandler(
       });
     }
 
-    const user = await requireRouteVersionReadAccess(
+    const { user, authenticatedScope } = await requireRouteVersionReadAccess(
       request,
       scopeKind,
       slug,
@@ -103,7 +103,13 @@ export const GET = withErrorHandler(
 
     // Resolve relationship and upload ids to display labels (access-checked),
     // after redaction, so the preview shows labels rather than ids.
-    await hydrateVersionSnapshot(row.snapshot, scopeKind, slug, user);
+    await hydrateVersionSnapshot(
+      row.snapshot,
+      scopeKind,
+      slug,
+      user,
+      authenticatedScope
+    );
 
     return respondDoc(row);
   }

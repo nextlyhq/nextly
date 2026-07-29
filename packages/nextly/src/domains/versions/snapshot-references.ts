@@ -14,6 +14,7 @@
  * @module domains/versions/snapshot-references
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
 import type { UserContext } from "../singles/types";
 
@@ -63,6 +64,30 @@ function childFieldsOf(field: FieldConfig): FieldConfig[] {
   return Array.isArray(nested) ? (nested as FieldConfig[]) : [];
 }
 
+/**
+ * Child fields for one component instance. A component carries its schema in the
+ * enriched `componentSchemas` (keyed by the instance's `_componentType`, for a
+ * dynamic zone) or `componentFields` (a fixed component), never in `fields` —
+ * the same shape the diff engine reads.
+ */
+function componentChildFieldsFor(
+  field: FieldConfig,
+  instance: unknown
+): FieldConfig[] {
+  const enriched = field as {
+    componentFields?: FieldConfig[];
+    componentSchemas?: Record<string, { fields?: FieldConfig[] }>;
+  };
+  const type = isPlainObject(instance)
+    ? (instance as { _componentType?: string })._componentType
+    : undefined;
+  if (type && enriched.componentSchemas?.[type]?.fields) {
+    return enriched.componentSchemas[type].fields ?? [];
+  }
+  if (Array.isArray(enriched.componentFields)) return enriched.componentFields;
+  return childFieldsOf(field);
+}
+
 /** The reference kind a field type resolves to, if any. */
 function refKindOf(type: string): ReferenceKind | null {
   if (type === "relationship") return "relationship";
@@ -88,7 +113,16 @@ function walk(
 
   for (const field of fields) {
     const name = field.name;
-    if (typeof name !== "string" || name.length === 0) continue;
+
+    // A nameless presentational group stores its children on THIS object, so
+    // recurse its fields against the same holder rather than skipping it.
+    if (typeof name !== "string" || name.length === 0) {
+      if (field.type === "group") {
+        const inline = childFieldsOf(field);
+        if (inline.length > 0) walk(value, inline, visit);
+      }
+      continue;
+    }
 
     const raw = parseIfJsonString(value[name]);
     if (raw === undefined || raw === null) continue;
@@ -99,16 +133,35 @@ function walk(
       continue;
     }
 
+    value[name] = raw;
+
+    // A component's children live in its enriched schema keyed by each
+    // instance's type, not in `fields`, so resolve them per instance.
+    if (field.type === "component") {
+      const instances = Array.isArray(raw) ? raw : [raw];
+      for (const instance of instances) {
+        walk(instance, componentChildFieldsFor(field, instance), visit);
+      }
+      continue;
+    }
+
     const children = childFieldsOf(field);
     if (children.length === 0) continue;
-
-    value[name] = raw;
     if (Array.isArray(raw)) {
       for (const row of raw) walk(row, children, visit);
     } else {
       walk(raw, children, visit);
     }
   }
+}
+
+/** The relationship field's configured display column (`targetLabelField`), if any. */
+function fieldLabelField(field: FieldConfig): string | undefined {
+  const direct = (field as { targetLabelField?: unknown }).targetLabelField;
+  if (typeof direct === "string") return direct;
+  const nested = (field as { options?: { targetLabelField?: unknown } }).options
+    ?.targetLabelField;
+  return typeof nested === "string" ? nested : undefined;
 }
 
 /** The reference requests one relationship/upload value contributes. */
@@ -119,9 +172,10 @@ function requestsForValue(
   const kind = refKindOf(field.type);
   if (!kind) return [];
   const cols = kind === "upload" ? ["media"] : fieldTargets(field);
+  const labelField = fieldLabelField(field);
   const out: ReferenceRequest[] = [];
   for (const stored of storedRefsOf(value)) {
-    const request = toReferenceRequest(kind, stored, cols);
+    const request = toReferenceRequest(kind, stored, cols, labelField);
     if (request) out.push(request);
   }
   return out;
@@ -135,7 +189,8 @@ function requestsForValue(
 export async function hydrateSnapshotReferences(
   snapshot: unknown,
   fields: FieldConfig[],
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<void> {
   if (!isPlainObject(snapshot) || fields.length === 0) return;
 
@@ -147,17 +202,22 @@ export async function hydrateSnapshotReferences(
   if (requests.length === 0) return;
 
   // Pass 2: resolve each distinct reference once, access-checked.
-  const labels = await resolveReferenceLabels(requests, user);
+  const labels = await resolveReferenceLabels(
+    requests,
+    user,
+    authenticatedScope
+  );
 
   // Pass 3: rewrite each value to its display shape, preserving cardinality.
   walk(snapshot, fields, (field, holder, name) => {
     const kind = refKindOf(field.type);
     if (!kind) return;
     const cols = kind === "upload" ? ["media"] : fieldTargets(field);
+    const labelField = fieldLabelField(field);
     const current = holder[name];
 
     const substitute = (stored: StoredRef): unknown => {
-      const request = toReferenceRequest(kind, stored, cols);
+      const request = toReferenceRequest(kind, stored, cols, labelField);
       const resolved = request
         ? labels.get(referenceLabelKey(request))
         : undefined;

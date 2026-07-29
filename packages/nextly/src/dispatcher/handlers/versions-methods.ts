@@ -220,7 +220,8 @@ export async function getVersionForDocument(
     row.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
 
   return row;
@@ -251,6 +252,7 @@ export async function getVersionDiffForDocument(
     from: args.from,
     to: args.to,
     modifiedOnly: args.modifiedOnly,
+    authenticatedScope: args.authenticatedScope,
   });
 }
 

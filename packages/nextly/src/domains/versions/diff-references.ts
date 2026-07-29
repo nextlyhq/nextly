@@ -17,6 +17,7 @@
  * @module domains/versions/diff-references
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { UserContext } from "../singles/types";
 
 import type { FieldDiff } from "./diff/types";
@@ -58,13 +59,27 @@ function resolveValueSide(
   value: unknown,
   kind: ReferenceKind,
   displayCollections: string[],
+  labelField: string | undefined,
   labels: Map<string, ResolvedReference>
 ): unknown {
-  const [stored] = storedRefsOf(value);
-  if (!stored) return value;
-  const request = toReferenceRequest(kind, stored, displayCollections);
-  const resolved = request ? labels.get(referenceLabelKey(request)) : undefined;
-  return referenceDisplayValue(stored, resolved);
+  const stored = storedRefsOf(value);
+  if (stored.length === 0) return value;
+
+  const resolveOne = (ref: (typeof stored)[number]): unknown => {
+    const request = toReferenceRequest(
+      kind,
+      ref,
+      displayCollections,
+      labelField
+    );
+    const resolved = request
+      ? labels.get(referenceLabelKey(request))
+      : undefined;
+    return referenceDisplayValue(ref, resolved);
+  };
+
+  // A `hasMany` upload side is an array; resolve every item, not just the first.
+  return Array.isArray(value) ? stored.map(resolveOne) : resolveOne(stored[0]);
 }
 
 /** Push every reference in the tree onto `out`, descending groups and lists. */
@@ -76,9 +91,10 @@ function collect(fields: FieldDiff[], out: ReferenceRequest[]): void {
         if (!kind) break;
         const cols =
           kind === "upload" ? ["media"] : displayTargets(node.display);
+        const labelField = node.display?.labelField;
         for (const side of [node.before, node.after]) {
           for (const stored of storedRefsOf(side)) {
-            const request = toReferenceRequest(kind, stored, cols);
+            const request = toReferenceRequest(kind, stored, cols, labelField);
             if (request) out.push(request);
           }
         }
@@ -86,11 +102,13 @@ function collect(fields: FieldDiff[], out: ReferenceRequest[]): void {
       }
       case "set": {
         const cols = displayTargets(node.display);
+        const labelField = node.display?.labelField;
         for (const target of [...node.added, ...node.removed]) {
           const request = toReferenceRequest(
             "relationship",
             { id: target.id, relationTo: target.relationTo },
-            cols
+            cols,
+            labelField
           );
           if (request) out.push(request);
         }
@@ -119,17 +137,32 @@ function annotate(
         if (!kind) break;
         const cols =
           kind === "upload" ? ["media"] : displayTargets(node.display);
-        node.before = resolveValueSide(node.before, kind, cols, labels);
-        node.after = resolveValueSide(node.after, kind, cols, labels);
+        const labelField = node.display?.labelField;
+        node.before = resolveValueSide(
+          node.before,
+          kind,
+          cols,
+          labelField,
+          labels
+        );
+        node.after = resolveValueSide(
+          node.after,
+          kind,
+          cols,
+          labelField,
+          labels
+        );
         break;
       }
       case "set": {
         const cols = displayTargets(node.display);
+        const labelField = node.display?.labelField;
         for (const target of [...node.added, ...node.removed]) {
           const request = toReferenceRequest(
             "relationship",
             { id: target.id, relationTo: target.relationTo },
-            cols
+            cols,
+            labelField
           );
           const resolved = request
             ? labels.get(referenceLabelKey(request))
@@ -154,12 +187,17 @@ function annotate(
  */
 export async function hydrateDiffReferences(
   fields: FieldDiff[],
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<void> {
   const requests: ReferenceRequest[] = [];
   collect(fields, requests);
   if (requests.length === 0) return;
 
-  const labels = await resolveReferenceLabels(requests, user);
+  const labels = await resolveReferenceLabels(
+    requests,
+    user,
+    authenticatedScope
+  );
   annotate(fields, labels);
 }

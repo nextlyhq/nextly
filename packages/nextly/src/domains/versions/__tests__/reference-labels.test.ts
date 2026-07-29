@@ -7,11 +7,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getEntrySpy, checkAccessSpy, findByIdSpy } = vi.hoisted(() => ({
-  getEntrySpy: vi.fn(),
-  checkAccessSpy: vi.fn(),
-  findByIdSpy: vi.fn(),
-}));
+const { getEntrySpy, checkAccessSpy, findByIdSpy, listUsersByIdsSpy } =
+  vi.hoisted(() => ({
+    getEntrySpy: vi.fn(),
+    checkAccessSpy: vi.fn(),
+    findByIdSpy: vi.fn(),
+    listUsersByIdsSpy: vi.fn(),
+  }));
 
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
@@ -20,10 +22,12 @@ vi.mock("../../../di", () => ({
       return { checkAccess: checkAccessSpy };
     }
     if (name === "mediaService") return { findById: findByIdSpy };
+    if (name === "userService") return { listUsersByIds: listUsersByIdsSpy };
     return {};
   }),
 }));
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { UserContext } from "../../singles/types";
 import {
   referenceDisplayValue,
@@ -293,5 +297,142 @@ describe("resolveReferenceLabels — uploads", () => {
         mimeType: null,
       },
     });
+  });
+});
+
+describe("resolveReferenceLabels — configured label + system entities", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("honors a configured targetLabelField", async () => {
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { headline: "Big News", title: "Ignored" },
+    });
+
+    const req: ReferenceRequest = {
+      kind: "relationship",
+      collection: "posts",
+      id: "p1",
+      labelField: "headline",
+    };
+    const labels = await resolveReferenceLabels([req], user);
+
+    expect(labels.get(referenceLabelKey(req))?.label).toBe("Big News");
+  });
+
+  it("ignores a label field naming an email or secret column", async () => {
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { email: "person@example.com", name: "Ada" },
+    });
+
+    const req: ReferenceRequest = {
+      kind: "relationship",
+      collection: "contacts",
+      id: "c1",
+      labelField: "email",
+    };
+    const labels = await resolveReferenceLabels([req], user);
+
+    // The configured field is excluded; resolution falls back to a safe column.
+    expect(labels.get(referenceLabelKey(req))?.label).toBe("Ada");
+  });
+
+  it("resolves a users target through the user service, not getEntry", async () => {
+    listUsersByIdsSpy.mockResolvedValue([{ id: "u9", name: "Grace" }]);
+
+    const req: ReferenceRequest = {
+      kind: "relationship",
+      collection: "users",
+      id: "u9",
+    };
+    const labels = await resolveReferenceLabels([req], user);
+
+    expect(listUsersByIdsSpy).toHaveBeenCalledWith(["u9"]);
+    expect(getEntrySpy).not.toHaveBeenCalled();
+    expect(labels.get(referenceLabelKey(req))).toEqual({
+      id: "u9",
+      label: "Grace",
+    });
+  });
+});
+
+describe("toReferenceRequest — upload discriminator", () => {
+  it("routes a polymorphic upload to its stored target collection", () => {
+    expect(
+      toReferenceRequest("upload", { id: "a1", relationTo: "assets" }, [
+        "media",
+      ])
+    ).toEqual({ kind: "upload", collection: "assets", id: "a1" });
+  });
+
+  it("defaults a plain upload to media", () => {
+    expect(toReferenceRequest("upload", { id: "m1" }, ["media"])).toEqual({
+      kind: "upload",
+      collection: "media",
+      id: "m1",
+    });
+  });
+});
+
+describe("resolveReferenceLabels — API-key scope", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const apiKey = (permissions: string[]): AuthenticatedScope => ({
+    actorType: "apiKey",
+    permissions,
+  });
+
+  it("passes the authenticated scope to the target read", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, data: { title: "T" } });
+    const scope = apiKey(["read-posts"]);
+
+    await resolveReferenceLabels([rel("posts", "p1")], user, scope);
+
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ authenticatedScope: scope })
+    );
+  });
+
+  it("withholds media for a key whose scope excludes media reads", async () => {
+    const req: ReferenceRequest = {
+      kind: "upload",
+      collection: "media",
+      id: "m1",
+    };
+
+    const labels = await resolveReferenceLabels(
+      [req],
+      user,
+      apiKey(["read-posts"])
+    );
+
+    expect(findByIdSpy).not.toHaveBeenCalled();
+    expect(labels.get(referenceLabelKey(req))?.label).toBeNull();
+  });
+
+  it("resolves media for a key granted media reads, skipping the role check", async () => {
+    findByIdSpy.mockResolvedValue({
+      originalFilename: "pic.png",
+      filename: "abc.png",
+      url: "/u",
+      thumbnailUrl: "/t",
+      mimeType: "image/png",
+    });
+    const req: ReferenceRequest = {
+      kind: "upload",
+      collection: "media",
+      id: "m1",
+    };
+
+    const labels = await resolveReferenceLabels(
+      [req],
+      user,
+      apiKey(["read-media"])
+    );
+
+    expect(checkAccessSpy).not.toHaveBeenCalled();
+    expect(findByIdSpy).toHaveBeenCalledWith("m1", {});
+    expect(labels.get(referenceLabelKey(req))?.label).toBe("pic.png");
   });
 });

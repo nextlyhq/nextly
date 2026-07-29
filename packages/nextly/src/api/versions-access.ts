@@ -50,7 +50,7 @@ export async function requireRouteVersionReadAccess(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string
-): Promise<UserContext> {
+): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
   await getCachedNextly();
 
   const auth = await requireRouteCollectionAccess(request, "read", slug);
@@ -85,7 +85,7 @@ export async function requireRouteVersionReadAccess(
     authenticatedScope
   );
 
-  return user;
+  return { user, authenticatedScope };
 }
 
 /**
@@ -498,11 +498,12 @@ export async function hydrateVersionSnapshot(
   snapshot: unknown,
   scopeKind: VersionScopeKind,
   slug: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<void> {
   const lookupKind = scopeKind === "single" ? "single" : "collection";
   const fields = await resolveEnrichedFields(lookupKind, slug);
-  await hydrateSnapshotReferences(snapshot, fields, user);
+  await hydrateSnapshotReferences(snapshot, fields, user, authenticatedScope);
 }
 
 /**
@@ -525,6 +526,7 @@ export async function diffDocumentVersions(args: {
   from: number;
   to: number;
   modifiedOnly?: boolean;
+  authenticatedScope?: AuthenticatedScope;
 }): Promise<VersionDiff> {
   const versions = getService("versionsService");
   const ref = {
@@ -587,7 +589,7 @@ export async function diffDocumentVersions(args: {
   // the same access-checked path a read uses: an unreadable target stays a bare
   // id. Labels attach beside the ids rather than replacing them, so the diff
   // wire stays id-stable for any non-admin consumer of this surface.
-  await hydrateDiffReferences(body.fields, args.user);
+  await hydrateDiffReferences(body.fields, args.user, args.authenticatedScope);
 
   return {
     from: args.from,

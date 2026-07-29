@@ -3,11 +3,10 @@
  * computed diff renders as identifiers unless those ids are resolved to
  * something human-readable.
  *
- * This resolver returns a LABEL MAP rather than rewriting the value it
- * describes. The id is the durable, machine-facing datum and must survive
- * intact for every consumer of the read/diff APIs, so a label is attached
- * alongside it (sideloaded next to a snapshot, an additive field on a diff
- * node) and never in place of it.
+ * This resolver returns a LABEL MAP keyed by target. Its callers — the snapshot
+ * and diff walkers — look each id up and rewrite the stored value in place to
+ * the read-only value kit's display shape, always keeping the id inside the
+ * resolved value so nothing loses its identity.
  *
  * Resolution deliberately does NOT reuse the framework's relationship
  * expansion. That path performs no access check on the target row, returns
@@ -20,6 +19,10 @@
  * @module domains/versions/reference-labels
  */
 
+import {
+  apiKeyScopeAllows,
+  type AuthenticatedScope,
+} from "../../auth/authenticated-scope";
 import { getService } from "../../di";
 import type { UserContext } from "../singles/types";
 
@@ -72,9 +75,14 @@ export type ReferenceKind = "relationship" | "upload";
 /** One reference to resolve: its kind, target collection, and stored id. */
 export interface ReferenceRequest {
   kind: ReferenceKind;
-  /** Target collection; always `"media"` for an upload. */
+  /** Target collection: the value's own when polymorphic, else the field's declared target. */
   collection: string;
   id: string;
+  /**
+   * The field's configured display column (`targetLabelField`), preferred over
+   * the default candidates when it names a populated, non-sensitive column.
+   */
+  labelField?: string;
 }
 
 /** Stable map key for a reference, distinguishing kind and target collection. */
@@ -129,22 +137,58 @@ export function storedRefsOf(value: unknown): StoredRef[] {
 
 /**
  * A resolvable request for one stored reference. The target collection is the
- * value's own when polymorphic, otherwise the field's first declared target;
- * an upload always resolves against media. Null when no collection is known.
+ * value's own when polymorphic (a relationship OR a multi-collection upload),
+ * otherwise the field's first declared target. Uploads fall back to the built-in
+ * `media` collection when neither is present, since that is their default store.
+ * Null when no collection is known.
  */
 export function toReferenceRequest(
   kind: ReferenceKind,
   stored: StoredRef,
-  collections: string[]
+  collections: string[],
+  labelField?: string
 ): ReferenceRequest | null {
   const collection =
-    kind === "upload" ? "media" : (stored.relationTo ?? collections[0]);
+    stored.relationTo ??
+    collections[0] ??
+    (kind === "upload" ? "media" : undefined);
   if (!collection || !stored.id) return null;
-  return { kind, collection, id: stored.id };
+  return {
+    kind,
+    collection,
+    id: stored.id,
+    ...(labelField ? { labelField } : {}),
+  };
 }
 
-/** First populated candidate column, or null when none carries a string. */
-function labelFor(row: Record<string, unknown>): string | null {
+/**
+ * Columns never surfaced as a label, even if a field names one as its display
+ * column: an address is a personal identifier and a password/hash is a secret,
+ * either of which would otherwise ride into version history via `label`.
+ */
+const EXCLUDED_LABEL_FIELDS = [
+  "email",
+  "password",
+  "passwordHash",
+  "password_hash",
+];
+
+/**
+ * The display label for a resolved row: the field's configured label column when
+ * it names a populated, non-sensitive field, otherwise the first populated
+ * default candidate. A configured label field pointing at an excluded (PII or
+ * secret) column is ignored rather than leaked.
+ */
+function labelForRow(
+  row: Record<string, unknown>,
+  labelField?: string
+): string | null {
+  if (labelField && !EXCLUDED_LABEL_FIELDS.includes(labelField)) {
+    const configured = row[labelField];
+    if (typeof configured === "string" && configured.length > 0) {
+      return configured;
+    }
+  }
   for (const key of LABEL_FIELDS) {
     const value = row[key];
     if (typeof value === "string" && value.length > 0) return value;
@@ -152,20 +196,48 @@ function labelFor(row: Record<string, unknown>): string | null {
   return null;
 }
 
+/** The `users` entity is the only system target a relationship can name. */
+function isSystemUserCollection(collection: string): boolean {
+  return collection.toLowerCase() === "users";
+}
+
+/**
+ * Resolve a `users` system-entity target to its display name.
+ *
+ * `users` is not a dynamic collection `collectionsHandler.getEntry` can load, so
+ * it is read through the same name lookup the version-author projection uses. A
+ * user's display name is the same low-sensitivity datum history already shows
+ * for the author of a change, so it is resolved without an added per-caller gate.
+ */
+async function resolveSystemUser(
+  ref: ReferenceRequest
+): Promise<ResolvedReference> {
+  try {
+    const users = getService("userService");
+    const [found] = await users.listUsersByIds([ref.id]);
+    return { id: ref.id, label: found?.name ?? null };
+  } catch {
+    return { id: ref.id, label: null };
+  }
+}
+
 /**
  * Read one relationship target through the access-checked read path.
  *
  * `overrideAccess: false` with `routeAuthorized: false` runs the RBAC check
  * against THIS target: the caller was authorized for the parent document, never
- * for what it links to. `status: "all"` resolves a historical link that now
- * points at an unpublished row. A denied or missing target yields a null label
- * rather than throwing, because dropping the reference would misrepresent the
- * historical value as empty and surfacing the error would confirm the target
- * exists.
+ * for what it links to. A scoped API key is judged on its OWN read grant via
+ * `authenticatedScope`, so a super-admin-owned but narrowly scoped key cannot
+ * read a target its scope excludes. `status: "all"` resolves a historical link
+ * that now points at an unpublished row. A denied or missing target yields a
+ * null label rather than throwing, because dropping the reference would
+ * misrepresent the historical value as empty and surfacing the error would
+ * confirm the target exists.
  */
 async function resolveRelationship(
   ref: ReferenceRequest,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<ResolvedReference> {
   try {
     const collections = getService("collectionsHandler");
@@ -177,11 +249,12 @@ async function resolveRelationship(
       overrideAccess: false,
       routeAuthorized: false,
       status: "all",
+      ...(authenticatedScope ? { authenticatedScope } : {}),
     });
     if (!result.success || !isPlainObject(result.data)) {
       return { id: ref.id, label: null };
     }
-    return { id: ref.id, label: labelFor(result.data) };
+    return { id: ref.id, label: labelForRow(result.data, ref.labelField) };
   } catch {
     return { id: ref.id, label: null };
   }
@@ -197,7 +270,8 @@ async function resolveRelationship(
  */
 async function resolveUpload(
   ref: ReferenceRequest,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<ResolvedReference> {
   const unresolved: ResolvedReference = {
     id: ref.id,
@@ -212,13 +286,19 @@ async function resolveUpload(
   };
 
   try {
-    const rbac = getService("rbacAccessControlService");
-    const allowed = await rbac.checkAccess({
-      userId: String(user.id),
-      operation: "read",
-      resource: "media",
-    });
-    if (!allowed) return unresolved;
+    // A scoped API key is judged on its OWN media-read grant; a session or
+    // system caller (`null`) falls through to the role-based media check.
+    const scopeAllows = apiKeyScopeAllows(authenticatedScope, "read", "media");
+    if (scopeAllows === false) return unresolved;
+    if (scopeAllows === null) {
+      const rbac = getService("rbacAccessControlService");
+      const allowed = await rbac.checkAccess({
+        userId: String(user.id),
+        operation: "read",
+        resource: "media",
+      });
+      if (!allowed) return unresolved;
+    }
 
     const media = getService("mediaService");
     const file = await media.findById(ref.id, {});
@@ -249,7 +329,8 @@ async function resolveUpload(
  */
 export async function resolveReferenceLabels(
   refs: ReferenceRequest[],
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<Map<string, ResolvedReference>> {
   const distinct = new Map<string, ReferenceRequest>();
   for (const ref of refs) {
@@ -263,15 +344,28 @@ export async function resolveReferenceLabels(
   const resolved = new Map<string, ResolvedReference>();
   await Promise.all(
     [...distinct].map(async ([key, ref]) => {
-      resolved.set(
-        key,
-        ref.kind === "upload"
-          ? await resolveUpload(ref, user)
-          : await resolveRelationship(ref, user)
-      );
+      resolved.set(key, await resolveOne(ref, user, authenticatedScope));
     })
   );
   return resolved;
+}
+
+/**
+ * Resolve one reference by its target: a `users` system entity through the user
+ * reader, anything in the system `media` library through the media service, and
+ * everything else (a normal relationship, or a polymorphic upload naming a
+ * content collection) through the access-checked entry read.
+ */
+async function resolveOne(
+  ref: ReferenceRequest,
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
+): Promise<ResolvedReference> {
+  if (isSystemUserCollection(ref.collection)) return resolveSystemUser(ref);
+  if (ref.collection === "media") {
+    return resolveUpload(ref, user, authenticatedScope);
+  }
+  return resolveRelationship(ref, user, authenticatedScope);
 }
 
 /**

@@ -131,17 +131,34 @@ function pickFieldDisplay(field: FieldConfig): FieldDisplay | undefined {
   const f = field as {
     hasMany?: boolean;
     relationTo?: string | string[];
-    options?: { label?: string; value?: unknown }[];
+    targetLabelField?: unknown;
+    options?: unknown;
     admin?: { date?: { pickerAppearance?: string } };
   };
   const display: FieldDisplay = {};
   if (f.hasMany === true) display.hasMany = true;
-  if (f.relationTo !== undefined) display.relationTo = f.relationTo;
+
+  // A relationship's target is usually `relationTo`; dynamic and many-to-many
+  // definitions instead nest it (and the display column) under `options`. Fall
+  // back to those so the diff's set/value node still names a collection to
+  // resolve against and can honor the configured label field.
+  const relOptions =
+    f.options && typeof f.options === "object" && !Array.isArray(f.options)
+      ? (f.options as { target?: unknown; targetLabelField?: unknown })
+      : undefined;
+  const relationTo =
+    f.relationTo ??
+    (typeof relOptions?.target === "string" ? relOptions.target : undefined);
+  if (relationTo !== undefined) display.relationTo = relationTo;
+
+  const labelField = f.targetLabelField ?? relOptions?.targetLabelField;
+  if (typeof labelField === "string") display.labelField = labelField;
+
+  // Select/radio option labels live in an array-shaped `options`.
   if (Array.isArray(f.options)) {
-    display.options = f.options.map(o => ({
-      label: o?.label,
-      value: o?.value,
-    }));
+    display.options = (f.options as { label?: string; value?: unknown }[]).map(
+      o => ({ label: o?.label, value: o?.value })
+    );
   }
   const pickerAppearance = f.admin?.date?.pickerAppearance;
   if (typeof pickerAppearance === "string") {
