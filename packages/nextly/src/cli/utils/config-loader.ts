@@ -33,6 +33,8 @@ import type { NextlyServiceConfig } from "../../di/register";
 import {
   clearFieldTypes,
   registerFieldType,
+  restoreFieldTypes,
+  snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -294,6 +296,12 @@ async function loadConfigInternal(
 
   debugLog(options, "Loading config from:", configPath);
 
+  // Held across the whole load so a failure below can put the registry back.
+  // Callers that keep running on the previous config after a bad edit — the
+  // `db:sync` watcher, the HMR reload — would otherwise resolve that config's
+  // plugin field types against an empty registry.
+  const previousFieldTypes = snapshotFieldTypes();
+
   try {
     // bundleAndRequire is our Turbopack-safe alternative to the
     // previous `bundle-require` dependency. See `config-bundler.ts`
@@ -454,6 +462,10 @@ async function loadConfigInternal(
       deferredExtends,
     };
   } catch (error) {
+    // The load owns the registry from the clear above until it returns, so
+    // every failure between them leaves it half-built or empty.
+    restoreFieldTypes(previousFieldTypes);
+
     if (NextlyError.is(error)) {
       throw error;
     }

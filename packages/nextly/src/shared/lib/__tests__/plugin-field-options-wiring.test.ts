@@ -16,7 +16,10 @@ import {
   clearFieldTypes,
   registerFieldType,
 } from "../../../domains/schema/field-types/field-type-registry";
-import { assertValidFieldsPayload } from "../../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors/nextly-error";
 import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
@@ -39,9 +42,9 @@ function registerDocument(): void {
     component: "@acme/docs/admin#DocumentInput",
     surfaces: ["entries", "singles", "components"],
     validateOptions(field) {
-      // Reads either key: `policy` is the type's own option (code-first only,
-      // since the manifest strips it) and `blocks` is one the manifest
-      // declares, which is the only shape reachable on the Builder path.
+      // Reads either key: `policy` is the type's own option, which the manifest
+      // schema does not declare and the preserver puts back, and `blocks` is
+      // one it does declare. Both reach storage.
       const key = field.policy !== undefined ? "policy" : "blocks";
       const policy = field.policy ?? field.blocks;
       if (policy === undefined) return true;
@@ -399,5 +402,56 @@ describe("declaration checks reach every authoring path", () => {
         { name: "body", type: "document", policy: { kinds: ["page"] } },
       ])
     ).toEqual([]);
+  });
+});
+
+/**
+ * The direct create/update handlers persist to the registry and run DDL without
+ * mirroring into `ui-schema.json`. They own their own field rules, which are
+ * not the manifest's — the config validator accepts camelCase names the
+ * manifest schema refuses — so they run the plugin checks alone.
+ */
+describe("the direct schema handlers' declaration check", () => {
+  const issuesOfOptions = (
+    fields: unknown
+  ): Array<{ path: string; code: string; message: string }> => {
+    try {
+      assertValidPluginFieldOptions(fields);
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ path: string; code: string; message: string }> }
+        | undefined;
+      return data?.errors ?? [];
+    }
+    return [];
+  };
+
+  it("refuses a declaration its own field type rejects", () => {
+    registerDocument();
+    expect(issuesOfOptions([badField])).toEqual([
+      {
+        path: "0.policy.kinds",
+        code: "FIELD_TYPE_INVALID",
+        message: "policy.kinds must name at least one kind.",
+      },
+    ]);
+  });
+
+  it("leaves a camelCase field name to the handler's own rules", () => {
+    registerDocument();
+    // The manifest schema requires `^[a-z][a-z0-9_]*$`; the config validator
+    // accepts camelCase. Judging these payloads by the manifest's rule would
+    // refuse names these APIs have always stored.
+    expect(issuesOfOptions([{ name: "heroTitle", type: "text" }])).toEqual([]);
+  });
+
+  it("reaches a field nested in a container", () => {
+    registerDocument();
+    expect(
+      issuesOfOptions([
+        { name: "rows", type: "repeater", fields: [badField] },
+      ])[0]?.path
+    ).toBe("0.fields.0.policy.kinds");
   });
 });

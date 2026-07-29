@@ -565,21 +565,49 @@ function republishRecordingPolicies(
  * its own reload is pending, but `boot-apply` calls straight through without
  * marking anything in flight, so HMR and boot can still meet.
  *
- * Coalescing rather than queueing, which matches what HMR already does with
- * overlapping edits: a run in progress reads the config when it reads it, and a
- * caller arriving mid-run wants that same answer.
+ * Serialized by queueing one trailing run, not by handing the caller the run
+ * already going. A caller arriving mid-run represents an edit that run may have
+ * read the file too early to see, and the HMR flag is drained before the call —
+ * so returning the in-flight promise would drop that edit until the next save
+ * or a restart. One trailing run is enough however many callers arrive: they
+ * all want the state after the last of them.
  */
 const globalForReload = globalThis as unknown as {
   __nextly_reloadInFlight?: Promise<void>;
+  __nextly_reloadQueued?: Promise<void>;
 };
 
 export function reloadNextlyConfig(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
 }): Promise<void> {
-  const running = globalForReload.__nextly_reloadInFlight;
-  if (running) return running;
+  // Checked before the running one: the queued run is cleared inside its own
+  // continuation, which is a microtask later than the running one's cleanup.
+  // A caller landing in between would otherwise start a second concurrent run
+  // alongside the queued one.
+  const queued = globalForReload.__nextly_reloadQueued;
+  if (queued) return queued;
 
+  const running = globalForReload.__nextly_reloadInFlight;
+  if (running) {
+    globalForReload.__nextly_reloadQueued = running
+      // A failed reload must not swallow the edit that arrived during it: the
+      // next config is read either way, and this caller sees its own outcome.
+      .catch(() => undefined)
+      .then(() => {
+        delete globalForReload.__nextly_reloadQueued;
+        return startReload(opts);
+      });
+    return globalForReload.__nextly_reloadQueued;
+  }
+
+  return startReload(opts);
+}
+
+function startReload(opts?: {
+  resolver?: ServiceResolver;
+  dispatcher?: PromptDispatcher;
+}): Promise<void> {
   const started = runReload(opts).finally(() => {
     delete globalForReload.__nextly_reloadInFlight;
   });

@@ -258,6 +258,7 @@ carries the detail.
 | boot | over the resolved config and a plugin's own raw contributions, once the registry is populated |
 | `db:sync` and its watcher | before anything is serialized or materialized |
 | Schema Builder writes | before the payload is stored, and again before the manifest is written |
+| direct collection/single/field-group create and update | before the definition is persisted and its DDL runs |
 | `nextly build` | over collections, singles and field groups |
 | `migrate:create` | over the merged set the migration is generated from |
 | HMR reload | after the reload repopulates the registry |

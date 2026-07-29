@@ -61,8 +61,16 @@ const fieldsArraySchema = z
  * parsed, so those options reach the database. Validating the parsed copy would
  * check a field with the options already removed and store the ones it never
  * saw.
+ *
+ * Exported for the writers that do NOT mirror into `ui-schema.json`: the direct
+ * create/update dispatcher handlers persist to the registry and run DDL, and
+ * each already enforces its own field-name and shape rules. Those rules are not
+ * the manifest's — the config validator accepts camelCase names the manifest
+ * schema rejects — so running the whole manifest schema there would refuse
+ * declarations those APIs have always stored. The plugin rules are the only
+ * ones genuinely missing from them.
  */
-function assertValidPluginFieldOptions(fields: unknown): void {
+export function assertValidPluginFieldOptions(fields: unknown): void {
   if (!Array.isArray(fields)) return;
   const errors: Array<{ path: string; code: string; message: string }> = [];
 

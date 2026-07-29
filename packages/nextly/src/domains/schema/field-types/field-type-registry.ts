@@ -105,3 +105,33 @@ export function allFieldTypes(): PluginFieldType[] {
 export function clearFieldTypes(): void {
   store().clear();
 }
+
+/**
+ * Capture the registered types so a failed rebuild can put them back.
+ *
+ * Loading a config clears this registry before re-registering from the new
+ * plugin list. A load that fails partway leaves it empty while the process
+ * keeps serving the previous config, and an unregistered type falls back to a
+ * built-in storage primitive — so the schema derived for those fields would be
+ * wrong until the next successful load.
+ */
+export function snapshotFieldTypes(): ReadonlyMap<string, PluginFieldType> {
+  return new Map(store());
+}
+
+/**
+ * Reinstate a captured set, replacing whatever is registered now.
+ *
+ * Writes to the map directly rather than through `registerFieldType`, whose
+ * collision guard exists to catch two plugins claiming one name; these entries
+ * were already accepted by it once.
+ */
+export function restoreFieldTypes(
+  snapshot: ReadonlyMap<string, PluginFieldType>
+): void {
+  const map = store();
+  map.clear();
+  for (const [type, definition] of snapshot) {
+    map.set(type, definition);
+  }
+}

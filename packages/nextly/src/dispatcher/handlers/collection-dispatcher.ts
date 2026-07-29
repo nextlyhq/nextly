@@ -18,7 +18,10 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondBulk,
@@ -254,13 +257,12 @@ const COLLECTIONS_METHODS: Record<
         body,
         "Collection data is required"
       );
-      // The preview/apply handlers validate; this direct path forwards the
-      // fields into metadata generation, which writes migrations and registry
-      // rows — so a declaration the Builder endpoints refuse could be persisted
-      // here and then refused by the next boot that reads it back.
+      // Metadata generation validates field names and shapes downstream, but
+      // it has no way to judge a plugin type's own options, so a declaration no
+      // value could satisfy would reach the registry and fail per write.
       const createdFields = (created as { fields?: unknown }).fields;
       if (createdFields !== undefined) {
-        assertValidFieldsPayload(createdFields, { kind: "collection" });
+        assertValidPluginFieldOptions(createdFields);
       }
       const result = await svc.createCollection(created);
       const collection = unwrapServiceResult(result);
@@ -387,7 +389,7 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("collectionName and update data are required");
       const updatedFields = (body as { fields?: unknown }).fields;
       if (updatedFields !== undefined) {
-        assertValidFieldsPayload(updatedFields, { kind: "collection" });
+        assertValidPluginFieldOptions(updatedFields);
       }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },

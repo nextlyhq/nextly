@@ -13,7 +13,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -310,12 +313,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         throw new Error("Component slug and fields are required");
       }
 
-      // The preview/apply handlers below already validate; these direct
-      // create/update handlers persist and run DDL without going through them,
-      // so an authenticated caller could store a declaration the Builder
-      // endpoints refuse — and the next boot would then reject the stored
-      // entity it has to load.
-      assertValidFieldsPayload(b.fields);
+      // These direct create/update handlers persist and run DDL without the
+      // preview/apply handlers below. Their own rules cover names and shapes;
+      // what none of them can judge is a plugin type's own options, so an
+      // unsatisfiable declaration would be stored and fail on every write.
+      assertValidPluginFieldOptions(b.fields);
 
       const isLocalized = b.localized === true;
       const schemaHash = calculateSchemaHash(b.fields);
@@ -483,7 +485,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         b?.localized !== undefined ? b.localized === true : wasLocalized;
 
       if (b?.fields) {
-        assertValidFieldsPayload(b.fields);
+        assertValidPluginFieldOptions(b.fields);
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
       }
