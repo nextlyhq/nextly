@@ -27,7 +27,7 @@ function fbPlugin(overrides: Record<string, unknown> = {}): PluginDefinition {
     contributes: {
       collections: [{ slug: "forms" }, { slug: "form-submissions" }],
       singles: [{ slug: "form-settings" }],
-      components: [{ slug: "field-group" }],
+      fieldGroups: [{ slug: "field-group" }],
       permissions: [
         {
           action: "export",

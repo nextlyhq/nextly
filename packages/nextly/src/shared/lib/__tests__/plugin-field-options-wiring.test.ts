@@ -10,8 +10,8 @@ import { describe, expect, it, afterEach } from "vitest";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import type { CollectionConfig } from "../../../collections/config/define-collection";
-import { validateComponentConfig } from "../../../components/config/validate-component";
-import type { ComponentConfig } from "../../../components/config/types";
+import type { FieldGroupConfig } from "../../../components/config/types";
+import { validateFieldGroupConfig } from "../../../components/config/validate-field-group";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -132,13 +132,13 @@ describe("declaration checks reach every authoring path", () => {
     expect(result.errors.map(e => e.path)).toContain("fields[0].policy.kinds");
   });
 
-  it("refuses a code-first component field", () => {
+  it("refuses a code-first field-group field", () => {
     registerDocument();
 
-    const result = validateComponentConfig({
+    const result = validateFieldGroupConfig({
       slug: "hero",
       fields: [badField],
-    } as unknown as ComponentConfig);
+    } as unknown as FieldGroupConfig);
 
     expect(result.valid).toBe(false);
     expect(result.errors.map(e => e.path)).toContain("fields[0].policy.kinds");
@@ -166,6 +166,22 @@ describe("declaration checks reach every authoring path", () => {
     ).toContainEqual(
       expect.objectContaining({ path: "0.fields.0.policy.kinds" })
     );
+  });
+
+  it("does not descend into a plugin type's own `fields` option", () => {
+    registerDocument();
+    registerFieldType({
+      type: "layout",
+      storage: "json",
+      component: "@acme/layout/admin#LayoutInput",
+      surfaces: ["entries"],
+    });
+
+    // `fields` here is the layout type's private configuration, not a Nextly
+    // container, so another type's rules must not be applied to its entries.
+    expect(
+      issuesOfPayload([{ name: "grid", type: "layout", fields: [badField] }])
+    ).toEqual([]);
   });
 
   it("strips the option from the manifest copy, which is why the check reads the original", () => {

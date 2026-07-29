@@ -77,10 +77,17 @@ function assertValidPluginFieldOptions(fields: unknown): void {
           message: issue.message,
         });
       }
-      // repeater/group carry their own fields, and a plugin type nested in one
-      // is stored the same way as a top-level one.
-      const nested = (field as { fields?: unknown }).fields;
-      if (Array.isArray(nested)) walk(nested, `${at}.fields`);
+      // Only the container types hold nested fields. A plugin declaration is
+      // open-ended, so a custom type may carry its own `fields` option as
+      // private configuration, and walking that would run OTHER types' rules
+      // over data that is not a field list at all.
+      const { type, fields: nested } = field as {
+        type?: unknown;
+        fields?: unknown;
+      };
+      if ((type === "repeater" || type === "group") && Array.isArray(nested)) {
+        walk(nested, `${at}.fields`);
+      }
     });
   };
 

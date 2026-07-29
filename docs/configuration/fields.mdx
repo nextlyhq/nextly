@@ -706,17 +706,17 @@ Embed reusable [components](/docs/configuration/components) inside collections, 
 
 ```typescript
 // Single fixed type
-component({ name: "seo", component: "seo" })
+fieldGroup({ name: "seo", component: "seo" })
 
 // Dynamic zone
-component({
+fieldGroup({
   name: "layout",
   components: ["hero", "cta", "content-block"],
   repeatable: true,
 })
 
 // Repeatable single type
-component({
+fieldGroup({
   name: "features",
   component: "feature-card",
   repeatable: true,
@@ -737,7 +737,7 @@ component({
 
 **Gotchas:** `component` and `components` are mutually exclusive; you'll get a startup error if both are set. Component nesting is capped at depth 3.
 
-**Cross-links:** see [Components](/docs/configuration/components) for the `defineComponent()` reference and [the three modes](/docs/configuration/components#using-components-in-collections-and-singles) explained side-by-side.
+**Cross-links:** see [Components](/docs/configuration/components) for the `defineFieldGroup()` reference and [the three modes](/docs/configuration/components#using-components-in-collections-and-singles) explained side-by-side.
 
 ---
 

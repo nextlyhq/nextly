@@ -1,15 +1,15 @@
 /**
  * SEO component (code-first) — a reusable field group stored in its own `comp_seo`
  * table. Defined once here, then embedded into collections/singles via the
- * `component({ component: "seo" })` field helper (see the Site Settings single).
+ * `fieldGroup({ component: "seo" })` field helper (see the Site Settings single).
  *
  * Components are schemas, not documents: each embed creates a row scoped to its
  * parent entry. `id`, and the component system columns (`_parent_*`, `_order`)
  * are auto-injected — never declare them.
  */
-import { defineComponent, text, textarea, upload } from "nextly/config";
+import { defineFieldGroup, text, textarea, upload } from "nextly/config";
 
-export const Seo = defineComponent({
+export const Seo = defineFieldGroup({
   slug: "seo",
   label: { singular: "SEO Metadata" },
   // Localized: text-like fields (metaTitle, metaDescription) translate per language;

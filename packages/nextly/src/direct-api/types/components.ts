@@ -10,27 +10,46 @@
 import type { DirectAPIConfig, GeneratedTypes } from "./shared";
 
 /**
- * Component slug type.
+ * Field group slug type.
  *
- * When generated types exist, this resolves to a union of valid component
+ * When generated types exist, this resolves to a union of valid field group
  * slug literals (e.g., `'seo' | 'hero'`). Without generated types,
  * falls back to `string`.
+ *
+ * The key here MUST match the one `TypeGenerator` emits into `Config`. If the
+ * two drift, this conditional silently takes the fallback branch and every slug
+ * widens to `string` — no compile error anywhere, just lost type safety.
+ *
+ * The conditional is factored into `FieldGroupSlugFrom` so a test can apply it
+ * to a stand-in for the generated types. Asserting against a locally re-declared
+ * copy of the same conditional would pass even if THIS alias read the wrong key,
+ * which is the failure being guarded. Pinned by
+ * `__tests__/generated-config-contract.test.ts`.
  */
-export type ComponentSlug = GeneratedTypes extends { components: infer C }
+export type FieldGroupSlugFrom<TGenerated> = TGenerated extends {
+  fieldGroups: infer C;
+}
   ? keyof C & string
   : string;
 
+export type FieldGroupSlug = FieldGroupSlugFrom<GeneratedTypes>;
+
 /**
- * Resolves the component type for a given component slug.
+ * Resolves the field group type for a given field group slug.
  *
- * @typeParam TSlug - The component slug string literal
+ * @typeParam TSlug - The field group slug string literal
  */
-export type DataFromComponentSlug<TSlug extends string> =
-  GeneratedTypes extends { components: infer C }
-    ? TSlug extends keyof C
-      ? C[TSlug]
-      : Record<string, unknown>
-    : Record<string, unknown>;
+export type DataFromFieldGroupSlugFrom<
+  TGenerated,
+  TSlug extends string,
+> = TGenerated extends { fieldGroups: infer C }
+  ? TSlug extends keyof C
+    ? C[TSlug]
+    : Record<string, unknown>
+  : Record<string, unknown>;
+
+export type DataFromFieldGroupSlug<TSlug extends string> =
+  DataFromFieldGroupSlugFrom<GeneratedTypes, TSlug>;
 
 /**
  * Component definition data returned by the Direct API.
@@ -191,9 +210,6 @@ export interface CreateComponentArgs extends DirectAPIConfig {
 
   /** Optional description */
   description?: string;
-
-  /** Custom database table name (defaults to 'comp_{slug}') */
-  tableName?: string;
 
   /** Admin UI configuration */
   admin?: {

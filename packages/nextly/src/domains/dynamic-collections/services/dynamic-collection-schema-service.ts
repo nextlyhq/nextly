@@ -23,6 +23,7 @@
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
@@ -141,7 +142,7 @@ export class DynamicCollectionSchemaService {
         // Component fields store their data in a separate comp_{slug} table and
         // are stripped from the parent row on write, so they get no parent
         // column (a NOT NULL one would break every insert).
-        if (f.type === "component") {
+        if (f.type === STORAGE_FORMAT.fieldType) {
           return null;
         }
 
@@ -262,7 +263,7 @@ export class DynamicCollectionSchemaService {
     // title (only if not user-defined). A component named "title" produces no
     // column, so it must not suppress the system title column.
     const hasTitleField = fields.some(
-      f => f.name === "title" && f.type !== "component"
+      f => f.name === "title" && f.type !== STORAGE_FORMAT.fieldType
     );
     if (!hasTitleField) {
       if (this.dialect === "mysql") {
@@ -276,7 +277,7 @@ export class DynamicCollectionSchemaService {
 
     // slug (only if not user-defined). Same column-less exclusion as title.
     const hasSlugField = fields.some(
-      f => f.name === "slug" && f.type !== "component"
+      f => f.name === "slug" && f.type !== STORAGE_FORMAT.fieldType
     );
     if (!hasSlugField) {
       if (this.dialect === "mysql") {
@@ -417,7 +418,11 @@ ${allColumnDefs.join(",\n")}
     // companion table (i18n). Component fields have no column to index, so skip them
     // too (an index on a nonexistent column fails).
     mainFields.forEach(f => {
-      if (f.index && f.type !== "relationship" && f.type !== "component") {
+      if (
+        f.index &&
+        f.type !== "relationship" &&
+        f.type !== STORAGE_FORMAT.fieldType
+      ) {
         const col = this.toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
@@ -593,7 +598,7 @@ ${allColumnDefs.join(",\n")}
 
         // Component fields store their data in a separate comp_{slug} table, so
         // adding one must not ADD COLUMN on the parent table.
-        if (field.type === "component") {
+        if (field.type === STORAGE_FORMAT.fieldType) {
           continue;
         }
 
@@ -650,7 +655,7 @@ ${allColumnDefs.join(",\n")}
     // Find fields that were modified to add/remove an index
     for (const field of newFields) {
       // Component fields have no parent column, so there is no index to add/drop.
-      if (field.type === "component") continue;
+      if (field.type === STORAGE_FORMAT.fieldType) continue;
       const oldField = oldFieldMap.get(field.name);
       if (oldField && oldField.index !== field.index) {
         const idxCol = this.toSnakeCase(field.name);
@@ -688,7 +693,7 @@ ${allColumnDefs.join(",\n")}
       if (field.name === renamedFromName) continue;
       // Component fields never had a parent column, so there is nothing to drop
       // (and SQLite's DROP COLUMN has no IF EXISTS to tolerate the absence).
-      if (field.type === "component") continue;
+      if (field.type === STORAGE_FORMAT.fieldType) continue;
       if (!newFieldMap.has(field.name)) {
         const dropCol = this.toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
@@ -710,7 +715,7 @@ ${allColumnDefs.join(",\n")}
     if (this.dialect !== "sqlite") {
       for (const field of newFields) {
         // Component fields have no parent column to alter.
-        if (field.type === "component") continue;
+        if (field.type === STORAGE_FORMAT.fieldType) continue;
         const oldField = oldFieldMap.get(field.name);
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = this.toSnakeCase(field.name);

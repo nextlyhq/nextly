@@ -65,14 +65,14 @@ describe("plugin field declarations at boot", () => {
     );
   });
 
-  it("covers singles and components, not collections alone", () => {
+  it("covers singles and field groups, not collections alone", () => {
     registerDocument();
 
     expect(
       issuesOf({ singles: [{ slug: "homepage", fields: [badField] }] })
     ).toHaveLength(1);
     expect(
-      issuesOf({ components: [{ slug: "hero", fields: [badField] }] })
+      issuesOf({ fieldGroups: [{ slug: "hero", fields: [badField] }] })
     ).toHaveLength(1);
   });
 
@@ -93,6 +93,38 @@ describe("plugin field declarations at boot", () => {
         path: "collections.posts.rows.body.policy.kinds",
       })
     );
+  });
+
+  it("does not treat a plugin type's own `fields` option as nested fields", () => {
+    // A plugin declaration is open-ended, so a custom type may carry a `fields`
+    // array as private configuration. Walking it would run OTHER registered
+    // types' rules over data that is not a field list at all.
+    registerDocument();
+    registerFieldType({
+      type: "layout",
+      storage: "json",
+      component: "@acme/layout/admin#LayoutInput",
+      surfaces: ["entries"],
+    });
+
+    expect(
+      issuesOf({
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              {
+                name: "grid",
+                type: "layout",
+                // Its own option, and one of its entries happens to name a
+                // registered type with rules of its own.
+                fields: [badField],
+              },
+            ],
+          },
+        ],
+      })
+    ).toEqual([]);
   });
 
   it("accepts a coherent declaration", () => {

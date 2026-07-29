@@ -13,30 +13,30 @@
 // ============================================================
 
 export type {
-  ComponentConfig,
-  ComponentLabel,
-  ComponentAdminOptions,
+  FieldGroupConfig,
+  FieldGroupLabel,
+  FieldGroupAdminOptions,
 } from "./types";
 
 // ============================================================
 // Define Helper
 // ============================================================
 
-export { defineComponent } from "./define-component";
+export { defineFieldGroup } from "./define-field-group";
 
 // ============================================================
 // Validation
 // ============================================================
 
 export {
-  validateComponentConfig,
-  assertValidComponentConfig,
-  RESERVED_COMPONENT_SLUGS,
-  MAX_COMPONENT_NESTING_DEPTH,
-} from "./validate-component";
+  validateFieldGroupConfig,
+  assertValidFieldGroupConfig,
+  RESERVED_FIELD_GROUP_SLUGS,
+  MAX_FIELD_GROUP_NESTING_DEPTH,
+} from "./validate-field-group";
 
 export type {
-  ComponentValidationErrorCode,
-  ComponentValidationError,
-  ComponentValidationResult,
-} from "./validate-component";
+  FieldGroupValidationErrorCode,
+  FieldGroupValidationError,
+  FieldGroupValidationResult,
+} from "./validate-field-group";

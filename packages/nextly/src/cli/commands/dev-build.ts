@@ -17,6 +17,7 @@ import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import { describeError, immediateMessage } from "../../errors/index";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
@@ -292,16 +293,15 @@ export async function syncComponents(
     serviceLogger
   );
 
-  // Transform ComponentConfig[] to CodeFirstComponentConfig[]
-  const codeFirstConfigs: CodeFirstComponentConfig[] = config.components.map(
+  // Transform FieldGroupConfig[] to CodeFirstComponentConfig[]
+  const codeFirstConfigs: CodeFirstComponentConfig[] = config.fieldGroups.map(
     component => ({
       slug: component.slug,
       label: component.label?.singular ?? toTitleCase(component.slug),
       fields: component.fields,
       description: component.description,
-      tableName: component.dbName,
       admin: component.admin,
-      configPath: `components/${component.slug}.ts`,
+      configPath: `${STORAGE_FORMAT.configPathDir}/${component.slug}.ts`,
     })
   );
 
@@ -740,7 +740,7 @@ async function handleRemovedComponents(
       await teardownEntityI18n({ adapter, slug, tableName });
 
       // Delete registry entry directly
-      await adapter.delete("dynamic_components", {
+      await adapter.delete(STORAGE_FORMAT.registryTable, {
         and: [{ column: "slug", op: "=", value: slug }],
       });
 

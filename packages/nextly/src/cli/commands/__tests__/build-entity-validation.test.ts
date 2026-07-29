@@ -2,11 +2,11 @@
  * `nextly build` is the gate that stops an invalid declaration reaching
  * production, so what it declines to validate is what CI cannot catch.
  *
- * Two properties are pinned here. Singles and components are validated at all —
+ * Two properties are pinned here. Singles and field groups are validated at all —
  * the command used to run the comprehensive validators over collections only.
  * And they are validated even when a project defines no collections, because
  * the "nothing to build" shortcut returns before the later validation step and
- * a project can be made entirely of singles and components.
+ * a project can be made entirely of singles and field groups.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 
@@ -115,11 +115,11 @@ describe("nextly build validates every entity kind", () => {
     expect(lines.join("\n")).not.toContain("Add collections to your");
   });
 
-  it("fails a component-only project the same way", async () => {
+  it("fails a field-group-only project the same way", async () => {
     registerDocument();
     stubConfig({
       collections: [],
-      components: [{ slug: "hero", fields: [badField] }],
+      fieldGroups: [{ slug: "hero", fields: [badField] }],
     });
 
     const { logger, lines } = createCaptureLogger();

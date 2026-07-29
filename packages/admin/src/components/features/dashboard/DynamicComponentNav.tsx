@@ -23,7 +23,7 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useComponents } from "@admin/hooks/queries";
 import type {
   ApiComponent,
-  ComponentMigrationStatus,
+  FieldGroupMigrationStatus,
 } from "@admin/types/entities";
 
 /**
@@ -45,12 +45,16 @@ interface DynamicComponentNavProps {
  * - Green dot: applied (migration applied, may need sync check)
  * - Red dot: failed (migration failed)
  */
-function MigrationIndicator({ status }: { status?: ComponentMigrationStatus }) {
+function MigrationIndicator({
+  status,
+}: {
+  status?: FieldGroupMigrationStatus;
+}) {
   if (!status || status === "synced") {
     return null;
   }
 
-  const colors: Record<ComponentMigrationStatus, string> = {
+  const colors: Record<FieldGroupMigrationStatus, string> = {
     synced: "",
     pending: "bg-warning-500",
     generated: "bg-primary",
@@ -58,7 +62,7 @@ function MigrationIndicator({ status }: { status?: ComponentMigrationStatus }) {
     failed: "bg-destructive-500",
   };
 
-  const titles: Record<ComponentMigrationStatus, string> = {
+  const titles: Record<FieldGroupMigrationStatus, string> = {
     synced: "In sync",
     pending: "Pending migration",
     generated: "Migration generated",

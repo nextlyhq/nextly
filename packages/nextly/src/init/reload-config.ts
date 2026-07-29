@@ -49,13 +49,16 @@ import { mergeRegisteredCollectionsSafely } from "../domains/schema/pipeline/reg
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
-  DesiredComponent,
+  DesiredFieldGroup,
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
-import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
@@ -378,7 +381,7 @@ async function syncCodeFirstMetadataOnly(
   newConfig: {
     collections?: CollectionDef[];
     singles?: SingleDef[];
-    components?: ComponentDef[];
+    fieldGroups?: ComponentDef[];
   },
   logger?: LoggerLike
 ): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
@@ -431,7 +434,7 @@ async function syncCodeFirstMetadataOnly(
     const compReg = (await resolve(
       "componentRegistryService"
     )) as ComponentRegistrySurface;
-    const payload = buildComponentSyncPayload(newConfig.components ?? []);
+    const payload = buildComponentSyncPayload(newConfig.fieldGroups ?? []);
     if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
   } catch (err) {
     components = false;
@@ -570,7 +573,7 @@ export async function reloadNextlyConfig(opts?: {
     | {
         collections?: CollectionDef[];
         singles?: SingleDef[];
-        components?: ComponentDef[];
+        fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
       }
     | undefined;
@@ -585,7 +588,7 @@ export async function reloadNextlyConfig(opts?: {
         config?: {
           collections?: CollectionDef[];
           singles?: SingleDef[];
-          components?: ComponentDef[];
+          fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
         };
       }
@@ -721,21 +724,19 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  // Normalize components. Table name is always comp_<slug_with_underscores>.
+  // Normalize components. Every name resolves canonically to
+  // comp_<slug_with_underscores>.
   const componentTargets: Array<{
     slug: string;
     tableName: string;
     fields: MinimalField[];
     localized?: boolean;
   }> = [];
-  for (const c of newConfig.components ?? []) {
+  for (const c of newConfig.fieldGroups ?? []) {
     if (!c.slug) continue;
     componentTargets.push({
       slug: c.slug,
-      tableName: `comp_${c.slug
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")}`,
+      tableName: resolveComponentTableName(c.slug),
       fields: (c.fields ?? []) as MinimalField[],
       // i18n: carry `localized` so the HMR diff omits translatable columns from the
       // component's main table and registers its companion.
@@ -935,12 +936,12 @@ export async function reloadNextlyConfig(opts?: {
   }
 
   // Per-component diff + safety classification — mirrors the singles loop.
-  const desiredComponents: Record<string, DesiredComponent> = {};
+  const desiredComponents: Record<string, DesiredFieldGroup> = {};
   for (const target of componentTargets) {
-    const entry: DesiredComponent = {
+    const entry: DesiredFieldGroup = {
       slug: target.slug,
       tableName: target.tableName,
-      fields: target.fields as DesiredComponent["fields"],
+      fields: target.fields as DesiredFieldGroup["fields"],
       localized: target.localized === true,
     };
     try {
@@ -1090,7 +1091,7 @@ export async function reloadNextlyConfig(opts?: {
         desiredComponents[c.slug] = {
           slug: c.slug,
           tableName: c.tableName,
-          fields: (c.fields ?? []) as DesiredComponent["fields"],
+          fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
         };
       }
     }
@@ -1256,7 +1257,7 @@ export async function reloadNextlyConfig(opts?: {
         "componentRegistryService"
       )) as ComponentRegistrySurface;
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        newConfig.components ?? []
+        newConfig.fieldGroups ?? []
       );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);

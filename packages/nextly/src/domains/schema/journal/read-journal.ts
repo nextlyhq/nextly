@@ -15,6 +15,7 @@
 import { and, desc, inArray, lt } from "drizzle-orm";
 
 import { schemaEventsTables } from "../../../schemas/schema-events";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
 export type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -92,7 +93,10 @@ export async function readJournal(
   const startedAtCol = (table as { startedAt: any }).startedAt;
 
   const filter = beforeDate
-    ? and(inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]), lt(startedAtCol, beforeDate))
+    ? and(
+        inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]),
+        lt(startedAtCol, beforeDate)
+      )
     : inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]);
 
   const chain = db
@@ -116,10 +120,16 @@ function mapRow(r: Record<string, unknown>): JournalRowApi {
   const scopeKind = r.scopeKind as string | null | undefined;
   const scopeSlug = r.scopeSlug as string | null | undefined;
   let scope: JournalScopeApi | null = null;
-  if (scopeKind === "global" || scopeKind === "core" || scopeKind === "component") {
+  if (
+    scopeKind === "global" ||
+    scopeKind === "core" ||
+    scopeKind === STORAGE_FORMAT.schemaEventScope
+  ) {
     // Events-only kinds (core/component) have no admin-facing equivalent;
     // fold them into the generic "global" bucket.
-    scope = scopeSlug ? { kind: "global", slug: scopeSlug } : { kind: "global" };
+    scope = scopeSlug
+      ? { kind: "global", slug: scopeSlug }
+      : { kind: "global" };
   } else if (
     (scopeKind === "collection" || scopeKind === "single") &&
     typeof scopeSlug === "string"

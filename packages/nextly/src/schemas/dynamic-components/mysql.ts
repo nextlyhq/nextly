@@ -20,13 +20,13 @@
  * @example
  * ```typescript
  * import {
- *   dynamicComponentsMysql,
- *   type DynamicComponentMysql,
- *   type DynamicComponentInsertMysql,
+ *   dynamicFieldGroupsMysql,
+ *   type DynamicFieldGroupMysql,
+ *   type DynamicFieldGroupInsertMysql,
  * } from '@nextly/schemas/dynamic-components/mysql';
  *
  * // Insert a new Component
- * const newComponent = await db.insert(dynamicComponentsMysql).values({
+ * const newComponent = await db.insert(dynamicFieldGroupsMysql).values({
  *   slug: 'seo',
  *   label: 'SEO Metadata',
  *   tableName: 'comp_seo',
@@ -49,9 +49,10 @@ import {
 } from "drizzle-orm/mysql-core";
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { ComponentAdminOptions } from "../../components/config/types";
+import type { FieldGroupAdminOptions } from "../../components/config/types";
+import { STORAGE_FORMAT } from "../storage-format";
 
-import type { ComponentSource, ComponentMigrationStatus } from "./types";
+import type { FieldGroupSource, FieldGroupMigrationStatus } from "./types";
 
 // ============================================================
 // Dynamic Components Table (MySQL)
@@ -66,8 +67,8 @@ import type { ComponentSource, ComponentMigrationStatus } from "./types";
  * - Migration status (synced, pending, generated, applied)
  * - Schema versioning and change detection
  */
-export const dynamicComponentsMysql = mysqlTable(
-  "dynamic_components",
+export const dynamicFieldGroupsMysql = mysqlTable(
+  STORAGE_FORMAT.registryTable,
   {
     // --------------------------------------------------------
     // Primary Key
@@ -117,7 +118,7 @@ export const dynamicComponentsMysql = mysqlTable(
      * Admin UI configuration options.
      * Controls category grouping, icon, visibility, etc.
      */
-    admin: json("admin").$type<ComponentAdminOptions>(),
+    admin: json("admin").$type<FieldGroupAdminOptions>(),
 
     // --------------------------------------------------------
     // Unified Model Fields
@@ -125,11 +126,11 @@ export const dynamicComponentsMysql = mysqlTable(
 
     /**
      * Where the Component was defined.
-     * - 'code': defineComponent() in a config file
+     * - 'code': defineFieldGroup() in a config file
      * - 'ui': Visual Component Builder
      */
     source: varchar("source", { length: 255 })
-      .$type<ComponentSource>()
+      .$type<FieldGroupSource>()
       .default("ui")
       .notNull(),
 
@@ -169,7 +170,7 @@ export const dynamicComponentsMysql = mysqlTable(
      * Current migration status.
      */
     migrationStatus: varchar("migration_status", { length: 20 })
-      .$type<ComponentMigrationStatus>()
+      .$type<FieldGroupMigrationStatus>()
       .default("pending")
       .notNull(),
 
@@ -201,19 +202,21 @@ export const dynamicComponentsMysql = mysqlTable(
     // --------------------------------------------------------
 
     /** Index for filtering Components by source (code, ui) */
-    index("dynamic_components_source_idx").on(table.source),
+    index(`${STORAGE_FORMAT.registryTable}_source_idx`).on(table.source),
 
     /** Index for finding Components needing migration */
-    index("dynamic_components_migration_status_idx").on(table.migrationStatus),
+    index(`${STORAGE_FORMAT.registryTable}_migration_status_idx`).on(
+      table.migrationStatus
+    ),
 
     /** Index for filtering by creator */
-    index("dynamic_components_created_by_idx").on(table.createdBy),
+    index(`${STORAGE_FORMAT.registryTable}_created_by_idx`).on(table.createdBy),
 
     /** Index for sorting by creation date */
-    index("dynamic_components_created_at_idx").on(table.createdAt),
+    index(`${STORAGE_FORMAT.registryTable}_created_at_idx`).on(table.createdAt),
 
     /** Index for sorting by last modified date */
-    index("dynamic_components_updated_at_idx").on(table.updatedAt),
+    index(`${STORAGE_FORMAT.registryTable}_updated_at_idx`).on(table.updatedAt),
   ]
 );
 
@@ -224,10 +227,11 @@ export const dynamicComponentsMysql = mysqlTable(
 /**
  * MySQL-specific select type for dynamic Components.
  */
-export type DynamicComponentMysql = typeof dynamicComponentsMysql.$inferSelect;
+export type DynamicFieldGroupMysql =
+  typeof dynamicFieldGroupsMysql.$inferSelect;
 
 /**
  * MySQL-specific insert type for dynamic Components.
  */
-export type DynamicComponentInsertMysql =
-  typeof dynamicComponentsMysql.$inferInsert;
+export type DynamicFieldGroupInsertMysql =
+  typeof dynamicFieldGroupsMysql.$inferInsert;

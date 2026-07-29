@@ -105,11 +105,11 @@ describe("isBuilderRoute", () => {
     ["PATCH", "/singles/homepage/schema"],
     ["POST", "/singles/schema/homepage/preview"],
     ["POST", "/singles/schema/homepage/apply"],
-    ["POST", "/components"],
-    ["PATCH", "/components/hero"],
-    ["DELETE", "/components/hero"],
-    ["POST", "/components/schema/hero/preview"],
-    ["POST", "/components/schema/hero/apply"],
+    ["POST", "/field-groups"],
+    ["PATCH", "/field-groups/hero"],
+    ["DELETE", "/field-groups/hero"],
+    ["POST", "/field-groups/schema/hero/preview"],
+    ["POST", "/field-groups/schema/hero/apply"],
   ])("gates %s %s", (httpMethod, path) => {
     expect(classify(path, httpMethod)).toBe(true);
   });
@@ -128,8 +128,8 @@ describe("isBuilderRoute", () => {
     ["GET", "/singles/homepage"],
     ["PATCH", "/singles/homepage"],
     ["GET", "/singles/homepage/schema"],
-    ["GET", "/components"],
-    ["GET", "/components/hero"],
+    ["GET", "/field-groups"],
+    ["GET", "/field-groups/hero"],
     ["GET", "/users"],
     ["POST", "/users"],
   ])("leaves %s %s open", (httpMethod, path) => {

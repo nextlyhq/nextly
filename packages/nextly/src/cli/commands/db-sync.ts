@@ -64,6 +64,7 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { registerComponentSchemas } from "../../domains/components/services/register-component-schemas";
 import { describeError } from "../../errors/index";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import {
   createContext,
   type CommandContext,
@@ -224,7 +225,7 @@ export async function runDbSync(
 
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles.length;
-  const componentCount = configResult.config.components.length;
+  const componentCount = configResult.config.fieldGroups.length;
   const userFieldCount = configResult.config.users?.fields?.length ?? 0;
   logger.keyValue("Collections", collectionCount);
   logger.keyValue("Singles", singleCount);
@@ -290,6 +291,13 @@ export async function runDbSync(
     // These run even when the config declares none of that entity type: removing the LAST
     // collection/single/component is what strands its table, so a zero count is exactly when
     // the orphan scan has something to report.
+    // The config validators do not run on this path — `loadConfig` registers
+    // plugin field types but nothing afterwards checks the declarations that
+    // use them, and the syncs below serialize those fields and materialize
+    // their columns. Only the field types' own rules run, so this cannot newly
+    // refuse a schema that syncs fine today.
+    assertPluginFieldDeclarations(configResult.config);
+
     await syncCollections(configResult, adapter, options, context);
     await syncSingles(configResult, adapter, options, context);
     await syncComponents(configResult, adapter, options, context);

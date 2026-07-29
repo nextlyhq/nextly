@@ -1,7 +1,7 @@
 /**
  * Define Component Helper
  *
- * Provides the `defineComponent()` function for creating code-first Component
+ * Provides the `defineFieldGroup()` function for creating code-first Component
  * configurations with full TypeScript support. This is the primary API for
  * defining Components (reusable field groups) in TypeScript files.
  *
@@ -14,14 +14,14 @@
  * - Support all field types including nested components (max depth: 3)
  * - Separate database table per component type (comp_{slug})
  *
- * @module components/config/define-component
+ * @module components/config/define-field-group
  * @since 1.0.0
  *
  * @example
  * ```typescript
- * import { defineComponent, text, upload } from 'nextly';
+ * import { defineFieldGroup, text, upload } from 'nextly';
  *
- * export default defineComponent({
+ * export default defineFieldGroup({
  *   slug: 'seo',
  *   label: { singular: 'SEO Metadata' },
  *   admin: {
@@ -40,11 +40,11 @@
  */
 
 import type {
-  ComponentConfig,
-  ComponentLabel,
-  ComponentAdminOptions,
+  FieldGroupConfig,
+  FieldGroupLabel,
+  FieldGroupAdminOptions,
 } from "./types";
-import { assertValidComponentConfig } from "./validate-component";
+import { assertValidFieldGroupConfig } from "./validate-field-group";
 
 // ============================================================
 // Utility Functions
@@ -68,7 +68,7 @@ function toTitleCase(str: string): string {
 }
 
 // ============================================================
-// defineComponent Function
+// defineFieldGroup Function
 // ============================================================
 
 /**
@@ -76,7 +76,7 @@ function toTitleCase(str: string): string {
  *
  * This is the primary API for creating Component configurations in TypeScript.
  * It validates the configuration, applies sensible defaults, and returns a
- * normalized `ComponentConfig` object.
+ * normalized `FieldGroupConfig` object.
  *
  * **Defaults Applied:**
  * - `label.singular`: Generated from slug (e.g., 'social-link' → 'Social Link')
@@ -93,9 +93,9 @@ function toTitleCase(str: string): string {
  *
  * @example Basic Component
  * ```typescript
- * import { defineComponent, text } from 'nextly';
+ * import { defineFieldGroup, text } from 'nextly';
  *
- * export default defineComponent({
+ * export default defineFieldGroup({
  *   slug: 'seo',
  *   fields: [
  *     text({ name: 'metaTitle', required: true }),
@@ -106,9 +106,9 @@ function toTitleCase(str: string): string {
  *
  * @example Component with Admin Options
  * ```typescript
- * import { defineComponent, text, upload, select } from 'nextly';
+ * import { defineFieldGroup, text, upload, select } from 'nextly';
  *
- * export default defineComponent({
+ * export default defineFieldGroup({
  *   slug: 'hero',
  *   label: { singular: 'Hero Section' },
  *   admin: {
@@ -138,37 +138,37 @@ function toTitleCase(str: string): string {
  *
  * @example Component with Nested Component Field
  * ```typescript
- * import { defineComponent, text, component } from 'nextly';
+ * import { defineFieldGroup, text, fieldGroup } from 'nextly';
  *
- * export default defineComponent({
+ * export default defineFieldGroup({
  *   slug: 'faq-item',
  *   label: { singular: 'FAQ Item' },
  *   fields: [
  *     text({ name: 'question', required: true }),
  *     text({ name: 'answer', required: true }),
- *     component({ name: 'cta', component: 'cta' }),
+ *     fieldGroup({ name: 'cta', component: 'cta' }),
  *   ],
  * });
  * ```
  */
-export function defineComponent(config: ComponentConfig): ComponentConfig {
+export function defineFieldGroup(config: FieldGroupConfig): FieldGroupConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================
 
-  assertValidComponentConfig(config);
+  assertValidFieldGroupConfig(config);
 
   // ============================================================
   // Apply Defaults
   // ============================================================
 
   // Generate label from slug if not provided
-  const label: ComponentLabel = {
+  const label: FieldGroupLabel = {
     singular: config.label?.singular ?? toTitleCase(config.slug),
   };
 
   // Build normalized config with defaults
-  const normalized: ComponentConfig = {
+  const normalized: FieldGroupConfig = {
     ...config,
     label,
     admin: {
@@ -183,4 +183,4 @@ export function defineComponent(config: ComponentConfig): ComponentConfig {
 // Re-exports for Convenience
 // ============================================================
 
-export type { ComponentConfig, ComponentLabel, ComponentAdminOptions };
+export type { FieldGroupConfig, FieldGroupLabel, FieldGroupAdminOptions };

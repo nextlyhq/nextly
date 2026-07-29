@@ -417,7 +417,7 @@ describe("reloadNextlyConfig", () => {
   it("preserves UI-created components (registry-only) in the desired schema", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
-        components: [
+        fieldGroups: [
           { slug: "hero", fields: [{ name: "title", type: "text" }] },
         ],
       },
@@ -781,7 +781,7 @@ describe("reloadNextlyConfig", () => {
     it("includes component table names in the batched introspect call", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "title", type: "text" }] },
             {
               slug: "seo-meta",
@@ -811,7 +811,7 @@ describe("reloadNextlyConfig", () => {
     it("normalises slug to comp_<snake_case> table name (hyphens → underscores)", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "seo-meta", fields: [{ name: "title", type: "text" }] },
           ],
         },
@@ -833,7 +833,7 @@ describe("reloadNextlyConfig", () => {
     it("flows an additive component field change through to the pipeline", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "subtitle", type: "text" }] },
           ],
         },
@@ -862,7 +862,7 @@ describe("reloadNextlyConfig", () => {
       // makes every save of a document embedding the component fail with a 500.
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             {
               slug: "meta-data",
               fields: [{ name: "metaTitle", type: "text" }],
@@ -905,7 +905,7 @@ describe("reloadNextlyConfig", () => {
       // dispatcher prompts the user. HMR layer no longer pre-blocks.
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [] }, // removed `headline` field
           ],
         },
@@ -935,7 +935,7 @@ describe("reloadNextlyConfig", () => {
     it("calls syncCodeFirstComponents after a successful apply", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             {
               slug: "hero",
               label: { singular: "Hero" },
@@ -962,7 +962,7 @@ describe("reloadNextlyConfig", () => {
     it("calls registerDynamicSchema for the component table after a successful apply", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "subtitle", type: "text" }] },
           ],
         },
@@ -984,7 +984,7 @@ describe("reloadNextlyConfig", () => {
     it("does not call the pipeline when all component diffs are empty", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "title", type: "text" }] },
           ],
         },

@@ -16,6 +16,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../collections/fields/types";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
@@ -46,7 +47,10 @@ export type DynamicTableRow = {
  */
 export async function loadDynamicTables(
   adapter: DrizzleAdapter,
-  sourceTable: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+  sourceTable:
+    | "dynamic_collections"
+    | "dynamic_singles"
+    | typeof STORAGE_FORMAT.registryTable,
   register: (
     tableName: string,
     fields: unknown[],
@@ -56,7 +60,8 @@ export async function loadDynamicTables(
 ): Promise<void> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
   // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
-  const statusCol = sourceTable !== "dynamic_components" ? ", status" : "";
+  const statusCol =
+    sourceTable !== STORAGE_FORMAT.registryTable ? ", status" : "";
 
   // Read the rows, tolerating an existing DB that predates the i18n `localized`
   // column: try the full select first, and on failure fall back to one without
@@ -132,7 +137,10 @@ export async function loadDynamicSlugs(
   const all = new Set<string>();
   const collections = new Set<string>();
   const read = async (
-    table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+    table:
+      | "dynamic_collections"
+      | "dynamic_singles"
+      | typeof STORAGE_FORMAT.registryTable,
     into?: Set<string>
   ): Promise<void> => {
     try {
@@ -151,7 +159,7 @@ export async function loadDynamicSlugs(
   };
   await read("dynamic_collections", collections);
   await read("dynamic_singles");
-  await read("dynamic_components");
+  await read(STORAGE_FORMAT.registryTable);
   return { all, collections };
 }
 
@@ -183,7 +191,10 @@ export async function loadBuilderEntities(
   adapter: DrizzleAdapter
 ): Promise<LoadedBuilderEntities> {
   const read = async (
-    table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+    table:
+      | "dynamic_collections"
+      | "dynamic_singles"
+      | typeof STORAGE_FORMAT.registryTable,
     hasStatusColumn: boolean
   ): Promise<LoadedBuilderEntity[]> => {
     const selectSql = hasStatusColumn
@@ -220,6 +231,6 @@ export async function loadBuilderEntities(
   return {
     collections: await read("dynamic_collections", true),
     singles: await read("dynamic_singles", true),
-    components: await read("dynamic_components", false),
+    components: await read(STORAGE_FORMAT.registryTable, false),
   };
 }

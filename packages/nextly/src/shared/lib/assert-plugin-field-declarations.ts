@@ -1,7 +1,7 @@
 /**
  * Boot-time gate for plugin field-type declaration checks.
  *
- * A plugin's own collections, singles and components arrive as raw configs: its
+ * A plugin's own collections, singles and field groups arrive as raw configs: its
  * field type is not registered when its module is evaluated, so it cannot route
  * them through `defineCollection`, which is where a code-first config is
  * checked. Nothing else on the boot path validates them, so without this a
@@ -29,7 +29,7 @@ interface FieldBearingEntity {
 interface SchemaLikeConfig {
   collections?: FieldBearingEntity[];
   singles?: FieldBearingEntity[];
-  components?: FieldBearingEntity[];
+  fieldGroups?: FieldBearingEntity[];
 }
 
 /**
@@ -43,7 +43,11 @@ export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
     if (!Array.isArray(fields)) return;
     for (const field of fields) {
       if (field === null || typeof field !== "object") continue;
-      const named = field as { name?: unknown; fields?: unknown };
+      const named = field as {
+        name?: unknown;
+        type?: unknown;
+        fields?: unknown;
+      };
       const at =
         typeof named.name === "string" ? `${basePath}.${named.name}` : basePath;
       for (const issue of pluginFieldOptionIssues(field)) {
@@ -53,16 +57,20 @@ export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
           message: issue.message,
         });
       }
-      // repeater/group hold their own fields, and a plugin type nested in one
-      // reaches the database the same way a top-level one does.
-      walk(named.fields, at);
+      // Only the container types hold nested fields. A plugin declaration is
+      // open-ended, so a custom type may carry its own `fields` option as
+      // private configuration, and walking that would run OTHER types' rules
+      // over data that is not a field list at all.
+      if (named.type === "repeater" || named.type === "group") {
+        walk(named.fields, at);
+      }
     }
   };
 
   const entities: Array<[string, FieldBearingEntity[] | undefined]> = [
     ["collections", config.collections],
     ["singles", config.singles],
-    ["components", config.components],
+    ["fieldGroups", config.fieldGroups],
   ];
 
   for (const [kind, list] of entities) {

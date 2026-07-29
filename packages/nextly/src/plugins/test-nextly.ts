@@ -20,7 +20,7 @@ import { randomBytes } from "node:crypto";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
-import type { ComponentConfig } from "../components/config/types";
+import type { FieldGroupConfig } from "../components/config/types";
 import { createAdapter } from "../database/factory";
 import {
   createDatabaseStatement,
@@ -130,8 +130,8 @@ export interface CreateTestNextlyOptions {
   collections?: CollectionConfig[];
   /** Code-first singles. */
   singles?: SingleConfig[];
-  /** Code-first components. */
-  components?: ComponentConfig[];
+  /** Code-first field groups. */
+  fieldGroups?: FieldGroupConfig[];
   /** Content-localization config (i18n). Normalized and wired so localized reads resolve. */
   localization?: LocalizationConfig;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
@@ -567,7 +567,7 @@ async function bootServices(
     plugins: opts.plugins,
     collections: opts.collections,
     singles: opts.singles,
-    components: opts.components,
+    fieldGroups: opts.fieldGroups,
     localization: opts.localization
       ? normalizeLocalization(opts.localization)
       : undefined,

@@ -11,7 +11,7 @@
 
 import type {
   DesiredCollection,
-  DesiredComponent,
+  DesiredFieldGroup,
   DesiredSchema,
   DesiredSingle,
 } from "./types";
@@ -33,7 +33,7 @@ interface RegistryReader {
 export interface DesiredSchemaOverrides {
   collections?: Record<string, DesiredCollection>;
   singles?: Record<string, DesiredSingle>;
-  components?: Record<string, DesiredComponent>;
+  components?: Record<string, DesiredFieldGroup>;
 }
 
 // Synchronous variant — used in test contexts where the registry is a
@@ -62,7 +62,7 @@ export function buildDesiredSchemaFromRegistry(
 
   const collections = projectRecords<DesiredCollection>(collectionsResult);
   const singles = projectRecords<DesiredSingle>(singlesResult);
-  const components = projectRecords<DesiredComponent>(componentsResult);
+  const components = projectRecords<DesiredFieldGroup>(componentsResult);
 
   return {
     collections: { ...collections, ...(overrides?.collections ?? {}) },
@@ -85,7 +85,7 @@ export async function buildDesiredSchemaFromRegistryAsync(
 
   const collections = projectRecords<DesiredCollection>(collectionsResult);
   const singles = projectRecords<DesiredSingle>(singlesResult);
-  const components = projectRecords<DesiredComponent>(componentsResult);
+  const components = projectRecords<DesiredFieldGroup>(componentsResult);
 
   return {
     collections: { ...collections, ...(overrides?.collections ?? {}) },

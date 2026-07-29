@@ -16,6 +16,7 @@ import type {
   UiSchemaEntity,
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
@@ -24,7 +25,7 @@ import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
 function toMinimal(
   entities: UiSchemaEntity[],
-  prefix: "dc_" | "single_" | "comp_"
+  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
 ): MinimalConfigEntity[] {
   return entities.map(e => ({
     slug: e.slug,
@@ -47,7 +48,7 @@ export function uiSchemaToSnapshot(
   return buildDesiredSnapshotFromConfig(
     toMinimal(manifest.collections, "dc_"),
     toMinimal(manifest.singles, "single_"),
-    toMinimal(manifest.components, "comp_"),
+    toMinimal(manifest.components, STORAGE_FORMAT.tablePrefix),
     dialect
   );
 }

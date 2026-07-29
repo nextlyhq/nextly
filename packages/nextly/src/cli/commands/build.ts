@@ -36,8 +36,8 @@ import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
-import type { ComponentConfig } from "../../components/config/types";
-import { assertValidComponentConfig } from "../../components/config/validate-component";
+import type { FieldGroupConfig } from "../../components/config/types";
+import { assertValidFieldGroupConfig } from "../../components/config/validate-field-group";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
@@ -241,13 +241,13 @@ export async function runBuild(
   result.collectionCount = collectionCount;
   logger.keyValue("Collections", collectionCount);
 
-  // Singles and components answer to the same declaration rules as collections,
+  // Singles and field groups answer to the same declaration rules as collections,
   // and a project can be made entirely of them. Validated before the
   // no-collections return below, which would otherwise let an invalid
   // declaration past the only check that would have caught it.
-  const entityValidation = validateSinglesAndComponents(
+  const entityValidation = validateSinglesAndFieldGroups(
     configResult.config.singles ?? [],
-    configResult.config.components ?? [],
+    configResult.config.fieldGroups ?? [],
     context
   );
   result.errors.push(...entityValidation.errors);
@@ -508,18 +508,18 @@ function reportDeclarationErrors(
 }
 
 /**
- * Run the comprehensive config validators over singles and components.
+ * Run the comprehensive config validators over singles and field groups.
  *
- * Collections were already covered here; singles and components were not, so a
+ * Collections were already covered here; singles and field groups were not, so a
  * declaration they alone carry — including one a plugin field type's own rules
  * reject — reported success from `nextly build` and surfaced later at runtime.
  * This is the one place the check is reliable, because the CLI registers plugin
  * field types while loading the config, so the registry is populated by the
  * time these run.
  */
-function validateSinglesAndComponents(
+function validateSinglesAndFieldGroups(
   singles: SingleConfig[],
-  components: ComponentConfig[],
+  fieldGroups: FieldGroupConfig[],
   context: CommandContext
 ): { errors: BuildError[] } {
   const { logger } = context;
@@ -534,13 +534,13 @@ function validateSinglesAndComponents(
     }
   }
 
-  for (const component of components) {
-    logger.debug(`Validating component: ${component.slug}`);
+  for (const fieldGroup of fieldGroups) {
+    logger.debug(`Validating field group: ${fieldGroup.slug}`);
     try {
-      assertValidComponentConfig(component);
+      assertValidFieldGroupConfig(fieldGroup);
     } catch (error) {
       errors.push({
-        collection: component.slug,
+        collection: fieldGroup.slug,
         message: describeError(error),
       });
     }
