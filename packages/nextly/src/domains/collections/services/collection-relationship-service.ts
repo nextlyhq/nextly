@@ -4,11 +4,17 @@ import { eq, inArray, sql } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { getDialectTables } from "../../../database";
+import { container } from "../../../di/container";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import {
+  AccessControlService,
+  DEFAULT_OWNER_FIELD,
+  isSuperAdminContext,
+} from "../../../services/access";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -18,7 +24,11 @@ import {
   stripPasswordFieldValues,
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
+import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+
+import { CollectionAccessService } from "./collection-access-service";
+import type { UserContext } from "./collection-types";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -838,6 +848,17 @@ export type RelationshipDbExecutor = {
 };
 
 export class CollectionRelationshipService extends BaseService {
+  /**
+   * Decides whether a caller may read a TARGET collection at all.
+   *
+   * Built on first use rather than injected: this service is constructed before
+   * the one that owns the access service, and resolving it lazily keeps that
+   * ordering intact. Stateless, so a second instance costs nothing but the
+   * construction.
+   */
+  private accessService: CollectionAccessService | null = null;
+  private readonly accessControl = new AccessControlService();
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -845,6 +866,85 @@ export class CollectionRelationshipService extends BaseService {
     private readonly collectionService: DynamicCollectionService
   ) {
     super(adapter, logger);
+  }
+
+  private resolveAccessService(): CollectionAccessService | null {
+    if (this.accessService) return this.accessService;
+    if (!container.has("rbacAccessControlService")) return null;
+    this.accessService = new CollectionAccessService(
+      this.adapter,
+      this.logger,
+      this.collectionService,
+      new AccessControlService(),
+      container.get<RBACAccessControlService>("rbacAccessControlService")
+    );
+    return this.accessService;
+  }
+
+  /**
+   * Whether the target collection's own stored read rules admit this caller.
+   *
+   * Populating a relationship hands back a row from another collection, and
+   * that collection's rules decide whether this caller may see it — the same
+   * decision a direct read of it makes. Without this, a caller refused the
+   * collection outright still obtains its rows by populating a relationship
+   * that points at them.
+   *
+   * Only the STORED rules are evaluated, not the RBAC permission gate. The
+   * route authorized this caller for the PARENT collection, and a permission
+   * check for a collection they never asked for by name would refuse
+   * population for every caller whose grants do not happen to name it —
+   * turning a fix into an outage. Whether expansion should also require a
+   * read permission on the target is a separate question, recorded on the
+   * task rather than decided here.
+   *
+   * Opt-in for the same reason field-level enforcement is: an entry point that
+   * has not been given the caller yet would judge everyone anonymous and hide
+   * rows from entitled callers.
+   */
+  private async targetCollectionReadable(
+    targetCollection: string,
+    access: RelatedRowAccess
+  ): Promise<boolean> {
+    if (!access.enforceFieldAccess) return true;
+    if (access.overrideAccess) return true;
+    // System entities carry no stored collection rules; their secrets are
+    // stripped by name during redaction instead.
+    if (isSystemEntity(targetCollection)) return true;
+
+    const accessService = this.resolveAccessService();
+    if (!accessService) return true;
+
+    const user = access.user as UserContext | undefined;
+    // Super-admins bypass stored rules on every other transport; expansion is
+    // not the one place that differs.
+    if (isSuperAdminContext(user)) return true;
+
+    try {
+      const collection =
+        await this.collectionService.getCollection(targetCollection);
+      const rules = accessService.getAccessRules(
+        collection as Record<string, unknown>
+      );
+      const result = await this.accessControl.evaluateAccess(
+        rules,
+        "read",
+        accessService.buildRequestContext(user),
+        undefined,
+        undefined,
+        // Collections stamp the owner into the `created_by` system column.
+        DEFAULT_OWNER_FIELD
+      );
+      // A rule answering with a CONSTRAINT rather than a boolean narrows which
+      // rows are readable, and narrowing is not yet applied to these fetches —
+      // so the row is withheld rather than returned unfiltered.
+      if (result.query) return false;
+      return result.allowed;
+    } catch {
+      // A target whose rules cannot be read is not a target whose rules are
+      // satisfied.
+      return false;
+    }
   }
 
   /**
@@ -1405,6 +1505,12 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess = {}
   ): Promise<Map<string, Record<string, unknown>>> {
     const resultMap = new Map<string, Record<string, unknown>>();
+
+    // Judged once for the whole batch: the decision is about the collection,
+    // not about any one row, so it does not need repeating per id.
+    if (!(await this.targetCollectionReadable(targetCollection, access))) {
+      return resultMap;
+    }
 
     if (relatedIds.length === 0) return resultMap;
 
@@ -2221,6 +2327,12 @@ export class CollectionRelationshipService extends BaseService {
     entryId: string,
     access: RelatedRowAccess = {}
   ): Promise<Record<string, unknown> | null> {
+    // Reads as absent rather than as an error: one unreadable reference must
+    // not refuse the whole parent read, and a caller learns no more than they
+    // would from a reference that points at nothing.
+    if (!(await this.targetCollectionReadable(collectionName, access))) {
+      return null;
+    }
     try {
       // Check if this is a system entity (like "users")
       if (isSystemEntity(collectionName)) {
