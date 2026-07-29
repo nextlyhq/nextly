@@ -32,8 +32,17 @@ function mergeMissing(
   original: Record<string, unknown>
 ): void {
   for (const [key, value] of Object.entries(original)) {
-    if (!(key in parsed)) {
-      parsed[key] = value;
+    // `key in parsed` would answer for the prototype too, so an option named
+    // `constructor` or `toString` would read as already present and never be
+    // restored. Defined rather than assigned for the same reason: a plain
+    // assignment to such a name can reach an inherited setter.
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) {
+      Object.defineProperty(parsed, key, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
       continue;
     }
     const kept = parsed[key];

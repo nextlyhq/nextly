@@ -281,6 +281,79 @@ describe("declaration checks reach every authoring path", () => {
     });
   });
 
+  it("refuses a manifest write whose declaration its plugin rejects", () => {
+    registerDocument();
+
+    // `dev-schema-handler` writes whatever `mutateManifest` returns, so this is
+    // the last point before the declaration reaches ui-schema.json.
+    let issues: Array<{ path: string; message: string }> = [];
+    try {
+      mutateManifest(
+        {
+          $schema: "s",
+          version: 1,
+          collections: [],
+          singles: [],
+          components: [],
+        },
+        {
+          type: "upsert",
+          kind: "collections",
+          entity: {
+            slug: "posts",
+            label: { singular: "Post", plural: "Posts" },
+            fields: [badField],
+          },
+        }
+      );
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ path: string; message: string }> }
+        | undefined;
+      issues = data?.errors ?? [];
+    }
+
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        message: "policy.kinds must name at least one kind.",
+      })
+    );
+  });
+
+  it("restores an option named after an Object.prototype member", () => {
+    registerDocument();
+
+    const next = mutateManifest(
+      {
+        $schema: "s",
+        version: 1,
+        collections: [],
+        singles: [],
+        components: [],
+      },
+      {
+        type: "upsert",
+        kind: "collections",
+        entity: {
+          slug: "posts",
+          label: { singular: "Post", plural: "Posts" },
+          // `"constructor" in parsed` is true via the prototype even after the
+          // submitted own property is stripped, so a presence check alone
+          // would drop this and never notice.
+          fields: [{ name: "body", type: "document", constructor: "custom" }],
+        },
+      }
+    );
+
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        next.collections[0]?.fields[0] ?? {},
+        "constructor"
+      )
+    ).toBe(true);
+  });
+
   it("still drops an undeclared key on a built-in field", () => {
     const next = mutateManifest(
       {

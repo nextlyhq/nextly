@@ -270,6 +270,11 @@ async function loadConfigInternal(
 
   if (!configPath) {
     debugLog(options, "No config file found, using default config");
+    // Cleared here too: a long-lived process that had loaded a plugin config
+    // and then lost its config file would otherwise keep the removed plugins'
+    // types registered, and Builder saves would go on recognizing them and
+    // running their `validate` and `validateOptions`.
+    clearFieldTypes();
     return {
       config: defineConfig({}),
       configPath: undefined,
