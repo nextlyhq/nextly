@@ -1390,6 +1390,16 @@ async function runReload(opts?: {
   });
 
   if (applyResult.success) {
+    // Provision again, now that the apply has created any brand-new main tables.
+    // The pre-apply call above cannot help an entity that did not exist yet: its
+    // companion carries a foreign key to a main table the pipeline had not created,
+    // so the CREATE failed and was swallowed, while the metadata and runtime schema
+    // were still published as localized — leaving non-default writes refused until
+    // another reload. Both calls are needed and both are idempotent: the earlier one
+    // seeds transitions while the main columns still exist, this one creates
+    // companions for entities that are new in this reload.
+    await ensureLocalizedCompanionsForReload(adapter, newConfig);
+
     // Publish each scope's recording policy only AFTER its field-tree metadata
     // sync succeeds (see the assignment after the syncs below): the DDL applied,
     // but if a sync then fails, activating the new decision while the mutation
