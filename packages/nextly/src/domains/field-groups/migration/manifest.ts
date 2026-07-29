@@ -14,6 +14,8 @@ import { createHash } from "node:crypto";
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
+import type { MigrationDirection } from "./state";
+
 /**
  * The names storage moves to.
  *
@@ -26,6 +28,23 @@ export const MIGRATION_TARGET = {
   tablePrefix: "fg_",
   columnType: "_field_group_type",
 } as const;
+
+/** The names this direction moves storage from and to. */
+function vocabulary(direction: MigrationDirection) {
+  const up = direction === "up";
+  return {
+    tableFrom: up ? STORAGE_FORMAT.tablePrefix : MIGRATION_TARGET.tablePrefix,
+    tableTo: up ? MIGRATION_TARGET.tablePrefix : STORAGE_FORMAT.tablePrefix,
+    registryFrom: up
+      ? STORAGE_FORMAT.registryTable
+      : MIGRATION_TARGET.registryTable,
+    registryTo: up
+      ? MIGRATION_TARGET.registryTable
+      : STORAGE_FORMAT.registryTable,
+    columnFrom: up ? STORAGE_FORMAT.columns.type : MIGRATION_TARGET.columnType,
+    columnTo: up ? MIGRATION_TARGET.columnType : STORAGE_FORMAT.columns.type,
+  };
+}
 
 /** A registry row, as far as the migration is concerned. */
 export interface RegistryRow {
@@ -73,11 +92,13 @@ export interface MigrationManifest {
  * `table_name` has to be read rather than derived: it decides not just what the
  * objects are called, but which of them are ours to rename at all.
  */
-export function retargetName(name: string): string | null {
-  if (!name.startsWith(STORAGE_FORMAT.tablePrefix)) return null;
-  return `${MIGRATION_TARGET.tablePrefix}${name.slice(
-    STORAGE_FORMAT.tablePrefix.length
-  )}`;
+export function retargetName(
+  name: string,
+  direction: MigrationDirection = "up"
+): string | null {
+  const { tableFrom, tableTo } = vocabulary(direction);
+  if (!name.startsWith(tableFrom)) return null;
+  return `${tableTo}${name.slice(tableFrom.length)}`;
 }
 
 /**
@@ -97,8 +118,20 @@ export function retargetName(name: string): string | null {
  */
 export function buildMigrationManifest(
   rows: readonly RegistryRow[],
-  options: { existingTables?: readonly string[] } = {}
+  options: {
+    direction?: MigrationDirection;
+    /**
+     * Every table in the database, not only the ones this migration expects.
+     *
+     * Partial input is worse than none: a source missing from an incomplete
+     * list reads as a rename that already happened. Omit it entirely when the
+     * catalog is not available, and only plan-level conflicts are checked.
+     */
+    existingTables?: readonly string[];
+  } = {}
 ): MigrationManifest {
+  const direction = options.direction ?? "up";
+  const v = vocabulary(direction);
   const entries: ManifestEntry[] = [];
 
   // Sorted by the stored table name so the plan is stable across runs. Step
@@ -112,15 +145,15 @@ export function buildMigrationManifest(
     // Idempotent by construction: a row already carrying a migrated name
     // produces no rename, so a plan rebuilt after a partial run contains only
     // the work still outstanding.
-    const target = retargetName(row.tableName);
+    const target = retargetName(row.tableName, direction);
     if (target === null) {
       // Custom-named: nothing to retire. Its column may still need renaming,
       // which is why this continues rather than skipping the row entirely.
       if (row.hasTypeColumn) {
         entries.push({
           kind: "column",
-          from: STORAGE_FORMAT.columns.type,
-          to: MIGRATION_TARGET.columnType,
+          from: v.columnFrom,
+          to: v.columnTo,
           table: row.tableName,
         });
       }
@@ -145,8 +178,8 @@ export function buildMigrationManifest(
       // the table rename, so the old name no longer resolves.
       entries.push({
         kind: "column",
-        from: STORAGE_FORMAT.columns.type,
-        to: MIGRATION_TARGET.columnType,
+        from: v.columnFrom,
+        to: v.columnTo,
         table: target,
       });
     }
@@ -154,13 +187,16 @@ export function buildMigrationManifest(
 
   entries.push({
     kind: "registry",
-    from: STORAGE_FORMAT.registryTable,
-    to: MIGRATION_TARGET.registryTable,
+    from: v.registryFrom,
+    to: v.registryTo,
   });
 
-  assertNoTargetCollision(entries, rows, options.existingTables ?? []);
+  const planned = options.existingTables
+    ? reconcileWithCatalog(entries, options.existingTables)
+    : entries;
+  assertNoTargetConflict(planned, rows);
 
-  return { entries, hash: hashManifest(entries) };
+  return { entries: planned, hash: hashManifest(planned) };
 }
 
 /**
@@ -179,64 +215,128 @@ export function hashManifest(entries: readonly ManifestEntry[]): string {
 }
 
 /**
- * Refuse a plan that would rename onto a name something else already answers to.
+ * Compare identifiers the way the loosest supported database would.
  *
- * `table_name` is unique but unconstrained, so a database can legitimately hold
- * both a generated `comp_hero` and another group whose author named its table
- * `fg_hero`. Nothing today prevents that pair, and the second one is left
- * untouched by design, so the first would rename onto an occupied name and fail
- * partway through the run.
- *
- * Detected before the migration starts rather than discovered during it: a
- * refusal here costs an operator a rename, while the same collision found
- * mid-run leaves storage half-migrated.
+ * SQLite matches table names case-insensitively, and MySQL does too under the
+ * usual `lower_case_table_names` settings. Comparing case-sensitively would let
+ * an existing `FG_HERO` slip past a check for `fg_hero` and fail the rename
+ * after the run had already started. Postgres can genuinely hold both, so this
+ * is stricter than Postgres requires — deliberately, because a refusal before
+ * the run costs an operator a rename while a failure during it leaves storage
+ * half-migrated.
  */
-function assertNoTargetCollision(
+function fold(name: string): string {
+  return name.toLowerCase();
+}
+
+/**
+ * Decide each rename against what the database actually contains.
+ *
+ * Four states, and only one of them is ordinary work:
+ *
+ * | source | target | meaning |
+ * |---|---|---|
+ * | present | absent  | the rename still has to happen |
+ * | absent  | present | this migration already did it; drop the entry |
+ * | present | present | something else owns the target; refuse |
+ * | absent  | absent  | the registry names a table that is gone; refuse |
+ *
+ * The second row is what makes a resume work. A run that crashed after a rename
+ * committed but before its marker write must be able to rebuild the plan and
+ * find that step already satisfied, rather than reading its own finished work
+ * as a conflict.
+ */
+function reconcileWithCatalog(
   entries: readonly ManifestEntry[],
-  rows: readonly RegistryRow[],
   existingTables: readonly string[]
+): ManifestEntry[] {
+  const catalog = new Set(existingTables.map(fold));
+  const kept: ManifestEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.kind === "column") {
+      // A column belongs to a table; if that table is not there, neither is it.
+      if (entry.table === undefined || catalog.has(fold(entry.table))) {
+        kept.push(entry);
+      }
+      continue;
+    }
+
+    const sourcePresent = catalog.has(fold(entry.from));
+    const targetPresent = catalog.has(fold(entry.to));
+
+    if (sourcePresent && targetPresent) {
+      throw refuseRename(
+        entry,
+        "migration target name is already in use",
+        `${entry.to} already exists while ${entry.from} still does`
+      );
+    }
+    if (!sourcePresent && !targetPresent) {
+      throw refuseRename(
+        entry,
+        "migration source object is missing",
+        `neither ${entry.from} nor ${entry.to} exists`
+      );
+    }
+    if (sourcePresent) kept.push(entry);
+    // Otherwise the target is present and the source is gone: already renamed.
+  }
+
+  return kept;
+}
+
+/**
+ * No two entries may claim the same name, and none may claim a name a registry
+ * row is keeping.
+ *
+ * Checked without needing a catalog, because both facts are properties of the
+ * plan and its inputs. A row whose table is left alone — one named through
+ * `dbName` — still occupies its name, and `table_name` being unique does not
+ * stop `comp_hero` and `fg_hero` coexisting.
+ */
+function assertNoTargetConflict(
+  entries: readonly ManifestEntry[],
+  rows: readonly RegistryRow[]
 ): void {
   const renamedAway = new Set(
-    entries.filter(e => e.kind !== "column").map(e => e.from)
+    entries.filter(e => e.kind !== "column").map(e => fold(e.from))
   );
-
-  // Names that will still be in use once the plan finishes: rows this plan
-  // leaves alone, plus catalog tables it never touches.
-  const survivors = new Set<string>();
-  for (const row of rows) {
-    if (!renamedAway.has(row.tableName)) survivors.add(row.tableName);
-  }
-  for (const table of existingTables) {
-    if (!renamedAway.has(table)) survivors.add(table);
-  }
+  const kept = new Set(
+    rows.map(r => fold(r.tableName)).filter(name => !renamedAway.has(name))
+  );
 
   const claimed = new Map<string, string>();
   for (const entry of entries) {
     if (entry.kind === "column") continue;
+    const key = fold(entry.to);
 
-    if (survivors.has(entry.to)) {
-      throw collision(
-        entry.from,
-        entry.to,
-        "an object that is not being renamed"
+    if (kept.has(key)) {
+      throw refuseRename(
+        entry,
+        "migration target name is already in use",
+        `${entry.to} belongs to a field group this plan leaves unchanged`
       );
     }
-    const previous = claimed.get(entry.to);
+    const previous = claimed.get(key);
     if (previous !== undefined) {
-      throw collision(entry.from, entry.to, `the rename of ${previous}`);
+      throw refuseRename(
+        entry,
+        "two objects would be renamed to the same name",
+        `${previous} also renames to ${entry.to}`
+      );
     }
-    claimed.set(entry.to, entry.from);
+    claimed.set(key, entry.from);
   }
 }
 
-function collision(from: string, to: string, occupant: string): NextlyError {
+function refuseRename(
+  entry: ManifestEntry,
+  reason: string,
+  detail: string
+): NextlyError {
   return NextlyError.serviceUnavailable({
-    logMessage: `field-group migration cannot rename ${from}: ${to} is already taken`,
-    logContext: {
-      reason: "migration target name is already in use",
-      from,
-      to,
-      occupiedBy: occupant,
-    },
+    logMessage: `field-group migration cannot rename ${entry.from}: ${detail}`,
+    logContext: { reason, from: entry.from, to: entry.to, detail },
   });
 }

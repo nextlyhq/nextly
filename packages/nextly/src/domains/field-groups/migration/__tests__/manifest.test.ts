@@ -170,7 +170,8 @@ describe("field-group migration manifest", () => {
   it("refuses when a target name is taken by a table outside the registry", () => {
     try {
       buildMigrationManifest([row({ tableName: "comp_hero" })], {
-        existingTables: ["fg_hero"],
+        // A complete catalog: the source, the squatter, and the registry.
+        existingTables: ["comp_hero", "fg_hero", "dynamic_components"],
       });
       expect.fail("expected a refusal");
     } catch (error) {
@@ -184,9 +185,70 @@ describe("field-group migration manifest", () => {
   it("allows a target whose occupant is itself being renamed away", () => {
     expect(() =>
       buildMigrationManifest([row({ tableName: "comp_hero" })], {
-        existingTables: ["comp_hero"],
+        existingTables: ["comp_hero", "dynamic_components"],
       })
     ).not.toThrow();
+  });
+
+  // A run that crashed after a rename committed but before its marker write
+  // must rebuild the plan and find that step already satisfied, rather than
+  // reading its own finished work as a conflict.
+  it("treats a completed rename as done, not as a collision", () => {
+    const { entries } = buildMigrationManifest(
+      [row({ tableName: "fg_hero" })],
+      { existingTables: ["fg_hero", "dynamic_field_groups"] }
+    );
+    expect(entries).toEqual([]);
+  });
+
+  // The registry names a table that is gone. Renaming it would fail after the
+  // marker had been written, so it is refused before the run starts.
+  it("refuses when the source table is missing entirely", () => {
+    expect(() =>
+      buildMigrationManifest([row({ tableName: "comp_hero" })], {
+        existingTables: ["dynamic_components"],
+      })
+    ).toThrowError(NextlyError);
+  });
+
+  // SQLite matches table names case-insensitively, as does MySQL under the
+  // usual settings, so a case-different squatter is still a squatter.
+  it("catches a target collision that differs only in case", () => {
+    expect(() =>
+      buildMigrationManifest([row({ tableName: "comp_hero" })], {
+        existingTables: ["comp_hero", "FG_HERO", "dynamic_components"],
+      })
+    ).toThrowError(NextlyError);
+  });
+
+  // The marker records a direction, so the plan has to be able to express one.
+  it("reverses the mapping for a down migration", () => {
+    const { entries } = buildMigrationManifest(
+      [row({ tableName: "fg_hero", hasCompanion: true })],
+      { direction: "down" }
+    );
+    expect(entries).toEqual([
+      { kind: "table", from: "fg_hero", to: "comp_hero" },
+      { kind: "companion", from: "fg_hero_locales", to: "comp_hero_locales" },
+      {
+        kind: "registry",
+        from: "dynamic_field_groups",
+        to: "dynamic_components",
+      },
+    ]);
+  });
+
+  it("reverses the column mapping too", () => {
+    const { entries } = buildMigrationManifest(
+      [row({ tableName: "fg_hero", hasTypeColumn: true })],
+      { direction: "down" }
+    );
+    expect(entries).toContainEqual({
+      kind: "column",
+      from: MIGRATION_TARGET.columnType,
+      to: STORAGE_FORMAT.columns.type,
+      table: "comp_hero",
+    });
   });
 
   // A plan rebuilt after a partial run must contain only outstanding work, so a
