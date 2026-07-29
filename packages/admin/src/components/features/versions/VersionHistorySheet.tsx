@@ -221,7 +221,13 @@ export function VersionHistorySheet({
     selected !== latestVersionNo &&
     !isRefetching &&
     !isRefetchError;
-  const canComparePrevious = selectedPresent && previousVersionNo !== null;
+  // Same freshness gate as "current": a stale or failed revalidation could point
+  // "previous" at a version retention has already pruned, 404-ing the diff.
+  const canComparePrevious =
+    selectedPresent &&
+    previousVersionNo !== null &&
+    !isRefetching &&
+    !isRefetchError;
 
   // When previewing a version whose previous same-locale version has not loaded
   // yet, page forward until it resolves or history runs out. Interleaved locales
