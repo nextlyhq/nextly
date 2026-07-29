@@ -22,6 +22,8 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { NextlyServiceConfig } from "../../di/register";
+import { NextlyError } from "../../errors";
+import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
@@ -36,7 +38,7 @@ type EntityKind = "collection" | "single" | "component";
 
 type RenamedContributes = Pick<
   NonNullable<PluginDefinition["contributes"]>,
-  "collections" | "singles" | "components"
+  "collections" | "singles" | "fieldGroups"
 >;
 
 interface Slugged {
@@ -123,12 +125,12 @@ function tryExtend<T extends Fielded>(
 function applyExtends(
   collections: NextlyServiceConfig["collections"],
   singles: NextlyServiceConfig["singles"],
-  components: NextlyServiceConfig["components"],
+  fieldGroups: NextlyServiceConfig["fieldGroups"],
   plugins: PluginDefinition[]
-): Pick<NextlyServiceConfig, "collections" | "singles" | "components"> {
+): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
   const cols = [...(collections ?? [])];
   const sin = [...(singles ?? [])];
-  const comp = [...(components ?? [])];
+  const comp = [...(fieldGroups ?? [])];
 
   for (const plugin of plugins) {
     for (const clause of plugin.contributes?.extend ?? []) {
@@ -145,7 +147,7 @@ function applyExtends(
     }
   }
 
-  return { collections: cols, singles: sin, components: comp };
+  return { collections: cols, singles: sin, fieldGroups: comp };
 }
 
 /**
@@ -210,18 +212,18 @@ export function applyExtendClauses<
 >(
   collections: C[] | undefined,
   singles: S[] | undefined,
-  components: P[] | undefined,
+  fieldGroups: P[] | undefined,
   clauses: DeferredExtend[],
   onUnknown: "throw" | "collect"
 ): {
   collections: C[];
   singles: S[];
-  components: P[];
+  fieldGroups: P[];
   deferred: DeferredExtend[];
 } {
   const cols = [...(collections ?? [])];
   const sin = [...(singles ?? [])];
-  const comp = [...(components ?? [])];
+  const comp = [...(fieldGroups ?? [])];
   const deferred: DeferredExtend[] = [];
   for (const { target, fields, owner } of clauses) {
     const applied =
@@ -233,7 +235,7 @@ export function applyExtendClauses<
       deferred.push({ target, fields, owner });
     }
   }
-  return { collections: cols, singles: sin, components: comp, deferred };
+  return { collections: cols, singles: sin, fieldGroups: comp, deferred };
 }
 
 /**
@@ -291,21 +293,54 @@ function renameEntity<T extends Fielded>(
  * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
  * the plugin's declared contributes unchanged when there is no rename map.
  */
+/**
+ * Rejects a plugin still contributing under the pre-rename key.
+ *
+ * The key was renamed rather than aliased, so a plugin compiled against the old
+ * name would otherwise load cleanly and have its entities dropped without a
+ * word. Failing here turns a silent loss of schema into a startup error naming
+ * the plugin.
+ */
+function assertNoLegacyContributesKey(
+  pluginName: string,
+  contributes: PluginDefinition["contributes"]
+): void {
+  if (!contributes) return;
+  const legacy = (contributes as { components?: unknown }).components;
+  if (legacy === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "contributes.components",
+        code: "PLUGIN_CONTRIBUTES_RENAMED",
+        message:
+          `Plugin '${pluginName}' contributes 'components', which is now ` +
+          `'fieldGroups'. Rename the key: the old one is no longer read.`,
+      },
+    ],
+    logContext: {
+      reason: "plugin-contributes-legacy-field-group-key",
+      plugin: pluginName,
+    },
+  });
+}
+
 function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
   const contributes = plugin.contributes;
+  assertNoLegacyContributesKey(plugin.name, contributes);
   const map = plugin.renameMap;
   if (!contributes || !map || Object.keys(map).length === 0) {
     return {
       collections: contributes?.collections,
       singles: contributes?.singles,
-      components: contributes?.components,
+      fieldGroups: contributes?.fieldGroups,
     };
   }
 
   const ownSlugs = new Set<string>([
     ...(contributes.collections ?? []).map(e => e.slug),
     ...(contributes.singles ?? []).map(e => e.slug),
-    ...(contributes.components ?? []).map(e => e.slug),
+    ...(contributes.fieldGroups ?? []).map(e => e.slug),
   ]);
   for (const key of Object.keys(map)) {
     if (!ownSlugs.has(key)) throw renameUnknownTargetError(key, plugin.name);
@@ -314,7 +349,7 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
   return {
     collections: contributes.collections?.map(e => renameEntity(e, map)),
     singles: contributes.singles?.map(e => renameEntity(e, map)),
-    components: contributes.components?.map(e => renameEntity(e, map)),
+    fieldGroups: contributes.fieldGroups?.map(e => renameEntity(e, map)),
   };
 }
 
@@ -328,7 +363,7 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
 function mergeRenamed(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
-): Pick<NextlyServiceConfig, "collections" | "singles" | "components"> {
+): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
   const renamed = plugins.map(p => ({
     owner: p.name,
     contributes: renamePluginContributes(p),
@@ -347,10 +382,13 @@ function mergeRenamed(
       config.singles ?? [],
       renamed.map(r => ({ owner: r.owner, entities: r.contributes.singles }))
     ),
-    components: mergeKind(
+    fieldGroups: mergeKind(
       "component",
-      config.components ?? [],
-      renamed.map(r => ({ owner: r.owner, entities: r.contributes.components }))
+      config.fieldGroups ?? [],
+      renamed.map(r => ({
+        owner: r.owner,
+        entities: r.contributes.fieldGroups,
+      }))
     ),
   };
 }
@@ -371,14 +409,17 @@ export function applyPluginSchemaContributions(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): NextlyServiceConfig {
-  const { collections, singles, components } = mergeRenamed(config, plugins);
+  // The fold is the one point every runtime and CLI path reaches, including
+  // after a plugin setup transformer has returned a new config object.
+  assertNoLegacyFieldGroupKey(config, "pluginFold");
+  const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
   // extend a code, own, or earlier-plugin entity). `extend[].target` is matched
   // against the merged (post-rename) slugs and is NOT itself rewritten through a
   // rename map — a plugin extending its own renamed entity must target the
   // renamed slug. (No current plugin extends its own entity.)
-  const extended = applyExtends(collections, singles, components, plugins);
+  const extended = applyExtends(collections, singles, fieldGroups, plugins);
 
   return { ...config, ...extended };
 }
@@ -396,11 +437,14 @@ export function applyPluginSchemaContributionsDeferred(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): FoldResult {
-  const { collections, singles, components } = mergeRenamed(config, plugins);
+  // The fold is the one point every runtime and CLI path reaches, including
+  // after a plugin setup transformer has returned a new config object.
+  assertNoLegacyFieldGroupKey(config, "pluginFold");
+  const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
   const r = applyExtendClauses(
     collections,
     singles,
-    components,
+    fieldGroups,
     flattenExtends(plugins),
     "collect"
   );
@@ -409,7 +453,7 @@ export function applyPluginSchemaContributionsDeferred(
       ...config,
       collections: r.collections,
       singles: r.singles,
-      components: r.components,
+      fieldGroups: r.fieldGroups,
     },
     deferredExtends: r.deferred,
   };
@@ -445,7 +489,7 @@ export function resolveBuilderExtends(
   return {
     collections: r.collections,
     singles: r.singles,
-    components: r.components,
+    components: r.fieldGroups,
   };
 }
 

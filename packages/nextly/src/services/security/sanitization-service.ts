@@ -8,6 +8,7 @@
 
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { SanitizationConfigInput } from "../../schemas/security-config";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 const TEXT_LIKE_FIELDS = new Set(["text", "string", "textarea", "email"]);
 
@@ -166,7 +167,7 @@ export function sanitizeEntryData(
       continue;
     }
 
-    if (field.type === "component") {
+    if (field.type === STORAGE_FORMAT.fieldType) {
       if (field.fields && Array.isArray(field.fields)) {
         const repeatable = (field as { repeatable?: boolean }).repeatable;
         if (repeatable && Array.isArray(value)) {

@@ -44,15 +44,15 @@ import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
 import type {
   ApiComponent,
-  ComponentSource,
-  ComponentMigrationStatus,
+  FieldGroupSource,
+  FieldGroupMigrationStatus,
 } from "@admin/types/entities";
 
 import { ComponentsEmptyState } from "./ComponentsEmptyState";
 import { ComponentTableSkeleton } from "./ComponentTableSkeleton";
 
 /** Source badge label + icon. */
-function getSourceBadge(source?: ComponentSource): {
+function getSourceBadge(source?: FieldGroupSource): {
   label: string;
   icon: React.ReactNode;
 } {
@@ -67,7 +67,7 @@ function getSourceBadge(source?: ComponentSource): {
 }
 
 /** Migration-status badge variant + label. */
-function getMigrationBadge(status?: ComponentMigrationStatus): {
+function getMigrationBadge(status?: FieldGroupMigrationStatus): {
   variant: "success" | "warning" | "primary" | "default" | "destructive";
   label: string;
 } {
@@ -111,11 +111,11 @@ export default function ComponentTable() {
     setPage(0);
   }, [debouncedSearch]);
 
-  const [sourceFilter, setSourceFilter] = useState<ComponentSource | "all">(
+  const [sourceFilter, setSourceFilter] = useState<FieldGroupSource | "all">(
     "all"
   );
   const [migrationFilter, setMigrationFilter] = useState<
-    ComponentMigrationStatus | "all"
+    FieldGroupMigrationStatus | "all"
   >("all");
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -384,12 +384,12 @@ export default function ComponentTable() {
   };
 
   const handleSourceFilterChange = (value: string) => {
-    setSourceFilter(value as ComponentSource | "all");
+    setSourceFilter(value as FieldGroupSource | "all");
     setPage(0);
   };
 
   const handleMigrationFilterChange = (value: string) => {
-    setMigrationFilter(value as ComponentMigrationStatus | "all");
+    setMigrationFilter(value as FieldGroupMigrationStatus | "all");
     setPage(0);
   };
 

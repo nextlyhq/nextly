@@ -32,10 +32,12 @@
  * ```
  */
 
-import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-component";
+import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../components/config/validate-field-group";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -82,7 +84,7 @@ function collectComponentRefs(
   refs: string[]
 ): void {
   for (const field of fields) {
-    if (field.type === "component") {
+    if (field.type === STORAGE_FORMAT.fieldType) {
       if (typeof field.component === "string") {
         refs.push(field.component);
       }
@@ -210,9 +212,9 @@ function validateComponentNesting(
 
   for (const slug of graph.keys()) {
     const depth = getMaxDepth(slug);
-    if (depth > MAX_COMPONENT_NESTING_DEPTH) {
+    if (depth > MAX_FIELD_GROUP_NESTING_DEPTH) {
       throw new Error(
-        `Component nesting depth exceeds maximum of ${MAX_COMPONENT_NESTING_DEPTH} levels ` +
+        `Component nesting depth exceeds maximum of ${MAX_FIELD_GROUP_NESTING_DEPTH} levels ` +
           `(component '${slug}' has a nesting chain ${depth} levels deep). ` +
           `Simplify the component structure to reduce nesting.`
       );
@@ -274,7 +276,9 @@ function validateNextlyConfig(config: NextlyConfig): void {
     slugs.add(slug);
   }
 
-  const components = config.components ?? [];
+  assertNoLegacyFieldGroupKey(config, "defineConfig");
+
+  const components = config.fieldGroups ?? [];
   const componentTables = new Map<string, string>();
 
   for (const comp of components) {
@@ -316,7 +320,7 @@ function validateNextlyConfig(config: NextlyConfig): void {
       throw NextlyError.validation({
         errors: [
           {
-            path: "components",
+            path: "fieldGroups",
             code: "COMPONENT_TABLE_COLLISION",
             message:
               `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve ` +
@@ -400,7 +404,7 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
     ...(config.singles ?? []),
     // Components localize too — a localized component with no app-level localization config
     // would route translatable writes to main comp_ columns the localized schema omits.
-    ...(config.components ?? []),
+    ...(config.fieldGroups ?? []),
   ];
   for (const entity of entities) {
     const rec = entity as {

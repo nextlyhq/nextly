@@ -33,7 +33,7 @@ import type {
   SecurityConfig,
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
-import type { ComponentConfig } from "../components/config/types";
+import type { FieldGroupConfig } from "../components/config/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
@@ -107,6 +107,7 @@ import type {
   CollectionSource,
   FieldDefinition,
 } from "../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type {
   CollectionRegistryService,
   CodeFirstCollectionConfig,
@@ -133,6 +134,7 @@ import type { Logger } from "../services/shared";
 import type { UserExtSchemaService } from "../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { registerFieldFunctions } from "../shared/lib/field-level-registry";
 import type { AdminConfig, AuthConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
@@ -233,8 +235,8 @@ export interface NextlyServiceConfig {
   /** Single (global document) configurations. */
   singles?: SingleConfig[];
 
-  /** Component (reusable field group) configurations. */
-  components?: ComponentConfig[];
+  /** Field Group (reusable field structure) configurations. */
+  fieldGroups?: FieldGroupConfig[];
 
   /** User model extension configuration. */
   users?: UserConfig;
@@ -365,6 +367,8 @@ export async function registerServices(
       "Services are already registered. Call clearServices() first if you need to re-register."
     );
   }
+
+  assertNoLegacyFieldGroupKey(config, "registerServices");
 
   // ----------------------------------------
   // Layer 0a: Resolve Plugins (validate + order)
@@ -1093,7 +1097,7 @@ async function initializeSchemaRegistry(
     // main comp_ table and registers/creates its companion `comp_<slug>_locales`.
     await loadDynamicTables(
       adapter,
-      "dynamic_components",
+      STORAGE_FORMAT.registryTable,
       async (tableName, fields, _hasStatus, localized) => {
         const { ComponentSchemaService } = await import(
           "../services/components/component-schema-service"
@@ -1727,8 +1731,8 @@ async function syncCodeFirstComponents(
   transformedConfig: NextlyServiceConfig
 ): Promise<void> {
   if (
-    !transformedConfig.components ||
-    transformedConfig.components.length === 0
+    !transformedConfig.fieldGroups ||
+    transformedConfig.fieldGroups.length === 0
   ) {
     return;
   }
@@ -1738,7 +1742,7 @@ async function syncCodeFirstComponents(
   );
 
   const codeFirstComponentConfigs: CodeFirstComponentConfig[] =
-    transformedConfig.components.map(comp => ({
+    transformedConfig.fieldGroups.map(comp => ({
       slug: comp.slug,
       label:
         comp.label?.singular ??
@@ -1746,8 +1750,8 @@ async function syncCodeFirstComponents(
       fields: comp.fields,
       description: comp.description,
       admin: comp.admin,
-      configPath: `components/${comp.slug}.ts`,
-      // i18n: forward the localized flag from defineComponent so the registry persists
+      configPath: `${STORAGE_FORMAT.configPathDir}/${comp.slug}.ts`,
+      // i18n: forward the localized flag from defineFieldGroup so the registry persists
       // it and the companion is provisioned for embedded per-language values.
       localized: (comp as { localized?: boolean }).localized === true,
     }));
@@ -1779,9 +1783,8 @@ async function syncCodeFirstComponents(
   );
 
   for (const slug of componentSyncResult.unchanged) {
-    // A component may declare a custom `dbName`, in which case its table is not
-    // named `comp_<slug>` at all. Probing the unresolved name would never find
-    // it and would queue a redundant sync on every boot.
+    // The physical name normalizes the slug, so probing the raw slug would
+    // never find the table and would queue a redundant sync on every boot.
     const tableName = resolveComponentTableName(slug);
     try {
       const tableExists = await adapter.tableExists(tableName);
@@ -1810,7 +1813,7 @@ async function syncCodeFirstComponents(
     const compSchemaService = new CompSchemaService(dialect);
 
     for (const slug of componentsNeedingTableSync) {
-      const compConfig = transformedConfig.components.find(
+      const compConfig = transformedConfig.fieldGroups.find(
         c => c.slug === slug
       );
       if (!compConfig) continue;

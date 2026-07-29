@@ -12,7 +12,7 @@
 
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { ComponentConfig } from "../../components/config/types";
+import type { FieldGroupConfig } from "../../components/config/types";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
   LocalizationConfig,
@@ -581,8 +581,8 @@ export interface NextlyConfig {
   /** Array of Single configurations. */
   singles?: SingleConfig[];
 
-  /** Array of Component configurations. */
-  components?: ComponentConfig[];
+  /** Array of Field Group configurations. */
+  fieldGroups?: FieldGroupConfig[];
 
   /** User model extension configuration. */
   users?: UserConfig;
@@ -689,7 +689,7 @@ export interface SanitizedNextlyConfig {
   singles: SingleConfig[];
 
   /** Array of Component configurations (empty array if none provided). */
-  components: ComponentConfig[];
+  fieldGroups: FieldGroupConfig[];
 
   /** User model extension configuration. Undefined if no user config provided. */
   users?: UserConfig;
@@ -879,7 +879,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
   return {
     collections: config.collections ?? [],
     singles: config.singles ?? [],
-    components: config.components ?? [],
+    fieldGroups: config.fieldGroups ?? [],
     users: config.users,
     email: config.email,
     typescript: {

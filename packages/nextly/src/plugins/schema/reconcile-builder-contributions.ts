@@ -104,7 +104,7 @@ export function reconcileBuilderContributions(
     entities: {
       collections: r.collections,
       singles: r.singles,
-      components: r.components,
+      components: r.fieldGroups,
     },
     unresolved: r.deferred.map(d => ({ target: d.target, owner: d.owner })),
   };

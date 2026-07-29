@@ -42,7 +42,7 @@ import {
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
-import type { DesiredComponent } from "../../domains/schema/pipeline/types";
+import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -54,6 +54,7 @@ import {
   getI18nArchiveDdl,
   getI18nArchiveIndexRepairDdl,
 } from "../../schemas/nextly-i18n-archive";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import { ComponentSchemaService } from "../../services/components/component-schema-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -565,7 +566,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       desired.components[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredComponent["fields"],
+        fields: fields as DesiredFieldGroup["fields"],
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
@@ -678,7 +679,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       desired.components[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredComponent["fields"],
+        fields: fields as DesiredFieldGroup["fields"],
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
@@ -758,7 +759,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       let versionPersisted = true;
       try {
         await adapter.update(
-          "dynamic_components",
+          STORAGE_FORMAT.registryTable,
           {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),

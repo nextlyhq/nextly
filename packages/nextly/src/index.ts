@@ -251,7 +251,7 @@ export {
   type DesiredSchema,
   type DesiredCollection,
   type DesiredSingle,
-  type DesiredComponent,
+  type DesiredFieldGroup,
   type DesiredSchemaOverrides,
   type SchemaApplyErrorCode,
 } from "./domains/schema/pipeline";
@@ -586,27 +586,27 @@ export {
 // COMPONENTS
 // ============================================================
 
-// Component configuration (defineComponent, ComponentConfig, etc.)
+// Component configuration (defineFieldGroup, FieldGroupConfig, etc.)
 export {
-  defineComponent,
-  type ComponentConfig,
-  type ComponentLabel,
-  type ComponentAdminOptions,
+  defineFieldGroup,
+  type FieldGroupConfig,
+  type FieldGroupLabel,
+  type FieldGroupAdminOptions,
 } from "./components";
 
 // Component configuration validation
 export {
-  validateComponentConfig,
-  assertValidComponentConfig,
-  type ComponentValidationResult,
-  type ComponentValidationError,
-  type ComponentValidationErrorCode,
-  RESERVED_COMPONENT_SLUGS,
-  MAX_COMPONENT_NESTING_DEPTH,
+  validateFieldGroupConfig,
+  assertValidFieldGroupConfig,
+  type FieldGroupValidationResult,
+  type FieldGroupValidationError,
+  type FieldGroupValidationErrorCode,
+  RESERVED_FIELD_GROUP_SLUGS,
+  MAX_FIELD_GROUP_NESTING_DEPTH,
 } from "./components";
 
 // Component field type (also exported from ./collections/fields via barrel export)
-export type { ComponentFieldConfig } from "./collections/fields/types/component";
+export type { FieldGroupFieldConfig } from "./collections/fields/types/component";
 
 // ============================================================
 // USER MANAGEMENT

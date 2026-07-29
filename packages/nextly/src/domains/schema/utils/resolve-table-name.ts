@@ -11,6 +11,7 @@
 // resolver (see resolveSingleTableName / resolveComponentTableName) rather than
 // a single generic rule, or generated names diverge from the live database.
 
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { normalizeIdentifier } from "../../singles/services/resolve-single-table-name";
 
 // Rule (mirrors the runtime collection sync in di/register.ts exactly):
@@ -34,5 +35,5 @@ export function resolveCollectionTableName(
 // identifier-case rules that decide whether two spellings are one table are
 // server configuration rather than anything the config can state.
 export function resolveComponentTableName(slug: string): string {
-  return `comp_${normalizeIdentifier(slug)}`;
+  return `${STORAGE_FORMAT.tablePrefix}${normalizeIdentifier(slug)}`;
 }

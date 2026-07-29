@@ -55,10 +55,10 @@ describe("ComponentDataService", () => {
   });
 
   describe("getComponentTableName", () => {
-    it("returns the registry's physical name for a custom-named component", async () => {
-      // A component whose dbName is honored verbatim has a table name that
-      // cannot be derived from its slug, so callers addressing its storage
-      // (filter subqueries) must read it from the registry.
+    it("returns the registry's physical name for a non-derived table", async () => {
+      // A row written before names resolved canonically points at a table the
+      // slug does not reconstruct, so callers addressing its storage (filter
+      // subqueries) must read the name from the registry.
       ctx.registry.registerComponent("legal", {
         slug: "legal",
         tableName: "legal_blocks",

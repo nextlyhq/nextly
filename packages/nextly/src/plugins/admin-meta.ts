@@ -186,7 +186,7 @@ export function buildPluginAdminMeta(
     // everything the plugin adds without loading the plugin itself.
     const singles = plugin.contributes?.singles?.map(s => s.slug) ?? [];
     if (singles.length > 0) meta.singles = singles;
-    const components = plugin.contributes?.components?.map(c => c.slug) ?? [];
+    const components = plugin.contributes?.fieldGroups?.map(c => c.slug) ?? [];
     if (components.length > 0) meta.components = components;
 
     // Behavioral admin UI only for enabled plugins.

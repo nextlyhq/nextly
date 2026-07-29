@@ -17,6 +17,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { isFieldLocalized } from "../i18n/classify-fields";
 
 /**
@@ -381,7 +382,9 @@ function pruneContainerValue(
   // keeps a key that this row's component has since lost merely because a
   // sibling component still declares it — and the save path, which serializes
   // against the row's own schema, then drops it without saying so.
-  const rowType = (value as { _componentType?: unknown })._componentType;
+  const rowType = (value as { _componentType?: unknown })[
+    STORAGE_FORMAT.wireTypeKey
+  ];
   const rowSchema =
     isComponentValue && typeof rowType === "string"
       ? componentSchemas?.get(rowType)
@@ -401,14 +404,17 @@ function pruneContainerValue(
     // Only for component instances. A group or repeater is ordinary JSON, where
     // a stale key that happens to be called `id` is exactly the kind of unknown
     // key this function exists to remove.
-    if (isComponentValue && (key === "_componentType" || key === "id")) {
+    if (
+      isComponentValue &&
+      (key === STORAGE_FORMAT.wireTypeKey || key === "id")
+    ) {
       // The type marker exists to record what the snapshot captured, and it has
       // already done its work above by selecting this row's schema. Carrying it
       // into the payload is only safe where the write path consumes it, which
       // is the dynamic zone alone. A single component nested in a group or
       // repeater is written as part of that container's JSON, and a marker left
       // inside would be stored verbatim and then served by ordinary reads.
-      if (key === "_componentType" && !storesType) continue;
+      if (key === STORAGE_FORMAT.wireTypeKey && !storesType) continue;
       out[key] = child;
       continue;
     }
@@ -491,7 +497,7 @@ function retainsNothing(pruned: unknown): boolean {
     if (typeof row !== "object" || row === null) return false;
     const keys = Object.keys(row);
     if (keys.length === 0) return false;
-    return keys.every(k => k === "id" || k === "_componentType");
+    return keys.every(k => k === "id" || k === STORAGE_FORMAT.wireTypeKey);
   };
 
   if (Array.isArray(pruned)) {
@@ -526,7 +532,7 @@ function withoutTypeMarker(value: unknown): unknown {
 
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key !== "_componentType") out[key] = child;
+    if (key !== STORAGE_FORMAT.wireTypeKey) out[key] = child;
   }
   return out;
 }
@@ -549,7 +555,7 @@ function partitionAllowedInstances(
 
   const typeOf = (row: unknown): string | undefined =>
     typeof row === "object" && row !== null
-      ? (row as { _componentType?: string })._componentType
+      ? (row as { _componentType?: string })[STORAGE_FORMAT.wireTypeKey]
       : undefined;
 
   // A row keeps its place when its type is allowed, or when this field stores
@@ -692,13 +698,13 @@ export function buildRestorePayload(
     // instances that were not in the incoming set — so resubmitting a snapshot
     // of only-removed types would clear the field rather than leaving it alone.
     const allowed = allowedComponentSlugs(field);
-    const isComponentField = allowed !== null;
+    const isFieldGroupField = allowed !== null;
     const children = childrenOf(field, componentSchemas);
 
     // A component field is partitioned even when its schema resolves to no
     // children: a component may legitimately declare none. Gating the partition
     // on children alone would let those fields through unchecked.
-    if (isComponentField || children.length > 0) {
+    if (isFieldGroupField || children.length > 0) {
       // A cleared field is restored as-is, so the update path removes the live
       // rows. Filtering cannot tell that from a value that lost every instance,
       // and the two need opposite outcomes.
@@ -706,7 +712,7 @@ export function buildRestorePayload(
       // Except when the field permits no component at all: the save path has no
       // branch for an empty allowlist, so the clear would never be applied and
       // the live rows would survive a restore that reported success.
-      if (isComponentField && isClearedComponentValue(value)) {
+      if (isFieldGroupField && isClearedComponentValue(value)) {
         if (allowed.size === 0) {
           droppedFields.push(key);
           continue;
@@ -748,7 +754,7 @@ export function buildRestorePayload(
         removed,
         blocked,
         key,
-        isComponentField,
+        isFieldGroupField,
         fieldNamesMultipleComponents(field)
       );
 
@@ -768,7 +774,7 @@ export function buildRestorePayload(
       // component since, every key of the old value is unknown to the new
       // schema — which is what this detects, rather than pruning the old
       // component's values into the new component's shape.
-      if (isComponentField && retainsNothing(pruned)) {
+      if (isFieldGroupField && retainsNothing(pruned)) {
         droppedFields.push(key);
         continue;
       }

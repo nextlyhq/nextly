@@ -17,6 +17,7 @@ import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 /**
  * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
@@ -324,7 +325,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // slot. Exactly one form must be present, and every referenced slug
       // must be a real slug — a blank or malformed reference points at no
       // loadable component, so runtime writes to it would be silently dropped.
-      if (f.type === "component") {
+      if (f.type === STORAGE_FORMAT.fieldType) {
         const hasSingle = f.component !== undefined;
         const hasMulti = f.components !== undefined;
         if (hasSingle === hasMulti) {
@@ -332,14 +333,18 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             code: z.ZodIssueCode.custom,
             message:
               "component fields require either a `component` slug or a `components[]` list, but not both",
-            path: [hasSingle ? "components" : "component"],
+            path: [
+              hasSingle
+                ? STORAGE_FORMAT.refKeys.many
+                : STORAGE_FORMAT.refKeys.single,
+            ],
           });
         } else if (hasSingle) {
           if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: "component must be a valid component slug",
-              path: ["component"],
+              path: [STORAGE_FORMAT.refKeys.single],
             });
           }
         } else if (
@@ -351,7 +356,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             code: z.ZodIssueCode.custom,
             message:
               "components must be a non-empty list of valid component slugs",
-            path: ["components"],
+            path: [STORAGE_FORMAT.refKeys.many],
           });
         }
       }
@@ -465,7 +470,10 @@ function entity(kind?: "collection" | "single" | "component") {
       // collection or single, whose versioning covers them. Accepting the key
       // here would persist a setting nothing reads and the Builder never
       // offers.
-      if (kind === "component" && e.versions !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.versions !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'versions' is not supported on components",
@@ -475,7 +483,10 @@ function entity(kind?: "collection" | "single" | "component") {
       // Components have no entries and no registry row of their own, so a
       // revalidation switch would persist a setting nothing reads and the
       // Builder never offers (same rationale as `versions` above).
-      if (kind === "component" && e.revalidate !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.revalidate !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'revalidate' is not supported on components",
@@ -486,7 +497,10 @@ function entity(kind?: "collection" | "single" | "component") {
       // recorded against the collection or single that embeds it, whose own
       // switch already governs them. Accepting the key here would persist a
       // setting nothing reads (same rationale as `revalidate` above).
-      if (kind === "component" && e.webhooks !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.webhooks !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'webhooks' is not supported on components",
@@ -551,7 +565,7 @@ export const uiSchemaManifest = z
   .superRefine((m, ctx) => {
     uniqueSlugs(m.collections, ctx, "collections");
     uniqueSlugs(m.singles, ctx, "singles");
-    uniqueSlugs(m.components, ctx, "components");
+    uniqueSlugs(m.components, ctx, STORAGE_FORMAT.manifest.key);
   });
 
 export type UiSchemaManifest = z.infer<typeof uiSchemaManifest>;

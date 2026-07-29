@@ -37,12 +37,13 @@ import {
   isJSONField,
   isBlocksField,
   isChipsField,
-  isComponentField,
+  isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
-import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-components/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 
 // ============================================================
@@ -223,7 +224,7 @@ export class TypeGenerator {
   generateTypesFile(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[] = [],
-    components: DynamicComponentRecord[] = [],
+    components: DynamicFieldGroupRecord[] = [],
     userFields: UserFieldDefinitionRecord[] = [],
     permissionSlugs: string[] = [],
     eventNames: string[] = []
@@ -341,7 +342,7 @@ export class TypeGenerator {
   generateInterface(
     collection: DynamicCollectionRecord,
     allCollections: DynamicCollectionRecord[] = [],
-    allComponents: DynamicComponentRecord[] = []
+    allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedTypeInterface {
     const interfaceName = this.toPascalCase(collection.slug);
     const lines: string[] = [];
@@ -417,7 +418,7 @@ export class TypeGenerator {
   generateSingleInterface(
     single: DynamicSingleRecord,
     allCollections: DynamicCollectionRecord[] = [],
-    allComponents: DynamicComponentRecord[] = []
+    allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedSingleTypeInterface {
     const interfaceName = this.toPascalCase(single.slug);
     const lines: string[] = [];
@@ -490,8 +491,8 @@ export class TypeGenerator {
    * @returns Generated interface with code and metadata
    */
   generateComponentInterface(
-    component: DynamicComponentRecord,
-    allComponents: DynamicComponentRecord[] = [],
+    component: DynamicFieldGroupRecord,
+    allComponents: DynamicFieldGroupRecord[] = [],
     allCollections: DynamicCollectionRecord[] = []
   ): GeneratedComponentTypeInterface {
     const interfaceName = this.toComponentInterfaceName(component.slug);
@@ -514,7 +515,7 @@ export class TypeGenerator {
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
     // Add discriminator property for type narrowing in dynamic zones
-    lines.push(`  _componentType: "${component.slug}";`);
+    lines.push(`  ${STORAGE_FORMAT.wireTypeKey}: "${component.slug}";`);
 
     // Generate field types
     for (const field of component.fields) {
@@ -547,7 +548,7 @@ export class TypeGenerator {
    * @returns Array of generated interfaces
    */
   generateAllComponentInterfaces(
-    components: DynamicComponentRecord[],
+    components: DynamicFieldGroupRecord[],
     allCollections: DynamicCollectionRecord[] = []
   ): GeneratedComponentTypeInterface[] {
     return components.map(component =>
@@ -618,7 +619,7 @@ export class TypeGenerator {
   private generateFieldType(
     field: DataFieldConfig,
     allCollections: DynamicCollectionRecord[] = [],
-    allComponents: DynamicComponentRecord[] = []
+    allComponents: DynamicFieldGroupRecord[] = []
   ): string | null {
     // Skip fields without names
     if (!("name" in field) || !field.name) {
@@ -706,7 +707,7 @@ export class TypeGenerator {
       tsType = "BlockDocument";
     }
     // Component fields
-    else if (isComponentField(field)) {
+    else if (isFieldGroupField(field)) {
       tsType = this.buildComponentType(field, allComponents);
     }
     // Unknown field type
@@ -786,7 +787,7 @@ export class TypeGenerator {
   private usesBlocksField(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[],
-    components: DynamicComponentRecord[]
+    components: DynamicFieldGroupRecord[]
   ): boolean {
     const entities = [...collections, ...singles, ...components];
     return entities.some(entity => hasBlocksField(entity.fields ?? []));
@@ -931,7 +932,7 @@ export class TypeGenerator {
   private buildArrayType(
     field: DataFieldConfig,
     allCollections: DynamicCollectionRecord[],
-    allComponents: DynamicComponentRecord[] = []
+    allComponents: DynamicFieldGroupRecord[] = []
   ): string {
     const arrayField = field as {
       fields?: FieldConfig[];
@@ -959,7 +960,7 @@ ${properties}
   private buildGroupType(
     field: DataFieldConfig,
     allCollections: DynamicCollectionRecord[],
-    allComponents: DynamicComponentRecord[] = []
+    allComponents: DynamicFieldGroupRecord[] = []
   ): string {
     const groupField = field as {
       fields?: FieldConfig[];
@@ -991,7 +992,7 @@ ${properties}
    */
   private buildComponentType(
     field: DataFieldConfig,
-    _allComponents: DynamicComponentRecord[]
+    _allComponents: DynamicFieldGroupRecord[]
   ): string {
     const componentField = field as {
       component?: string;
@@ -1035,7 +1036,7 @@ ${properties}
   private buildObjectProperties(
     fields: FieldConfig[],
     allCollections: DynamicCollectionRecord[],
-    allComponents: DynamicComponentRecord[] = []
+    allComponents: DynamicFieldGroupRecord[] = []
   ): string {
     const lines: string[] = [];
 
@@ -1141,7 +1142,7 @@ ${properties}
   private generateConfigInterface(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[] = [],
-    components: DynamicComponentRecord[] = [],
+    components: DynamicFieldGroupRecord[] = [],
     permissionSlugs: string[] = [],
     eventNames: string[] = []
   ): string {

@@ -99,7 +99,7 @@ export function collectPluginInfo(
       optionalDependsOn: Object.keys(plugin.optionalDependsOn ?? {}),
       collections: pluginCollectionSlugs(plugin),
       singles: (contributes?.singles ?? []).map(s => s.slug),
-      components: (contributes?.components ?? []).map(c => c.slug),
+      components: (contributes?.fieldGroups ?? []).map(c => c.slug),
       permissions: (permissionsByOwner.get(plugin.name) ?? []).sort(),
       events: (contributes?.events ?? []).map(e => e.name),
       routeCount: routeCountByPlugin.get(plugin.name) ?? 0,
