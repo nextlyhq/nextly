@@ -20,13 +20,16 @@ describe("schemaFileApi", () => {
 
   it("writeSingle posts to /_dev/schema/single", async () => {
     await schemaFileApi.writeSingle(entity);
-    expect(protectedApi.post).toHaveBeenCalledWith("/_dev/schema/single", entity);
+    expect(protectedApi.post).toHaveBeenCalledWith(
+      "/_dev/schema/single",
+      entity
+    );
   });
 
-  it("writeComponent posts to /_dev/schema/component", async () => {
-    await schemaFileApi.writeComponent(entity);
+  it("writeFieldGroup posts to /_dev/schema/field-group", async () => {
+    await schemaFileApi.writeFieldGroup(entity);
     expect(protectedApi.post).toHaveBeenCalledWith(
-      "/_dev/schema/component",
+      "/_dev/schema/field-group",
       entity
     );
   });
@@ -38,12 +41,14 @@ describe("schemaFileApi", () => {
     );
   });
 
-  it("deleteSingle / deleteComponent target the right path", async () => {
+  it("deleteSingle / deleteFieldGroup target the right path", async () => {
     await schemaFileApi.deleteSingle("hero");
-    expect(protectedApi.delete).toHaveBeenCalledWith("/_dev/schema/single/hero");
-    await schemaFileApi.deleteComponent("card");
     expect(protectedApi.delete).toHaveBeenCalledWith(
-      "/_dev/schema/component/card"
+      "/_dev/schema/single/hero"
+    );
+    await schemaFileApi.deleteFieldGroup("card");
+    expect(protectedApi.delete).toHaveBeenCalledWith(
+      "/_dev/schema/field-group/card"
     );
   });
 });

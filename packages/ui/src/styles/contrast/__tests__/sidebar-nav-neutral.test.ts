@@ -54,7 +54,7 @@ const NAV_SOURCES = [
   "packages/admin/src/components/layout/sidebar/DualSidebar.tsx",
   "packages/admin/src/components/features/dashboard/SidebarNavigation.tsx",
   "packages/admin/src/components/features/dashboard/DynamicCollectionNav.tsx",
-  "packages/admin/src/components/features/dashboard/DynamicComponentNav.tsx",
+  "packages/admin/src/components/features/dashboard/DynamicFieldGroupNav.tsx",
   "packages/admin/src/components/features/dashboard/DynamicCustomGroupNav.tsx",
   "packages/admin/src/components/features/dashboard/DynamicSingleNav.tsx",
 ];

@@ -224,7 +224,7 @@ export async function runDbSync(
 
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles.length;
-  const componentCount = configResult.config.components.length;
+  const componentCount = configResult.config.fieldGroups.length;
   const userFieldCount = configResult.config.users?.fields?.length ?? 0;
   logger.keyValue("Collections", collectionCount);
   logger.keyValue("Singles", singleCount);

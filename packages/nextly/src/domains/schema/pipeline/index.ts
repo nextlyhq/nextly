@@ -42,7 +42,7 @@ import type { DesiredSchema } from "./types";
 
 export type {
   DesiredCollection,
-  DesiredComponent,
+  DesiredFieldGroup,
   DesiredSchema,
   DesiredSingle,
 } from "./types";

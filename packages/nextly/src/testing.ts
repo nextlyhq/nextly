@@ -10,6 +10,8 @@
 
 export {
   createTestNextly,
+  getConfiguredTestDialects,
   type CreateTestNextlyOptions,
+  type TestDialect,
   type TestNextly,
 } from "./plugins/test-nextly";

@@ -100,16 +100,18 @@ export type {
 } from "./forms";
 
 export type {
-  ComponentSlug,
-  DataFromComponentSlug,
-  ComponentDefinition,
-  FindComponentsArgs,
-  FindComponentBySlugArgs,
-  CreateComponentArgs,
-  UpdateComponentArgs,
-  DeleteComponentArgs,
-  ComponentListResult,
-} from "./components";
+  // Slug and data types resolve against the `Config.fieldGroups` map that
+  // `TypeGenerator` emits, so callers narrow to the same field-group slugs the
+  // generated file declares.
+  FieldGroupSlug,
+  DataFromFieldGroupSlug,
+  FieldGroupDefinition,
+  FindFieldGroupsArgs,
+  FindFieldGroupBySlugArgs,
+  CreateFieldGroupArgs,
+  UpdateFieldGroupArgs,
+  DeleteFieldGroupArgs,
+} from "./field-groups";
 
 export type {
   FindEmailProvidersArgs,

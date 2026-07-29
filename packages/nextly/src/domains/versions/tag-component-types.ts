@@ -17,6 +17,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 /**
  * Looks up a component's own fields by slug.
@@ -152,13 +153,13 @@ function tagValue(
   // stopping at the repeated slug would tag the first two levels and leave
   // every level below them bare.
   const ownFields = resolve?.(slug);
-  if (!ownFields) return { ...source, _componentType: slug };
+  if (!ownFields) return { ...source, [STORAGE_FORMAT.wireTypeKey]: slug };
 
   seen.add(source);
   const inner = tagFieldsIn(source, ownFields, resolve, seen);
   seen.delete(source);
 
-  return { ...inner, _componentType: slug };
+  return { ...inner, [STORAGE_FORMAT.wireTypeKey]: slug };
 }
 
 /**
@@ -187,7 +188,7 @@ function tagZoneRows(
   // The row's own type decides which schema its values belong to. A row whose
   // type is missing, or names a component the field does not allow, is left
   // alone rather than walked against a schema that may not describe it.
-  const rowType = source._componentType;
+  const rowType = source[STORAGE_FORMAT.wireTypeKey];
   if (typeof rowType !== "string" || !allowed.includes(rowType)) return source;
 
   const ownFields = resolve?.(rowType);

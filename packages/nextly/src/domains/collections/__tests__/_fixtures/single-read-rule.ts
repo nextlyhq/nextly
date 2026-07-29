@@ -85,6 +85,10 @@ export default function singleReadRule({
         if (settings) settings.injected = "from-the-rule";
       }
       return true;
+    // Allows the STORED row and refuses the document a first read would create,
+    // so the two are distinguishable when the row disappears mid-read.
+    case "seeded-only":
+      return (data as { siteName?: string })?.siteName === "Acme";
     // Asserts the identity arguments agree. A read of a Single that does not
     // exist yet is judged against the document it would create, so the id it is
     // told about has to be the id that document carries.

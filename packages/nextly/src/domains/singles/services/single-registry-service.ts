@@ -47,10 +47,16 @@ import {
   type BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import type { SingleConfig } from "../../../singles/config/types";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import {
+  clearWebhookRecording,
+  setWebhookRecording,
+} from "../../webhooks/recording-policy";
+import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import { resolveSingleTableName } from "./resolve-single-table-name";
 
@@ -111,6 +117,9 @@ export interface CodeFirstSingleConfig {
   /** Cache-revalidation config (or null when the single sets none). */
   revalidate?: DynamicSingleInsert["revalidate"];
 
+  /** Webhook recording policy (or null when the single records, the default). */
+  webhooks?: DynamicSingleInsert["webhooks"];
+
   /** Admin UI configuration */
   admin?: DynamicSingleInsert["admin"];
 
@@ -170,8 +179,73 @@ export class SingleRegistryService extends BaseRegistryService<
   /** Optional PermissionSeedService for auto-permission management. */
   private permissionSeedService?: PermissionSeedService;
 
+  /**
+   * Live code-first Single configs, kept for their field `defaultValue`s. A
+   * `defaultValue` is a function, which is dropped when field metadata is
+   * JSON-serialized to `dynamic_singles.fields`, so the default resolution on a
+   * first-read auto-create reads defaults from here instead of the serialized
+   * (function-less) registry row. Undefined for UI-created Singles. Set only
+   * AFTER a successful metadata sync (boot and HMR reload) via
+   * {@link setCodeFirstSingles}, never eagerly — otherwise new live fields could
+   * pair with stale serialized metadata for a single whose sync failed.
+   */
+  private codeFirstSingles?: SingleConfig[];
+
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
+  }
+
+  /**
+   * Update the live code-first config snapshot after a metadata sync. Pass
+   * `keepPriorFor` (the slugs whose sync FAILED) to retain their previous
+   * snapshot entry instead of the new config: a failed single's serialized
+   * metadata did not advance, so exposing its new fields would mis-encode a
+   * default against the old type. A failed single with no prior entry is
+   * dropped (it falls back to the serialized fields).
+   */
+  setCodeFirstSingles(
+    singles: SingleConfig[],
+    options?: { keepPriorFor?: ReadonlySet<string> }
+  ): void {
+    const keepPrior = options?.keepPriorFor;
+    if (!keepPrior || keepPrior.size === 0) {
+      this.codeFirstSingles = singles;
+      return;
+    }
+    const priorBySlug = new Map(
+      (this.codeFirstSingles ?? []).map(single => [single.slug, single])
+    );
+    this.codeFirstSingles = singles
+      .map(single =>
+        keepPrior.has(single.slug) ? priorBySlug.get(single.slug) : single
+      )
+      .filter((single): single is SingleConfig => single !== undefined);
+  }
+
+  /**
+   * Drop snapshot entries whose slug is not in `presentSlugs`, leaving the
+   * surviving entries untouched. Used on a config reload to evict a removed
+   * Single's live defaults BEFORE any later `setCodeFirstSingles` call — so a
+   * reload that aborts (introspection failure, deferred schema, apply failure)
+   * after a Single was removed cannot leave its stale function defaults runnable
+   * against the removed-but-still-readable registry row. Remove-only: it never
+   * updates a surviving entry, so it cannot pair new live fields with stale
+   * serialized metadata the way an eager replace could.
+   */
+  pruneCodeFirstSingles(presentSlugs: ReadonlySet<string>): void {
+    if (!this.codeFirstSingles) return;
+    this.codeFirstSingles = this.codeFirstSingles.filter(single =>
+      presentSlugs.has(single.slug)
+    );
+  }
+
+  /**
+   * The live code-first field definitions for a Single (with `defaultValue`
+   * functions intact), or undefined for a UI-created Single. Callers resolving
+   * declared defaults use these instead of the serialized `dynamic_singles.fields`.
+   */
+  getCodeFirstFields(slug: string): SingleConfig["fields"] | undefined {
+    return this.codeFirstSingles?.find(single => single.slug === slug)?.fields;
   }
 
   protected getSearchColumns(): string[] {
@@ -268,6 +342,8 @@ export class SingleRegistryService extends BaseRegistryService<
         { returning: "*" }
       );
 
+      this.publishRegisteredRecording(data);
+
       this.logger.info("Single registered", {
         slug: data.slug,
         source: data.source,
@@ -320,7 +396,30 @@ export class SingleRegistryService extends BaseRegistryService<
       { returning: "*" }
     );
 
+    this.publishRegisteredRecording(data);
+
     return this.deserializeRecord(result);
+  }
+
+  /**
+   * Publish a newly registered Single's recording decision into the live
+   * policy. Shared by both registration paths so a Single created inside a
+   * caller's transaction is not left recording until the next restart.
+   *
+   * Code-first Singles are skipped: their config is the source of truth and the
+   * config publisher has already applied it. On the transactional path this runs
+   * before the caller's transaction commits, which is safe in both directions —
+   * a rolled-back Single has no rows to record, and the next boot republishes
+   * from whatever the registry actually contains.
+   */
+  private publishRegisteredRecording(data: DynamicSingleInsert): void {
+    if (isConfigOwnedSource(data.source)) return;
+    setWebhookRecording(
+      "single",
+      data.slug,
+      data.webhooks?.record !== false,
+      "db"
+    );
   }
 
   // ============================================================
@@ -438,6 +537,12 @@ export class SingleRegistryService extends BaseRegistryService<
         ? JSON.stringify(data.revalidate)
         : null;
     }
+    // Webhook recording policy: same explicit-provide semantics as `revalidate`.
+    if (data.webhooks !== undefined) {
+      updateData.webhooks = data.webhooks
+        ? JSON.stringify(data.webhooks)
+        : null;
+    }
 
     try {
       const results = await this.adapter.update<DynamicSingleRecord>(
@@ -450,6 +555,24 @@ export class SingleRegistryService extends BaseRegistryService<
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
         throw NextlyError.notFound({ logContext: { slug } });
+      }
+
+      // Mirror the stored change into the live policy so turning the switch
+      // off takes effect on the next write rather than the next restart. Keyed
+      // on the slug the row is stored under (this method validates a rename but
+      // never writes it), and skipped for code-first sync so the entry keeps its
+      // `code` provenance — a `db` entry survives the reconcile that prunes
+      // removed code-first slugs, which would strand a stale opt-out.
+      if (
+        data.webhooks !== undefined &&
+        !isConfigOwnedSource(options?.source)
+      ) {
+        setWebhookRecording(
+          "single",
+          slug,
+          data.webhooks?.record !== false,
+          "db"
+        );
       }
 
       this.logger.info("Single updated", { slug });
@@ -513,6 +636,11 @@ export class SingleRegistryService extends BaseRegistryService<
         // §13.8: generic "Not found." — slug in logContext only.
         throw NextlyError.notFound({ logContext: { slug } });
       }
+
+      // Drop the in-process recording decision with the row, for the same
+      // reason as collections: a slug reused later must start from the
+      // recording default.
+      clearWebhookRecording("single", slug);
 
       this.logger.info("Single deleted", { slug, force: true });
 
@@ -601,6 +729,8 @@ export class SingleRegistryService extends BaseRegistryService<
             versions: config.versions,
             // Forward the cache-revalidation config on first sync.
             revalidate: config.revalidate,
+            // Forward the webhook recording policy on first sync.
+            webhooks: config.webhooks,
             localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
@@ -617,6 +747,9 @@ export class SingleRegistryService extends BaseRegistryService<
           // Re-sync when the cache-revalidation config changed.
           JSON.stringify(config.revalidate ?? null) !==
             JSON.stringify(existing.revalidate ?? null) ||
+          // Re-sync when the webhook recording policy changed.
+          JSON.stringify(config.webhooks ?? null) !==
+            JSON.stringify(existing.webhooks ?? null) ||
           (config.localized === true) !== (existing.localized === true)
         ) {
           // Either fields changed or the status toggle flipped — both warrant
@@ -638,6 +771,10 @@ export class SingleRegistryService extends BaseRegistryService<
               // `revalidate`, so updateSingle actually clears the column instead
               // of leaving the stale config persisted.
               revalidate: config.revalidate ?? null,
+              // Send explicit null (not undefined) when the config removed
+              // `webhooks`, so updateSingle actually clears the column instead
+              // of leaving a stale opt-out suppressing the outbox.
+              webhooks: config.webhooks ?? null,
               localized: config.localized === true,
             },
             { source: "code" }
@@ -691,6 +828,7 @@ export class SingleRegistryService extends BaseRegistryService<
     const admin = r.admin as string | object | null;
     const versions = r.versions as string | object | null;
     const revalidate = r.revalidate as string | object | null;
+    const webhooks = r.webhooks as string | object | null;
     const accessRules = (r.access_rules ?? r.accessRules) as
       | string
       | object
@@ -744,6 +882,14 @@ export class SingleRegistryService extends BaseRegistryService<
         ? typeof revalidate === "string"
           ? JSON.parse(revalidate)
           : revalidate
+        : null,
+      // Parse the webhook recording policy (JSON string on SQLite / raw
+      // inserts; already an object on pg/mysql). null when unset or on rows
+      // written before this column existed, which reads as recording.
+      webhooks: webhooks
+        ? typeof webhooks === "string"
+          ? JSON.parse(webhooks)
+          : webhooks
         : null,
       localized: Boolean(r.localized),
       configPath,
@@ -826,6 +972,8 @@ export class SingleRegistryService extends BaseRegistryService<
       versions: data.versions ? JSON.stringify(data.versions) : null,
       // Persist the cache-revalidation config (JSON-serialized like `versions`).
       revalidate: data.revalidate ? JSON.stringify(data.revalidate) : null,
+      // Persist the webhook recording policy (JSON-serialized like `revalidate`).
+      webhooks: data.webhooks ? JSON.stringify(data.webhooks) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,

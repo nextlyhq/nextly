@@ -4,7 +4,7 @@
 
 import type { FieldTypeId } from "@admin/types/collection";
 
-export type BuilderKind = "collection" | "single" | "component";
+export type BuilderKind = "collection" | "single" | "field-group";
 
 export type BasicsField =
   | "singularName"
@@ -21,6 +21,7 @@ export type AdvancedField =
   | "i18n"
   | "versions"
   | "revalidate"
+  | "webhooks"
   | "showSystemFields";
 
 export type BuilderConfig = {

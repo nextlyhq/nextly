@@ -5,7 +5,7 @@
  * derived WITHOUT running the plugin (`init` is never called). Reuses the same
  * folds the runtime/CLI boot uses, so introspection matches reality:
  *   - {@link resolvePlugins} for canonical (topo) order + version validation;
- *   - {@link pluginCollectionSlugs} / `contributes.singles|components` for schema;
+ *   - {@link pluginCollectionSlugs} / `contributes.singles|fieldGroups` for schema;
  *   - {@link collectCustomPermissions} for custom permission slugs (per owner);
  *   - {@link collectPluginRoutes} for route counts (enabled-only, D49);
  *   - {@link buildPluginAdminMeta} for admin menu/page/settings counts.
@@ -37,7 +37,7 @@ export interface PluginInfo {
   /** Owned collection slugs (resolved, post-rename). */
   collections: string[];
   singles: string[];
-  components: string[];
+  fieldGroups: string[];
   /** Custom permission slugs declared by this plugin (CRUD is auto-seeded, not listed). */
   permissions: string[];
   /** Custom event names this plugin declares it may emit. */
@@ -99,7 +99,7 @@ export function collectPluginInfo(
       optionalDependsOn: Object.keys(plugin.optionalDependsOn ?? {}),
       collections: pluginCollectionSlugs(plugin),
       singles: (contributes?.singles ?? []).map(s => s.slug),
-      components: (contributes?.components ?? []).map(c => c.slug),
+      fieldGroups: (contributes?.fieldGroups ?? []).map(c => c.slug),
       permissions: (permissionsByOwner.get(plugin.name) ?? []).sort(),
       events: (contributes?.events ?? []).map(e => e.name),
       routeCount: routeCountByPlugin.get(plugin.name) ?? 0,

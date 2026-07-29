@@ -30,6 +30,10 @@ export function registerSingleServices(ctx: RegistrationContext): void {
   container.registerSingleton<SingleRegistryService>(
     "singleRegistryService",
     () => {
+      // The live code-first snapshot (for field `defaultValue` functions that do
+      // not survive serialization) is set AFTER the boot metadata sync via
+      // setCodeFirstSingles, not here — so a single whose sync fails never
+      // exposes new fields paired with stale serialized metadata.
       const singleRegistryService = new SingleRegistryService(adapter, logger);
 
       if (container.has("permissionSeedService")) {

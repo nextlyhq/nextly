@@ -42,14 +42,9 @@ describe("resolveCollectionTableName", () => {
 });
 
 describe("resolveComponentTableName", () => {
-  // Mirrors the runtime (di/register.ts): components honor a custom dbName raw.
-  it("honors a custom dbName verbatim, without forcing the comp_ prefix", () => {
-    expect(resolveComponentTableName("hero", "component_hero")).toBe(
-      "component_hero"
-    );
-  });
-
-  it("prefixes and normalizes the slug when no dbName is given", () => {
+  // A component's table is always derived: the slug is the only input, so the
+  // name cannot address storage the component does not own.
+  it("prefixes and normalizes the slug", () => {
     expect(resolveComponentTableName("hero")).toBe("comp_hero");
     expect(resolveComponentTableName("my-hero")).toBe("comp_my_hero");
   });

@@ -124,6 +124,10 @@ export function createMockSingleRegistry(): MockRecord {
     getSingleBySlug: vi.fn().mockImplementation(async (slug: string) => {
       return singles.get(slug) ?? null;
     }),
+    // The live code-first field source used to resolve `defaultValue`s that do
+    // not survive serialization. Undefined by default (UI-created behavior);
+    // tests that exercise function defaults override the return value.
+    getCodeFirstFields: vi.fn().mockReturnValue(undefined),
   };
 }
 

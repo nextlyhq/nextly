@@ -24,13 +24,12 @@ function makeDataProvider(nx: NextlyInstance): DataProvider {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Direct API arg shapes vary by slug
       const result = await nx.find(args as any);
       return {
-        items: (result.items ?? []) as unknown as Record<string, unknown>[],
+        items: result.items ?? [],
       };
     },
     findOne: async ({ collection, id }) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- slug is a generated union
-      const doc = await nx.findByID({ collection, id } as any);
-      return (doc ?? null) as Record<string, unknown> | null;
+      const doc = await nx.findByID({ collection, id });
+      return doc ?? null;
     },
     resolveMedia: async () => null,
   };
@@ -43,10 +42,9 @@ interface HomeData {
 export default async function HomePage() {
   const nx = await getNextly({ config: nextlyConfig });
 
-  const home = (await nx.findSingle(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- single slug is a generated union
-    { slug: "homepage" } as any
-  )) as HomeData | undefined;
+  const home = (await nx.findSingle({ slug: "homepage" })) as
+    | HomeData
+    | undefined;
 
   if (!home?.layout) notFound();
 

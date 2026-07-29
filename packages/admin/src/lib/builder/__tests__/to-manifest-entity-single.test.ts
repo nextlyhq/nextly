@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { componentToManifestEntity } from "../to-manifest-entity-component";
+import { fieldGroupToManifestEntity } from "../to-manifest-entity-field-group";
 import { singleToManifestEntity } from "../to-manifest-entity-single";
 
 describe("singleToManifestEntity", () => {
@@ -44,9 +44,9 @@ describe("singleToManifestEntity", () => {
   });
 });
 
-describe("componentToManifestEntity", () => {
+describe("fieldGroupToManifestEntity", () => {
   it("maps slug + fields into a manifest entity", () => {
-    const e = componentToManifestEntity({
+    const e = fieldGroupToManifestEntity({
       slug: "card",
       settings: { singularName: "Card" },
       fields: [{ name: "title", type: "text" }],

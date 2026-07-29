@@ -498,7 +498,7 @@ describe("buildPluginAdminMeta", () => {
     expect(disabled[0].routes).toBeUndefined();
   });
 
-  it("lists contributed singles and components slugs alongside collections", () => {
+  it("lists contributed singles and field group slugs alongside collections", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -506,7 +506,7 @@ describe("buildPluginAdminMeta", () => {
           contributes: {
             collections: [{ slug: "forms" }],
             singles: [{ slug: "form-settings" }],
-            components: [{ slug: "form-block" }],
+            fieldGroups: [{ slug: "form-block" }],
           },
         },
       ]),
@@ -514,6 +514,6 @@ describe("buildPluginAdminMeta", () => {
     );
     expect(meta[0].collections).toEqual(["forms"]);
     expect(meta[0].singles).toEqual(["form-settings"]);
-    expect(meta[0].components).toEqual(["form-block"]);
+    expect(meta[0].fieldGroups).toEqual(["form-block"]);
   });
 });

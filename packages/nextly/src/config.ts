@@ -82,12 +82,12 @@ export {
 // Branding helpers (for server-side CSS injection)
 export { getBrandingCss } from "./utils/color-utils";
 
-// Component configuration (defineComponent, ComponentConfig, etc.)
+// Component configuration (defineFieldGroup, FieldGroupConfig, etc.)
 export {
-  defineComponent,
-  type ComponentConfig,
-  type ComponentLabel,
-  type ComponentAdminOptions,
+  defineFieldGroup,
+  type FieldGroupConfig,
+  type FieldGroupLabel,
+  type FieldGroupAdminOptions,
 } from "./components/config";
 
 // Field builders and related runtime guards used in collection definitions.
@@ -109,7 +109,7 @@ export {
   repeater,
   group,
   json,
-  component,
+  fieldGroup,
   chips,
   blocks,
   option,
@@ -133,7 +133,7 @@ export {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isComponentField,
+  isFieldGroupField,
   isChipsField,
   isDataField,
   hasNestedFields,

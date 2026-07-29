@@ -27,6 +27,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
@@ -306,31 +307,31 @@ export function buildDesiredTableFromComponentFields(
       primaryKey: true,
     });
     columns.push({
-      name: "_parent_id",
+      name: STORAGE_FORMAT.columns.parentId,
       type: "text",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_parent_table",
+      name: STORAGE_FORMAT.columns.parentTable,
       type: "varchar",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_parent_field",
+      name: STORAGE_FORMAT.columns.parentField,
       type: "varchar",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_order",
+      name: STORAGE_FORMAT.columns.order,
       type: "int4",
       nullable: true,
       default: undefined,
     });
     columns.push({
-      name: "_component_type",
+      name: STORAGE_FORMAT.columns.type,
       type: "varchar",
       nullable: true,
       default: undefined,
@@ -346,31 +347,31 @@ export function buildDesiredTableFromComponentFields(
       primaryKey: true,
     });
     columns.push({
-      name: "_parent_id",
+      name: STORAGE_FORMAT.columns.parentId,
       type: "varchar(36)",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_parent_table",
+      name: STORAGE_FORMAT.columns.parentTable,
       type: "varchar(255)",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_parent_field",
+      name: STORAGE_FORMAT.columns.parentField,
       type: "varchar(255)",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_order",
+      name: STORAGE_FORMAT.columns.order,
       type: "int(11)",
       nullable: true,
       default: undefined,
     });
     columns.push({
-      name: "_component_type",
+      name: STORAGE_FORMAT.columns.type,
       type: "varchar(255)",
       nullable: true,
       default: undefined,
@@ -387,31 +388,31 @@ export function buildDesiredTableFromComponentFields(
       primaryKey: true,
     });
     columns.push({
-      name: "_parent_id",
+      name: STORAGE_FORMAT.columns.parentId,
       type: "text",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_parent_table",
+      name: STORAGE_FORMAT.columns.parentTable,
       type: "text",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_parent_field",
+      name: STORAGE_FORMAT.columns.parentField,
       type: "text",
       nullable: false,
       default: undefined,
     });
     columns.push({
-      name: "_order",
+      name: STORAGE_FORMAT.columns.order,
       type: "integer",
       nullable: true,
       default: undefined,
     });
     columns.push({
-      name: "_component_type",
+      name: STORAGE_FORMAT.columns.type,
       type: "text",
       nullable: true,
       default: undefined,
@@ -485,8 +486,12 @@ export function buildDesiredTableFromComponentFields(
   // unmanaged extra and `migrate:resolve --applied` verify emits a spurious drop_index.
   const indexes: IndexSpec[] = [
     {
-      name: `idx_${tableName}_parent`,
-      columns: ["_parent_id", "_parent_table", "_parent_field"],
+      name: `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`,
+      columns: [
+        STORAGE_FORMAT.columns.parentId,
+        STORAGE_FORMAT.columns.parentTable,
+        STORAGE_FORMAT.columns.parentField,
+      ],
       unique: false,
     },
     // The per-field rules are the same ones a collection gets, and they are

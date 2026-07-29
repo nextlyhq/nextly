@@ -34,6 +34,8 @@ import type {
   WhereOperator,
 } from "@nextlyhq/adapter-drizzle/types";
 
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+
 import type { GeoFilter } from "./geo-utils";
 import { parseNearQuery, parseWithinQuery } from "./geo-utils";
 
@@ -200,10 +202,7 @@ function buildCondition(
   if (operator === "like" || operator === "contains" || operator === "search") {
     const escaped =
       typeof value === "string"
-        ? value
-            .replace(/\\/g, "\\\\")
-            .replace(/%/g, "\\%")
-            .replace(/_/g, "\\_")
+        ? value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")
         : String(value);
     return {
       column: field,
@@ -546,7 +545,7 @@ export interface ExtractComponentFiltersResult {
  */
 interface ComponentFieldDefinition {
   name: string;
-  type: "component";
+  type: typeof STORAGE_FORMAT.fieldType;
   component?: string;
   components?: string[];
 }
@@ -558,7 +557,7 @@ function isComponentFieldDef(field: {
   name: string;
   type: string;
 }): field is ComponentFieldDefinition {
-  return field.type === "component";
+  return field.type === STORAGE_FORMAT.fieldType;
 }
 
 /**
@@ -709,7 +708,8 @@ export function extractComponentFieldConditions(
                 componentFieldPath,
                 operator: operator as QueryOperator,
                 value: operatorValue,
-                isComponentTypeFilter: componentFieldPath === "_componentType",
+                isComponentTypeFilter:
+                  componentFieldPath === STORAGE_FORMAT.wireTypeKey,
               });
             }
           }
@@ -722,7 +722,8 @@ export function extractComponentFieldConditions(
             componentFieldPath,
             operator: "equals",
             value,
-            isComponentTypeFilter: componentFieldPath === "_componentType",
+            isComponentTypeFilter:
+              componentFieldPath === STORAGE_FORMAT.wireTypeKey,
           });
         }
 

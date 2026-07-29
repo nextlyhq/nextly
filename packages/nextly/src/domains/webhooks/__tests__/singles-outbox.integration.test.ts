@@ -10,8 +10,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  component,
-  defineComponent,
+  fieldGroup,
+  defineFieldGroup,
   defineSingle,
   password,
   text,
@@ -514,8 +514,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // the event must not be tagged with a language.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero",
           localized: false,
           fields: [text({ name: "heading" })],
@@ -527,7 +527,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           localized: true,
           fields: [
             text({ name: "title", localized: true }),
-            component({ name: "hero", component: "hero" }),
+            fieldGroup({ name: "hero", component: "hero" }),
           ],
         }),
       ],
@@ -552,8 +552,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // write locale.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -563,7 +563,7 @@ describe("webhook outbox capture — singles (integration)", () => {
         defineSingle({
           slug: "preferences",
           localized: true,
-          fields: [component({ name: "hero", component: "hero" })],
+          fields: [fieldGroup({ name: "hero", component: "hero" })],
         }),
       ],
     });
@@ -588,8 +588,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // config names an allow-list rather than a single component slug.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero_localized",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -600,7 +600,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           slug: "preferences",
           localized: true,
           fields: [
-            component({
+            fieldGroup({
               name: "blocks",
               components: ["hero_localized"],
               repeatable: true,
@@ -629,8 +629,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // per-locale even though there is no dynamic-zone `_componentType`.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero_localized",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -641,7 +641,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           slug: "preferences",
           localized: true,
           fields: [
-            component({
+            fieldGroup({
               name: "blocks",
               component: "hero_localized",
               repeatable: true,
@@ -670,8 +670,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // per-locale even though the component's definition is localized.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero_mixed",
           localized: true,
           fields: [
@@ -684,7 +684,7 @@ describe("webhook outbox capture — singles (integration)", () => {
         defineSingle({
           slug: "preferences",
           localized: true,
-          fields: [component({ name: "hero", component: "hero_mixed" })],
+          fields: [fieldGroup({ name: "hero", component: "hero_mixed" })],
         }),
       ],
     });

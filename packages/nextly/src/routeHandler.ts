@@ -515,6 +515,7 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
   "getEntryVersion",
+  "getEntryVersionDiff",
   // Restoring writes the document, so the route parser marks it an `update`
   // operation and this resolves to the `update-{slug}` permission.
   "restoreEntryVersion",
@@ -530,6 +531,7 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   // Read-only history for the document, guarded by the same read permission.
   "listSingleVersions",
   "getSingleVersion",
+  "getSingleVersionDiff",
   // A write, authorized as an update of the document.
   "restoreSingleVersion",
   // Also a write. Deliberately absent from the read allowlist below, so the
@@ -566,8 +568,10 @@ const ROLE_AWARE_READ_METHODS = new Set([
   "getSingleDocument",
   "listEntryVersions",
   "getEntryVersion",
+  "getEntryVersionDiff",
   "listSingleVersions",
   "getSingleVersion",
+  "getSingleVersionDiff",
 ]);
 
 /**
@@ -633,7 +637,8 @@ async function resolveAuthorization(
       const action =
         method === "getSingleDocument" ||
         method === "listSingleVersions" ||
-        method === "getSingleVersion"
+        method === "getSingleVersion" ||
+        method === "getSingleVersionDiff"
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
@@ -674,8 +679,8 @@ async function resolveAuthorization(
     ]);
   }
 
-  // --- Components → manage-settings ---
-  if (service === "components") {
+  // --- Field groups → manage-settings ---
+  if (service === "field-groups") {
     const action = getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "settings" },

@@ -59,7 +59,7 @@ export function collectUnresolvedRelationTargets(
   const entities = [
     ...((config.collections ?? []) as unknown as FieldedEntity[]),
     ...((config.singles ?? []) as unknown as FieldedEntity[]),
-    ...((config.components ?? []) as unknown as FieldedEntity[]),
+    ...((config.fieldGroups ?? []) as unknown as FieldedEntity[]),
   ];
 
   const unresolved: UnresolvedRelation[] = [];
@@ -130,7 +130,7 @@ function pluginEntities(plugin: PluginDefinition): FieldedEntity[] {
   return [
     ...((c?.collections ?? []) as unknown as FieldedEntity[]),
     ...((c?.singles ?? []) as unknown as FieldedEntity[]),
-    ...((c?.components ?? []) as unknown as FieldedEntity[]),
+    ...((c?.fieldGroups ?? []) as unknown as FieldedEntity[]),
   ];
 }
 

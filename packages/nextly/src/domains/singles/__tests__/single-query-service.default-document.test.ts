@@ -233,4 +233,204 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(localizedDefaults).toEqual({});
     expect(insertValues).toMatchObject({ region: "us" });
   });
+
+  // A `defaultValue` function does not survive serialization to
+  // `dynamic_singles.fields`, so the resolution must read it from the live
+  // code-first config the registry exposes via `getCodeFirstFields`.
+  it("resolves a defaultValue from the code-first config when the serialized meta lacks it", () => {
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    // Serialized meta: the function/structured defaults are gone.
+    const meta = siteSettingsMeta({
+      status: true,
+      fields: [
+        { name: "siteName", type: "text" },
+        {
+          name: "settings",
+          type: "group",
+          fields: [{ name: "private", type: "checkbox" }],
+        },
+      ],
+    });
+
+    // Live code-first fields still carry them.
+    registry.getCodeFirstFields.mockReturnValue([
+      { name: "siteName", type: "text", defaultValue: () => "Acme" },
+      {
+        name: "settings",
+        type: "group",
+        fields: [{ name: "private", type: "checkbox" }],
+        defaultValue: () => ({ private: true }),
+      },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    // The function default is resolved to its value (insertValues is keyed by
+    // DB column name, so `siteName` -> `site_name`)...
+    expect(insertValues).toMatchObject({ site_name: "Acme" });
+    // ...and a structured default is JSON-encoded for its json-backed column,
+    // parsing back to the real object rather than a stringified function.
+    expect(typeof insertValues.settings).toBe("string");
+    expect(JSON.parse(insertValues.settings as string)).toEqual({
+      private: true,
+    });
+  });
+
+  it("passes logical (not JSON-stringified) prior values to a dependent default function", () => {
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    const meta = siteSettingsMeta({
+      status: true,
+      fields: [
+        {
+          name: "settings",
+          type: "group",
+          fields: [{ name: "private", type: "checkbox" }],
+        },
+        { name: "tier", type: "text" },
+      ],
+    });
+
+    // `tier`'s default reads the earlier group value: it must see the object,
+    // not the JSON string stored for `settings`'s json-backed column.
+    registry.getCodeFirstFields.mockReturnValue([
+      {
+        name: "settings",
+        type: "group",
+        fields: [{ name: "private", type: "checkbox" }],
+        defaultValue: () => ({ private: true }),
+      },
+      {
+        name: "tier",
+        type: "text",
+        defaultValue: (data: { settings?: { private?: boolean } }) =>
+          data.settings?.private ? "pro" : "free",
+      },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues).toMatchObject({ tier: "pro" });
+  });
+
+  it("JSON-encodes a primitive default for a json-backed column", () => {
+    // A json column stores text (SQLite especially), so a primitive default like
+    // `() => true` must be encoded to "true"; a raw boolean cannot be bound.
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+
+    const meta = siteSettingsMeta({
+      fields: [{ name: "flags", type: "json" }],
+    });
+    registry.getCodeFirstFields.mockReturnValue([
+      { name: "flags", type: "json", defaultValue: () => true },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues.flags).toBe("true");
+  });
+
+  it("keeps the serialized-meta default for a UI-created single (no code-first fields)", () => {
+    // getCodeFirstFields returns undefined by default in the mock, mirroring a
+    // UI-created single; the serialized primitive default still applies.
+    const service = createQueryService();
+    const meta = siteSettingsMeta({
+      fields: [{ name: "region", type: "text", defaultValue: "us" }],
+    });
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(insertValues).toMatchObject({ region: "us" });
+  });
+
+  it("rejects a password field that declares a defaultValue", () => {
+    // This path inserts the resolved value directly, bypassing the write path's
+    // password hashing, so a password default would persist in plaintext; it
+    // must be refused rather than stored.
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+    const meta = siteSettingsMeta({
+      fields: [{ name: "secret", type: "password" }],
+    });
+    registry.getCodeFirstFields.mockReturnValue([
+      { name: "secret", type: "password", defaultValue: () => "hunter2" },
+    ]);
+
+    let caught: unknown;
+    try {
+      service.buildDefaultDocument(meta as unknown as SingleMeta);
+    } catch (error) {
+      caught = error;
+    }
+    // A validation error naming the password field, not the plaintext value in
+    // the row that would otherwise be inserted.
+    const publicData = (
+      caught as { publicData?: { errors?: Array<{ code?: string }> } }
+    )?.publicData;
+    expect(publicData?.errors?.[0]?.code).toBe("PASSWORD_DEFAULT_UNSUPPORTED");
+  });
+
+  it("coerces a string date default to a Date for the timestamp column", () => {
+    // A timestamp column needs a Date; the ordinary write path coerces, and the
+    // direct insert must too, or SQLite stores the string in an integer column.
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+    const meta = siteSettingsMeta({
+      fields: [{ name: "launchAt", type: "date" }],
+    });
+    registry.getCodeFirstFields.mockReturnValue([
+      {
+        name: "launchAt",
+        type: "date",
+        defaultValue: () => "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+
+    const { insertValues } = service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    // insertValues is keyed by DB column name (launchAt -> launch_at).
+    expect(insertValues.launch_at).toBeInstanceOf(Date);
+    expect((insertValues.launch_at as Date).toISOString()).toBe(
+      "2026-01-01T00:00:00.000Z"
+    );
+  });
 });

@@ -17,13 +17,13 @@ import Media from "./src/collections/media";
 import SiteSettings from "./src/singles/site-settings";
 import Header from "./src/singles/header";
 import Footer from "./src/singles/footer";
-import { Seo, Hero } from "./src/components";
+import { Seo, Hero } from "./src/field-groups";
 
 export default defineConfig({
   // Content model
   collections: [Posts, Media],
   singles: [SiteSettings, Header, Footer],
-  components: [Seo, Hero],
+  fieldGroups: [Seo, Hero],
 
   // Built-in user model extensions
   users: {
@@ -116,7 +116,7 @@ export default defineConfig({
 |---|---|---|---|
 | `collections` | `CollectionConfig[]` | `[]` | Content types with multiple entries. See [Collections](/docs/configuration/collections). |
 | `singles` | `SingleConfig[]` | `[]` | Single-document content (site settings, header, etc.). See [Singles](/docs/configuration/singles). |
-| `components` | `ComponentConfig[]` | `[]` | Reusable field groups. See [Components](/docs/configuration/components). |
+| `fieldGroups` | `FieldGroupConfig[]` | `[]` | Reusable field groups. See [Field Groups](/docs/configuration/field-groups). |
 | `users` | `UserConfig` | `undefined` | Extend the built-in user model with custom fields. |
 | `typescript` | `TypeScriptConfig` | See below | Generated types path and module augmentation. |
 | `db` | `DatabaseConfig` | See below | Where Drizzle schema and migration files are written. |
@@ -160,7 +160,7 @@ See [Collections](/docs/configuration/collections) for the full `CollectionConfi
 singles?: SingleConfig[];
 ```
 
-Array of single-document configurations created with `defineSingle()`. A single is an auto-created, non-deletable document (site settings, header, footer, homepage). Slugs must be unique across collections, singles, and components.
+Array of single-document configurations created with `defineSingle()`. A single is an auto-created, non-deletable document (site settings, header, footer, homepage). Slugs must be unique across collections, singles, and field groups.
 
 ```typescript
 import SiteSettings from "./src/singles/site-settings";
@@ -174,23 +174,23 @@ See [Singles](/docs/configuration/singles) for the full `SingleConfig` shape.
 
 ---
 
-### `components`
+### `fieldGroups`
 
 ```ts
-components?: ComponentConfig[];
+fieldGroups?: FieldGroupConfig[];
 ```
 
-Array of reusable field-group templates created with `defineComponent()`. Components are embedded inside collections, singles, or other components via the `component` field type. Slugs must be unique across collections, singles, and components.
+Array of reusable field structures created with `defineFieldGroup()`. Field groups are embedded inside collections, singles, or other field groups via the `component` field type. Slugs must be unique across collections, singles, and field groups.
 
 ```typescript
-import { Seo, Hero } from "./src/components";
+import { Seo, Hero } from "./src/field-groups";
 
 export default defineConfig({
-  components: [Seo, Hero],
+  fieldGroups: [Seo, Hero],
 });
 ```
 
-See [Components](/docs/configuration/components).
+See [Field Groups](/docs/configuration/field-groups).
 
 ---
 
@@ -553,9 +553,9 @@ admin: {
 
 `defineConfig()` performs these checks at startup:
 
-- **Duplicate slugs** — collection, single, and component slugs must be unique across all three.
-- **Cross-type conflicts** — a single cannot share a slug with a collection or component.
-- **Component nesting** — circular component references and excessive nesting (max depth 3) are rejected.
+- **Duplicate slugs** — collection, single, and field group slugs must be unique across all three.
+- **Cross-type conflicts** — a single cannot share a slug with a collection or field group.
+- **Field group nesting** — circular field group references and excessive nesting (max depth 3) are rejected.
 - **User config** — only the allowed scalar field types are accepted.
 - **API-key bounds** — `apiKeys.rateLimit.requestsPerHour` and `apiKeys.rateLimit.windowMs` must be positive.
 
@@ -565,6 +565,6 @@ Validation failures throw a descriptive error at startup so misconfigurations su
 
 - [Collections](/docs/configuration/collections) — define content types with multiple entries
 - [Singles](/docs/configuration/singles) — define single-document content
-- [Components](/docs/configuration/components) — reusable field groups
+- [Field Groups](/docs/configuration/field-groups) — reusable field groups
 - [Fields](/docs/configuration/fields) — every available field type
 - [Environment variables](/docs/configuration/environment) — every env var explained

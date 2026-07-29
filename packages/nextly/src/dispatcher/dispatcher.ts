@@ -68,7 +68,7 @@ export class ServiceDispatcher {
     "collections",
     "singles",
     "forms",
-    "components",
+    "field-groups",
     "userFields",
     "emailProviders",
     "emailTemplates",
@@ -260,7 +260,7 @@ export class ServiceDispatcher {
         return dispatchSingles(method, p, body);
       case "forms":
         return dispatchForms(this.container, method, p, body, request.request);
-      case "components":
+      case "field-groups":
         return dispatchComponents(method, p, body);
       case "userFields":
         return dispatchUserFields(method, p, body);

@@ -48,6 +48,7 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 // The legacy fallback sync path is deleted (dead code post-Option E).
 // addMissingColumnsForFields is extracted to utils/missing-columns.ts.
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError, immediateMessage } from "../../errors/index";
@@ -573,11 +574,16 @@ export async function performSinglesAutoSync(
   logger.newline();
   logger.info(`Auto-syncing ${singlesToSync.length} single table(s)...`);
 
-  // Import the schema service for generating migration SQL
+  // Import the schema service for generating migration SQL. The dialect comes
+  // from the adapter that will run the DDL: the service's own default reads
+  // DB_DIALECT, which is optional and falls back to "postgresql".
   const { DynamicCollectionSchemaService } = await import(
     "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
-  const schemaService = new DynamicCollectionSchemaService();
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.dialect
+  );
 
   const synced: string[] = [];
   const errors: Array<{ slug: string; error: string }> = [];
@@ -759,7 +765,11 @@ export async function performSinglesReconcile(
   const { DynamicCollectionSchemaService } = await import(
     "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
-  const schemaService = new DynamicCollectionSchemaService();
+  // Same as the auto-sync above: the adapter names the dialect, not DB_DIALECT.
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.dialect
+  );
 
   const reconciledSlugs: string[] = [];
 
@@ -893,19 +903,14 @@ export async function performComponentsAutoSync(
 
   for (const slug of componentsToSync) {
     // Get the Component config to get fields
-    const componentConfig = config.components.find(c => c.slug === slug);
+    const componentConfig = config.fieldGroups.find(c => c.slug === slug);
     if (!componentConfig) {
       errors.push({ slug, error: "Component config not found" });
       continue;
     }
 
-    // Generate table name using the same convention as the registry (comp_ prefix)
-    const tableName =
-      componentConfig.dbName ??
-      `comp_${slug
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")}`;
+    // Canonical resolution: custom dbName verbatim, else comp_ + normalized slug.
+    const tableName = resolveComponentTableName(slug);
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);

@@ -86,6 +86,8 @@ export interface BuilderSettingsInput {
   versions?: boolean;
   /** Whether writes bust cache tags. Defaults on; false opts out. */
   revalidate?: boolean;
+  /** Whether writes are recorded to the webhook outbox. Defaults on; false opts out. */
+  webhooks?: boolean;
   useAsTitle?: string;
   defaultColumns?: string[];
   group?: string;
@@ -147,6 +149,8 @@ export interface ManifestEntity {
   versions?: boolean;
   /** Whether writes bust cache tags. Defaults on; false opts out. */
   revalidate?: boolean;
+  /** Whether writes are recorded to the webhook outbox. Defaults on; false opts out. */
+  webhooks?: boolean;
   fields: ManifestField[];
 }
 
@@ -221,6 +225,7 @@ export function applyCommonSettings(
     localized,
     versions,
     revalidate,
+    webhooks,
   } = settings;
   const admin: NonNullable<ManifestEntity["admin"]> = {};
   if (useAsTitle) admin.useAsTitle = useAsTitle;
@@ -233,6 +238,7 @@ export function applyCommonSettings(
   if (localized !== undefined) entity.localized = localized;
   if (versions !== undefined) entity.versions = versions;
   if (revalidate !== undefined) entity.revalidate = revalidate;
+  if (webhooks !== undefined) entity.webhooks = webhooks;
 }
 
 export function collectionToManifestEntity(

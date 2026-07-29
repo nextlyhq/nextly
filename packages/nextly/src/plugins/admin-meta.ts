@@ -62,8 +62,8 @@ export interface PluginAdminMeta {
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
   singles?: string[];
-  /** Slugs of contributed components, for the detail page's contributions view. */
-  components?: string[];
+  /** Slugs of contributed field groups, for the detail page's contributions view. */
+  fieldGroups?: string[];
   /**
    * Declared custom permissions (identity + display fields only) — present
    * only for enabled plugins, like the rest of the behavioral surface.
@@ -182,12 +182,12 @@ export function buildPluginAdminMeta(
       collections: pluginCollectionSlugs(plugin),
     };
 
-    // Contributed singles/components slugs, so the detail page can list
+    // Contributed singles/field-group slugs, so the detail page can list
     // everything the plugin adds without loading the plugin itself.
     const singles = plugin.contributes?.singles?.map(s => s.slug) ?? [];
     if (singles.length > 0) meta.singles = singles;
-    const components = plugin.contributes?.components?.map(c => c.slug) ?? [];
-    if (components.length > 0) meta.components = components;
+    const fieldGroups = plugin.contributes?.fieldGroups?.map(c => c.slug) ?? [];
+    if (fieldGroups.length > 0) meta.fieldGroups = fieldGroups;
 
     // Behavioral admin UI only for enabled plugins.
     const admin = plugin.contributes?.admin;

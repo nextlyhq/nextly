@@ -109,6 +109,7 @@ import type { MethodHandler, Params } from "../types";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   listVersionsForDocument,
@@ -219,6 +220,21 @@ export const COLLECTION_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  getEntryVersionDiff: {
+    execute: async (_svc, p) => {
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from: Number(p.from),
+        to: Number(p.to),
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
     },
   },
 };

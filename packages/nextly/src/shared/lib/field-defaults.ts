@@ -25,13 +25,17 @@
  * @module shared/lib/field-defaults
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type { ValidatableField } from "./entry-validation";
 
 /**
  * A field whose value is stored somewhere other than its own column, so a
  * default written here would target a column that does not exist.
  */
-const NON_COLUMN_TYPES: ReadonlySet<string> = new Set(["component"]);
+const NON_COLUMN_TYPES: ReadonlySet<string> = new Set([
+  STORAGE_FORMAT.fieldType,
+]);
 
 /**
  * Fill in declared defaults for fields the caller did not supply.
@@ -100,7 +104,7 @@ export function applyFieldDefaults(
  * row, say — would reach into unrelated rows, entries already written from the
  * same config, and the definition itself.
  */
-function cloneDefault(value: unknown): unknown {
+export function cloneDefault(value: unknown): unknown {
   if (value === null || typeof value !== "object") return value;
   try {
     return structuredClone(value);

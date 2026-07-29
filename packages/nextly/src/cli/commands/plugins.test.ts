@@ -13,7 +13,7 @@ function info(overrides: Partial<PluginInfo> = {}): PluginInfo {
     optionalDependsOn: [],
     collections: ["forms", "form-submissions"],
     singles: [],
-    components: [],
+    fieldGroups: [],
     permissions: ["export-submissions"],
     events: ["form-builder.submitted"],
     routeCount: 1,

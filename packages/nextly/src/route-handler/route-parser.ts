@@ -87,7 +87,7 @@ export function requiresAuthOnly(service: string, method: string): boolean {
   // matching the collection/single schema-list endpoints above. It must not
   // be public: unauthenticated callers must not enumerate component schemas.
   if (
-    service === "components" &&
+    service === "field-groups" &&
     ["getComponent", "listComponents"].includes(method)
   ) {
     return true;
@@ -841,6 +841,18 @@ function parseCollectionEntryVersionRoutes(
   routeParams.collectionName = id;
   routeParams.entryId = subId;
 
+  // `versions/diff?from=A&to=B` compares two versions. It is a read of history,
+  // authorized like reading a single version; `diff` can never collide with a
+  // version number, which is always numeric.
+  if (additionalParams[1] === "diff") {
+    return {
+      service: "collections",
+      operation: "single",
+      method: "getEntryVersionDiff",
+      routeParams,
+    };
+  }
+
   const versionNo = additionalParams[1];
   if (versionNo) {
     routeParams.versionNo = versionNo;
@@ -917,6 +929,17 @@ function parseSingleVersionRoutes(
   }
 
   routeParams.slug = id;
+
+  // `versions/diff?from=A&to=B` compares two versions; a read of history like
+  // reading one version. `diff` cannot collide with a numeric version number.
+  if (subId === "diff") {
+    return {
+      service: "singles",
+      operation: "single",
+      method: "getSingleVersionDiff",
+      routeParams,
+    };
+  }
 
   if (subId) {
     routeParams.versionNo = subId;
@@ -1237,13 +1260,13 @@ function parseSingleRoutes(
  * Parse Components routes
  *
  * Handles component definition endpoints:
- * - GET /api/components → list all components
- * - POST /api/components → create component (Schema Builder)
- * - GET /api/components/[slug] → get component by slug
- * - PATCH /api/components/[slug] → update component
- * - DELETE /api/components/[slug] → delete component
- * - POST /api/components/schema/[slug]/preview → preview component schema changes
- * - POST /api/components/schema/[slug]/apply → apply confirmed component schema changes
+ * - GET /api/field-groups → list all components
+ * - POST /api/field-groups → create component (Schema Builder)
+ * - GET /api/field-groups/[slug] → get component by slug
+ * - PATCH /api/field-groups/[slug] → update component
+ * - DELETE /api/field-groups/[slug] → delete component
+ * - POST /api/field-groups/schema/[slug]/preview → preview component schema changes
+ * - POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
  */
 function parseComponentRoutes(
   id: string | undefined,
@@ -1252,7 +1275,7 @@ function parseComponentRoutes(
   subresource?: string,
   subId?: string
 ): ParsedRoute | null {
-  // POST /api/components/schema/[slug]/preview → preview component schema changes
+  // POST /api/field-groups/schema/[slug]/preview → preview component schema changes
   if (
     id === "schema" &&
     subresource &&
@@ -1261,14 +1284,14 @@ function parseComponentRoutes(
   ) {
     routeParams.slug = subresource;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "single",
       method: "previewComponentSchemaChanges",
       routeParams,
     };
   }
 
-  // POST /api/components/schema/[slug]/apply → apply confirmed component schema changes
+  // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
   if (
     id === "schema" &&
     subresource &&
@@ -1277,7 +1300,7 @@ function parseComponentRoutes(
   ) {
     routeParams.slug = subresource;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "update",
       method: "applyComponentSchemaChanges",
       routeParams,
@@ -1286,53 +1309,53 @@ function parseComponentRoutes(
 
   const slug = id;
 
-  // GET /api/components → list all components
+  // GET /api/field-groups → list all components
   if (!slug && httpMethod === "GET") {
     return {
-      service: "components",
+      service: "field-groups",
       operation: "list",
       method: "listComponents",
       routeParams,
     };
   }
 
-  // POST /api/components → create component (Schema Builder)
+  // POST /api/field-groups → create component (Schema Builder)
   if (!slug && httpMethod === "POST") {
     return {
-      service: "components",
+      service: "field-groups",
       operation: "create",
       method: "createComponent",
       routeParams,
     };
   }
 
-  // GET /api/components/[slug] → get component by slug
+  // GET /api/field-groups/[slug] → get component by slug
   if (slug && httpMethod === "GET") {
     routeParams.slug = slug;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "single",
       method: "getComponent",
       routeParams,
     };
   }
 
-  // PATCH /api/components/[slug] → update component
+  // PATCH /api/field-groups/[slug] → update component
   if (slug && httpMethod === "PATCH") {
     routeParams.slug = slug;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "update",
       method: "updateComponent",
       routeParams,
     };
   }
 
-  // DELETE /api/components/[slug] → delete component
+  // DELETE /api/field-groups/[slug] → delete component
   if (slug && httpMethod === "DELETE") {
     routeParams.slug = slug;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "delete",
       method: "deleteComponent",
       routeParams,
@@ -2209,7 +2232,7 @@ export function parseRestRoute(
   }
 
   // Handle Components endpoints
-  if (resource === "components") {
+  if (resource === "field-groups") {
     const result = parseComponentRoutes(
       id,
       httpMethod,
