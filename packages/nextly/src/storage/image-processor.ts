@@ -202,13 +202,22 @@ export class ImageProcessor {
     const tgtW = options.width;
     const tgtH = options.height;
 
+    // Positive, not merely present. A zero width or height used to fall out of
+    // this branch through the old truthiness test, and it has to keep doing so:
+    // a zero target makes the crop region zero-sized and Sharp's `extract`
+    // rejects it, where the normal branch reads the zero as an omitted
+    // dimension. `generateImageSizes` accepts any number, so this is reachable.
     const hasFocalPoint =
       options.fit === "cover" &&
       (options.focalX !== undefined || options.focalY !== undefined) &&
       tgtW !== undefined &&
       tgtH !== undefined &&
       srcW !== undefined &&
-      srcH !== undefined;
+      srcH !== undefined &&
+      tgtW > 0 &&
+      tgtH > 0 &&
+      srcW > 0 &&
+      srcH > 0;
 
     if (hasFocalPoint) {
       const fx = (options.focalX ?? 50) / 100; // 0-1

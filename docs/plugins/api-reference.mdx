@@ -274,6 +274,11 @@ is the submitted payload, not the parsed copy: the manifest schema drops keys it
 does not declare, while the write persists the original, so your options are
 present in what gets stored and absent from what was parsed.
 
+A disabled plugin runs neither hook. Its field types stay registered, because its
+collections are retained and their fields still have to map to a column and
+render, but `validate` and `validateOptions` are both dropped at registration —
+they are behavior, and a disabled plugin contributes none.
+
 **Naming your options.** An option key must not collide with one the field
 schema already declares — `options`, `fields`, `admin`, `label` and the rest of
 the built-in field surface. The manifest applies the built-in shape to every

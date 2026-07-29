@@ -1513,6 +1513,11 @@ export async function reloadNextlyConfig(opts?: {
   if (!applyResult.success) {
     const code = applyResult.error.code;
 
+    // The DDL never landed, so the live tables still match the previous config
+    // and the previous field types are the ones that describe them. Same
+    // reasoning as the deferred-diff branch above.
+    abandonReload();
+
     // The DDL apply failed (needs-TTY confirmation, an executor error, ...), so
     // the field-tree syncs and the recording republish under `if (success)` were
     // skipped. Existing tables and services stay writable, though, so a recording

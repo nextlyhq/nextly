@@ -250,9 +250,19 @@ const COLLECTIONS_METHODS: Record<
     // as the toast string so admin UIs see the same copy ("Collection
     // created! Restart the app...").
     execute: async (svc, _, body) => {
-      const result = await svc.createCollection(
-        requireBody(body, "Collection data is required")
+      const created = requireBody<Parameters<typeof svc.createCollection>[0]>(
+        body,
+        "Collection data is required"
       );
+      // The preview/apply handlers validate; this direct path forwards the
+      // fields into metadata generation, which writes migrations and registry
+      // rows — so a declaration the Builder endpoints refuse could be persisted
+      // here and then refused by the next boot that reads it back.
+      const createdFields = (created as { fields?: unknown }).fields;
+      if (createdFields !== undefined) {
+        assertValidFieldsPayload(createdFields, { kind: "collection" });
+      }
+      const result = await svc.createCollection(created);
       const collection = unwrapServiceResult(result);
       return respondMutation(
         result.message ?? "Collection created.",
@@ -375,6 +385,10 @@ const COLLECTIONS_METHODS: Record<
     execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and update data are required");
+      const updatedFields = (body as { fields?: unknown }).fields;
+      if (updatedFields !== undefined) {
+        assertValidFieldsPayload(updatedFields, { kind: "collection" });
+      }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
         body
