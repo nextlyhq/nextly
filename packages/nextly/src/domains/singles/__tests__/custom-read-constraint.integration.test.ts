@@ -987,6 +987,66 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     });
   });
 
+  // A read at depth serves the populated row, and that is what a client sends
+  // back on save. Stored as it arrives it becomes a snapshot: later reads serve
+  // the copy instead of reloading the target, so edits to the target vanish.
+  it("stores a reference, not the row, when a populated value is saved back", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Original" }
+    );
+    const authorId = (author.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: { relationTo: "authors", value: authorId } },
+      { overrideAccess: true }
+    );
+
+    const read = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    // Saved back exactly as served, which is what an unrelated edit does.
+    await entry.update(
+      "branding",
+      { siteName: "Acme Two", author: read.data!.author },
+      { overrideAccess: true }
+    );
+
+    // Change the target: a stored snapshot would keep serving the old name.
+    await handler.updateEntry(
+      { collectionName: "authors", entryId: authorId, overrideAccess: true },
+      { name: "Renamed" }
+    );
+
+    const after = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    expect(after.data!.author).toMatchObject({
+      relationTo: "authors",
+      value: { id: authorId, name: "Renamed" },
+    });
+  });
+
   // Neither `relationTo` nor `value` is a reserved field name, so a target
   // collection may define both. A populated row from one then looks exactly
   // like the wrapper a populated reference is served in, and reading it as one

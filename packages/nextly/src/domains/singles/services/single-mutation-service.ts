@@ -55,7 +55,10 @@ import {
   attachFieldValidators,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
-import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
+import {
+  coerceDateFieldsToDate,
+  normalizeRelationshipFields,
+} from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
@@ -817,6 +820,11 @@ export class SingleMutationService extends BaseService {
 
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)
       normalizeUploadFields(currentData, fieldConfigs);
+
+      // 6.5. Relationships come back populated from a read at depth, so reduce
+      // them to the references they stand for rather than storing a snapshot
+      // of the related row.
+      normalizeRelationshipFields(currentData, fieldConfigs);
 
       // 6.6. Coerce date-field strings into `Date` objects so Drizzle can
       // bind them to `timestamp` columns. Without this step the adapter

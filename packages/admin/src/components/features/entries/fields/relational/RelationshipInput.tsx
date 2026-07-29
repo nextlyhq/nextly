@@ -54,10 +54,14 @@ export type MultiRelationshipValue = string[] | null | undefined;
 
 /**
  * Value format for polymorphic relationship (single item).
+ *
+ * `value` is the target's id when nothing was populated, and the target row
+ * itself when the entry was read at a depth that populates relationships — the
+ * edit page asks for one, so both arrive here.
  */
 export interface PolymorphicRelationshipValue {
   relationTo: string;
-  value: string;
+  value: string | { id: string; [key: string]: unknown };
 }
 
 /**
@@ -126,6 +130,25 @@ function getCollections(relationTo: string | string[]): string[] {
 }
 
 /**
+ * Reads a polymorphic entry as the item to display.
+ *
+ * Its `value` is the target's id, or the whole target row when the entry was
+ * read at a populating depth. Passing the row through as the id would put an
+ * object where a string is expected and render it as a React child; taking the
+ * row's own fields also gives the card something to show besides the id.
+ */
+function polymorphicEntryToItem(entry: {
+  relationTo: string;
+  value: string | { id: string; [key: string]: unknown };
+}): RelatedItem {
+  const { relationTo, value } = entry;
+  if (typeof value === "string") {
+    return { id: value, relationTo };
+  }
+  return { ...value, relationTo };
+}
+
+/**
  * Converts the form value to an array of selected items for display.
  * Handles all value formats (simple IDs, objects, polymorphic).
  */
@@ -140,12 +163,9 @@ function valueToSelectedItems(
   // Handle array values (hasMany: true)
   if (Array.isArray(value)) {
     return value.map(item => {
-      // Polymorphic array item: { relationTo: string, value: string }
+      // Polymorphic array item: { relationTo, value: id | populated row }
       if (typeof item === "object" && "value" in item && "relationTo" in item) {
-        return {
-          id: item.value,
-          relationTo: item.relationTo,
-        };
+        return polymorphicEntryToItem(item);
       }
       // Simple string ID
       if (typeof item === "string") {
@@ -160,9 +180,9 @@ function valueToSelectedItems(
     });
   }
 
-  // Handle single polymorphic value: { relationTo: string, value: string }
+  // Handle single polymorphic value: { relationTo, value: id | populated row }
   if (typeof value === "object" && "value" in value && "relationTo" in value) {
-    return [{ id: value.value, relationTo: value.relationTo }];
+    return [polymorphicEntryToItem(value)];
   }
 
   // Handle single object (populated relationship)
@@ -352,8 +372,17 @@ export function RelationshipInput<
           if (typeof v === "string") return v !== itemId;
           if (typeof v === "object" && v !== null && "id" in v)
             return (v as { id: string }).id !== itemId;
-          if (typeof v === "object" && v !== null && "value" in v)
-            return (v as { value: string }).value !== itemId;
+          if (typeof v === "object" && v !== null && "value" in v) {
+            // `value` is the target's id, or the target row when the entry was
+            // read at a populating depth. Comparing the row against an id never
+            // matches, which would leave the item in the list after removal.
+            const target = v.value;
+            const id =
+              typeof target === "string"
+                ? target
+                : ((target as { id?: string } | null)?.id ?? undefined);
+            return id !== itemId;
+          }
           return true;
         });
         onChange(filtered);

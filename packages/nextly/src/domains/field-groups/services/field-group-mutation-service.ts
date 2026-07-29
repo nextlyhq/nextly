@@ -18,7 +18,10 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
-import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
+import {
+  coerceDateFieldsToDate,
+  normalizeRelationshipFields,
+} from "../../../shared/lib/field-transform";
 import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -1290,6 +1293,12 @@ export class FieldGroupMutationService extends BaseService {
     // write path because both `buildInsertRow` and the in-place update
     // sites funnel through here.
     coerceDateFieldsToDate(data, fields);
+
+    // A relationship read at depth comes back populated, and a multi-target one
+    // as `{ relationTo, value: row }`. Serializing that as it arrives would
+    // store a snapshot of the related row in the column, which later reads
+    // would serve in place of reloading the target.
+    normalizeRelationshipFields(data, fields);
 
     const fieldMap = new Map<string, FieldConfig>();
     for (const field of fields) {
