@@ -203,6 +203,60 @@ describe("field-group migration marker", () => {
     });
   });
 
+  // A rollback reverses a persisted plan, so the plan has to survive
+  // settlement. Deriving the reverse is impossible: nothing in the database
+  // says which `fg_*` names this migration created.
+  it("keeps the applied plan through settlement", async () => {
+    const { meta } = createMeta();
+    const applied = [
+      { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
+      {
+        kind: "column" as const,
+        from: "_component_type",
+        to: "_field_group_type",
+        table: "fg_hero",
+      },
+    ];
+    await settleMigration(meta, "field-groups-v2", applied);
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: applied,
+    });
+  });
+
+  it("settles without a plan when none was recorded", async () => {
+    const { meta } = createMeta();
+    await settleMigration(meta, "legacy");
+    const state = await readMigrationState(meta);
+    expect(state).toMatchObject({ status: "settled", generation: "legacy" });
+    expect(
+      (state as { appliedManifest?: unknown }).appliedManifest
+    ).toBeUndefined();
+  });
+
+  // A rollback acts on this plan, so an unreadable one must refuse rather than
+  // revert some objects and silently leave others migrated.
+  it.each([
+    ["not a list", "nonsense"],
+    ["a non-object entry", [42]],
+    ["an entry with no known kind", [{ kind: "whatever", from: "a", to: "b" }]],
+    ["an entry with no source", [{ kind: "table", to: "b" }]],
+    ["an entry with no target", [{ kind: "table", from: "a" }]],
+    [
+      "an entry with an invalid table",
+      [{ kind: "column", from: "a", to: "b", table: 7 }],
+    ],
+  ])("refuses a recorded plan that is %s", async (_label, appliedManifest) => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest,
+    });
+    await expect(readMigrationState(meta)).rejects.toThrowError(NextlyError);
+  });
+
   // A marker that exists but cannot be read must never degrade to "absent":
   // that would restart a run which may already have renamed objects.
   it.each([

@@ -204,12 +204,19 @@ export function buildMigrationManifest(
  * Nextly upgrade can reorder steps while this map is untouched.
  */
 export function hashManifest(entries: readonly ManifestEntry[]): string {
-  // Deliberately excludes `satisfied`: progress is not identity. A plan whose
+  // JSON rather than delimiter-joined text. `table_name` is an unconstrained
+  // varchar, so a name containing the delimiters would let two different plans
+  // serialize identically -- one row called
+  // `a:_component_type>_field_group_type\ncolumn:b` produced the same bytes as
+  // two rows called `a` and `b`. A resume would then accept a plan whose step
+  // positions address different operations.
+  //
+  // `satisfied` is deliberately excluded: progress is not identity. A plan whose
   // steps have partly run is the same plan, and the marker must still recognise
   // it on resume.
-  const canonical = entries
-    .map(e => `${e.kind}:${e.table ?? ""}:${e.from}>${e.to}`)
-    .join("\n");
+  const canonical = JSON.stringify(
+    entries.map(e => [e.kind, e.table ?? null, e.from, e.to])
+  );
   return createHash("sha256").update(canonical).digest("hex");
 }
 

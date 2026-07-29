@@ -18,6 +18,8 @@
 import { NextlyError } from "../../../errors/nextly-error";
 import type { MetaService } from "../../meta/services/meta-service";
 
+import type { ManifestEntry } from "./manifest";
+
 /** `nextly_meta` key holding the marker. */
 export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
 
@@ -66,6 +68,19 @@ export interface SettledState {
    * unexplained rather than expected.
    */
   recorded: boolean;
+  /**
+   * The plan that produced this generation, kept so a rollback can reverse it.
+   *
+   * A rollback cannot derive the reverse mapping: nothing in the database
+   * distinguishes a `fg_*` name this migration created from one an author chose
+   * before it existed, so renaming by prefix on the way down would destroy the
+   * latter. Only the record of what was applied carries that distinction, which
+   * is why it survives settlement rather than being discarded with the run.
+   *
+   * Absent on a `legacy` generation that no run produced, and on markers written
+   * before a plan was recorded.
+   */
+  appliedManifest?: ManifestEntry[];
 }
 
 /**
@@ -117,6 +132,7 @@ interface StoredMarker {
   step?: number;
   manifestHash?: string;
   planHash?: string;
+  appliedManifest?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -170,6 +186,9 @@ export async function readMigrationState(
       status: "settled",
       generation: marker.generation,
       recorded: true,
+      ...(marker.appliedManifest === undefined
+        ? {}
+        : { appliedManifest: parseAppliedManifest(marker.appliedManifest) }),
     };
   }
 
@@ -378,14 +397,63 @@ function planMoved(
  */
 export async function settleMigration(
   meta: MetaService,
-  generation: StorageGeneration
+  generation: StorageGeneration,
+  appliedManifest?: readonly ManifestEntry[]
 ): Promise<void> {
   const marker: StoredMarker = {
     version: MIGRATION_MARKER_VERSION,
     status: "settled",
     generation,
+    // Recorded so a later process can reverse this run. Inverting a persisted
+    // plan is the only safe rollback: the reverse cannot be derived from the
+    // database, which cannot say which names this migration created.
+    ...(appliedManifest === undefined
+      ? {}
+      : { appliedManifest: [...appliedManifest] }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
+}
+
+/**
+ * Validate a persisted plan on the way back in.
+ *
+ * A rollback acts on this, so a marker carrying something unreadable must
+ * refuse rather than hand back a partial plan that would revert some objects
+ * and silently leave others migrated.
+ */
+function parseAppliedManifest(value: unknown): ManifestEntry[] {
+  if (!Array.isArray(value)) {
+    throw markerCorrupt("recorded plan is not a list");
+  }
+  return value.map(raw => {
+    if (!isRecord(raw)) {
+      throw markerCorrupt("recorded plan contains a non-object entry");
+    }
+    const { kind, from, to, table } = raw;
+    if (
+      kind !== "registry" &&
+      kind !== "table" &&
+      kind !== "companion" &&
+      kind !== "column"
+    ) {
+      throw markerCorrupt("recorded plan entry has no known kind");
+    }
+    if (typeof from !== "string" || from.length === 0) {
+      throw markerCorrupt("recorded plan entry has no source name");
+    }
+    if (typeof to !== "string" || to.length === 0) {
+      throw markerCorrupt("recorded plan entry has no target name");
+    }
+    if (table !== undefined && typeof table !== "string") {
+      throw markerCorrupt("recorded plan entry has an invalid table");
+    }
+    return {
+      kind,
+      from,
+      to,
+      ...(table === undefined ? {} : { table }),
+    };
+  });
 }
 
 // A marker that exists but cannot be read is refused rather than ignored:

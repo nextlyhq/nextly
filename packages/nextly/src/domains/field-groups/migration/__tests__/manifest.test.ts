@@ -267,6 +267,35 @@ describe("field-group migration manifest", () => {
     ).toBe(false);
   });
 
+  // `table_name` is an unconstrained varchar, so a name containing the old
+  // delimiters made two different plans serialize to the same bytes -- and a
+  // resume would then accept a plan whose step positions address other work.
+  it("cannot be made to collide by a name containing delimiters", () => {
+    const one = hashManifest([
+      {
+        kind: "column",
+        table: "a:_component_type>_field_group_type\ncolumn:b",
+        from: "_component_type",
+        to: "_field_group_type",
+      },
+    ]);
+    const two = hashManifest([
+      {
+        kind: "column",
+        table: "a",
+        from: "_component_type",
+        to: "_field_group_type",
+      },
+      {
+        kind: "column",
+        table: "b",
+        from: "_component_type",
+        to: "_field_group_type",
+      },
+    ]);
+    expect(one).not.toBe(two);
+  });
+
   it("targets a prefix no longer than the one it replaces", () => {
     // Guarantees the migration cannot push a name past an identifier limit:
     // Postgres caps at 63 bytes and MySQL at 64, and every name that fits today
