@@ -22,7 +22,32 @@ describe("postgres index SQL", () => {
     expect(sql).toContain('ON "dc_x" ("email")');
   });
   it("emits DROP INDEX IF EXISTS for drop_index", () => {
-    expect(generatePgSQL(dropPlain)).toContain('DROP INDEX IF EXISTS "idx_dc_x_views"');
+    expect(generatePgSQL(dropPlain)).toContain(
+      'DROP INDEX IF EXISTS "idx_dc_x_views"'
+    );
+  });
+  it("drops the owning constraint too when the index is unique", () => {
+    // A `unique: true` field created by the schema services exists as
+    // ALTER TABLE ... ADD CONSTRAINT, whose index Postgres refuses to DROP
+    // INDEX ("constraint ... requires it") — IF EXISTS does not suppress
+    // that. Both idempotent drops must run so either physical form is
+    // removed.
+    const sql = generatePgSQL({
+      type: "drop_index",
+      tableName: "dc_x",
+      index: { name: "uq_dc_x_email", columns: ["email"], unique: true },
+    } as never);
+    expect(sql).toContain(
+      'ALTER TABLE "dc_x" DROP CONSTRAINT IF EXISTS "uq_dc_x_email"'
+    );
+    expect(sql).toContain('DROP INDEX IF EXISTS "uq_dc_x_email"');
+    // The constraint must go first: dropping it removes the index it owns.
+    expect(sql.indexOf("DROP CONSTRAINT")).toBeLessThan(
+      sql.indexOf("DROP INDEX")
+    );
+  });
+  it("keeps the plain form for a non-unique index (never constraint-owned)", () => {
+    expect(generatePgSQL(dropPlain)).not.toContain("DROP CONSTRAINT");
   });
   it("renders table indexes on add_table", () => {
     const sql = generatePgSQL({
@@ -39,14 +64,22 @@ describe("postgres index SQL", () => {
 
 describe("mysql index SQL", () => {
   it("emits CREATE UNIQUE INDEX and DROP INDEX ... ON", () => {
-    expect(generateMysqlSQL(addUnique)).toContain("CREATE UNIQUE INDEX `uq_dc_x_email`");
-    expect(generateMysqlSQL(dropPlain)).toContain("DROP INDEX `idx_dc_x_views` ON `dc_x`");
+    expect(generateMysqlSQL(addUnique)).toContain(
+      "CREATE UNIQUE INDEX `uq_dc_x_email`"
+    );
+    expect(generateMysqlSQL(dropPlain)).toContain(
+      "DROP INDEX `idx_dc_x_views` ON `dc_x`"
+    );
   });
 });
 
 describe("sqlite index SQL", () => {
   it("emits CREATE UNIQUE INDEX IF NOT EXISTS and DROP INDEX IF EXISTS", () => {
-    expect(generateSqliteSQL(addUnique)).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "uq_dc_x_email"');
-    expect(generateSqliteSQL(dropPlain)).toContain('DROP INDEX IF EXISTS "idx_dc_x_views"');
+    expect(generateSqliteSQL(addUnique)).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "uq_dc_x_email"'
+    );
+    expect(generateSqliteSQL(dropPlain)).toContain(
+      'DROP INDEX IF EXISTS "idx_dc_x_views"'
+    );
   });
 });
