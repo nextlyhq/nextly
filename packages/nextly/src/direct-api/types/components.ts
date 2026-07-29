@@ -10,23 +10,28 @@
 import type { DirectAPIConfig, GeneratedTypes } from "./shared";
 
 /**
- * Component slug type.
+ * Field group slug type.
  *
- * When generated types exist, this resolves to a union of valid component
+ * When generated types exist, this resolves to a union of valid field group
  * slug literals (e.g., `'seo' | 'hero'`). Without generated types,
  * falls back to `string`.
+ *
+ * The key here MUST match the one `TypeGenerator` emits into `Config`. If the
+ * two drift, this conditional silently takes the fallback branch and every slug
+ * widens to `string` — no compile error anywhere, just lost type safety. Pinned
+ * by `__tests__/generated-config-contract.test.ts`.
  */
-export type ComponentSlug = GeneratedTypes extends { components: infer C }
+export type FieldGroupSlug = GeneratedTypes extends { fieldGroups: infer C }
   ? keyof C & string
   : string;
 
 /**
- * Resolves the component type for a given component slug.
+ * Resolves the field group type for a given field group slug.
  *
- * @typeParam TSlug - The component slug string literal
+ * @typeParam TSlug - The field group slug string literal
  */
-export type DataFromComponentSlug<TSlug extends string> =
-  GeneratedTypes extends { components: infer C }
+export type DataFromFieldGroupSlug<TSlug extends string> =
+  GeneratedTypes extends { fieldGroups: infer C }
     ? TSlug extends keyof C
       ? C[TSlug]
       : Record<string, unknown>

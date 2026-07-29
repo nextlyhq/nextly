@@ -100,8 +100,8 @@ export type {
 } from "./forms";
 
 export type {
-  ComponentSlug,
-  DataFromComponentSlug,
+  FieldGroupSlug,
+  DataFromFieldGroupSlug,
   ComponentDefinition,
   FindComponentsArgs,
   FindComponentBySlugArgs,
