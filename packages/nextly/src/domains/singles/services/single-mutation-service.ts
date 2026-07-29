@@ -1179,7 +1179,11 @@ export class SingleMutationService extends BaseService {
                 // `_status`, so its presence already answers row existence — no
                 // extra query.
                 previousCompanionRowExists = previousCompanionStatus !== null;
-              } else {
+              } else if (singleMeta.versions?.enabled) {
+                // Only the version-capture block consumes this, so a non-status
+                // companion is probed for existence solely when versioning is on
+                // — otherwise this would add a companion round trip to every
+                // localized update while the write holds its row lock.
                 previousCompanionRowExists = await companionRowExists(
                   tx.getDrizzle<
                     Parameters<typeof companionRowExists>[0]

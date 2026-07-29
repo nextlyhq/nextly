@@ -3067,17 +3067,34 @@ export class CollectionMutationService extends BaseService {
             // event carries that language's full content (fields and localized
             // components) and its own prior status, matching the ordinary
             // localized update path. Read on the transaction (read-your-writes).
-            const localeValues = this.deserializeJsonFieldsForSnapshot(
-              await this.readCompanionLocalizedValues(
+            let rawLocaleValues: Record<string, unknown>;
+            try {
+              // These values feed a durable locale-tagged event; a real
+              // companion read failure must abort rather than commit a publish
+              // event missing this locale's translated fields.
+              rawLocaleValues = await this.readCompanionLocalizedValues(
                 tx,
                 params.collectionName,
                 params.entryId,
                 locale,
-                // These values feed a durable locale-tagged event; a real
-                // companion read failure must abort rather than commit a publish
-                // event missing this locale's translated fields.
                 true
-              ),
+              );
+            } catch (err) {
+              // Normalize the raw driver error the same way the status scan
+              // above does, so a schema/permission failure returns the canonical
+              // internal error instead of leaking the driver's message through
+              // the service failure result.
+              throw NextlyError.internal({
+                cause: err instanceof Error ? err : undefined,
+                logContext: {
+                  reason: "publish-all-locale-values-read",
+                  collection: params.collectionName,
+                  locale,
+                },
+              });
+            }
+            const localeValues = this.deserializeJsonFieldsForSnapshot(
+              rawLocaleValues,
               fields
             );
             const { components: localeComponents, manyToMany: localeM2M } =
