@@ -133,7 +133,7 @@ export const PATCH = withErrorHandler(
       source: "ui",
     });
 
-    return respondMutation("Component updated.", updated);
+    return respondMutation("Field group updated.", updated);
   }
 );
 

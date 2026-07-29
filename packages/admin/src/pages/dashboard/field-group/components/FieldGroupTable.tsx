@@ -34,22 +34,22 @@ import type {
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
-  useComponents,
-  useDeleteComponent,
-  useBulkDeleteComponents,
+  useFieldGroups,
+  useDeleteFieldGroup,
+  useBulkDeleteFieldGroups,
 } from "@admin/hooks/queries";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
 import type {
-  ApiComponent,
+  ApiFieldGroup,
   FieldGroupSource,
   FieldGroupMigrationStatus,
 } from "@admin/types/entities";
 
-import { ComponentsEmptyState } from "./ComponentsEmptyState";
-import { ComponentTableSkeleton } from "./ComponentTableSkeleton";
+import { FieldGroupsEmptyState } from "./FieldGroupsEmptyState";
+import { FieldGroupTableSkeleton } from "./FieldGroupTableSkeleton";
 
 /** Source badge label + icon. */
 function getSourceBadge(source?: FieldGroupSource): {
@@ -91,7 +91,7 @@ function getMigrationBadge(status?: FieldGroupMigrationStatus): {
 const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
 
 /**
- * ComponentTable
+ * FieldGroupTable
  *
  * Lists components with search, source/migration-status filters, server-side
  * pagination, column visibility, whole-row navigation to the builder, per-row
@@ -99,7 +99,7 @@ const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
  * selected, or deleted from the UI. Data + mutations run through TanStack Query;
  * rendering is delegated to the unified DataTableView.
  */
-export default function ComponentTable() {
+export default function FieldGroupTable() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [search, setSearch] = useState("");
@@ -119,7 +119,7 @@ export default function ComponentTable() {
   >("all");
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [componentToDelete, setComponentToDelete] = useState<{
+  const [fieldGroupToDelete, setFieldGroupToDelete] = useState<{
     id: string;
     slug: string;
     label: string;
@@ -136,14 +136,14 @@ export default function ComponentTable() {
     });
   };
 
-  const { data, isLoading, isFetching, isError, error } = useComponents({
+  const { data, isLoading, isFetching, isError, error } = useFieldGroups({
     pagination: { page, pageSize },
     sorting: [],
     filters: { search: debouncedSearch },
   });
 
-  const { mutate: deleteComponent, isPending: isDeleting } =
-    useDeleteComponent();
+  const { mutate: deleteFieldGroup, isPending: isDeleting } =
+    useDeleteFieldGroup();
 
   const {
     selectedIds,
@@ -161,18 +161,18 @@ export default function ComponentTable() {
     clearSelection();
   }, [page, debouncedSearch, sourceFilter, clearSelection]);
 
-  const { mutate: bulkDeleteComponents, isPending: isBulkDeleting } =
-    useBulkDeleteComponents();
+  const { mutate: bulkDeleteFieldGroups, isPending: isBulkDeleting } =
+    useBulkDeleteFieldGroups();
 
   const filteredData = useMemo(() => {
     if (!data?.items) return [];
-    return data.items.filter(component => {
-      if (sourceFilter !== "all" && component.source !== sourceFilter) {
+    return data.items.filter(fieldGroup => {
+      if (sourceFilter !== "all" && fieldGroup.source !== sourceFilter) {
         return false;
       }
       if (
         migrationFilter !== "all" &&
-        component.migrationStatus !== migrationFilter
+        fieldGroup.migrationStatus !== migrationFilter
       ) {
         return false;
       }
@@ -182,47 +182,47 @@ export default function ComponentTable() {
 
   // Code-first (locked) components open the same builder route; the builder
   // renders read-only when the loaded component is locked.
-  const handleEdit = useCallback((component: ApiComponent) => {
+  const handleEdit = useCallback((fieldGroup: ApiFieldGroup) => {
     navigateTo(
-      buildRoute(ROUTES.BUILDER_COMPONENTS_EDIT, { slug: component.slug })
+      buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug: fieldGroup.slug })
     );
   }, []);
 
-  const handleDelete = useCallback((component: ApiComponent) => {
-    if (component.locked) {
-      toast.error("Cannot delete locked component", {
-        description: "Code-first components cannot be deleted from the UI.",
+  const handleDelete = useCallback((fieldGroup: ApiFieldGroup) => {
+    if (fieldGroup.locked) {
+      toast.error("Cannot delete locked field group", {
+        description: "Code-first field groups cannot be deleted from the UI.",
       });
       return;
     }
-    setComponentToDelete({
-      id: component.id,
-      slug: component.slug,
-      label: component.label,
+    setFieldGroupToDelete({
+      id: fieldGroup.id,
+      slug: fieldGroup.slug,
+      label: fieldGroup.label,
     });
     setDeleteDialogOpen(true);
   }, []);
 
   const handleConfirmDelete = useCallback(() => {
-    if (!componentToDelete) return;
-    deleteComponent(componentToDelete.slug, {
+    if (!fieldGroupToDelete) return;
+    deleteFieldGroup(fieldGroupToDelete.slug, {
       onSuccess: () => {
-        toast.success("Component deleted", {
-          description: `${componentToDelete.label} has been deleted successfully.`,
+        toast.success("Field group deleted", {
+          description: `${fieldGroupToDelete.label} has been deleted successfully.`,
         });
         setDeleteDialogOpen(false);
-        setComponentToDelete(null);
+        setFieldGroupToDelete(null);
       },
       onError: err => {
         toast.error("Delete failed", {
           description:
             err instanceof Error
               ? err.message
-              : "Failed to delete the component.",
+              : "Failed to delete the field group.",
         });
       },
     });
-  }, [componentToDelete, deleteComponent]);
+  }, [fieldGroupToDelete, deleteFieldGroup]);
 
   const handleBulkDelete = useCallback(() => {
     if (selectedCount === 0) {
@@ -233,13 +233,13 @@ export default function ComponentTable() {
   }, [selectedCount]);
 
   const handleConfirmBulkDelete = useCallback(() => {
-    const selectedComponentSlugs = filteredData
+    const selectedFieldGroupSlugs = filteredData
       .filter(c => selectedIds.includes(c.id) && !c.locked)
       .map(c => c.slug);
-    void bulkDeleteComponents(selectedComponentSlugs, undefined, {
+    void bulkDeleteFieldGroups(selectedFieldGroupSlugs, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
-          toast.success("Components deleted", {
+          toast.success("Field groups deleted", {
             description: `${result.succeeded} components deleted successfully.`,
           });
         } else {
@@ -258,14 +258,14 @@ export default function ComponentTable() {
         console.error("Failed components:", result.failedIds);
       },
     });
-  }, [filteredData, selectedIds, bulkDeleteComponents, clearSelection]);
+  }, [filteredData, selectedIds, bulkDeleteFieldGroups, clearSelection]);
 
-  const getFieldCount = useCallback((component: ApiComponent): number => {
-    if (component.fieldCount !== undefined) return component.fieldCount;
-    return component.fields?.length || 0;
+  const getFieldCount = useCallback((fieldGroup: ApiFieldGroup): number => {
+    if (fieldGroup.fieldCount !== undefined) return fieldGroup.fieldCount;
+    return fieldGroup.fields?.length || 0;
   }, []);
 
-  const allColumns = useMemo<NextlyColumn<ApiComponent>[]>(
+  const allColumns = useMemo<NextlyColumn<ApiFieldGroup>[]>(
     () => [
       {
         name: "label",
@@ -393,11 +393,11 @@ export default function ComponentTable() {
     setPage(0);
   };
 
-  const selection = useMemo<DataTableSelection<ApiComponent>>(
+  const selection = useMemo<DataTableSelection<ApiFieldGroup>>(
     () => ({
       selectedIds,
-      isSelectable: component => !component.locked,
-      onToggle: component => toggleSelection(component.id),
+      isSelectable: fieldGroup => !fieldGroup.locked,
+      onToggle: fieldGroup => toggleSelection(fieldGroup.id),
       onToggleAll: (rows, allSelected) => {
         const ids = rows.map(r => r.id);
         if (allSelected) deselectAllOnPage(ids);
@@ -408,24 +408,24 @@ export default function ComponentTable() {
   );
 
   const rowActions = useCallback(
-    (component: ApiComponent): RowAction<ApiComponent>[] => [
+    (fieldGroup: ApiFieldGroup): RowAction<ApiFieldGroup>[] => [
       {
         id: "edit",
-        label: component.locked ? "View" : "Edit",
-        icon: component.locked ? (
+        label: fieldGroup.locked ? "View" : "Edit",
+        icon: fieldGroup.locked ? (
           <Eye className="h-4 w-4" />
         ) : (
           <Pencil className="h-4 w-4" />
         ),
-        onSelect: () => handleEdit(component),
+        onSelect: () => handleEdit(fieldGroup),
       },
       {
         id: "delete",
         label: "Delete",
         icon: <Trash2 className="h-4 w-4" />,
         destructive: true,
-        isDisabled: () => Boolean(component.locked),
-        onSelect: () => handleDelete(component),
+        isDisabled: () => Boolean(fieldGroup.locked),
+        onSelect: () => handleDelete(fieldGroup),
       },
     ],
     [handleEdit, handleDelete]
@@ -588,20 +588,20 @@ export default function ComponentTable() {
             : "Failed to load components. Please try again."}
         </Alert>
       ) : showLoadingSkeleton ? (
-        <ComponentTableSkeleton />
+        <FieldGroupTableSkeleton />
       ) : isEmpty ? (
-        <ComponentsEmptyState isSearching={isSearching || isFiltering} />
+        <FieldGroupsEmptyState isSearching={isSearching || isFiltering} />
       ) : (
         <>
-          <DataTableView<ApiComponent>
+          <DataTableView<ApiFieldGroup>
             columns={columns}
             rows={filteredData}
-            onRowClick={component => handleEdit(component)}
+            onRowClick={fieldGroup => handleEdit(fieldGroup)}
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}
             registryKey="components"
-            ariaLabel="Components table"
+            ariaLabel="Field Groups table"
             emptyMessage="No components found. Try adjusting your search or filters."
           />
           {data && (
@@ -622,15 +622,15 @@ export default function ComponentTable() {
       <BulkDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
-        entityType="Component"
-        entityTypePlural="Components"
+        entityType="Field Group"
+        entityTypePlural="Field Groups"
         items={
-          componentToDelete
+          fieldGroupToDelete
             ? [
                 {
-                  id: componentToDelete.id,
-                  name: componentToDelete.label,
-                  secondary: componentToDelete.slug,
+                  id: fieldGroupToDelete.id,
+                  name: fieldGroupToDelete.label,
+                  secondary: fieldGroupToDelete.slug,
                 },
               ]
             : []
@@ -642,8 +642,8 @@ export default function ComponentTable() {
       <BulkDeleteDialog
         open={bulkDeleteDialogOpen}
         onOpenChange={setBulkDeleteDialogOpen}
-        entityType="Component"
-        entityTypePlural="Components"
+        entityType="Field Group"
+        entityTypePlural="Field Groups"
         items={filteredData
           .filter(c => selectedIds.includes(c.id) && !c.locked)
           .map(c => ({ id: c.id, name: c.label, secondary: c.slug }))}

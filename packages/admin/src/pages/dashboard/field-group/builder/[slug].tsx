@@ -1,19 +1,19 @@
 "use client";
 
 /**
- * Component Builder — Edit Page
+ * Field Group Builder, edit page.
  *
- * Mirrors the Collection / Single edit pages: BuilderToolbar at top,
+ * Mirrors the Collection and Single edit pages: BuilderToolbar at top,
  * BuilderFieldList in body inside DndContext, overlays mounted lazily.
  *
- * Schema-change preview + apply pipeline wired the same way as the
- * collection builder — SafeChangeConfirmDialog / SchemaChangeDialog /
- * RestartContext. Components-specific deltas:
- * - No HooksEditorSheet (showHooks: false in COMPONENT_BUILDER_CONFIG).
- * - Uses componentApi.previewSchemaChanges / applySchemaChanges.
+ * The schema-change preview and apply pipeline is wired the same way as the
+ * collection builder, through SafeChangeConfirmDialog, SchemaChangeDialog and
+ * RestartContext. Field groups differ in that:
+ * - No HooksEditorSheet (showHooks: false in FIELD_GROUP_BUILDER_CONFIG).
+ * - Uses fieldGroupApi.previewSchemaChanges / applySchemaChanges.
  * - Settings modal uses Category instead of adminGroup; no Status/Order/Plural.
  *
- * Locked code-first Components render in readOnly mode.
+ * Locked code-first field groups render in readOnly mode.
  */
 
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
@@ -41,9 +41,9 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import {
-  useComponent,
-  useUpdateComponent,
-} from "@admin/hooks/queries/useComponents";
+  useFieldGroup,
+  useUpdateFieldGroup,
+} from "@admin/hooks/queries/useFieldGroups";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import {
   convertToBuilderField,
@@ -57,8 +57,8 @@ import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
-import { componentToManifestEntity } from "@admin/lib/builder/to-manifest-entity-component";
-import { componentApi } from "@admin/services/componentApi";
+import { fieldGroupToManifestEntity } from "@admin/lib/builder/to-manifest-entity-field-group";
+import { fieldGroupApi } from "@admin/services/fieldGroupApi";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -68,7 +68,7 @@ import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
 
-import { COMPONENT_BUILDER_CONFIG } from "./builder-config";
+import { FIELD_GROUP_BUILDER_CONFIG } from "./builder-config";
 
 const componentFormSchema = z.object({
   singularName: z
@@ -91,15 +91,15 @@ type ActiveOverlay =
   | { kind: "create"; draft: BuilderField; parentFieldId?: string }
   | { kind: "edit"; fieldId: string };
 
-interface ComponentBuilderEditPageProps {
+interface FieldGroupBuilderEditPageProps {
   params?: { slug?: string };
 }
 
-export default function ComponentBuilderEditPage({
+export default function FieldGroupBuilderEditPage({
   params,
-}: ComponentBuilderEditPageProps): React.ReactElement {
+}: FieldGroupBuilderEditPageProps): React.ReactElement {
   const slug = params?.slug;
-  const { data: component, isLoading, error } = useComponent(slug);
+  const { data: fieldGroup, isLoading, error } = useFieldGroup(slug);
 
   const builder = useFieldBuilder<FormData>({
     resolver: zodResolver(componentFormSchema),
@@ -126,17 +126,18 @@ export default function ComponentBuilderEditPage({
   const [isApplyingSchema, setIsApplyingSchema] = useState(false);
   const { startRestart, stopRestart } = useRestart();
 
-  const { mutate: updateComponent, isPending: isSaving } = useUpdateComponent();
+  const { mutate: updateFieldGroup, isPending: isSaving } =
+    useUpdateFieldGroup();
 
-  // Initialize builder + settings from the loaded Component.
+  // Initialize builder + settings from the loaded field group.
   useEffect(() => {
-    if (!component || isInitialized) return;
+    if (!fieldGroup || isInitialized) return;
 
     builder.form.reset({
-      singularName: component.label || component.slug || "",
+      singularName: fieldGroup.label || fieldGroup.slug || "",
     });
 
-    const userSchemaFields = (component.fields ?? []).filter(
+    const userSchemaFields = (fieldGroup.fields ?? []).filter(
       (f: SchemaField) => f.name !== "title" && f.name !== "slug"
     );
     const builderFields = userSchemaFields.map(
@@ -148,24 +149,24 @@ export default function ComponentBuilderEditPage({
 
     setOriginalFields(allFields.filter(f => !f.isSystem));
 
-    const adminBlock = (component.admin ?? {}) as Record<string, unknown>;
+    const adminBlock = (fieldGroup.admin ?? {}) as Record<string, unknown>;
     const loadedSettings: BuilderSettingsValues = {
-      singularName: component.label || component.slug || "",
-      slug: component.slug,
-      description: component.description || "",
+      singularName: fieldGroup.label || fieldGroup.slug || "",
+      slug: fieldGroup.slug,
+      description: fieldGroup.description || "",
       icon: (adminBlock.icon as string | undefined) || "Puzzle",
       category: (adminBlock.category as string | undefined) || "",
       // i18n: reflect the saved localization flag so the Internationalization toggle shows real
       // state (mirrors the collection/single builder).
-      i18n: (component as { localized?: boolean }).localized === true,
+      i18n: (fieldGroup as { localized?: boolean }).localized === true,
     };
     setSettings(loadedSettings);
     setOriginalSettings(loadedSettings);
 
     setIsInitialized(true);
-  }, [component, builder, isInitialized]);
+  }, [fieldGroup, builder, isInitialized]);
 
-  const isLocked = component?.locked === true;
+  const isLocked = fieldGroup?.locked === true;
 
   const settingsDirty = useMemo(() => {
     if (!originalSettings || !settings) return false;
@@ -201,7 +202,7 @@ export default function ComponentBuilderEditPage({
     return userFields.map(convertToFieldDefinition);
   }, [builder]);
 
-  const applyComponentSchemaChanges = useCallback(
+  const applyFieldGroupSchemaChanges = useCallback(
     async (
       fieldDefinitions: FieldDefinition[],
       schemaVersion: number,
@@ -213,7 +214,7 @@ export default function ComponentBuilderEditPage({
       if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
       startRestart();
       try {
-        const result = await componentApi.applySchemaChanges(
+        const result = await fieldGroupApi.applySchemaChanges(
           slug,
           fieldDefinitions,
           schemaVersion,
@@ -239,7 +240,7 @@ export default function ComponentBuilderEditPage({
           // D-series: database mode also writes the committable ui-schema.json
           // so the component has a migration record. Non-fatal if it fails.
           try {
-            const entity = componentToManifestEntity({
+            const entity = fieldGroupToManifestEntity({
               slug,
               settings: {
                 singularName: settings?.singularName,
@@ -248,11 +249,11 @@ export default function ComponentBuilderEditPage({
               },
               fields: fieldDefinitions,
             });
-            await schemaFileApi.writeComponent(entity);
+            await schemaFileApi.writeFieldGroup(entity);
           } catch (err) {
             const m = (err as { message?: string })?.message;
             toast.warning(
-              `Component applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+              `Field group applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
             );
           }
         } else {
@@ -279,9 +280,9 @@ export default function ComponentBuilderEditPage({
   const saveSettingsOnly = useCallback(
     (fieldDefinitions: FieldDefinition[]) => {
       if (!slug || !settings) return;
-      updateComponent(
+      updateFieldGroup(
         {
-          componentSlug: slug,
+          fieldGroupSlug: slug,
           updates: {
             label: settings.singularName,
             description: settings.description,
@@ -298,7 +299,7 @@ export default function ComponentBuilderEditPage({
         },
         {
           onSuccess: () => {
-            toast.success("Component updated");
+            toast.success("Field group updated");
             setOriginalFields(builder.fields.filter(f => !f.isSystem));
             // Re-pin settings baseline so the Save button disables again.
             setOriginalSettings(settings);
@@ -307,18 +308,18 @@ export default function ComponentBuilderEditPage({
             const errorObj = err as { message?: string };
             toast.error(
               errorObj?.message ||
-                "An unexpected error occurred while updating the component."
+                "An unexpected error occurred while updating the field group."
             );
           },
         }
       );
     },
-    [slug, settings, updateComponent, builder.fields]
+    [slug, settings, updateFieldGroup, builder.fields]
   );
 
   const handleSave = useCallback(async () => {
     if (!slug) {
-      toast.error("Component slug is missing");
+      toast.error("Field group slug is missing");
       return;
     }
 
@@ -326,7 +327,7 @@ export default function ComponentBuilderEditPage({
     if (!fieldDefinitions) return;
 
     try {
-      const preview = await componentApi.previewSchemaChanges(
+      const preview = await fieldGroupApi.previewSchemaChanges(
         slug,
         fieldDefinitions
       );
@@ -443,7 +444,7 @@ export default function ComponentBuilderEditPage({
       <div className="h-screen flex items-center justify-center bg-background">
         <div className="text-center">
           <h2 className="text-lg font-semibold text-foreground mb-2">
-            Component Not Found
+            Field Group Not Found
           </h2>
           <p className="text-muted-foreground">
             No component slug was provided.
@@ -469,7 +470,7 @@ export default function ComponentBuilderEditPage({
     );
   }
 
-  if (error || !component || !settings) {
+  if (error || !fieldGroup || !settings) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <PageErrorFallback />
@@ -489,7 +490,7 @@ export default function ComponentBuilderEditPage({
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <BuilderToolbar
-        config={COMPONENT_BUILDER_CONFIG}
+        config={FIELD_GROUP_BUILDER_CONFIG}
         name={settings.singularName || slug}
         locked={isLocked}
         unsavedCount={unsavedCount}
@@ -499,8 +500,8 @@ export default function ComponentBuilderEditPage({
       <PageContainer className="flex-1 pb-0">
         {isLocked && (
           <BuilderReadOnlyNotice
-            kind="component"
-            configPath={component?.configPath}
+            kind="field-group"
+            configPath={fieldGroup?.configPath}
           />
         )}
         <DndContext
@@ -534,7 +535,7 @@ export default function ComponentBuilderEditPage({
         <BuilderSettingsModal
           open
           mode="edit"
-          config={COMPONENT_BUILDER_CONFIG}
+          config={FIELD_GROUP_BUILDER_CONFIG}
           initialValues={settings}
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
@@ -558,7 +559,7 @@ export default function ComponentBuilderEditPage({
                 }`
               : undefined
           }
-          excludedTypes={COMPONENT_BUILDER_CONFIG.picker.excludedTypes ?? []}
+          excludedTypes={FIELD_GROUP_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
           // Why: PR C flow change -- pick opens sheet in create mode.
           // PR D: thread parentFieldId through.
@@ -675,7 +676,7 @@ export default function ComponentBuilderEditPage({
             onConfirm={() => {
               const fieldDefs = getValidatedFields();
               if (fieldDefs) {
-                void applyComponentSchemaChanges(
+                void applyFieldGroupSchemaChanges(
                   fieldDefs,
                   previewData.schemaVersion,
                   {},
@@ -704,7 +705,7 @@ export default function ComponentBuilderEditPage({
             onConfirm={(resolutions, renameResolutions) => {
               const fieldDefs = getValidatedFields();
               if (fieldDefs) {
-                void applyComponentSchemaChanges(
+                void applyFieldGroupSchemaChanges(
                   fieldDefs,
                   previewData.schemaVersion,
                   resolutions,
