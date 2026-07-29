@@ -1,0 +1,297 @@
+/**
+ * Relationship and upload ids in a snapshot or diff are resolved to display
+ * labels through the SAME access-checked read a normal request uses, so a caller
+ * never learns the label of a document they may not read. These tests pin that
+ * access gate, the id-preserving fallbacks, the PII exclusion, and the shape the
+ * value kit consumes.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const { getEntrySpy, checkAccessSpy, findByIdSpy } = vi.hoisted(() => ({
+  getEntrySpy: vi.fn(),
+  checkAccessSpy: vi.fn(),
+  findByIdSpy: vi.fn(),
+}));
+
+vi.mock("../../../di", () => ({
+  getService: vi.fn((name: string) => {
+    if (name === "collectionsHandler") return { getEntry: getEntrySpy };
+    if (name === "rbacAccessControlService") {
+      return { checkAccess: checkAccessSpy };
+    }
+    if (name === "mediaService") return { findById: findByIdSpy };
+    return {};
+  }),
+}));
+
+import type { UserContext } from "../../singles/types";
+import {
+  referenceDisplayValue,
+  referenceLabelKey,
+  resolveReferenceLabels,
+  storedRefsOf,
+  toReferenceRequest,
+  type ReferenceRequest,
+} from "../reference-labels";
+
+const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
+
+function rel(collection: string, id: string): ReferenceRequest {
+  return { kind: "relationship", collection, id };
+}
+
+describe("storedRefsOf", () => {
+  it("reads a bare id, an array, a polymorphic pair, and a populated object", () => {
+    expect(storedRefsOf("t1")).toEqual([{ id: "t1" }]);
+    expect(storedRefsOf(["a", "b"])).toEqual([{ id: "a" }, { id: "b" }]);
+    expect(storedRefsOf({ relationTo: "posts", value: "p1" })).toEqual([
+      { id: "p1", relationTo: "posts" },
+    ]);
+    expect(storedRefsOf({ relationTo: "posts", value: { id: "p1" } })).toEqual([
+      { id: "p1", relationTo: "posts" },
+    ]);
+    expect(storedRefsOf({ id: "x" })).toEqual([{ id: "x" }]);
+  });
+
+  it("yields nothing for an empty or non-reference value", () => {
+    expect(storedRefsOf(null)).toEqual([]);
+    expect(storedRefsOf(undefined)).toEqual([]);
+    expect(storedRefsOf("")).toEqual([]);
+    expect(storedRefsOf(42)).toEqual([]);
+    expect(storedRefsOf({})).toEqual([]);
+  });
+});
+
+describe("toReferenceRequest", () => {
+  it("uses the polymorphic target when the value names one", () => {
+    expect(
+      toReferenceRequest("relationship", { id: "p1", relationTo: "posts" }, [
+        "tags",
+      ])
+    ).toEqual({ kind: "relationship", collection: "posts", id: "p1" });
+  });
+
+  it("falls back to the field's first declared target", () => {
+    expect(toReferenceRequest("relationship", { id: "t1" }, ["tags"])).toEqual({
+      kind: "relationship",
+      collection: "tags",
+      id: "t1",
+    });
+  });
+
+  it("always resolves an upload against media", () => {
+    expect(toReferenceRequest("upload", { id: "m1" }, [])).toEqual({
+      kind: "upload",
+      collection: "media",
+      id: "m1",
+    });
+  });
+
+  it("is null when no collection or id is known", () => {
+    expect(toReferenceRequest("relationship", { id: "t1" }, [])).toBeNull();
+    expect(toReferenceRequest("relationship", { id: "" }, ["tags"])).toBeNull();
+  });
+});
+
+describe("referenceDisplayValue", () => {
+  it("shapes a relationship as { id, label }", () => {
+    expect(
+      referenceDisplayValue({ id: "t1" }, { id: "t1", label: "Design" })
+    ).toEqual({ id: "t1", label: "Design" });
+  });
+
+  it("keeps a polymorphic wrapper with the label inlined", () => {
+    expect(
+      referenceDisplayValue(
+        { id: "p1", relationTo: "posts" },
+        { id: "p1", label: "Hello" }
+      )
+    ).toEqual({ relationTo: "posts", value: "p1", label: "Hello" });
+  });
+
+  it("spreads media detail for an upload", () => {
+    const media = {
+      originalFilename: "pic.png",
+      filename: "abc.png",
+      url: "/u",
+      thumbnailUrl: "/t",
+      mimeType: "image/png",
+    };
+    expect(
+      referenceDisplayValue({ id: "m1" }, { id: "m1", label: "pic.png", media })
+    ).toEqual({ id: "m1", ...media });
+  });
+
+  it("keeps the stored id when the reference was not resolved", () => {
+    expect(referenceDisplayValue({ id: "t1" }, undefined)).toBe("t1");
+    expect(
+      referenceDisplayValue({ id: "p1", relationTo: "posts" }, undefined)
+    ).toEqual({ relationTo: "posts", value: "p1" });
+  });
+});
+
+describe("resolveReferenceLabels — relationships", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("resolves a target through the access-checked read path", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, data: { title: "Design" } });
+
+    const labels = await resolveReferenceLabels([rel("tags", "t1")], user);
+
+    // The read runs against THIS target with RBAC on (never route-authorized),
+    // at depth 0, and sees rows of any status so a historical link resolves.
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "tags",
+        entryId: "t1",
+        user,
+        depth: 0,
+        overrideAccess: false,
+        routeAuthorized: false,
+        status: "all",
+      })
+    );
+    expect(labels.get(referenceLabelKey(rel("tags", "t1")))).toEqual({
+      id: "t1",
+      label: "Design",
+    });
+  });
+
+  it("withholds the label when the target read is denied", async () => {
+    getEntrySpy.mockResolvedValue({ success: false });
+
+    const labels = await resolveReferenceLabels([rel("tags", "t1")], user);
+
+    expect(labels.get(referenceLabelKey(rel("tags", "t1")))).toEqual({
+      id: "t1",
+      label: null,
+    });
+  });
+
+  it("withholds the label when the read throws, never failing the caller", async () => {
+    getEntrySpy.mockRejectedValue(new Error("db down"));
+
+    const labels = await resolveReferenceLabels([rel("tags", "t1")], user);
+
+    expect(labels.get(referenceLabelKey(rel("tags", "t1")))).toEqual({
+      id: "t1",
+      label: null,
+    });
+  });
+
+  it("prefers title, then name, then label, then slug", async () => {
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { slug: "s", label: "l", name: "n", title: "t" },
+    });
+    let labels = await resolveReferenceLabels([rel("c", "1")], user);
+    expect(labels.get(referenceLabelKey(rel("c", "1")))?.label).toBe("t");
+
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { slug: "s", name: "n" },
+    });
+    labels = await resolveReferenceLabels([rel("c", "2")], user);
+    expect(labels.get(referenceLabelKey(rel("c", "2")))?.label).toBe("n");
+  });
+
+  it("never routes an email into a label", async () => {
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { email: "person@example.com" },
+    });
+
+    const labels = await resolveReferenceLabels([rel("contacts", "c1")], user);
+
+    expect(labels.get(referenceLabelKey(rel("contacts", "c1")))).toEqual({
+      id: "c1",
+      label: null,
+    });
+  });
+
+  it("resolves each distinct reference exactly once", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, data: { title: "X" } });
+
+    await resolveReferenceLabels(
+      [rel("tags", "t1"), rel("tags", "t1"), rel("tags", "t2")],
+      user
+    );
+
+    expect(getEntrySpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds resolution, leaving references past the cap as bare ids", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, data: { title: "X" } });
+    const many = Array.from({ length: 60 }, (_, i) => rel("tags", `t${i}`));
+
+    const labels = await resolveReferenceLabels(many, user);
+
+    expect(getEntrySpy).toHaveBeenCalledTimes(50);
+    expect(labels.has(referenceLabelKey(rel("tags", "t0")))).toBe(true);
+    expect(labels.has(referenceLabelKey(rel("tags", "t59")))).toBe(false);
+  });
+});
+
+describe("resolveReferenceLabels — uploads", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("checks media read access before projecting the file", async () => {
+    checkAccessSpy.mockResolvedValue(true);
+    findByIdSpy.mockResolvedValue({
+      originalFilename: "pic.png",
+      filename: "abc.png",
+      url: "/u",
+      thumbnailUrl: "/t",
+      mimeType: "image/png",
+    });
+
+    const req: ReferenceRequest = {
+      kind: "upload",
+      collection: "media",
+      id: "m1",
+    };
+    const labels = await resolveReferenceLabels([req], user);
+
+    expect(checkAccessSpy).toHaveBeenCalledWith({
+      userId: "u1",
+      operation: "read",
+      resource: "media",
+    });
+    expect(findByIdSpy).toHaveBeenCalledWith("m1", {});
+    expect(labels.get(referenceLabelKey(req))).toEqual({
+      id: "m1",
+      label: "pic.png",
+      media: {
+        originalFilename: "pic.png",
+        filename: "abc.png",
+        url: "/u",
+        thumbnailUrl: "/t",
+        mimeType: "image/png",
+      },
+    });
+  });
+
+  it("withholds the file when media read is denied", async () => {
+    checkAccessSpy.mockResolvedValue(false);
+
+    const req: ReferenceRequest = {
+      kind: "upload",
+      collection: "media",
+      id: "m1",
+    };
+    const labels = await resolveReferenceLabels([req], user);
+
+    expect(findByIdSpy).not.toHaveBeenCalled();
+    expect(labels.get(referenceLabelKey(req))).toEqual({
+      id: "m1",
+      label: null,
+      media: {
+        originalFilename: null,
+        filename: null,
+        url: null,
+        thumbnailUrl: null,
+        mimeType: null,
+      },
+    });
+  });
+});

@@ -1,10 +1,14 @@
 /**
  * The version diff engine emits relationship and upload references as bare ids:
  * a `set` of targets for a many-relationship, or a `value` node's before/after
- * for a single one. This walks that computed tree, resolves every referenced id
- * to a display label through the access-checked resolver, and attaches the
- * result ADDITIVELY: a `label` on each target, a `beforeRef`/`afterRef` on each
- * value node. The ids in the tree are never rewritten.
+ * for a single one. This walks that computed tree and resolves every referenced
+ * id to a display label through the access-checked resolver.
+ *
+ * A value node's before/after is rewritten in place to the value kit's display
+ * shape (`{ id, label }` / `{ id, filename, ... }`), so the client renders it
+ * through the same kit as a live value. A set node's targets each gain a
+ * `label` beside the id, because those render as their own badges rather than
+ * through that kit. Either way the id is kept inside the resolved value.
  *
  * It lives one layer above the pure engine (`diff/compute-diff.ts`) so that
  * engine stays dialect- and service-free: resolution needs access checks and
