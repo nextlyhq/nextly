@@ -13,9 +13,6 @@
 /** Whether a field (or list item) was added, removed, changed, or left alone. */
 export type DiffStatus = "added" | "removed" | "changed" | "unchanged";
 
-/** List items add "moved" on top of the scalar statuses (same id, new index). */
-export type ListItemStatus = DiffStatus | "moved";
-
 /**
  * One run of a word-level text diff. `op` follows diff-match-patch:
  * -1 = present only on the left (deleted), 0 = unchanged, 1 = present only on
@@ -63,17 +60,27 @@ export interface SetFieldDiff extends FieldDiffBase {
   removed: string[];
 }
 
-/** One item inside a repeatable/dynamic-zone list, matched by stable id. */
+/**
+ * One item inside a repeatable/dynamic-zone list, matched by stable id.
+ *
+ * `status` describes the item's CONTENT (added/removed/changed/unchanged);
+ * `hasMoved` is orthogonal POSITION, because an item can be both edited and
+ * reordered. This split follows the identity model Sanity uses and beats the
+ * index-based matching that marks every row after an insert as changed.
+ */
 export interface ListItemDiff {
   /** Stable component-row UUID; identity for add/remove/move detection. */
   id: string;
   /** The component slug (`_componentType`) when the snapshot carries one. */
   componentType?: string;
-  status: ListItemStatus;
-  /** Set only for a "moved" item. */
+  status: DiffStatus;
+  /** True when the item kept its identity but changed position. */
+  hasMoved?: boolean;
+  /** Prior index (present when the item existed before). */
   fromIndex?: number;
+  /** New index (present when the item exists after). */
   toIndex?: number;
-  /** Per-field diffs for a changed item; empty for a pure move or unchanged. */
+  /** Per-field diffs; empty for a pure move or an unchanged item. */
   fields: FieldDiff[];
 }
 
