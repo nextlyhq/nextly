@@ -32,7 +32,7 @@ import {
 } from "../../../init/schema-snapshot-cache";
 import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
 import type { MigrationScope } from "../../../runtime/notifications/types";
-import { ComponentSchemaService } from "../../components/services/component-schema-service";
+import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import {
@@ -1242,15 +1242,15 @@ export class PushSchemaPipeline {
     }
     // Components (comp_* tables) use component system columns
     // (_parent_id, _parent_table, _parent_field, _order, _component_type)
-    // instead of collection columns (title, slug). ComponentSchemaService
+    // instead of collection columns (title, slug). FieldGroupSchemaService
     // owns that column layout; generateRuntimeSchema would inject wrong
     // system columns.
-    const componentSchemaService = new ComponentSchemaService(dialect);
+    const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
     for (const c of Object.values(desired.components)) {
       // i18n: omit a localized component's translatable columns from the main
       // comp_ table handed to drizzle-kit (they live in comp_<slug>_locales,
       // provisioned out-of-band) — same rule as collections/singles above.
-      const componentTable = componentSchemaService.generateRuntimeSchema(
+      const componentTable = fieldGroupSchemaService.generateRuntimeSchema(
         c.tableName,
         c.fields,
         { localized: (c as { localized?: boolean }).localized === true }

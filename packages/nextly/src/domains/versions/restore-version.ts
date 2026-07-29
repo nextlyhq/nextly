@@ -144,7 +144,7 @@ async function resolveComponentSchemas(
   const resolved: ComponentSchemas = new Map();
   if (slugs.size === 0) return resolved;
 
-  const registry = getService("componentRegistryService");
+  const registry = getService("fieldGroupRegistryService");
 
   // A component may embed another, so resolving only the entity's own layer
   // would leave the deeper ones opaque — and an opaque subtree is one the

@@ -139,6 +139,10 @@
       "types": "./dist/api/versions-detail.d.ts",
       "import": "./dist/api/versions-detail.mjs"
     },
+    "./api/versions-diff": {
+      "types": "./dist/api/versions-diff.d.ts",
+      "import": "./dist/api/versions-diff.mjs"
+    },
     "./api/singles-detail": {
       "types": "./dist/api/singles-detail.d.ts",
       "import": "./dist/api/singles-detail.mjs"
@@ -249,6 +253,7 @@
     "@inquirer/prompts": "^7.3.2",
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "@nextlyhq/blocks-engine": "workspace:*",
+    "@sanity/diff-match-patch": "^3.2.0",
     "bcryptjs": "^3.0.2",
     "chokidar": "^5.0.0",
     "commander": "^14.0.2",

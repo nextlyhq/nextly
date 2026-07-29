@@ -88,7 +88,7 @@ export {
   type FieldGroupConfig,
   type FieldGroupLabel,
   type FieldGroupAdminOptions,
-} from "./components/config";
+} from "./field-groups/config";
 
 // Field builders and related runtime guards used in collection definitions.
 export {

@@ -166,6 +166,53 @@ describe("version routes", () => {
       ).method
     ).toBe("publishAllLocales");
   });
+
+  it("parses a collection version diff, not a version read", () => {
+    const parsed = parseRestRoute(
+      ["collections", "posts", "entries", "e1", "versions", "diff"],
+      "GET"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "collections",
+      method: "getEntryVersionDiff",
+      // A read of history, so it resolves to read-{slug}, not a write.
+      operation: "single",
+      routeParams: { collectionName: "posts", entryId: "e1" },
+    });
+    // `diff` must never be captured as a version number.
+    expect(parsed.routeParams?.versionNo).toBeUndefined();
+  });
+
+  it("parses a single's version diff", () => {
+    const parsed = parseRestRoute(
+      ["singles", "settings", "versions", "diff"],
+      "GET"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "singles",
+      method: "getSingleVersionDiff",
+      operation: "single",
+      routeParams: { slug: "settings" },
+    });
+    expect(parsed.routeParams?.versionNo).toBeUndefined();
+  });
+
+  it("does not answer a diff comparison on a destructive verb", () => {
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "diff"],
+        "POST"
+      ).method
+    ).toBeUndefined();
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "diff"],
+        "DELETE"
+      ).method
+    ).toBeUndefined();
+  });
 });
 
 describe("version label routes", () => {

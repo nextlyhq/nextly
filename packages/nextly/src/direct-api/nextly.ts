@@ -60,10 +60,10 @@ import { RoleService } from "../domains/auth/services/role-service";
 import { NextlyError } from "../errors/nextly-error";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
 import type { CollectionsHandler } from "../services/collections-handler";
-import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 import type { EmailService } from "../services/email/email-service";
 import type { EmailTemplateService } from "../services/email/email-template-service";
+import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
@@ -367,8 +367,10 @@ export class Nextly implements NextlyContext {
   }
 
   /** @internal */
-  public get componentRegistryService(): ComponentRegistryService {
-    return container.get<ComponentRegistryService>("componentRegistryService");
+  public get fieldGroupRegistryService(): FieldGroupRegistryService {
+    return container.get<FieldGroupRegistryService>(
+      "fieldGroupRegistryService"
+    );
   }
 
   /** @internal */

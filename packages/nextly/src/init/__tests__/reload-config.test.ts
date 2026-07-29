@@ -149,7 +149,7 @@ describe("reloadNextlyConfig", () => {
         setCodeFirstSingles: setCodeFirstSinglesSpy,
         pruneCodeFirstSingles: pruneCodeFirstSinglesSpy,
       },
-      componentRegistryService: {
+      fieldGroupRegistryService: {
         syncCodeFirstComponents: syncCodeFirstComponentsSpy,
         getAllComponents: vi.fn().mockResolvedValue(opts?.allComponents ?? []),
       },

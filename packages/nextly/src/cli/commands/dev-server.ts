@@ -56,9 +56,9 @@ import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
-  ComponentRegistryService,
+  FieldGroupRegistryService,
   type SyncComponentResult,
-} from "../../services/components/component-registry-service";
+} from "../../services/field-groups/field-group-registry-service";
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
   SingleRegistryService,
@@ -345,7 +345,7 @@ export async function performAutoSync(
     drizzleAdapter,
     registryLogger
   );
-  const componentRegistry = new ComponentRegistryService(
+  const componentRegistry = new FieldGroupRegistryService(
     drizzleAdapter,
     registryLogger
   );
@@ -863,7 +863,7 @@ export async function performSinglesReconcile(
 export async function performComponentsAutoSync(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
-  componentRegistry: ComponentRegistryService,
+  componentRegistry: FieldGroupRegistryService,
   syncResult: SyncComponentResult,
   _options: ResolvedDevOptions,
   context: CommandContext
@@ -881,12 +881,12 @@ export async function performComponentsAutoSync(
   logger.info(`Auto-syncing ${componentsToSync.length} component table(s)...`);
 
   // Import the component schema service for generating migration SQL
-  const { ComponentSchemaService } = await import(
-    "../../services/components/component-schema-service"
+  const { FieldGroupSchemaService } = await import(
+    "../../services/field-groups/field-group-schema-service"
   );
   const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
     .dialect;
-  const schemaService = new ComponentSchemaService(dialect);
+  const schemaService = new FieldGroupSchemaService(dialect);
 
   const synced: string[] = [];
   const errors: Array<{ slug: string; error: string }> = [];

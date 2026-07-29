@@ -476,7 +476,7 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
       }),
       fields: [textField("siteName")],
     });
-    const componentDataService = {
+    const fieldGroupDataService = {
       populateComponentData: vi
         .fn()
         .mockRejectedValue(new Error('no such table: "comp_hero"')),
@@ -488,7 +488,7 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
       createSilentLogger() as unknown as Ctor[1],
       registry as unknown as Ctor[2],
       createMockHookRegistry() as unknown as Ctor[3],
-      componentDataService as unknown as Ctor[4],
+      fieldGroupDataService as unknown as Ctor[4],
       createMockRBACService(true) as unknown as Ctor[5],
       undefined,
       {
@@ -505,7 +505,7 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
     // status pins that this is the strict-component path refusing rather than
     // some earlier gate the mock happened to trip.
     expect(result.statusCode).toBe(500);
-    expect(componentDataService.populateComponentData).toHaveBeenCalled();
+    expect(fieldGroupDataService.populateComponentData).toHaveBeenCalled();
     expect(result.message).not.toContain("comp_hero");
   });
 

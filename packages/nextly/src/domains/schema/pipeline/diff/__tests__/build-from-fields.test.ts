@@ -493,7 +493,7 @@ describe("buildDesiredTableFromFields with status enabled", () => {
 });
 
 describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
-  // ComponentSchemaService creates idx_<table>_<column> for an indexed field
+  // FieldGroupSchemaService creates idx_<table>_<column> for an indexed field
   // and uq_<table>_<column> for a unique one. The snapshot has to carry them
   // too: it is what the index restore replays after a SQLite rebuild, and a
   // unique index missing from it is a constraint that silently disappears.

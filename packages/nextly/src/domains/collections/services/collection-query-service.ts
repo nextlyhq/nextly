@@ -68,7 +68,7 @@ import type {
   WhereFilter,
   ComponentFieldFilter,
 } from "../../../services/collections/query-operators";
-import type { ComponentDataService } from "../../../services/components/component-data-service";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -148,7 +148,7 @@ export class CollectionQueryService extends BaseService {
     private readonly relationshipService: CollectionRelationshipService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
-    private readonly componentDataService?: ComponentDataService,
+    private readonly fieldGroupDataService?: FieldGroupDataService,
     /**
      * Normalized localization config (i18n M4). When set and a collection is localized,
      * reads resolve translatable fields from the companion `_locales` table for the
@@ -1199,9 +1199,9 @@ export class CollectionQueryService extends BaseService {
       // Uses WHERE _parent_id IN (...) for N+1 prevention
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
-      if (this.componentDataService) {
+      if (this.fieldGroupDataService) {
         expandedEntries =
-          await this.componentDataService.populateComponentDataMany({
+          await this.fieldGroupDataService.populateComponentDataMany({
             entries: expandedEntries,
             parentTable: getTableName(params.collectionName),
             fields: fields as FieldConfig[],
@@ -2105,8 +2105,8 @@ export class CollectionQueryService extends BaseService {
       // Populate component field data from comp_{slug} tables
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
-      if (this.componentDataService) {
-        expandedEntry = await this.componentDataService.populateComponentData({
+      if (this.fieldGroupDataService) {
+        expandedEntry = await this.fieldGroupDataService.populateComponentData({
           entry: expandedEntry,
           parentTable: getTableName(params.collectionName),
           fields: fields as FieldConfig[],
@@ -2513,7 +2513,7 @@ export class CollectionQueryService extends BaseService {
     componentFilters: ComponentFieldFilter[]
   ): Promise<Map<string, string>> {
     const resolved = new Map<string, string>();
-    if (componentFilters.length === 0 || !this.componentDataService) {
+    if (componentFilters.length === 0 || !this.fieldGroupDataService) {
       return resolved;
     }
 
@@ -2533,7 +2533,8 @@ export class CollectionQueryService extends BaseService {
     const lookups = await Promise.all(
       [...slugs].map(async slug => ({
         slug,
-        tableName: await this.componentDataService?.getComponentTableName(slug),
+        tableName:
+          await this.fieldGroupDataService?.getComponentTableName(slug),
       }))
     );
     for (const { slug, tableName } of lookups) {

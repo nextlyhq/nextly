@@ -33,7 +33,7 @@ import {
   dynamicFieldGroupsPg,
   dynamicFieldGroupsMysql,
   dynamicFieldGroupsSqlite,
-} from "./dynamic-components";
+} from "./dynamic-field-groups";
 import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
 import { dynamicSinglesPg } from "./dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "./dynamic-singles/sqlite";
@@ -236,7 +236,7 @@ export { nextlySchemaEventsPg as nextlySchemaEvents } from "./schema-events/post
 // other managed core tables listed in CORE_TABLE_NAMES.
 export { nextlyVersionsPg as nextlyVersions } from "./versions/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
-export * from "./dynamic-components"; // kept; unchanged
+export * from "./dynamic-field-groups"; // kept; unchanged
 // Plan A Task 11 — apiKeys (Drizzle). PG re-exports for direct-query callers.
 // The Zod validators (CreateApiKeySchema, UpdateApiKeySchema, etc.) live at
 // schemas/_zod/api-keys.ts and are re-exported via `export * from "./_zod"`
