@@ -32,10 +32,10 @@
  * ```
  */
 
-import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../components/config/validate-field-group";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
+import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../field-groups/config/validate-field-group";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {

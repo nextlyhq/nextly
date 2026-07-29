@@ -435,8 +435,8 @@ async function resolveEnrichedFields(
   slug: string
 ): Promise<FieldConfig[]> {
   const rawFields = await resolveCurrentFields(scopeKind, slug);
-  const componentRegistry = getService("componentRegistryService");
-  const enriched = await componentRegistry.enrichFieldsWithComponentSchemas(
+  const fieldGroupRegistry = getService("fieldGroupRegistryService");
+  const enriched = await fieldGroupRegistry.enrichFieldsWithComponentSchemas(
     rawFields as unknown as Record<string, unknown>[]
   );
   return enriched as unknown as FieldConfig[];

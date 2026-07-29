@@ -19,8 +19,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { ComponentRegistryService } from "../../domains/components/services/component-registry-service";
-import { ComponentSchemaService } from "../../domains/components/services/component-schema-service";
+import { FieldGroupRegistryService } from "../../domains/field-groups/services/field-group-registry-service";
+import { FieldGroupSchemaService } from "../../domains/field-groups/services/field-group-schema-service";
 import {
   type CollectionMetadata,
   DynamicCollectionRegistryService,
@@ -167,14 +167,14 @@ export async function seedBuilderComponent(
     .filter(f => !RESERVED.has(f.name))
     .map(f => ({ source: "ui", ...f })) as unknown as FieldConfig[];
 
-  const schemaService = new ComponentSchemaService(dialect);
+  const schemaService = new FieldGroupSchemaService(dialect);
   const migrationSQL = schemaService.generateMigrationSQL(
     tableName,
     userFields
   );
   await executeStatements(adapter, migrationSQL);
 
-  const registry = new ComponentRegistryService(adapter, silentLogger);
+  const registry = new FieldGroupRegistryService(adapter, silentLogger);
   await registry.registerComponent({
     slug,
     label: slug,

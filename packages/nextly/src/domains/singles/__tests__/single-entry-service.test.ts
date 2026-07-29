@@ -42,7 +42,7 @@ type EntryTestCtx = {
   adapter: ReturnType<typeof createMockAdapter>;
   registry: ReturnType<typeof createMockSingleRegistry>;
   hookRegistry: ReturnType<typeof createMockHookRegistry>;
-  componentDataService: ReturnType<typeof createMockComponentDataService>;
+  fieldGroupDataService: ReturnType<typeof createMockComponentDataService>;
   rbac: ReturnType<typeof createMockRBACService>;
 };
 
@@ -55,7 +55,7 @@ function createCtx(
   const adapter = createMockAdapter(options.adapterOverrides ?? {});
   const registry = createMockSingleRegistry();
   const hookRegistry = createMockHookRegistry();
-  const componentDataService = createMockComponentDataService();
+  const fieldGroupDataService = createMockComponentDataService();
   const rbac = createMockRBACService(true);
   const logger = createSilentLogger();
 
@@ -64,7 +64,9 @@ function createCtx(
     logger,
     registry as unknown as Parameters<typeof SingleEntryService>[2],
     hookRegistry as unknown as Parameters<typeof SingleEntryService>[3],
-    componentDataService as unknown as Parameters<typeof SingleEntryService>[4],
+    fieldGroupDataService as unknown as Parameters<
+      typeof SingleEntryService
+    >[4],
     options.withRbac
       ? (rbac as unknown as Parameters<typeof SingleEntryService>[5])
       : undefined
@@ -75,7 +77,7 @@ function createCtx(
     adapter,
     registry,
     hookRegistry,
-    componentDataService,
+    fieldGroupDataService,
     rbac,
   };
 }
@@ -147,7 +149,7 @@ describe("SingleEntryService", () => {
       expect(result.data?.settings).toEqual({ theme: "dark" });
     });
 
-    it("populates component data when a ComponentDataService is provided", async () => {
+    it("populates component data when a FieldGroupDataService is provided", async () => {
       ctx.registry.registerSingle("site-settings", {
         ...siteSettingsMeta(),
         fields: [textField("siteName"), componentFieldDef("seo", "seo")],
@@ -157,7 +159,7 @@ describe("SingleEntryService", () => {
         siteName: "My Site",
         updated_at: "2026-01-01T00:00:00.000Z",
       });
-      ctx.componentDataService.populateComponentData.mockImplementation(
+      ctx.fieldGroupDataService.populateComponentData.mockImplementation(
         async ({ entry }: { entry: Record<string, unknown> }) => ({
           ...entry,
           seo: { metaTitle: "SEO Title" },
@@ -166,7 +168,9 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.get("site-settings");
 
-      expect(ctx.componentDataService.populateComponentData).toHaveBeenCalled();
+      expect(
+        ctx.fieldGroupDataService.populateComponentData
+      ).toHaveBeenCalled();
       expect(result.data?.seo).toEqual({ metaTitle: "SEO Title" });
     });
   });
@@ -652,7 +656,7 @@ describe("SingleEntryService", () => {
   // ============================================================
 
   describe("update — component data", () => {
-    it("extracts component fields and saves them via ComponentDataService", async () => {
+    it("extracts component fields and saves them via FieldGroupDataService", async () => {
       ctx.registry.registerSingle("site-settings", {
         ...siteSettingsMeta(),
         fields: [textField("siteName"), componentFieldDef("seo", "seo")],
@@ -686,10 +690,10 @@ describe("SingleEntryService", () => {
       // single update now writes components inside a transaction, so the call
       // is saveComponentDataInTransaction(tx, params) — params is the 2nd arg.
       expect(
-        ctx.componentDataService.saveComponentDataInTransaction
+        ctx.fieldGroupDataService.saveComponentDataInTransaction
       ).toHaveBeenCalledTimes(1);
       const saveCall =
-        ctx.componentDataService.saveComponentDataInTransaction.mock
+        ctx.fieldGroupDataService.saveComponentDataInTransaction.mock
           .calls[0][1];
       expect(saveCall.parentTable).toBe("single_site_settings");
       expect(saveCall.data).toEqual({ seo: { metaTitle: "Hello" } });
@@ -712,7 +716,7 @@ describe("SingleEntryService", () => {
       await ctx.service.update("site-settings", { siteName: "New" });
 
       expect(
-        ctx.componentDataService.saveComponentDataInTransaction
+        ctx.fieldGroupDataService.saveComponentDataInTransaction
       ).not.toHaveBeenCalled();
     });
   });

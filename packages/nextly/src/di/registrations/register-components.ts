@@ -2,16 +2,16 @@
  * Component domain DI registrations.
  *
  * Registered early in the orchestrator because `CollectionService` depends
- * on `ComponentDataService` (via `container.has` / `container.get` at factory
+ * on `FieldGroupDataService` (via `container.has` / `container.get` at factory
  * resolution time) for component-field read/write support.
  */
 
 import type { CollectionRelationshipService } from "../../services/collections/collection-relationship-service";
 import {
-  ComponentDataService,
-  ComponentRegistryService,
-  ComponentSchemaService,
-} from "../../services/components";
+  FieldGroupDataService,
+  FieldGroupRegistryService,
+  FieldGroupSchemaService,
+} from "../../services/field-groups";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
@@ -19,35 +19,35 @@ import type { RegistrationContext } from "./types";
 export function registerComponentServices(ctx: RegistrationContext): void {
   const { adapter, logger } = ctx;
 
-  // ComponentRegistryService — registry for component definitions
-  container.registerSingleton<ComponentRegistryService>(
-    "componentRegistryService",
-    () => new ComponentRegistryService(adapter, logger)
+  // FieldGroupRegistryService — registry for component definitions
+  container.registerSingleton<FieldGroupRegistryService>(
+    "fieldGroupRegistryService",
+    () => new FieldGroupRegistryService(adapter, logger)
   );
 
-  // ComponentSchemaService — utility for generating component table schemas.
+  // FieldGroupSchemaService — utility for generating component table schemas.
   // Standalone utility class that only needs the dialect.
-  container.registerSingleton<ComponentSchemaService>(
-    "componentSchemaService",
-    () => new ComponentSchemaService(adapter.getCapabilities().dialect)
+  container.registerSingleton<FieldGroupSchemaService>(
+    "fieldGroupSchemaService",
+    () => new FieldGroupSchemaService(adapter.getCapabilities().dialect)
   );
 
-  // ComponentDataService — CRUD for component instance data.
-  // Depends on ComponentRegistryService for component metadata lookups
+  // FieldGroupDataService — CRUD for component instance data.
+  // Depends on FieldGroupRegistryService for component metadata lookups
   // and optionally on CollectionRelationshipService (registered later by
   // the CollectionService factory) for depth-controlled population.
-  container.registerSingleton<ComponentDataService>(
-    "componentDataService",
+  container.registerSingleton<FieldGroupDataService>(
+    "fieldGroupDataService",
     () => {
-      const registryService = container.get<ComponentRegistryService>(
-        "componentRegistryService"
+      const registryService = container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
       );
 
       const relationshipService = container.has("relationshipService")
         ? container.get<CollectionRelationshipService>("relationshipService")
         : undefined;
 
-      return new ComponentDataService(
+      return new FieldGroupDataService(
         adapter,
         logger,
         registryService,

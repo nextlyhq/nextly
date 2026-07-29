@@ -33,8 +33,8 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";

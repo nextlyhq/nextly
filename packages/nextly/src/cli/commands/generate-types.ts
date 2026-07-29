@@ -30,7 +30,6 @@ import { resolve, dirname } from "node:path";
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { FieldGroupConfig } from "../../components/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import {
   TypeGenerator,
@@ -40,10 +39,11 @@ import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
-import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";

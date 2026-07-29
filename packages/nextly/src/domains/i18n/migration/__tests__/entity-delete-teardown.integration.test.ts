@@ -8,7 +8,7 @@
  * Two layers are proved here against a real in-memory SQLite database:
  *   1. `teardownEntityI18n` itself — drops the companion, purges only the deleted entity's
  *      archive rows, and stays a no-op when either artifact is absent.
- *   2. `ComponentRegistryService.deleteComponent` — the real delete path must invoke that
+ *   2. `FieldGroupRegistryService.deleteComponent` — the real delete path must invoke that
  *      teardown, not only drop the main table.
  *
  * System tables come from the production DDL helpers (`getI18nArchiveDdl`, drizzle-kit over
@@ -21,9 +21,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getSQLiteDrizzleKit } from "../../../../database/drizzle-kit-lazy";
 import { SchemaRegistry } from "../../../../database/schema-registry";
-import { dynamicFieldGroupsSqlite } from "../../../../schemas/dynamic-components/sqlite";
+import { dynamicFieldGroupsSqlite } from "../../../../schemas/dynamic-field-groups/sqlite";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive";
-import { ComponentRegistryService } from "../../../components/services/component-registry-service";
+import { FieldGroupRegistryService } from "../../../field-groups/services/field-group-registry-service";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { buildCompanionCreateOnlySql } from "../generate-up";
 import { teardownEntityI18n } from "../teardown-entity-i18n";
@@ -180,8 +180,8 @@ describe("teardownEntityI18n (real SQLite)", () => {
   });
 });
 
-describe("ComponentRegistryService.deleteComponent (real SQLite)", () => {
-  let service: ComponentRegistryService;
+describe("FieldGroupRegistryService.deleteComponent (real SQLite)", () => {
+  let service: FieldGroupRegistryService;
 
   beforeEach(async () => {
     for (const stmt of await registryDdl()) await adapter.executeQuery(stmt);
@@ -195,12 +195,12 @@ describe("ComponentRegistryService.deleteComponent (real SQLite)", () => {
       warn: () => {},
       error: () => {},
     };
-    service = new ComponentRegistryService(
+    service = new FieldGroupRegistryService(
       adapter as unknown as ConstructorParameters<
-        typeof ComponentRegistryService
+        typeof FieldGroupRegistryService
       >[0],
       logger as unknown as ConstructorParameters<
-        typeof ComponentRegistryService
+        typeof FieldGroupRegistryService
       >[1]
     );
   });

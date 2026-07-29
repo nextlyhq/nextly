@@ -146,7 +146,7 @@ export function createMockHookRegistry(): MockRecord {
   };
 }
 
-// ── Mock ComponentDataService ───────────────────────────────────────────
+// ── Mock FieldGroupDataService ───────────────────────────────────────────
 
 export function createMockComponentDataService(): MockRecord {
   return {

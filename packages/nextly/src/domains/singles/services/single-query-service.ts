@@ -10,7 +10,7 @@
  * - JSON field deserialization
  * - Upload field expansion with full media metadata
  * - Relationship field expansion via CollectionRelationshipService
- * - Component field population via ComponentDataService
+ * - Component field population via FieldGroupDataService
  *
  *
  * @module domains/singles/services/single-query-service
@@ -47,7 +47,7 @@ import {
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
-import type { ComponentDataService } from "../../../services/components/component-data-service";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { detachData } from "../../../shared/lib/detach";
@@ -613,7 +613,7 @@ export class SingleQueryService extends BaseService {
     logger: Logger,
     private readonly singleRegistryService: SingleRegistryService,
     private readonly hookRegistry: HookRegistry,
-    private readonly componentDataService?: ComponentDataService,
+    private readonly fieldGroupDataService?: FieldGroupDataService,
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
@@ -730,9 +730,9 @@ export class SingleQueryService extends BaseService {
       true
     );
 
-    if (this.componentDataService) {
+    if (this.fieldGroupDataService) {
       try {
-        doc = (await this.componentDataService.populateComponentData({
+        doc = (await this.fieldGroupDataService.populateComponentData({
           entry: doc,
           parentTable: singleMeta.tableName,
           fields: singleMeta.fields,

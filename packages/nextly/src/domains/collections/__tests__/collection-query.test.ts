@@ -205,7 +205,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(call[1]).toBe("posts");
     });
 
-    it("should populate component data when componentDataService is available", async () => {
+    it("should populate component data when fieldGroupDataService is available", async () => {
       selectData.rows = [createSampleEntry()];
 
       await service.listEntries({

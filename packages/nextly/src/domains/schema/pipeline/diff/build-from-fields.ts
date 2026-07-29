@@ -295,7 +295,7 @@ export function buildDesiredTableFromComponentFields(
     ? new Set(resolveLocalizedFieldNames(fields, true))
     : new Set<string>();
 
-  // Component system columns — mirrors component-schema-service.ts DDL.
+  // Component system columns — mirrors field-group-schema-service.ts DDL.
   if (dialect === "postgresql") {
     columns.push({
       name: "id",
@@ -480,7 +480,7 @@ export function buildDesiredTableFromComponentFields(
   }
 
   // Component tables have no slug. They get a composite index on the parent-link
-  // columns plus the system created_at index — mirroring component-schema-service.ts
+  // columns plus the system created_at index — mirroring field-group-schema-service.ts
   // (idx_<table>_parent). The parent index is required so the migrate:create snapshot
   // matches the table the apply pipeline builds; otherwise the live index reads as an
   // unmanaged extra and `migrate:resolve --applied` verify emits a spurious drop_index.
@@ -498,7 +498,7 @@ export function buildDesiredTableFromComponentFields(
     // taken from the shared helper rather than restated: a component table
     // materialises `idx_<table>_<column>` for an indexed or single-relationship
     // field and `uq_<table>_<column>` for a unique one, exactly as
-    // ComponentSchemaService creates them. Listing only the parent and
+    // FieldGroupSchemaService creates them. Listing only the parent and
     // created_at indexes here left the rest out of the snapshot, so a SQLite
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
