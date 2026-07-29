@@ -555,7 +555,39 @@ function republishRecordingPolicies(
 // Reload entry point. resolver is optional and exists primarily for tests.
 // dispatcher is also test-only: injects a fake PromptDispatcher (e.g., one
 // that records prompts and auto-confirms) so tests don't need a real TTY.
-export async function reloadNextlyConfig(opts?: {
+/**
+ * Serialize reloads across every caller.
+ *
+ * The reload captures the field-type registry, then `loadConfig` clears and
+ * rebuilds that same process-global. Two runs overlapping would let one capture
+ * a registry the other is halfway through replacing, and an abandoned run would
+ * then restore a set that was never live. HMR already refuses to schedule while
+ * its own reload is pending, but `boot-apply` calls straight through without
+ * marking anything in flight, so HMR and boot can still meet.
+ *
+ * Coalescing rather than queueing, which matches what HMR already does with
+ * overlapping edits: a run in progress reads the config when it reads it, and a
+ * caller arriving mid-run wants that same answer.
+ */
+const globalForReload = globalThis as unknown as {
+  __nextly_reloadInFlight?: Promise<void>;
+};
+
+export function reloadNextlyConfig(opts?: {
+  resolver?: ServiceResolver;
+  dispatcher?: PromptDispatcher;
+}): Promise<void> {
+  const running = globalForReload.__nextly_reloadInFlight;
+  if (running) return running;
+
+  const started = runReload(opts).finally(() => {
+    delete globalForReload.__nextly_reloadInFlight;
+  });
+  globalForReload.__nextly_reloadInFlight = started;
+  return started;
+}
+
+async function runReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
 }): Promise<void> {
