@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
@@ -41,6 +42,14 @@ export interface ComponentReadAccess {
   enforceFieldAccess?: boolean;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
+  /**
+   * The caller's authenticated scope, forwarded to relationship expansion.
+   *
+   * A relationship reached through a field group is populated by the same
+   * service a top-level one is, and a scoped API key must not inherit its
+   * owner's super-admin bypass there either.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 export interface PopulateComponentDataParams {
@@ -1097,6 +1106,7 @@ export class FieldGroupQueryService extends BaseService {
           enforceFieldAccess: access.enforceFieldAccess,
           user: access.user,
           overrideAccess: access.overrideAccess,
+          authenticatedScope: access.authenticatedScope,
         }
       );
 

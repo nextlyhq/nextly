@@ -1222,6 +1222,7 @@ export class CollectionQueryService extends BaseService {
               enforceFieldAccess: true,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
             },
           });
       }
@@ -2126,6 +2127,7 @@ export class CollectionQueryService extends BaseService {
             enforceFieldAccess: true,
             user: params.user,
             overrideAccess: params.overrideAccess,
+            authenticatedScope: params.authenticatedScope,
           },
         });
       }

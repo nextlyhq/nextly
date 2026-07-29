@@ -714,6 +714,7 @@ export class SingleQueryService extends BaseService {
         enforceFieldAccess: enforceRelatedFieldAccess,
         user: options.user,
         overrideAccess: options.overrideAccess,
+        authenticatedScope: options.authenticatedScope,
       },
       strict,
       // The read path threads a caller, so the target collection's field rules
@@ -2302,6 +2303,12 @@ export class SingleQueryService extends BaseService {
       enforceFieldAccess?: boolean;
       user?: UserContext;
       overrideAccess?: boolean;
+      /**
+       * The caller's authenticated scope. A scoped API key is judged on its
+       * own grant, so it must not inherit its owner's super-admin bypass when
+       * a related row's collection rules are evaluated.
+       */
+      authenticatedScope?: AuthenticatedScope;
     } = {},
     /**
      * Propagate expansion failures instead of returning the document
@@ -2354,6 +2361,7 @@ export class SingleQueryService extends BaseService {
           enforceFieldAccess: access.enforceFieldAccess,
           user: access.user as Record<string, unknown> | undefined,
           overrideAccess: access.overrideAccess,
+          authenticatedScope: access.authenticatedScope,
         }
       );
       return expandedDoc as SingleDocument;

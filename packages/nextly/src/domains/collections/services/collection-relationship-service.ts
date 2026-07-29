@@ -82,7 +82,7 @@ interface RelatedRowAccess {
    * relationship holding many references reads its collection's metadata once
    * instead of once per value.
    */
-  targetPolicies?: Map<string, TargetReadPolicy>;
+  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
 }
 
 /** A target collection's read policy, as one expansion needs it. */
@@ -972,13 +972,16 @@ export class CollectionRelationshipService extends BaseService {
       return [];
     }
 
-    const kept: Record<string, unknown>[] = [];
-    for (const row of rows) {
-      if (await this.rowPassesTargetPolicy(row, policy, accessService, user)) {
-        kept.push(row);
-      }
-    }
-    return kept;
+    // Judged concurrently: a custom rule may do its own IO, and a list
+    // expanding many targets would otherwise pay for each one in turn. The
+    // verdicts are zipped back against the original order, so the rows keep
+    // the sequence they were fetched in.
+    const verdicts = await Promise.all(
+      rows.map(row =>
+        this.rowPassesTargetPolicy(row, policy, accessService, user)
+      )
+    );
+    return rows.filter((_, index) => verdicts[index]);
   }
 
   /**
@@ -989,7 +992,7 @@ export class CollectionRelationshipService extends BaseService {
    * hundreds of values into hundreds of metadata reads against the same pool
    * the row fetches need.
    */
-  private async resolveTargetReadPolicy(
+  private resolveTargetReadPolicy(
     targetCollection: string,
     accessService: CollectionAccessService,
     access: RelatedRowAccess
@@ -997,25 +1000,33 @@ export class CollectionRelationshipService extends BaseService {
     const cached = access.targetPolicies?.get(targetCollection);
     if (cached) return cached;
 
-    const collection =
-      await this.collectionService.getCollection(targetCollection);
-    const policy: TargetReadPolicy = {
-      rules: accessService.getAccessRules(
-        collection as Record<string, unknown>
-      ),
-      // Owner-only reads answer with a predicate rather than a verdict, so the
-      // owner column and the caller's id are what decide. Resolved through the
-      // helper the direct read path uses, so both compare the same column.
-      ownerConstraint: await accessService.getOwnerConstraint(
-        targetCollection,
-        "read",
-        access.user as UserContext | undefined,
-        false,
-        access.authenticatedScope
-      ),
-    };
-    access.targetPolicies?.set(targetCollection, policy);
-    return policy;
+    // The PENDING lookup is cached, not its result. A `hasMany` relationship
+    // fetches its references concurrently, so every one of them reaches this
+    // point before the first has anything to store — caching only the resolved
+    // value leaves each of them issuing its own metadata read, which is the
+    // pool pressure the cache exists to avoid.
+    const pending = (async (): Promise<TargetReadPolicy> => {
+      const collection =
+        await this.collectionService.getCollection(targetCollection);
+      return {
+        rules: accessService.getAccessRules(
+          collection as Record<string, unknown>
+        ),
+        // Owner-only reads answer with a predicate rather than a verdict, so
+        // the owner column and the caller's id are what decide. Resolved
+        // through the helper the direct read path uses, so both compare the
+        // same column.
+        ownerConstraint: await accessService.getOwnerConstraint(
+          targetCollection,
+          "read",
+          access.user as UserContext | undefined,
+          false,
+          access.authenticatedScope
+        ),
+      };
+    })();
+    access.targetPolicies?.set(targetCollection, pending);
+    return pending;
   }
 
   /** Whether one fetched row survives the target collection's read policy. */
@@ -1036,7 +1047,12 @@ export class CollectionRelationshipService extends BaseService {
       "read",
       accessService.buildRequestContext(user),
       row.id as string | undefined,
-      row,
+      // The id is supplied and the document is not, which is exactly what a
+      // direct read of this target evaluates with. Handing the row over here
+      // instead would let a rule written as `data?.tenant === req.user.tenant`
+      // admit through a relationship what the target's own endpoint refuses,
+      // making population the more permissive way in.
+      undefined,
       // Collections stamp the owner into the `created_by` system column.
       DEFAULT_OWNER_FIELD
     );
