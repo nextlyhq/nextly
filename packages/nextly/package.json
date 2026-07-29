@@ -139,6 +139,10 @@
       "types": "./dist/api/versions-detail.d.ts",
       "import": "./dist/api/versions-detail.mjs"
     },
+    "./api/versions-diff": {
+      "types": "./dist/api/versions-diff.d.ts",
+      "import": "./dist/api/versions-diff.mjs"
+    },
     "./api/singles-detail": {
       "types": "./dist/api/singles-detail.d.ts",
       "import": "./dist/api/singles-detail.mjs"

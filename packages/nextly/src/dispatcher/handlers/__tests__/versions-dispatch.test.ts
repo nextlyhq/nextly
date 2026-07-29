@@ -42,6 +42,7 @@ describe("version methods are registered", () => {
     // permitted as a read or as a write.
     expect(Object.keys(COLLECTION_VERSION_METHODS).sort()).toEqual([
       "getEntryVersion",
+      "getEntryVersionDiff",
       "listEntryVersions",
       "restoreEntryVersion",
       "setEntryVersionLabel",
@@ -51,6 +52,7 @@ describe("version methods are registered", () => {
   it("exposes every single version method", () => {
     expect(Object.keys(SINGLE_VERSION_METHODS).sort()).toEqual([
       "getSingleVersion",
+      "getSingleVersionDiff",
       "listSingleVersions",
       "restoreSingleVersion",
       "setSingleVersionLabel",

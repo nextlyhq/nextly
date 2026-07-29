@@ -11,10 +11,11 @@
 
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
+  assertDiffVersionPair,
   assertVersionDocumentReadable,
   assertVersionDocumentUpdatable,
+  diffDocumentVersions,
   redactSnapshotForUser,
-  resolveCurrentFields,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
@@ -22,14 +23,12 @@ import {
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 import type { RequestActor } from "../../auth/request-actor";
-import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import type { UserContext } from "../../domains/singles/types";
 import {
   attachVersionAuthors,
   type VersionMetaWithAuthor,
 } from "../../domains/versions/author-hydration";
-import { computeVersionDiff } from "../../domains/versions/diff";
 import type { VersionDiff } from "../../domains/versions/diff";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
@@ -216,41 +215,14 @@ export async function getVersionForDocument(
   return row;
 }
 
-/** A stored snapshot as a plain object, or an empty object if it is not one. */
-function snapshotObject(snapshot: unknown): Record<string, unknown> {
-  return snapshot !== null &&
-    typeof snapshot === "object" &&
-    !Array.isArray(snapshot)
-    ? (snapshot as Record<string, unknown>)
-    : {};
-}
-
 /**
- * A typed diff of two versions of one document, gated and redacted exactly like
- * a single-version read.
- *
- * Both snapshots are redacted for the caller before the pure engine sees them,
- * so the diff can never surface a field the caller may not read. The two
- * versions must share a locale: each snapshot records one locale's values, so a
- * cross-locale comparison is meaningless. The schema is enriched with component
- * sub-schemas so nested component fields diff field-by-field.
+ * A typed diff of two versions of one document over the dispatcher, gated
+ * exactly like a single-version read.
  */
 export async function getVersionDiffForDocument(
   args: VersionMethodArgs & { from: number; to: number; modifiedOnly?: boolean }
 ): Promise<VersionDiff> {
-  assertPositiveInteger(args.from, "from");
-  assertPositiveInteger(args.to, "to");
-  if (args.from === args.to) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "to",
-          code: "INVALID_VALUE",
-          message: "Cannot compare a version with itself.",
-        },
-      ],
-    });
-  }
+  assertDiffVersionPair(args.from, args.to);
 
   await assertVersionDocumentReadable(
     args.scopeKind,
@@ -260,72 +232,15 @@ export async function getVersionDiffForDocument(
     args.authenticatedScope
   );
 
-  const versions = getService("versionsService");
-  const ref = {
+  return diffDocumentVersions({
     scopeKind: args.scopeKind,
-    scopeSlug: args.slug,
+    slug: args.slug,
     entryId: args.entryId,
-  };
-  const [fromRow, toRow] = await Promise.all([
-    versions.get(ref, args.from),
-    versions.get(ref, args.to),
-  ]);
-
-  if (fromRow.locale !== toRow.locale) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "to",
-          code: "LOCALE_MISMATCH",
-          message: "The two versions belong to different locales.",
-        },
-      ],
-      logContext: {
-        reason: "version-diff-locale-mismatch",
-        scopeKind: args.scopeKind,
-        slug: args.slug,
-        from: args.from,
-        to: args.to,
-      },
-    });
-  }
-
-  await redactSnapshotForUser(
-    fromRow.snapshot,
-    args.scopeKind,
-    args.slug,
-    args.user
-  );
-  await redactSnapshotForUser(
-    toRow.snapshot,
-    args.scopeKind,
-    args.slug,
-    args.user
-  );
-
-  // Page scope has no HTTP diff surface; collection and single are the only
-  // callers, so anything else resolves as a collection for field lookup.
-  const lookupKind = args.scopeKind === "single" ? "single" : "collection";
-  const rawFields = await resolveCurrentFields(lookupKind, args.slug);
-  const componentRegistry = getService("componentRegistryService");
-  const fields = (await componentRegistry.enrichFieldsWithComponentSchemas(
-    rawFields as unknown as Record<string, unknown>[]
-  )) as unknown as FieldConfig[];
-
-  const body = computeVersionDiff(
-    snapshotObject(fromRow.snapshot),
-    snapshotObject(toRow.snapshot),
-    fields,
-    { modifiedOnly: args.modifiedOnly }
-  );
-
-  return {
+    user: args.user,
     from: args.from,
     to: args.to,
-    locale: fromRow.locale,
-    hasChanges: body.hasChanges,
-    fields: body.fields,
-  };
+    modifiedOnly: args.modifiedOnly,
+  });
 }
 
 /**

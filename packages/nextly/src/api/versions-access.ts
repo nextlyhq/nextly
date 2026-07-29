@@ -20,6 +20,8 @@ import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { checkSingleAccess } from "../domains/singles";
 import type { UserContext } from "../domains/singles/types";
+import { computeVersionDiff } from "../domains/versions/diff";
+import type { VersionDiff } from "../domains/versions/diff";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -418,4 +420,135 @@ export async function resolveCurrentFields(
   } catch {
     return [];
   }
+}
+
+/** A stored snapshot as a plain object, or an empty object if it is not one. */
+function snapshotObject(snapshot: unknown): Record<string, unknown> {
+  return snapshot !== null &&
+    typeof snapshot === "object" &&
+    !Array.isArray(snapshot)
+    ? (snapshot as Record<string, unknown>)
+    : {};
+}
+
+/** Validate the version pair a diff compares before any read runs. */
+export function assertDiffVersionPair(from: number, to: number): void {
+  for (const [value, path] of [
+    [from, "from"],
+    [to, "to"],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 1) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path,
+            code: "INVALID_VALUE",
+            message: `${path} must be a positive integer.`,
+          },
+        ],
+      });
+    }
+  }
+  if (from === to) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "to",
+          code: "INVALID_VALUE",
+          message: "Cannot compare a version with itself.",
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Compute a diff of two versions AFTER the caller has confirmed read access to
+ * the document. The dispatcher method and the standalone route both call this,
+ * so the get/redact/walk logic has exactly one definition and each surface
+ * applies its own read gate (mirroring how both reuse `versions.get`).
+ *
+ * Both snapshots are redacted for the caller before the pure engine sees them,
+ * so the diff can never surface a field the caller may not read. The two
+ * versions must share a locale: each snapshot records one locale's values, so a
+ * cross-locale comparison is meaningless. The schema is enriched with component
+ * sub-schemas so nested component fields diff field-by-field.
+ */
+export async function diffDocumentVersions(args: {
+  scopeKind: VersionScopeKind;
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  from: number;
+  to: number;
+  modifiedOnly?: boolean;
+}): Promise<VersionDiff> {
+  const versions = getService("versionsService");
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const [fromRow, toRow] = await Promise.all([
+    versions.get(ref, args.from),
+    versions.get(ref, args.to),
+  ]);
+
+  if (fromRow.locale !== toRow.locale) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "to",
+          code: "LOCALE_MISMATCH",
+          message: "The two versions belong to different locales.",
+        },
+      ],
+      logContext: {
+        reason: "version-diff-locale-mismatch",
+        scopeKind: args.scopeKind,
+        slug: args.slug,
+        from: args.from,
+        to: args.to,
+      },
+    });
+  }
+
+  // Redact each snapshot for the caller BEFORE diffing, so the diff can never
+  // surface a field the caller may not read.
+  await redactSnapshotForUser(
+    fromRow.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user
+  );
+  await redactSnapshotForUser(
+    toRow.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user
+  );
+
+  // Page scope has no HTTP diff surface; collection and single are the only
+  // callers, so anything else resolves as a collection for field lookup.
+  const lookupKind = args.scopeKind === "single" ? "single" : "collection";
+  const rawFields = await resolveCurrentFields(lookupKind, args.slug);
+  const componentRegistry = getService("componentRegistryService");
+  const fields = (await componentRegistry.enrichFieldsWithComponentSchemas(
+    rawFields as unknown as Record<string, unknown>[]
+  )) as unknown as FieldConfig[];
+
+  const body = computeVersionDiff(
+    snapshotObject(fromRow.snapshot),
+    snapshotObject(toRow.snapshot),
+    fields,
+    { modifiedOnly: args.modifiedOnly }
+  );
+
+  return {
+    from: args.from,
+    to: args.to,
+    locale: fromRow.locale,
+    hasChanges: body.hasChanges,
+    fields: body.fields,
+  };
 }
