@@ -30,7 +30,7 @@ import { resolve, dirname } from "node:path";
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { ComponentConfig } from "../../components/config/types";
+import type { FieldGroupConfig } from "../../components/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import {
   TypeGenerator,
@@ -43,7 +43,7 @@ import { describeError } from "../../errors/index";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
-import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-components/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
@@ -158,7 +158,7 @@ export async function runGenerateTypes(
 
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles?.length ?? 0;
-  const componentCount = configResult.config.components?.length ?? 0;
+  const componentCount = configResult.config.fieldGroups?.length ?? 0;
   const userFieldCount = configResult.config.users?.fields?.length ?? 0;
   logger.keyValue("Collections", collectionCount);
   logger.keyValue("Singles", singleCount);
@@ -211,7 +211,7 @@ async function generateTypes(
   const result: GenerationResult = {
     collectionCount: config.collections.length,
     singleCount: config.singles?.length ?? 0,
-    componentCount: config.components?.length ?? 0,
+    componentCount: config.fieldGroups?.length ?? 0,
     userFieldCount: config.users?.fields?.length ?? 0,
     zodSchemaFiles: [],
     durationMs: 0,
@@ -226,8 +226,8 @@ async function generateTypes(
   // Convert SingleConfig[] to DynamicSingleRecord[] for generators
   const singleRecords = convertToSingleRecords(config.singles ?? []);
 
-  // Convert ComponentConfig[] to DynamicComponentRecord[] for generators
-  const componentRecords = convertToComponentRecords(config.components ?? []);
+  // Convert FieldGroupConfig[] to DynamicFieldGroupRecord[] for generators
+  const componentRecords = convertToComponentRecords(config.fieldGroups ?? []);
 
   // Convert UserFieldConfig[] to UserFieldDefinitionRecord[] for generators
   const userFieldRecords = convertToUserFieldRecords(
@@ -387,11 +387,11 @@ function convertToSingleRecords(
 }
 
 /**
- * Convert ComponentConfig[] to DynamicComponentRecord[] format
+ * Convert FieldGroupConfig[] to DynamicFieldGroupRecord[] format
  */
 function convertToComponentRecords(
-  components: ComponentConfig[]
-): DynamicComponentRecord[] {
+  components: FieldGroupConfig[]
+): DynamicFieldGroupRecord[] {
   return components.map(component => ({
     id: component.slug, // Use slug as temporary ID
     slug: component.slug,

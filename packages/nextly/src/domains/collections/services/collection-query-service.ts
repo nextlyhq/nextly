@@ -45,6 +45,7 @@ import {
   resolveStatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   describeUntranslatableConstraint,
   stripNoOpConstraintMembers,
@@ -2562,7 +2563,7 @@ export class CollectionQueryService extends BaseService {
 
       // Handle _componentType filter specially (already snake_case)
       const dbColumnName = filter.isComponentTypeFilter
-        ? "_component_type"
+        ? STORAGE_FORMAT.columns.type
         : columnName;
 
       // Build the value condition based on operator
@@ -2664,9 +2665,9 @@ export class CollectionQueryService extends BaseService {
         const existsSubquery = sql`
           EXISTS (
             SELECT 1 FROM ${sql.identifier(componentTableName)}
-            WHERE _parent_id = ${parentIdColumn}
-            AND _parent_table = ${parentTableName}
-            AND _parent_field = ${filter.fieldName}
+            WHERE ${sql.identifier(STORAGE_FORMAT.columns.parentId)} = ${parentIdColumn}
+            AND ${sql.identifier(STORAGE_FORMAT.columns.parentTable)} = ${parentTableName}
+            AND ${sql.identifier(STORAGE_FORMAT.columns.parentField)} = ${filter.fieldName}
             AND ${valueCondition}
           )
         `;

@@ -84,7 +84,7 @@ function applyFoldedToBase(
     ...base,
     collections: folded.collections ?? base.collections,
     singles: folded.singles ?? base.singles,
-    components: folded.components ?? base.components,
+    fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
     // Carry a plugin setup transformer's audit decision through, so an audit
@@ -103,7 +103,7 @@ function applyFoldedToBase(
  * declarative plugin schema contributions (D3/D12) via the SAME shared function
  * the runtime boot uses (`applyPluginSchemaContributionsDeferred` in
  * `register.ts`), so the CLI and runtime produce the same merged schema (D50).
- * Threads collections, singles, AND components. Extend targets that aren't
+ * Threads collections, singles, AND field groups. Extend targets that aren't
  * code/plugin entities are deferred (candidate Builder targets, P8/R2) and
  * resolved by the caller against the Builder set — not thrown here. Exported for
  * unit/parity testing.

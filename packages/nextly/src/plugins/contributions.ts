@@ -5,7 +5,7 @@ import type {
   FieldTypeCategory,
 } from "../collections/fields/catalog";
 import type { FieldConfig } from "../collections/fields/types";
-import type { ComponentConfig } from "../components/config/types";
+import type { FieldGroupConfig } from "../components/config/types";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { EmailProviderAdapter } from "../domains/email/types";
 import type { SingleConfig } from "../singles/config/types";
@@ -291,8 +291,8 @@ export interface PluginContributions {
   collections?: CollectionConfig[];
   /** @public New plugin-owned singles. */
   singles?: SingleConfig[];
-  /** @public Plugin-owned components. */
-  components?: ComponentConfig[];
+  /** @public Plugin-owned field groups. */
+  fieldGroups?: FieldGroupConfig[];
   /** @public Add fields to existing entities by slug. */
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
   /** @public Custom permissions; CRUD is auto-seeded separately. */

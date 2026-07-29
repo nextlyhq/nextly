@@ -55,7 +55,7 @@ import {
   isGroupField,
   isJSONField,
   isBlocksField,
-  isComponentField,
+  isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
 import type {
@@ -64,6 +64,7 @@ import type {
   NumberFieldConfig,
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   DEFAULT_DECIMAL_PRECISION,
@@ -185,23 +186,31 @@ export class ComponentSchemaService {
     }
 
     if (this.dialect === "mysql") {
-      lines.push(`  ${this.q}_parent_id${this.q} varchar(36) NOT NULL,`);
+      lines.push(
+        `  ${this.q}${STORAGE_FORMAT.columns.parentId}${this.q} varchar(36) NOT NULL,`
+      );
     } else {
-      lines.push(`  ${this.q}_parent_id${this.q} text NOT NULL,`);
+      lines.push(
+        `  ${this.q}${STORAGE_FORMAT.columns.parentId}${this.q} text NOT NULL,`
+      );
     }
     lines.push(
-      `  ${this.q}_parent_table${this.q} ${types.varchar(255)} NOT NULL,`
+      `  ${this.q}${STORAGE_FORMAT.columns.parentTable}${this.q} ${types.varchar(255)} NOT NULL,`
     );
     lines.push(
-      `  ${this.q}_parent_field${this.q} ${types.varchar(255)} NOT NULL,`
+      `  ${this.q}${STORAGE_FORMAT.columns.parentField}${this.q} ${types.varchar(255)} NOT NULL,`
     );
-    lines.push(`  ${this.q}_order${this.q} ${types.integer} DEFAULT 0,`);
-    lines.push(`  ${this.q}_component_type${this.q} ${types.varchar(255)},`);
+    lines.push(
+      `  ${this.q}${STORAGE_FORMAT.columns.order}${this.q} ${types.integer} DEFAULT 0,`
+    );
+    lines.push(
+      `  ${this.q}${STORAGE_FORMAT.columns.type}${this.q} ${types.varchar(255)},`
+    );
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
       // Skip component fields — data lives in the referenced component's table.
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       // i18n: translatable columns live in the companion, not the main comp_ table.
       if ("name" in field && field.name && localizedNames.has(field.name)) {
         continue;
@@ -226,11 +235,11 @@ export class ComponentSchemaService {
 
     const indexStatements: string[] = [];
 
-    const parentIndexName = `idx_${tableName}_parent`;
+    const parentIndexName = `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`;
     const parentColumns = [
-      `${this.q}_parent_id${this.q}`,
-      `${this.q}_parent_table${this.q}`,
-      `${this.q}_parent_field${this.q}`,
+      `${this.q}${STORAGE_FORMAT.columns.parentId}${this.q}`,
+      `${this.q}${STORAGE_FORMAT.columns.parentTable}${this.q}`,
+      `${this.q}${STORAGE_FORMAT.columns.parentField}${this.q}`,
     ].join(", ");
 
     if (this.dialect === "mysql") {
@@ -245,7 +254,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
       if (localizedNames.has(field.name)) continue;
@@ -267,7 +276,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
       if (localizedNames.has(field.name)) continue;
@@ -290,7 +299,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
       if (localizedNames.has(field.name)) continue;
@@ -437,12 +446,14 @@ export class ComponentSchemaService {
         ? `DROP TABLE IF EXISTS ${this.q}${tableName}${this.q};`
         : `DROP TABLE IF EXISTS ${this.q}${tableName}${this.q} CASCADE;`;
 
-    const componentSlug = tableName.replace(/^comp_/, "");
+    const componentSlug = tableName.startsWith(STORAGE_FORMAT.tablePrefix)
+      ? tableName.slice(STORAGE_FORMAT.tablePrefix.length)
+      : tableName;
     const migrationSQL = `-- Drop component data table: ${tableName}\n${dropStatement}`;
 
     return {
       migrationSQL,
-      migrationFileName: `${Date.now()}_drop_comp_${componentSlug}.sql`,
+      migrationFileName: `${Date.now()}_drop_${STORAGE_FORMAT.tablePrefix}${componentSlug}.sql`,
     };
   }
 
@@ -497,18 +508,22 @@ export class ComponentSchemaService {
     // and doesn't leak Drizzle internals into the public API.
     const columns: Record<string, unknown> = {
       id: pgText("id").primaryKey(),
-      _parent_id: pgText("_parent_id").notNull(),
-      _parent_table: pgVarchar("_parent_table", { length: 255 }).notNull(),
-      _parent_field: pgVarchar("_parent_field", { length: 255 }).notNull(),
-      _order: pgInteger("_order").default(0),
-      _component_type: pgVarchar("_component_type", { length: 255 }),
+      _parent_id: pgText(STORAGE_FORMAT.columns.parentId).notNull(),
+      _parent_table: pgVarchar(STORAGE_FORMAT.columns.parentTable, {
+        length: 255,
+      }).notNull(),
+      _parent_field: pgVarchar(STORAGE_FORMAT.columns.parentField, {
+        length: 255,
+      }).notNull(),
+      _order: pgInteger(STORAGE_FORMAT.columns.order).default(0),
+      _component_type: pgVarchar(STORAGE_FORMAT.columns.type, { length: 255 }),
       created_at: pgTimestamp("created_at").defaultNow().notNull(),
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToPostgresColumn(field);
@@ -526,11 +541,9 @@ export class ComponentSchemaService {
       columns as Record<string, never>,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle table column accessor is dialect-typed
       (table: any) => ({
-        parentIdx: pgIndex(`idx_${tableName}_parent`).on(
-          table._parent_id,
-          table._parent_table,
-          table._parent_field
-        ),
+        parentIdx: pgIndex(
+          `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
+        ).on(table._parent_id, table._parent_table, table._parent_field),
       })
     );
   }
@@ -541,18 +554,26 @@ export class ComponentSchemaService {
   ): unknown {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
-      _parent_id: mysqlVarchar("_parent_id", { length: 36 }).notNull(),
-      _parent_table: mysqlVarchar("_parent_table", { length: 255 }).notNull(),
-      _parent_field: mysqlVarchar("_parent_field", { length: 255 }).notNull(),
-      _order: mysqlInt("_order").default(0),
-      _component_type: mysqlVarchar("_component_type", { length: 255 }),
+      _parent_id: mysqlVarchar(STORAGE_FORMAT.columns.parentId, {
+        length: 36,
+      }).notNull(),
+      _parent_table: mysqlVarchar(STORAGE_FORMAT.columns.parentTable, {
+        length: 255,
+      }).notNull(),
+      _parent_field: mysqlVarchar(STORAGE_FORMAT.columns.parentField, {
+        length: 255,
+      }).notNull(),
+      _order: mysqlInt(STORAGE_FORMAT.columns.order).default(0),
+      _component_type: mysqlVarchar(STORAGE_FORMAT.columns.type, {
+        length: 255,
+      }),
       created_at: mysqlTimestamp("created_at").defaultNow().notNull(),
       updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
     };
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToMySQLColumn(field);
@@ -566,11 +587,9 @@ export class ComponentSchemaService {
       columns as Record<string, never>,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle table column accessor is dialect-typed
       (table: any) => ({
-        parentIdx: mysqlIndex(`idx_${tableName}_parent`).on(
-          table._parent_id,
-          table._parent_table,
-          table._parent_field
-        ),
+        parentIdx: mysqlIndex(
+          `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
+        ).on(table._parent_id, table._parent_table, table._parent_field),
       })
     );
   }
@@ -581,11 +600,11 @@ export class ComponentSchemaService {
   ): unknown {
     const columns: Record<string, unknown> = {
       id: sqliteText("id").primaryKey(),
-      _parent_id: sqliteText("_parent_id").notNull(),
-      _parent_table: sqliteText("_parent_table").notNull(),
-      _parent_field: sqliteText("_parent_field").notNull(),
-      _order: sqliteInteger("_order").default(0),
-      _component_type: sqliteText("_component_type"),
+      _parent_id: sqliteText(STORAGE_FORMAT.columns.parentId).notNull(),
+      _parent_table: sqliteText(STORAGE_FORMAT.columns.parentTable).notNull(),
+      _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
+      _order: sqliteInteger(STORAGE_FORMAT.columns.order).default(0),
+      _component_type: sqliteText(STORAGE_FORMAT.columns.type),
       created_at: sqliteInteger("created_at", { mode: "timestamp" })
         .notNull()
         .$defaultFn(() => new Date()),
@@ -596,7 +615,7 @@ export class ComponentSchemaService {
 
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
       const column = this.mapFieldToSQLiteColumn(field);
@@ -610,11 +629,9 @@ export class ComponentSchemaService {
       columns as Record<string, never>,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle table column accessor is dialect-typed
       (table: any) => ({
-        parentIdx: sqliteIndex(`idx_${tableName}_parent`).on(
-          table._parent_id,
-          table._parent_table,
-          table._parent_field
-        ),
+        parentIdx: sqliteIndex(
+          `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
+        ).on(table._parent_id, table._parent_table, table._parent_field),
       })
     );
   }
@@ -635,7 +652,7 @@ export class ComponentSchemaService {
 
     const fieldColumns = fields
       .filter(
-        (f): f is DataFieldConfig => isDataField(f) && !isComponentField(f)
+        (f): f is DataFieldConfig => isDataField(f) && !isFieldGroupField(f)
       )
       .map(f => {
         const drizzleType = this.mapFieldToDrizzleCode(f);
@@ -669,7 +686,7 @@ export class ComponentSchemaService {
 
     const fieldIndexes = fields
       .filter(
-        (f): f is DataFieldConfig => isDataField(f) && !isComponentField(f)
+        (f): f is DataFieldConfig => isDataField(f) && !isFieldGroupField(f)
       )
       .filter(
         (f): f is DataFieldConfig & { name: string } =>
@@ -1135,7 +1152,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     }
 
     for (const field of fields) {
-      if (!isDataField(field) || isComponentField(field)) continue;
+      if (!isDataField(field) || isFieldGroupField(field)) continue;
 
       if (this.dialect === "sqlite") {
         if (isNumberField(field)) {
@@ -1317,7 +1334,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     const map = new Map<string, DataFieldConfig>();
     for (const field of fields) {
       if (!isDataField(field)) continue;
-      if (isComponentField(field)) continue;
+      if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       map.set(field.name, field);
     }

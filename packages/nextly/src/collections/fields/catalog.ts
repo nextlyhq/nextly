@@ -12,6 +12,8 @@
  * and each consumer resolves names against its own icon set.
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type { FieldType } from "./types/base";
 
 /**
@@ -171,7 +173,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     icon: "FolderOpen",
   },
   {
-    type: "component",
+    type: STORAGE_FORMAT.fieldType,
     label: "Component",
     category: "Structured",
     hint: "Embed a reusable component",

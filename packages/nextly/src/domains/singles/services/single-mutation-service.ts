@@ -24,7 +24,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, type Column } from "drizzle-orm";
 
 import { actorForWrite } from "../../../auth/request-actor";
-import { isComponentField } from "../../../collections/fields/guards";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -39,6 +39,7 @@ import {
   readRevalidateConfig,
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   AccessControlService,
   type CollectionAccessRules,
@@ -139,12 +140,15 @@ function writtenComponentInstances(
     if (
       instance &&
       typeof instance === "object" &&
-      "_componentType" in instance &&
-      typeof (instance as { _componentType?: unknown })._componentType ===
-        "string"
+      STORAGE_FORMAT.wireTypeKey in instance &&
+      typeof (instance as { _componentType?: unknown })[
+        STORAGE_FORMAT.wireTypeKey
+      ] === "string"
     ) {
       out.push({
-        slug: (instance as { _componentType: string })._componentType,
+        slug: (instance as { _componentType: string })[
+          STORAGE_FORMAT.wireTypeKey
+        ],
         data: instance as Record<string, unknown>,
       });
     }
@@ -353,7 +357,8 @@ export class SingleMutationService extends BaseService {
     const components: Record<string, unknown> = {};
     if (this.componentDataService) {
       const componentFields = fieldConfigs.filter(
-        (f): f is typeof f & { name: string } => isComponentField(f) && !!f.name
+        (f): f is typeof f & { name: string } =>
+          isFieldGroupField(f) && !!f.name
       );
       if (componentFields.length > 0) {
         try {
@@ -799,7 +804,7 @@ export class SingleMutationService extends BaseService {
       // the component fields.
       const componentFieldData: Record<string, unknown> = {};
       fieldConfigs.forEach(field => {
-        if (isComponentField(field) && currentData[field.name] !== undefined) {
+        if (isFieldGroupField(field) && currentData[field.name] !== undefined) {
           componentFieldData[field.name] = currentData[field.name];
           delete currentData[field.name];
         }
@@ -1242,7 +1247,7 @@ export class SingleMutationService extends BaseService {
                 const fieldConfig = fieldConfigs.find(
                   f => "name" in f && f.name === writtenName
                 );
-                if (!fieldConfig || !isComponentField(fieldConfig)) continue;
+                if (!fieldConfig || !isFieldGroupField(fieldConfig)) continue;
                 // The instances this write actually stored: a single-component
                 // field yields one; a dynamic-zone field yields each written
                 // `_componentType` block (only the blocks the write used).
@@ -1649,7 +1654,7 @@ export class SingleMutationService extends BaseService {
               if (this.componentDataService) {
                 const componentFields = fieldConfigs.filter(
                   (f): f is typeof f & { name: string } =>
-                    isComponentField(f) && !!f.name
+                    isFieldGroupField(f) && !!f.name
                 );
                 if (componentFields.length > 0) {
                   try {

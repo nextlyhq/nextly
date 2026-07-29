@@ -12,6 +12,8 @@
  * @module domains/i18n/migration/resolve-entity-table
  */
 
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+
 /** The minimal entity shape this needs from a loaded config. */
 export interface EntityLike {
   slug?: string;
@@ -19,10 +21,17 @@ export interface EntityLike {
   dbName?: string;
 }
 
-/** The config surface this reads — collections, singles, and components. */
+/**
+ * The config surface this reads.
+ *
+ * Field groups arrive under two different keys: an authored config supplies
+ * `fieldGroups`, while the persisted UI-schema manifest still spells the key
+ * `components`. Both are accepted because this resolver is handed each in turn.
+ */
 export interface ConfigLike {
   collections?: unknown[];
   singles?: unknown[];
+  fieldGroups?: unknown[];
   components?: unknown[];
 }
 
@@ -36,12 +45,15 @@ export interface ResolvedEntityTable {
 }
 
 /** Table-name prefix per entity kind — mirrors migrate-create's `toMinimalEntities`. */
-const GROUPS: [keyof ConfigLike, "dc_" | "single_" | "comp_", ResolvedEntityTable["kind"]][] =
-  [
-    ["collections", "dc_", "collection"],
-    ["singles", "single_", "single"],
-    ["components", "comp_", "component"],
-  ];
+const GROUPS: [
+  readonly (keyof ConfigLike)[],
+  "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix,
+  ResolvedEntityTable["kind"],
+][] = [
+  [["collections"], "dc_", "collection"],
+  [["singles"], "single_", "single"],
+  [["fieldGroups", "components"], STORAGE_FORMAT.tablePrefix, "component"],
+];
 
 /**
  * Resolve `slug` to its main + companion table, or `null` when no entity of that slug exists in
@@ -51,8 +63,10 @@ export function resolveEntityTable(
   config: ConfigLike,
   slug: string
 ): ResolvedEntityTable | null {
-  for (const [key, prefix, kind] of GROUPS) {
-    for (const raw of config[key] ?? []) {
+  for (const [keys, prefix, kind] of GROUPS) {
+    // Both spellings are consulted for field groups; the first one present wins.
+    const entities = keys.flatMap(key => config[key] ?? []);
+    for (const raw of entities) {
       const e = raw as EntityLike;
       if (e.slug !== slug) continue;
       const tableName = e.dbName ?? `${prefix}${slug.replace(/-/g, "_")}`;

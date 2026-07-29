@@ -101,9 +101,9 @@ export class ComponentDataService {
    *
    * Callers that need to address a component's storage directly (a filter
    * subquery, for instance) must go through this rather than re-deriving the
-   * name, because a component with a custom `dbName` is stored under a name
-   * that cannot be reconstructed from its slug. Returns null when the
-   * component is unknown.
+   * name: a row written before names resolved canonically can still point at a
+   * table the slug does not reconstruct. Returns null when the component is
+   * unknown.
    */
   async getComponentTableName(
     slug: string,

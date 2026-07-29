@@ -24,7 +24,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
-import { isComponentField } from "../../../collections/fields/guards";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 // PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
 import { toDbError } from "../../../database/errors";
@@ -1222,7 +1222,7 @@ export class CollectionMutationService extends BaseService {
   }> {
     const components: Record<string, unknown> = {};
     if (this.componentDataService) {
-      const componentFields = fields.filter(isComponentField);
+      const componentFields = fields.filter(isFieldGroupField);
       if (componentFields.length > 0) {
         try {
           const populated =
@@ -1993,7 +1993,7 @@ export class CollectionMutationService extends BaseService {
       // Extract component field data for separate storage in comp_{slug} tables
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (isComponentField(field) && finalData[field.name] !== undefined) {
+        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main insert
         }
@@ -3831,7 +3831,7 @@ export class CollectionMutationService extends BaseService {
       // Component fields should not be stored in the collection table
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (isComponentField(field) && finalData[field.name] !== undefined) {
+        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main update
         }
@@ -6329,15 +6329,18 @@ export class CollectionMutationService extends BaseService {
       // after the delete+insert below would report the new ids as the old ones.
       // The pre-update parent row plus its current (pre-rewrite) component and
       // m2m relations, read on `tx`.
-      const { document: previousDocument } = await this.readTxDocumentParts(tx, {
-        collectionName: params.collectionName,
-        tableName,
-        entryId: params.entryId,
-        parentRow: this.readShapeEventDocument(existingEntry, fields),
-        fields,
-        manyToManyFields,
-        needsRelations: previousNeedsRelations,
-      });
+      const { document: previousDocument } = await this.readTxDocumentParts(
+        tx,
+        {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: params.entryId,
+          parentRow: this.readShapeEventDocument(existingEntry, fields),
+          fields,
+          manyToManyFields,
+          needsRelations: previousNeedsRelations,
+        }
+      );
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
@@ -7810,15 +7813,18 @@ export class CollectionMutationService extends BaseService {
       // so a relationship-only update still lists the changed field: reading m2m
       // after the delete+insert below would report the new ids as the old ones.
       // The pre-update parent row plus its current (pre-rewrite) relations on `tx`.
-      const { document: previousDocument } = await this.readTxDocumentParts(tx, {
-        collectionName: params.collectionName,
-        tableName,
-        entryId,
-        parentRow: this.readShapeEventDocument(existingEntry, fields),
-        fields,
-        manyToManyFields,
-        needsRelations: previousNeedsRelations,
-      });
+      const { document: previousDocument } = await this.readTxDocumentParts(
+        tx,
+        {
+          collectionName: params.collectionName,
+          tableName,
+          entryId,
+          parentRow: this.readShapeEventDocument(existingEntry, fields),
+          fields,
+          manyToManyFields,
+          needsRelations: previousNeedsRelations,
+        }
+      );
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.

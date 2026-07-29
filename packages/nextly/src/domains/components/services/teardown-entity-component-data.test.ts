@@ -247,7 +247,7 @@ describe("teardownEntityComponentData registry safety", () => {
       executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
       select: vi.fn(async (table: string) => {
         if (table === "dynamic_components") {
-          // A component whose dbName collides with the registry itself.
+          // A registry row pointing at the registry table itself.
           return [{ slug: "bad", table_name: "dynamic_components" }];
         }
         probed.push(table);
