@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { resolveStorageVerdict, type StorageProbe } from "../guard";
-import type { MigrationState } from "../state";
+import type { MigratingState, MigrationState } from "../state";
 
 const LEGACY: MigrationState = { status: "settled", generation: "legacy" };
 const MIGRATED: MigrationState = {
   status: "settled",
   generation: "field-groups-v2",
 };
-const IN_FLIGHT: MigrationState = {
+const IN_FLIGHT: MigratingState = {
   status: "migrating",
   direction: "up",
   migrationId: "run-1",
@@ -23,6 +23,21 @@ function probe(over: Partial<StorageProbe> = {}): StorageProbe {
     legacyRegistryPresent: true,
     ...over,
   };
+}
+
+/**
+ * Run something expected to refuse, and hand back the refusal to assert on.
+ * Anything else -- returning, or throwing a different kind of error -- fails
+ * the test where it happened rather than further down an assertion chain.
+ */
+function captureRefusal(run: () => unknown): NextlyError {
+  try {
+    run();
+  } catch (error) {
+    if (NextlyError.is(error)) return error;
+    expect.fail(`expected a NextlyError, received ${String(error)}`);
+  }
+  expect.fail("expected a refusal, but the call returned normally");
 }
 
 // The guard is the only thing standing between a half-migrated database and a
@@ -51,47 +66,47 @@ describe("field-group storage verdict", () => {
   // that we have no record of creating is theirs until proven otherwise, and
   // renaming over it would destroy data Nextly does not own.
   it("refuses when a migrated-name object exists with no migration recorded", () => {
-    expect(() =>
+    // The narrative lives in logContext, not in the public message: the
+    // envelope stays generic so a refusal never leaks storage internals.
+    const refusal = captureRefusal(() =>
       resolveStorageVerdict({
         state: LEGACY,
         probe: probe({ targetRegistryPresent: true }),
       })
-    ).toThrowError(NextlyError);
-    // The narrative lives in logContext, not in the public message: the
-    // envelope stays generic so a refusal never leaks storage internals.
-    try {
-      resolveStorageVerdict({
-        state: LEGACY,
-        probe: probe({ targetRegistryPresent: true }),
-      });
-      throw new Error("expected a refusal");
-    } catch (error) {
-      expect((error as NextlyError).logContext?.reason).toMatch(
-        /no migration recorded it/
-      );
-    }
+    );
+    expect(refusal.logContext?.reason).toMatch(/no migration recorded it/);
   });
 
   // A newer marker over an older database: a restore from backup that did not
   // also restore the marker. Serving would write post-migration names while
   // reading a legacy registry.
   it("refuses when the marker claims migrated but the registry is absent", () => {
-    try {
-      resolveStorageVerdict({ state: MIGRATED, probe: probe() });
-      throw new Error("expected a refusal");
-    } catch (error) {
-      expect((error as NextlyError).logContext?.reason).toMatch(
-        /migrated registry is absent/
-      );
-    }
+    const refusal = captureRefusal(() =>
+      resolveStorageVerdict({ state: MIGRATED, probe: probe() })
+    );
+    expect(refusal.logContext?.reason).toMatch(/migrated registry is absent/);
   });
 
   // Resume from the step AFTER the last verified one; re-running a verified
   // step is wasteful, and skipping one leaves an object unrenamed.
   it("resumes at the step after the last verified one", () => {
     expect(resolveStorageVerdict({ state: IN_FLIGHT, probe: probe() })).toEqual(
-      { action: "resume", step: 5 }
+      { action: "resume", step: 5, manifestHash: "hash-1" }
     );
+  });
+
+  // A step number only means something against the plan it was checked off
+  // under, so the resumed run is handed that plan's hash to compare against
+  // rather than being left to look it up.
+  it("carries the interrupted run's manifest hash into the resume", () => {
+    const verdict = resolveStorageVerdict({
+      state: IN_FLIGHT,
+      probe: probe(),
+    });
+    expect(verdict).toMatchObject({
+      action: "resume",
+      manifestHash: IN_FLIGHT.manifestHash,
+    });
   });
 
   // An interrupted run is interpretable only by the step list, whatever the
@@ -103,20 +118,17 @@ describe("field-group storage verdict", () => {
           state: IN_FLIGHT,
           probe: probe({ targetRegistryPresent: target }),
         })
-      ).toEqual({ action: "resume", step: 5 });
+      ).toEqual({ action: "resume", step: 5, manifestHash: "hash-1" });
     }
   });
 
   it("reports refusals as retryable-unavailable, not as a client error", () => {
-    try {
+    const refusal = captureRefusal(() =>
       resolveStorageVerdict({
         state: LEGACY,
         probe: probe({ targetRegistryPresent: true }),
-      });
-      throw new Error("expected a refusal");
-    } catch (error) {
-      expect(NextlyError.is(error)).toBe(true);
-      expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
-    }
+      })
+    );
+    expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
   });
 });

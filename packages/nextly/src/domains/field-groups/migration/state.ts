@@ -79,20 +79,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * An absent marker is `settled/legacy`. A marker that is present but malformed
  * is NOT treated as absent: that would silently restart a migration that may
  * have already renamed objects, so it throws instead.
+ *
+ * Absence is decided by whether the row exists, never by whether its value
+ * decodes to `null`. A row holding SQL NULL or the JSON literal `null` is a
+ * marker we wrote and can no longer read, which is the corrupt case, not the
+ * untouched one.
  */
 export async function readMigrationState(
   meta: MetaService
 ): Promise<MigrationState> {
-  const raw = await meta.get<unknown>(FIELD_GROUP_MIGRATION_KEY);
-  if (raw === null || raw === undefined) {
+  const entry = await meta.getEntry<unknown>(FIELD_GROUP_MIGRATION_KEY);
+  if (!entry.present) {
     return { status: "settled", generation: "legacy" };
   }
 
-  if (!isRecord(raw)) {
+  if (entry.value === null || entry.value === undefined) {
+    throw markerCorrupt("marker row exists but carries no value");
+  }
+
+  if (!isRecord(entry.value)) {
     throw markerCorrupt("marker is not an object");
   }
 
-  const marker = raw as unknown as StoredMarker;
+  const marker = entry.value as unknown as StoredMarker;
 
   if (marker.version !== MIGRATION_MARKER_VERSION) {
     throw markerCorrupt(
@@ -203,6 +212,35 @@ export async function advanceStep(
     manifestHash: current.manifestHash,
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
+}
+
+/**
+ * Refuse to resume a run whose plan no longer describes the same objects.
+ *
+ * Steps are identified by position, and a position only means something
+ * relative to the manifest it was planned against. If the object map changed
+ * between the interrupted run and this one — a deployment, an edited schema, a
+ * field group added or removed — then step N now names different objects than
+ * the step N that was checked off, and continuing would rename or verify the
+ * wrong ones. There is no safe reconciliation, so this refuses.
+ *
+ * Callers must invoke this once they have rebuilt the plan and can supply its
+ * hash, which is necessarily after the resume decision itself is made.
+ */
+export function assertManifestUnchanged(args: {
+  recorded: string;
+  current: string;
+}): void {
+  if (args.recorded === args.current) return;
+  throw NextlyError.serviceUnavailable({
+    logMessage:
+      "field-group migration cannot resume: the plan changed since the interrupted run",
+    logContext: {
+      reason: "migration manifest changed since the interrupted run",
+      recorded: args.recorded,
+      current: args.current,
+    },
+  });
 }
 
 /**

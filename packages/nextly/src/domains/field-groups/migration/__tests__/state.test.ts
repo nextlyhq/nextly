@@ -4,6 +4,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
 import {
   advanceStep,
+  assertManifestUnchanged,
   beginMigration,
   FIELD_GROUP_MIGRATION_KEY,
   MIGRATION_MARKER_VERSION,
@@ -11,17 +12,26 @@ import {
   settleMigration,
 } from "../state";
 
+/** Absence is a distinct state from "stored, but holding nothing readable". */
+const ABSENT = Symbol("absent");
+
 /**
  * Stands in for `nextly_meta`. The real service round-trips JSON through a
  * column, so the fake stores the value it was handed and returns it verbatim.
+ *
+ * `getEntry` is what the marker reads through, because it is the only accessor
+ * that separates an absent row from a present row carrying `null`.
  */
-function createMeta(initial?: unknown): {
+function createMeta(initial: unknown = ABSENT): {
   meta: MetaService;
   read: () => unknown;
 } {
   let stored = initial;
   const meta = {
-    get: vi.fn(async () => (stored === undefined ? null : stored)),
+    getEntry: vi.fn(async () =>
+      stored === ABSENT ? { present: false } : { present: true, value: stored }
+    ),
+    get: vi.fn(async () => (stored === ABSENT ? null : stored)),
     set: vi.fn(async (_key: string, value: unknown) => {
       stored = value;
     }),
@@ -189,5 +199,49 @@ describe("field-group migration marker", () => {
     await expect(readMigrationState(meta)).rejects.toMatchObject({
       code: "SERVICE_UNAVAILABLE",
     });
+  });
+
+  // A row whose value is SQL NULL, and a row holding the JSON literal `null`,
+  // both decode to `null`. Neither is an absent marker: we wrote a row, so a
+  // run started, and reading it as "untouched" would restart a migration that
+  // may already have renamed objects.
+  it("refuses a marker row that exists but carries no value", async () => {
+    const { meta } = createMeta(null);
+    await expect(readMigrationState(meta)).rejects.toThrowError(NextlyError);
+    await expect(readMigrationState(meta)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
+  it("still reads a genuinely absent row as untouched legacy storage", async () => {
+    const { meta } = createMeta();
+    await expect(readMigrationState(meta)).resolves.toEqual({
+      status: "settled",
+      generation: "legacy",
+    });
+  });
+});
+
+// Step numbers index into a plan. Resuming step N against a plan that no longer
+// describes the same objects would rename or verify the wrong ones, and there
+// is no way to reconcile the two, so the mismatch is refused outright.
+describe("field-group migration manifest guard", () => {
+  it("allows a resume whose plan is unchanged", () => {
+    expect(() =>
+      assertManifestUnchanged({ recorded: "hash-1", current: "hash-1" })
+    ).not.toThrow();
+  });
+
+  it("refuses a resume whose plan changed", () => {
+    try {
+      assertManifestUnchanged({ recorded: "hash-1", current: "hash-2" });
+      expect.fail("expected a refusal");
+    } catch (error) {
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
+      expect((error as NextlyError).logContext?.reason).toMatch(
+        /manifest changed/
+      );
+    }
   });
 });

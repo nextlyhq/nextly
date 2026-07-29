@@ -29,11 +29,19 @@ export interface StorageProbe {
   legacyRegistryPresent: boolean;
 }
 
-/** What the caller should do next. */
+/**
+ * What the caller should do next.
+ *
+ * The resume verdict carries the manifest hash the interrupted run was planned
+ * against rather than leaving it in the marker for the caller to look up. A
+ * resumed step is only meaningful against that same plan, so the value the
+ * caller must check is handed to it alongside the step it would otherwise run
+ * blind. See `assertManifestUnchanged`.
+ */
 export type StorageVerdict =
   | { action: "use-legacy" }
   | { action: "use-field-groups-v2" }
-  | { action: "resume"; step: number };
+  | { action: "resume"; step: number; manifestHash: string };
 
 /**
  * Resolve state plus probe into an instruction, or throw.
@@ -49,8 +57,13 @@ export function resolveStorageVerdict(args: {
 
   if (state.status === "migrating") {
     // A run died in flight. Resuming is the only safe move: the objects are in
-    // a state only the step list can interpret.
-    return { action: "resume", step: state.step + 1 };
+    // a state only the step list can interpret. The recorded manifest hash
+    // travels with the step so the resumed run can refuse a changed plan.
+    return {
+      action: "resume",
+      step: state.step + 1,
+      manifestHash: state.manifestHash,
+    };
   }
 
   if (state.generation === "field-groups-v2") {
