@@ -2761,6 +2761,10 @@ export class CollectionMutationService extends BaseService {
         from: string | null;
         data: Record<string, unknown>;
       }[] = [];
+      // Whether the default locale's companion row transitions to published, so
+      // the post-commit workflow replay suppresses the untagged main transition
+      // (the default's locale-tagged replay stands in for it). Set in the tx.
+      let defaultCompanionTransitions = false;
       // Read the fresh post-publish parent whenever the collection captures
       // versions or carries a status: the pre-transaction `previousStatus` can
       // be stale (a concurrent writer may commit between it and the lock), so a
@@ -2789,6 +2793,7 @@ export class CollectionMutationService extends BaseService {
           entryVanished = false;
           lockedPreviousStatus = previousStatus;
           perLocaleTransitions = [];
+          defaultCompanionTransitions = false;
           const lockedRow = await tx.selectOne<Record<string, unknown>>(
             tableName,
             { where: this.whereEq("id", params.entryId), forUpdate: true }
@@ -2980,12 +2985,31 @@ export class CollectionMutationService extends BaseService {
             actor: publishActor,
           });
           eventRecorded = baseRecorded || eventRecorded;
-          // The document-wide (main-row) publish transition. Gated on the status
-          // read under the lock so a concurrent unpublish/publish is judged
-          // correctly. For a localized collection the main row holds the default
-          // locale's status, so this event stands in for the default locale and
-          // carries no `locale` tag.
-          if (hasMainStatus && lockedPreviousStatus !== "published") {
+          // Whether the default locale's own companion row transitions to
+          // published here. When it does, the per-locale loop below emits the
+          // default locale's transition tagged `locale: <default>` — matching
+          // the ordinary localized update path, where a default-locale status
+          // that rides the companion is emitted locale-tagged and the untagged
+          // main-row event is suppressed (its companion event already encodes
+          // the transition). So a consumer routing the default language by its
+          // locale still sees the default translation go live.
+          const defaultLocale = this.localization?.defaultLocale;
+          defaultCompanionTransitions =
+            defaultLocale !== undefined &&
+            priorCompanionStatuses.has(defaultLocale) &&
+            priorCompanionStatuses.get(defaultLocale) !== "published";
+          // The document-wide (main-row) publish transition, WITHOUT a locale
+          // tag. Emitted only when a default-companion event does not already
+          // encode it (a non-localized collection, or a default locale whose
+          // status lives only on the main row) — otherwise the locale-tagged
+          // default event below stands in, avoiding a duplicate. Gated on the
+          // status read under the lock so a concurrent unpublish/publish is
+          // judged correctly.
+          if (
+            hasMainStatus &&
+            lockedPreviousStatus !== "published" &&
+            !defaultCompanionTransitions
+          ) {
             const statusRecorded = await this.recordStatusEvents(tx, {
               collection: params.collectionName,
               id: params.entryId,
@@ -3004,19 +3028,12 @@ export class CollectionMutationService extends BaseService {
           // watching a single language needs its own `entry.published` — so each
           // companion locale that actually transitioned gets a locale-tagged
           // event, with the locale's own prior `_status` as the transition
-          // `from`. The default locale is skipped ONLY when the main-row event
-          // above actually represented its transition; if the main row was
-          // already published (or has no status column), the default locale's
-          // real draft->published change lives on the companion and needs its
-          // own event too.
-          const mainEmittedDocumentWide =
-            hasMainStatus && lockedPreviousStatus !== "published";
-          const defaultLocale = this.localization?.defaultLocale;
+          // `from`. The default locale is included: its companion event replaces
+          // the untagged main event suppressed above.
           for (const [
             locale,
             priorLocaleStatus,
           ] of priorCompanionStatuses) {
-            if (mainEmittedDocumentWide && locale === defaultLocale) continue;
             if (priorLocaleStatus === "published") continue;
             // Build this locale's own before/after documents. Publishing changes
             // only status, so the locale's translatable values are identical on
@@ -3086,7 +3103,11 @@ export class CollectionMutationService extends BaseService {
       // main row was already published (no transition, judged on the status read
       // under the lock), matching updateEntry. Prefer the fresh in-tx row; fall
       // back to the pre-read only if the row vanished mid-publish.
-      if (hasMainStatus && lockedPreviousStatus !== "published") {
+      if (
+        hasMainStatus &&
+        lockedPreviousStatus !== "published" &&
+        !defaultCompanionTransitions
+      ) {
         this.transitionStatus({
           collection: params.collectionName,
           id: params.entryId,

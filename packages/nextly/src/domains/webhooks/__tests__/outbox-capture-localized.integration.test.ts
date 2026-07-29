@@ -243,9 +243,11 @@ describe("webhook outbox capture, localized (integration)", () => {
     expect(de!.data.heading).toBe("Deutsch");
     expect(de!.data.status).toBe("published");
     expect(de!.previous?.status).toBe("draft");
-    // The default locale's transition is the document-wide event, which carries
-    // no locale.
-    expect(byLocale(undefined)).toBeDefined();
+    // The default locale's companion transitioned too, so it is emitted with its
+    // own `en` tag (matching the ordinary update path) rather than an untagged
+    // document-wide event, so an `en`-routed consumer still sees it go live.
+    expect(byLocale("en")).toBeDefined();
+    expect(byLocale(undefined)).toBeUndefined();
   });
 
   it("emits the default locale's own published event when its companion transitions under an already-published main row", async () => {

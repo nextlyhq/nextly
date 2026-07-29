@@ -249,10 +249,12 @@ describe("document status-transition events (integration)", () => {
       overrideAccess: true,
     });
 
-    // The German companion's draft->published change reached the workflow
-    // subscribers, locale-tagged, alongside the document-wide (default) one.
+    // Both companion locales' draft->published changes reached the workflow
+    // subscribers, each locale-tagged — the default locale by its own `en` tag
+    // (matching the ordinary update path), not an untagged document-wide event.
     expect(publishedLocales).toContain("de");
-    expect(publishedLocales).toContain(undefined);
+    expect(publishedLocales).toContain("en");
+    expect(publishedLocales).not.toContain(undefined);
   });
 
   it("re-publishing an already-published locale fires no status events", async () => {
