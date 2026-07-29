@@ -4,123 +4,269 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
-  MIGRATION_LOCK_NAME,
+  getMigrationLockDdl,
+  MIGRATION_LOCK_TABLE,
   withMigrationSession,
   type MigrationDialect,
 } from "../session";
 
+type Where = {
+  and?: { column: string; op: string; value: unknown }[];
+};
+
+/** Reads the structured predicate the adapter API uses back into plain fields. */
+function readWhere(where?: Where): { id?: number; owner?: string | null } {
+  const out: { id?: number; owner?: string | null } = {};
+  for (const c of where?.and ?? []) {
+    if (c.column === "id") out.id = c.value as number;
+    if (c.column === "owner") out.owner = c.value as string | null;
+  }
+  return out;
+}
+
 /**
- * Stands in for an adapter, recording which connection each statement ran on.
+ * A single-row lock table backed by an object, plus the two behaviours of the
+ * real adapters that a naive double would omit and that hid a defect once:
  *
- * The connection identity is the point: an advisory lock belongs to the
- * connection that took it, so a release issued anywhere else releases nothing.
+ * - every error escaping a transaction callback is reclassified, so a domain
+ *   error thrown inside one does NOT come back out intact;
+ * - each `transaction()` call takes a connection, so a fake that never counts
+ *   them cannot show that the lock stops holding one.
  */
-function createAdapter(options: { locked?: boolean } = {}) {
-  const locked = options.locked !== false;
-  const statements: { conn: number; sql: string }[] = [];
-  let connections = 0;
+function createAdapter(options: { heldBy?: string | null } = {}) {
+  const rows = new Map<number, { id: number; owner: string | null }>();
+  if (options.heldBy !== undefined) {
+    rows.set(1, { id: 1, owner: options.heldBy });
+  }
+  const ddl: string[] = [];
+  let open = 0;
+  let peakOpen = 0;
+
+  const ctx = {
+    lockRow: vi.fn(async () => undefined),
+    selectOne: vi.fn(async (_t: string, o?: { where?: Where }) => {
+      const row = rows.get(readWhere(o?.where).id ?? 1);
+      return row ? { ...row } : null;
+    }),
+    insert: vi.fn(async (_t: string, data: Record<string, unknown>) => {
+      const id = data.id as number;
+      if (rows.has(id)) throw new Error("duplicate key");
+      rows.set(id, { id, owner: (data.owner as string | null) ?? null });
+      return data;
+    }),
+    update: vi.fn(
+      async (_t: string, data: Record<string, unknown>, where: Where) => {
+        const cond = readWhere(where);
+        const row = rows.get(cond.id ?? 1);
+        if (!row) return [];
+        // A `where` naming an owner must not match a row held by someone else.
+        if (cond.owner !== undefined && row.owner !== cond.owner) return [];
+        row.owner = (data.owner as string | null) ?? null;
+        return [row];
+      }
+    ),
+  };
 
   const adapter = {
-    transaction: vi.fn(async (work: (ctx: unknown) => Promise<unknown>) => {
-      connections += 1;
-      const conn = connections;
-      const ctx = {
-        execute: vi.fn(async (sql: string) => {
-          statements.push({ conn, sql });
-          if (sql.includes("GET_LOCK")) return [{ locked: locked ? 1 : 0 }];
-          if (sql.includes("pg_try_advisory_lock")) return [{ locked: locked }];
-          return [];
-        }),
-      };
-      return work(ctx);
+    executeQuery: vi.fn(async (sql: string) => {
+      ddl.push(sql);
+      return [];
+    }),
+    transaction: vi.fn(async (work: (c: unknown) => Promise<unknown>) => {
+      open += 1;
+      peakOpen = Math.max(peakOpen, open);
+      try {
+        return await work(ctx);
+      } catch (error) {
+        // What the real adapters do: anything that is not already a
+        // DatabaseError is rewrapped, so a NextlyError thrown inside a
+        // callback loses its identity on the way out.
+        throw new Error(`DatabaseError(unknown): ${String(error)}`);
+      } finally {
+        open -= 1;
+      }
     }),
   } as unknown as DrizzleAdapter;
 
-  return { adapter, statements, connectionCount: () => connections };
+  return {
+    adapter,
+    ctx,
+    ddl,
+    owner: () => rows.get(1)?.owner ?? null,
+    peakOpen: () => peakOpen,
+  };
 }
 
 describe("field-group migration session", () => {
-  it.each<[MigrationDialect, RegExp, RegExp]>([
-    ["mysql", /GET_LOCK/, /RELEASE_LOCK/],
-    ["postgresql", /pg_try_advisory_lock/, /pg_advisory_unlock/],
-  ])(
-    "takes and releases the lock on one connection (%s)",
-    async (dialect, acquireSql, releaseSql) => {
-      const { adapter, statements } = createAdapter();
-      await withMigrationSession({ adapter, dialect }, async () => undefined);
-
-      const acquired = statements.find(s => acquireSql.test(s.sql));
-      const released = statements.find(s => releaseSql.test(s.sql));
-      expect(acquired).toBeDefined();
-      expect(released).toBeDefined();
-      // Same connection for both. A release on any other connection is a
-      // no-op that leaves the lock held until that connection is recycled.
-      expect(released?.conn).toBe(acquired?.conn);
-    }
-  );
-
-  // The schema pipeline's lock helper gives up waiting and proceeds unlocked.
-  // Two concurrent runs renaming the same tables is not a survivable outcome,
-  // so this refuses instead.
-  it.each<MigrationDialect>(["mysql", "postgresql"])(
-    "refuses to run when the lock is held elsewhere (%s)",
-    async dialect => {
-      const { adapter } = createAdapter({ locked: false });
-      const ran = vi.fn();
-      await expect(
-        withMigrationSession({ adapter, dialect }, async () => ran())
-      ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
-      expect(ran).not.toHaveBeenCalled();
-    }
-  );
+  it("takes the lock, runs, and releases it", async () => {
+    const h = createAdapter({ heldBy: null });
+    const seen: (string | null)[] = [];
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+      async () => {
+        seen.push(h.owner());
+      }
+    );
+    expect(seen).toEqual(["run-1"]);
+    expect(h.owner()).toBeNull();
+  });
 
   it("releases the lock even when the run throws", async () => {
-    const { adapter, statements } = createAdapter();
+    const h = createAdapter({ heldBy: null });
     await expect(
-      withMigrationSession({ adapter, dialect: "mysql" }, async () => {
-        throw NextlyError.internal({ logContext: { reason: "boom" } });
-      })
-    ).rejects.toThrowError(NextlyError);
-    expect(statements.some(s => /RELEASE_LOCK/.test(s.sql))).toBe(true);
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "mysql", owner: "run-1" },
+        async () => {
+          throw NextlyError.internal({ logContext: { reason: "boom" } });
+        }
+      )
+    ).rejects.toThrowError();
+    expect(h.owner()).toBeNull();
   });
 
-  // SQLite has one writer by definition, and the adapter serializes
-  // `transaction()` through a queue: an outer transaction would hold that queue
-  // while every step waited on it, which never resolves.
-  it("does not open a pinning transaction on sqlite", async () => {
-    const { adapter, connectionCount } = createAdapter();
+  // The schema pipeline's helper gives up waiting and proceeds unlocked. Two
+  // concurrent runs renaming the same tables is not a survivable outcome.
+  it("refuses to run when another owner holds the lock", async () => {
+    const h = createAdapter({ heldBy: "other-run" });
     const ran = vi.fn();
-    await withMigrationSession({ adapter, dialect: "sqlite" }, async () =>
-      ran()
+    await expect(
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+        async () => ran()
+      )
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    expect(ran).not.toHaveBeenCalled();
+    // Untouched: a refused run must not disturb the holder's claim.
+    expect(h.owner()).toBe("other-run");
+  });
+
+  // The refusal is raised outside the transaction because the adapters
+  // reclassify everything thrown inside one. Were it raised inside, this would
+  // surface as a generic database error and lose its status and context.
+  it("surfaces the refusal as a NextlyError, not a reclassified database error", async () => {
+    const h = createAdapter({ heldBy: "other-run" });
+    try {
+      await withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+        async () => undefined
+      );
+      expect.fail("expected a refusal");
+    } catch (error) {
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).logContext?.reason).toMatch(
+        /held elsewhere/
+      );
+      expect((error as NextlyError).logContext?.heldBy).toBe("other-run");
+    }
+  });
+
+  // Holding a pooled connection for the whole run deadlocks a `pool.max: 1`
+  // configuration, because every step then asks for a second one.
+  it("holds no connection open while the run executes", async () => {
+    const h = createAdapter({ heldBy: null });
+    let openDuringRun = 0;
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+      async session => {
+        await session.inTransaction(async () => {
+          openDuringRun = h.peakOpen();
+        });
+      }
     );
-    expect(ran).toHaveBeenCalled();
-    expect(connectionCount()).toBe(0);
+    // One: the step's own transaction. Not two.
+    expect(openDuringRun).toBe(1);
   });
 
-  // Steps must commit independently, so they run on their own connections
-  // rather than the one holding the lock. Sharing it would make the whole run
-  // a single transaction, and a rollback at the end would erase work the
-  // marker already reports as done.
-  it("runs step work on a different connection than the lock", async () => {
-    const { adapter, statements } = createAdapter();
-    await withMigrationSession({ adapter, dialect: "mysql" }, async session => {
-      await session.inTransaction(async ctx => {
-        await (ctx as { execute: (s: string) => Promise<unknown> }).execute(
-          "SELECT 1"
-        );
-      });
+  // Serialization of individual writes is not exclusion across a whole run, so
+  // SQLite needs the same lock as the others rather than being skipped.
+  it.each<MigrationDialect>(["postgresql", "mysql", "sqlite"])(
+    "excludes a second run on %s",
+    async dialect => {
+      const h = createAdapter({ heldBy: null });
+      await withMigrationSession(
+        { adapter: h.adapter, dialect, owner: "run-1" },
+        async () => {
+          const second = createAdapter({ heldBy: h.owner() });
+          await expect(
+            withMigrationSession(
+              { adapter: second.adapter, dialect, owner: "run-2" },
+              async () => undefined
+            )
+          ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+        }
+      );
+    }
+  );
+
+  it("creates its lock table on every dialect", async () => {
+    for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+      const h = createAdapter({ heldBy: null });
+      await withMigrationSession(
+        { adapter: h.adapter, dialect, owner: "run-1" },
+        async () => undefined
+      );
+      expect(h.ddl.join("\n")).toContain(MIGRATION_LOCK_TABLE);
+      expect(h.ddl.join("\n")).toContain("IF NOT EXISTS");
+    }
+  });
+
+  it("seeds the lock row when the table is new", async () => {
+    const h = createAdapter();
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "sqlite", owner: "run-1" },
+      async () => undefined
+    );
+    expect(h.ctx.insert).toHaveBeenCalled();
+  });
+
+  // Two processes seeding at once: the primary key decides, and the loser must
+  // continue to contend rather than crash on the duplicate.
+  it("tolerates losing the race to seed the row", async () => {
+    const h = createAdapter();
+    h.ctx.insert.mockImplementationOnce(async () => {
+      throw new Error("duplicate key");
     });
-    const lockConn = statements.find(s => /GET_LOCK/.test(s.sql))?.conn;
-    const workConn = statements.find(s => s.sql === "SELECT 1")?.conn;
-    expect(lockConn).toBeDefined();
-    expect(workConn).toBeDefined();
-    expect(workConn).not.toBe(lockConn);
+    await expect(
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+        async () => undefined
+      )
+    ).resolves.toBeUndefined();
   });
 
-  it("locks under a name distinct from the schema pipeline's", () => {
-    // Conflating the two would make an ordinary schema sync and a storage
-    // migration exclude each other by accident rather than by decision.
-    expect(MIGRATION_LOCK_NAME).toBe("nextly_field_group_migration");
-    expect(MIGRATION_LOCK_NAME).not.toBe("nextly_migrate");
+  it("refuses an empty owner rather than taking an unattributable lock", async () => {
+    const h = createAdapter({ heldBy: null });
+    await expect(
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", owner: "" },
+        async () => undefined
+      )
+    ).rejects.toThrowError(NextlyError);
+    expect(h.ddl).toEqual([]);
+  });
+
+  // A run that already lost the lock must not free it on its way out: by then
+  // the row belongs to whoever took it next, and clearing it would let a third
+  // run start while that one is mid-migration.
+  it("releases only a lock it still owns", async () => {
+    const h = createAdapter({ heldBy: null });
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "postgresql", owner: "run-1" },
+      async () => {
+        // Someone else takes the row over while this run is in flight.
+        h.ctx.update(
+          MIGRATION_LOCK_TABLE,
+          { owner: "run-2" },
+          { and: [{ column: "id", op: "=", value: 1 }] }
+        );
+      }
+    );
+    expect(h.owner()).toBe("run-2");
+  });
+
+  it("uses a lock table distinct from the schema pipeline's", () => {
+    expect(MIGRATION_LOCK_TABLE).toBe("nextly_field_group_lock");
+    expect(MIGRATION_LOCK_TABLE).not.toBe("nextly_migrate_lock");
+    expect(getMigrationLockDdl("mysql")[0]).toContain("int PRIMARY KEY");
   });
 });

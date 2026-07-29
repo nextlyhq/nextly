@@ -1,26 +1,32 @@
 /**
- * The connection a field-group migration runs under.
+ * Mutual exclusion for a field-group migration run.
  *
  * A migration that renames tables and rewrites rows must be the only one doing
- * so, and it must be able to prove it for the whole run rather than at the
- * moment it started. That needs an advisory lock, and an advisory lock is owned
- * by a connection: releasing it from a different connection than acquired it
- * releases nothing, and the lock then survives until the original connection
- * happens to close.
+ * so, for the whole run rather than at the instant it started.
  *
- * So the session checks out one connection, takes the lock on that connection,
- * and holds both for the duration. Steps do NOT run on it. They open their own
- * transactions, because a step must commit on its own before its progress is
- * recorded, and a single enclosing transaction would let a rollback at the end
- * erase work the marker already reports as done. Advisory locks exclude other
- * connections regardless of which connection does the work, so mutual exclusion
- * survives that split.
+ * The lock is a row, not a connection-scoped advisory lock. An advisory lock is
+ * owned by a connection, so holding one for a run means holding a pooled
+ * connection for a run: with `pool.max: 1` the steps could then never check out
+ * a connection of their own. MySQL's `GET_LOCK` is also scoped to the server
+ * rather than the database, so two unrelated Nextly databases sharing a server
+ * would exclude each other. A row has neither problem, behaves identically on
+ * all three dialects, and is reached through the adapter's typed API instead of
+ * dialect-specific SQL.
+ *
+ * There is deliberately no TTL and no auto-steal. Expiry needs a trusted clock,
+ * and skew between application servers is precisely the case where two runs
+ * would both conclude the lock had expired and proceed together. A run that
+ * dies holding the lock leaves it held, and an operator clears it. For
+ * something that rewrites customer data, refusing is the correct failure.
  *
  * @module domains/field-groups/migration/session
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  WhereClause,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
@@ -28,21 +34,28 @@ import { NextlyError } from "../../../errors/nextly-error";
 export type MigrationDialect = "postgresql" | "mysql" | "sqlite";
 
 /**
- * Lock identity, distinct from the schema pipeline's own lock.
+ * Lock table, separate from the schema pipeline's `nextly_migrate_lock`.
  *
- * The two guard different things, and conflating them would make an ordinary
- * schema sync and a storage migration appear to exclude each other by accident
- * rather than by decision. Keeping tools from colliding with a migration in
- * flight is the marker's job, not this lock's.
+ * Plain text columns rather than a row in the `nextly_meta` key/value table:
+ * that column holds JSON, and the dialects differ on whether a value returns
+ * parsed or as a string. A lock is the wrong place to discover that.
  */
-export const MIGRATION_LOCK_NAME = "nextly_field_group_migration";
+export const MIGRATION_LOCK_TABLE = "nextly_field_group_lock";
 
-/**
- * Postgres advisory locks are keyed by a bigint rather than a name. A fixed
- * literal is used instead of hashing the name at runtime so the value is
- * greppable and cannot drift if the name is ever reworded.
- */
-export const MIGRATION_LOCK_KEY = 8_053_119_204_411_001n;
+/** The lock is a single row; its key never varies. */
+const LOCK_ROW_ID = 1;
+
+/** The lock row, addressed the way the adapter's query builder expects. */
+function lockRowWhere(owner?: string): WhereClause {
+  const and: WhereClause["and"] = [
+    { column: "id", op: "=", value: LOCK_ROW_ID },
+  ];
+  // Naming the owner as well makes a release affect only a row we still hold.
+  if (owner !== undefined) {
+    and.push({ column: "owner", op: "=", value: owner });
+  }
+  return { and };
+}
 
 /** What a step is handed to do its work. */
 export interface MigrationSession {
@@ -50,100 +63,144 @@ export interface MigrationSession {
   /**
    * Run work in its own transaction, on its own connection.
    *
-   * Deliberately not the session's pinned connection: each step commits
-   * independently so that the progress marker, written after the commit,
-   * never claims work that a later rollback could undo.
+   * Each step commits independently so that the progress marker, written after
+   * the commit, never claims work a later rollback could undo.
    */
   inTransaction<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T>;
 }
 
 /**
- * Hold the migration lock for the duration of `fn`.
+ * DDL for the lock table.
  *
- * Refuses rather than continuing when the lock cannot be taken. The schema
- * pipeline's lock helper logs a warning and proceeds unlocked when it gives up
- * waiting; that is survivable for an idempotent schema sync and is not
- * survivable here, where two concurrent runs would rename the same objects and
- * rewrite the same rows.
+ * Exported so tests build it from the same source as production rather than
+ * hand-copying CREATE TABLE statements that drift.
  */
-export async function withMigrationSession<T>(
-  args: { adapter: DrizzleAdapter; dialect: MigrationDialect },
-  fn: (session: MigrationSession) => Promise<T>
-): Promise<T> {
-  const { adapter, dialect } = args;
-
-  const session: MigrationSession = {
-    dialect,
-    inTransaction: work => adapter.transaction(work),
-  };
-
-  // SQLite has no advisory locks and needs none: one writer at a time is a
-  // property of the database. Pinning here would also deadlock outright, since
-  // the adapter serializes `transaction()` calls through a queue and an outer
-  // transaction would hold that queue while every step waited on it.
-  if (dialect === "sqlite") {
-    return fn(session);
-  }
-
-  return adapter.transaction(async lock => {
-    await acquire(lock, dialect);
-    try {
-      return await fn(session);
-    } finally {
-      // Released on the connection that took it. Anywhere else is a no-op that
-      // leaves the lock held until the connection is recycled.
-      await release(lock, dialect);
-    }
-  });
+export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
+  const idType = dialect === "mysql" ? "int" : "integer";
+  return [
+    `CREATE TABLE IF NOT EXISTS ${MIGRATION_LOCK_TABLE} (id ${idType} PRIMARY KEY, owner text)`,
+  ];
 }
 
-async function acquire(
-  ctx: TransactionContext,
-  dialect: Exclude<MigrationDialect, "sqlite">
-): Promise<void> {
-  const acquired =
-    dialect === "mysql" ? await acquireMysql(ctx) : await acquirePostgres(ctx);
+/**
+ * Hold the migration lock for the duration of `fn`.
+ *
+ * Refuses rather than continuing when the lock is held. The schema pipeline's
+ * helper logs a warning and proceeds unlocked once it gives up waiting; that is
+ * survivable for an idempotent schema sync and is not survivable here, where
+ * two runs would rename the same objects and rewrite the same rows.
+ */
+export async function withMigrationSession<T>(
+  args: { adapter: DrizzleAdapter; dialect: MigrationDialect; owner: string },
+  fn: (session: MigrationSession) => Promise<T>
+): Promise<T> {
+  const { adapter, dialect, owner } = args;
 
-  if (!acquired) {
+  if (owner.length === 0) {
+    throw NextlyError.internal({
+      logContext: { reason: "migration lock owner must be a non-empty string" },
+    });
+  }
+
+  await ensureLockRow(adapter, dialect);
+
+  const acquired = await acquire(adapter, owner);
+  if (!acquired.ok) {
+    // Raised outside the transaction on purpose: the adapters route every error
+    // escaping a transaction callback through `classifyError`, which rewraps
+    // anything that is not already a DatabaseError and would strip this of its
+    // status and its context.
     throw NextlyError.serviceUnavailable({
       logMessage:
         "field-group migration could not take the migration lock; another run holds it",
-      logContext: { reason: "migration lock is held elsewhere", dialect },
+      logContext: {
+        reason: "migration lock is held elsewhere",
+        heldBy: acquired.heldBy,
+      },
     });
   }
-}
 
-async function acquireMysql(ctx: TransactionContext): Promise<boolean> {
-  // Timeout 0 so this reports the conflict instead of blocking: a caller that
-  // knows another run is in progress can decide to wait, a caller silently
-  // parked inside a lock call cannot.
-  const rows = await ctx.execute<{ locked: number | boolean | null }>(
-    "SELECT GET_LOCK(?, 0) AS locked",
-    [MIGRATION_LOCK_NAME]
-  );
-  const value = rows[0]?.locked;
-  return value === 1 || value === true;
-}
-
-async function acquirePostgres(ctx: TransactionContext): Promise<boolean> {
-  // Session-level rather than the `_xact_` variant, so the lock's lifetime is
-  // the connection's and stays under this function's control.
-  const rows = await ctx.execute<{ locked: boolean | null }>(
-    "SELECT pg_try_advisory_lock($1) AS locked",
-    [MIGRATION_LOCK_KEY.toString()]
-  );
-  return rows[0]?.locked === true;
-}
-
-async function release(
-  ctx: TransactionContext,
-  dialect: Exclude<MigrationDialect, "sqlite">
-): Promise<void> {
-  if (dialect === "mysql") {
-    await ctx.execute("SELECT RELEASE_LOCK(?)", [MIGRATION_LOCK_NAME]);
-    return;
+  try {
+    return await fn({
+      dialect,
+      inTransaction: work => adapter.transaction(work),
+    });
+  } finally {
+    await release(adapter, owner);
   }
-  await ctx.execute("SELECT pg_advisory_unlock($1)", [
-    MIGRATION_LOCK_KEY.toString(),
-  ]);
+}
+
+/**
+ * Create the table and seed the single row.
+ *
+ * The row must exist before it can be locked, and seeding it here rather than
+ * inside `acquire` keeps that path to one shape: lock, read, decide.
+ */
+async function ensureLockRow(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect
+): Promise<void> {
+  for (const statement of getMigrationLockDdl(dialect)) {
+    await adapter.executeQuery(statement);
+  }
+
+  const existing = await adapter.transaction(async ctx =>
+    ctx.selectOne<{ id: number }>(MIGRATION_LOCK_TABLE, {
+      where: lockRowWhere(),
+    })
+  );
+  if (existing) return;
+
+  try {
+    await adapter.transaction(async ctx =>
+      ctx.insert(MIGRATION_LOCK_TABLE, { id: LOCK_ROW_ID, owner: null })
+    );
+  } catch {
+    // Two processes seeding at once: the primary key decides, and the loser
+    // proceeds to contend for the row that now exists.
+  }
+}
+
+type Acquisition = { ok: true } | { ok: false; heldBy: string };
+
+/**
+ * Claim the row, or report who holds it.
+ *
+ * Returns rather than throws so the refusal is raised by the caller, outside
+ * the transaction, where it survives the adapter's error classifier.
+ */
+async function acquire(
+  adapter: DrizzleAdapter,
+  owner: string
+): Promise<Acquisition> {
+  return adapter.transaction(async ctx => {
+    // Serializes contenders: everyone else waits here until this transaction
+    // ends, so the read below cannot be overtaken between reading and writing.
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+
+    const row = await ctx.selectOne<{ owner: string | null }>(
+      MIGRATION_LOCK_TABLE,
+      { where: lockRowWhere() }
+    );
+
+    const heldBy = row?.owner ?? null;
+    if (heldBy !== null && heldBy !== owner) {
+      return { ok: false, heldBy };
+    }
+
+    await ctx.update(MIGRATION_LOCK_TABLE, { owner }, lockRowWhere());
+    return { ok: true };
+  });
+}
+
+/** Release only what we hold, so a late finaliser cannot free someone else's run. */
+async function release(adapter: DrizzleAdapter, owner: string): Promise<void> {
+  await adapter.transaction(async ctx => {
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+    await ctx.update(
+      MIGRATION_LOCK_TABLE,
+      { owner: null },
+      lockRowWhere(owner)
+    );
+  });
 }
