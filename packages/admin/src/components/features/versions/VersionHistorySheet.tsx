@@ -250,11 +250,12 @@ export function VersionHistorySheet({
   });
   useEffect(() => {
     if (selected === null || canComparePrevious) return;
-    // Wait out a head revalidation before paging: `fetchNextPage` defaults to
-    // `cancelRefetch: true`, so firing it mid-revalidation would silently cancel
-    // the refetch and leave a stale head that "Compare with current" would then
-    // trust.
-    if (isRefetching) return;
+    // Do not page while a head revalidation is running OR has failed. Firing
+    // `fetchNextPage` mid-revalidation would cancel it (default `cancelRefetch`),
+    // and firing it after a failed one would clear `isRefetchError` without
+    // refreshing the stale head, both re-enabling "Compare with current" against
+    // a stale head. Paging resumes once a revalidation succeeds.
+    if (isRefetching || isRefetchError) return;
     const search = previousSearchRef.current;
     // Keyed by document too: version numbers repeat across documents, so a spent
     // budget for version N in one document must not suppress paging for version N
@@ -278,6 +279,7 @@ export function VersionHistorySheet({
     selected,
     canComparePrevious,
     isRefetching,
+    isRefetchError,
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
@@ -396,9 +398,12 @@ export function VersionHistorySheet({
                     variant="outline"
                     size="sm"
                     className="w-full"
-                    // Disabled during a head revalidation too: `fetchNextPage`
-                    // would otherwise cancel it and leave a stale head.
-                    disabled={isFetchingNextPage || isRefetching}
+                    // Disabled while the head is revalidating or its revalidation
+                    // failed: `fetchNextPage` would otherwise cancel the refetch
+                    // or clear the error, leaving a stale head trusted as current.
+                    disabled={
+                      isFetchingNextPage || isRefetching || isRefetchError
+                    }
                     onClick={() => void fetchNextPage()}
                   >
                     {isFetchingNextPage ? "Loading…" : "Load more"}

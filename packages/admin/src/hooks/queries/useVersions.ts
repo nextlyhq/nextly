@@ -184,10 +184,11 @@ export interface UseVersionDiffOptions {
 /**
  * A diff of two versions. The snapshots are immutable, but the server classifies
  * and renders them against the live schema, so the result is not immutable
- * across schema edits. Rather than fingerprint every schema attribute that
- * feeds the diff, the query is treated as always stale: each time the compare
- * view mounts it revalidates, so an edited schema yields a fresh diff. It is not
- * refetched on window focus, where nothing relevant has changed.
+ * across schema edits. Rather than fingerprint every schema attribute that feeds
+ * the diff, the query is treated as always stale: each time the compare view
+ * mounts it revalidates, so an edited schema yields a fresh diff. Focus refetch
+ * is left on (the default) for the same reason: a schema edited in another tab
+ * is picked up on returning here rather than showing an obsolete classification.
  */
 export function useVersionDiff({
   scope,
@@ -210,7 +211,6 @@ export function useVersionDiff({
     },
     enabled: enabled && from !== null && to !== null && isAddressable(scope),
     staleTime: 0,
-    refetchOnWindowFocus: false,
     // Toggling "Changed only" switches to a different cache entry; keep the
     // prior diff on screen while the new one loads rather than flashing a
     // skeleton over a comparison the user is already reading.

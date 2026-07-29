@@ -86,7 +86,10 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
             Try again
           </Button>
         </div>
-      ) : diff.data && !diff.data.hasChanges ? (
+      ) : diff.data && diff.data.fields.length === 0 ? (
+        // Nothing to show: "Changed only" is on and no field changed. With the
+        // filter off the response carries the unchanged fields, so the branch
+        // below renders them instead of this message.
         <div className="px-4 py-8 text-center">
           <p className="text-sm text-muted-foreground">
             These two versions are identical.
@@ -94,6 +97,11 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
         </div>
       ) : diff.data ? (
         <div className="px-4">
+          {!diff.data.hasChanges ? (
+            <p className="py-3 text-sm text-muted-foreground">
+              No changes between these versions.
+            </p>
+          ) : null}
           {diff.data.fields.map(node => (
             <FieldDiffNode key={childKey(node)} node={node} />
           ))}

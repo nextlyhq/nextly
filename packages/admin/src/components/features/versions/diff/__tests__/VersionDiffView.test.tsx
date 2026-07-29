@@ -73,6 +73,40 @@ describe("VersionDiffView", () => {
     expect(screen.getByText(/identical/)).toBeInTheDocument();
   });
 
+  it("renders the unchanged fields with a no-change note when filter is off", () => {
+    // "Changed only" off returns the unchanged fields even though hasChanges is
+    // false; they must render (with a note) rather than showing "identical".
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: false,
+        fields: [
+          {
+            kind: "value",
+            name: "title",
+            label: "Title",
+            type: "text",
+            status: "unchanged",
+            before: "same",
+            after: "same",
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByText("Title")).toBeInTheDocument();
+    expect(screen.getByText(/No changes between/)).toBeInTheDocument();
+    expect(screen.queryByText(/identical/)).not.toBeInTheDocument();
+  });
+
   it("offers a retry when the comparison fails", () => {
     useVersionDiffMock.mockReturnValue({
       data: undefined,
