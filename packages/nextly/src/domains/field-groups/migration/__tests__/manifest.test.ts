@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import {
   buildMigrationManifest,
@@ -13,7 +14,7 @@ function row(over: Partial<RegistryRow> = {}): RegistryRow {
   return {
     slug: "hero",
     tableName: "comp_hero",
-    localized: false,
+    hasCompanion: false,
     hasTypeColumn: false,
     ...over,
   };
@@ -32,7 +33,7 @@ describe("field-group migration manifest", () => {
   });
 
   it("renames the table and, when localized, its companion", () => {
-    const { entries } = buildMigrationManifest([row({ localized: true })]);
+    const { entries } = buildMigrationManifest([row({ hasCompanion: true })]);
     expect(entries).toEqual([
       { kind: "table", from: "comp_hero", to: "fg_hero" },
       { kind: "companion", from: "comp_hero_locales", to: "fg_hero_locales" },
@@ -48,7 +49,7 @@ describe("field-group migration manifest", () => {
   // with an unexpected name still has its companion found.
   it("derives the companion from the read table name", () => {
     const { entries } = buildMigrationManifest([
-      row({ tableName: "comp_odd_name", localized: true }),
+      row({ tableName: "comp_odd_name", hasCompanion: true }),
     ]);
     expect(entries).toContainEqual({
       kind: "companion",
@@ -101,7 +102,7 @@ describe("field-group migration manifest", () => {
   // plan from it. Renaming it first would strand the resume.
   it("renames the registry last", () => {
     const { entries } = buildMigrationManifest([
-      row({ tableName: "comp_a", localized: true }),
+      row({ tableName: "comp_a", hasCompanion: true }),
       row({ tableName: "comp_b" }),
     ]);
     expect(entries[entries.length - 1]).toEqual({
@@ -145,6 +146,54 @@ describe("field-group migration manifest", () => {
       { kind: "table", from: "comp_a", to: "fg_a" },
     ]);
     expect(a).not.toBe(b);
+  });
+
+  // A localized group with no translatable fields has no companion table, and
+  // the create path accepts exactly that. Naming one would make the step fail.
+  it("does not rename a companion that was never created", () => {
+    const { entries } = buildMigrationManifest([row({ hasCompanion: false })]);
+    expect(entries.some(e => e.kind === "companion")).toBe(false);
+  });
+
+  // `table_name` is unique but unconstrained, so a generated `comp_hero` and an
+  // author-named `fg_hero` can both exist today. The second is left alone by
+  // design, so the first would rename onto an occupied name mid-run.
+  it("refuses when a target name is taken by a row it leaves alone", () => {
+    expect(() =>
+      buildMigrationManifest([
+        row({ tableName: "comp_hero" }),
+        row({ slug: "other", tableName: "fg_hero" }),
+      ])
+    ).toThrowError(NextlyError);
+  });
+
+  it("refuses when a target name is taken by a table outside the registry", () => {
+    try {
+      buildMigrationManifest([row({ tableName: "comp_hero" })], {
+        existingTables: ["fg_hero"],
+      });
+      expect.fail("expected a refusal");
+    } catch (error) {
+      expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
+      expect((error as NextlyError).logContext?.to).toBe("fg_hero");
+    }
+  });
+
+  // Renaming a table away frees its name, so a plan that moves comp_a to fg_a
+  // while something else vacates fg_a is not a collision.
+  it("allows a target whose occupant is itself being renamed away", () => {
+    expect(() =>
+      buildMigrationManifest([row({ tableName: "comp_hero" })], {
+        existingTables: ["comp_hero"],
+      })
+    ).not.toThrow();
+  });
+
+  // A plan rebuilt after a partial run must contain only outstanding work, so a
+  // row already carrying a migrated name contributes nothing.
+  it("produces no rename for a row already migrated", () => {
+    const { entries } = buildMigrationManifest([row({ tableName: "fg_hero" })]);
+    expect(entries.filter(e => e.kind !== "registry")).toEqual([]);
   });
 
   it("targets a prefix no longer than the one it replaces", () => {

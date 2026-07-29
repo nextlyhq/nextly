@@ -11,6 +11,7 @@
 
 import { createHash } from "node:crypto";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
 /**
@@ -31,8 +32,15 @@ export interface RegistryRow {
   slug: string;
   /** Read from `table_name`. Never recomputed from the slug. */
   tableName: string;
-  /** Localized groups keep translations in a companion table. */
-  localized: boolean;
+  /**
+   * Whether a companion table is physically present.
+   *
+   * Deliberately not `localized`: a localized group with no translatable
+   * fields has no companion, and the create path accepts exactly that. Reading
+   * this from the catalog rather than inferring it keeps the plan from naming
+   * a table that was never created.
+   */
+  hasCompanion: boolean;
   /** Dynamic zones carry the type discriminator column; fixed groups do not. */
   hasTypeColumn: boolean;
 }
@@ -75,12 +83,21 @@ export function retargetName(name: string): string | null {
 /**
  * Build the ordered rename plan.
  *
- * The registry is renamed **last**. While it still answers to its old name a
- * resumed run can rebuild this plan from it; renaming it first would leave a
- * resume unable to find the plan it was meant to finish.
+ * The registry is renamed **last**, so that for every step but the final one
+ * the plan can still be rebuilt from the legacy registry on resume.
+ *
+ * That ordering is necessary but not sufficient. The final step has the same
+ * commit-before-marker crash window as any other: once the registry rename
+ * commits, a crash before the marker records it leaves a resume that must retry
+ * a step whose source table no longer exists. So callers must read registry
+ * rows from whichever registry is present — legacy first, then the migrated
+ * name — and this function must produce an identical plan from either. It does,
+ * because the rows are the only input and the entries are derived from them
+ * alone; nothing here reads the registry's own name from the database.
  */
 export function buildMigrationManifest(
-  rows: readonly RegistryRow[]
+  rows: readonly RegistryRow[],
+  options: { existingTables?: readonly string[] } = {}
 ): MigrationManifest {
   const entries: ManifestEntry[] = [];
 
@@ -92,6 +109,9 @@ export function buildMigrationManifest(
   );
 
   for (const row of ordered) {
+    // Idempotent by construction: a row already carrying a migrated name
+    // produces no rename, so a plan rebuilt after a partial run contains only
+    // the work still outstanding.
     const target = retargetName(row.tableName);
     if (target === null) {
       // Custom-named: nothing to retire. Its column may still need renaming,
@@ -109,7 +129,7 @@ export function buildMigrationManifest(
 
     entries.push({ kind: "table", from: row.tableName, to: target });
 
-    if (row.localized) {
+    if (row.hasCompanion) {
       // Derived from the table name that was read, not from the slug, so a
       // custom-named table's companion is still found.
       const suffix = STORAGE_FORMAT.companionSuffix;
@@ -138,6 +158,8 @@ export function buildMigrationManifest(
     to: MIGRATION_TARGET.registryTable,
   });
 
+  assertNoTargetCollision(entries, rows, options.existingTables ?? []);
+
   return { entries, hash: hashManifest(entries) };
 }
 
@@ -154,4 +176,67 @@ export function hashManifest(entries: readonly ManifestEntry[]): string {
     .map(e => `${e.kind}:${e.table ?? ""}:${e.from}>${e.to}`)
     .join("\n");
   return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * Refuse a plan that would rename onto a name something else already answers to.
+ *
+ * `table_name` is unique but unconstrained, so a database can legitimately hold
+ * both a generated `comp_hero` and another group whose author named its table
+ * `fg_hero`. Nothing today prevents that pair, and the second one is left
+ * untouched by design, so the first would rename onto an occupied name and fail
+ * partway through the run.
+ *
+ * Detected before the migration starts rather than discovered during it: a
+ * refusal here costs an operator a rename, while the same collision found
+ * mid-run leaves storage half-migrated.
+ */
+function assertNoTargetCollision(
+  entries: readonly ManifestEntry[],
+  rows: readonly RegistryRow[],
+  existingTables: readonly string[]
+): void {
+  const renamedAway = new Set(
+    entries.filter(e => e.kind !== "column").map(e => e.from)
+  );
+
+  // Names that will still be in use once the plan finishes: rows this plan
+  // leaves alone, plus catalog tables it never touches.
+  const survivors = new Set<string>();
+  for (const row of rows) {
+    if (!renamedAway.has(row.tableName)) survivors.add(row.tableName);
+  }
+  for (const table of existingTables) {
+    if (!renamedAway.has(table)) survivors.add(table);
+  }
+
+  const claimed = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.kind === "column") continue;
+
+    if (survivors.has(entry.to)) {
+      throw collision(
+        entry.from,
+        entry.to,
+        "an object that is not being renamed"
+      );
+    }
+    const previous = claimed.get(entry.to);
+    if (previous !== undefined) {
+      throw collision(entry.from, entry.to, `the rename of ${previous}`);
+    }
+    claimed.set(entry.to, entry.from);
+  }
+}
+
+function collision(from: string, to: string, occupant: string): NextlyError {
+  return NextlyError.serviceUnavailable({
+    logMessage: `field-group migration cannot rename ${from}: ${to} is already taken`,
+    logContext: {
+      reason: "migration target name is already in use",
+      from,
+      to,
+      occupiedBy: occupant,
+    },
+  });
 }
