@@ -255,16 +255,19 @@ carries the detail.
 
 | Path | When |
 |---|---|
-| `defineCollection` / `defineSingle` / `defineFieldGroup` | as the config module is evaluated |
-| Schema Builder writes | before the payload is stored |
-| `nextly build` | over collections, singles and components |
-| boot | over a plugin's own raw contributions, once the registry is populated |
+| boot | over the resolved config and a plugin's own raw contributions, once the registry is populated |
+| `db:sync` and its watcher | before anything is serialized or materialized |
+| Schema Builder writes | before the payload is stored, and again before the manifest is written |
+| `nextly build` | over collections, singles and field groups |
+| `migrate:create` | over the merged set the migration is generated from |
+| HMR reload | after the reload repopulates the registry |
 
-The boot pass exists because a plugin cannot route its own contributions through
-a `define*` call — its type is not registered when its module is evaluated, so
-the call would reject the type outright. Only the field types' own rules run
-there, never the general config validators, so it cannot newly refuse a schema
-that starts fine today.
+**Not** the `define*` calls, despite their being where a code-first config is
+validated. The config bundle is evaluated before `contributes.fieldTypes` is
+registered, so a custom type is not yet known at that point and the define call
+rejects it as an unknown field type before any option check could run. Do not
+reach for `defineCollection` to get your declaration checked — that ordering is
+why every gate above sits after registration.
 
 Your check always sees the declaration **as written**. On the Builder path that
 is the submitted payload, not the parsed copy: the manifest schema drops keys it

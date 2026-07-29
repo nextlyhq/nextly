@@ -675,7 +675,12 @@ export async function reloadNextlyConfig(opts?: {
     );
     return;
   }
-  if (!newConfig) return;
+  // The loader returned without a config: the swap already happened inside it,
+  // and nothing below will run, so the new types must not outlive the attempt.
+  if (!newConfig) {
+    abandonReload();
+    return;
+  }
 
   // Republish the audit seam from the reloaded config, so toggling
   // `webhooks.audit` in nextly.config.ts takes effect on save without a restart.
@@ -714,7 +719,12 @@ export async function reloadNextlyConfig(opts?: {
     abandonReload();
     return;
   }
-  if (!adapter) return;
+  // Resolution can succeed and still hand back no adapter, which is the same
+  // outcome as it throwing: nothing below runs, so the reload never lands.
+  if (!adapter) {
+    abandonReload();
+    return;
+  }
 
   // Evict removed singles from the live default snapshot up front, before any
   // return/abort below, so a single dropped from the config can never
