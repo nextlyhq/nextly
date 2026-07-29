@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Record field group storage migration progress durably, so an interrupted upgrade resumes from where it stopped instead of restarting against a half-renamed database.
+Internal groundwork for the upcoming field group storage migration: durable progress tracking, and a startup guard that refuses to serve a database whose storage state cannot be accounted for. Nothing calls this yet, so there is no change in behaviour in this release.

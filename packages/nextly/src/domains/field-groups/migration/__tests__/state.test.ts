@@ -4,6 +4,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
 import {
   advanceStep,
+  MAX_MIGRATION_STEP,
   assertPlanUnchanged,
   beginMigration,
   FIELD_GROUP_MIGRATION_KEY,
@@ -127,6 +128,28 @@ describe("field-group migration marker", () => {
     ).rejects.toThrowError(NextlyError);
   });
 
+  // The bound is enforced on the way in as well as on the way out. Recording a
+  // position the next read would reject as corrupt is worse than refusing to
+  // advance, because it leaves the marker with no way forward at all.
+  it("refuses to record a step past the highest readable position", async () => {
+    const { meta, read } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "migrating",
+      direction: "up",
+      migrationId: "run-1",
+      step: MAX_MIGRATION_STEP,
+      manifestHash: "hash-1",
+      planHash: "plan-1",
+    });
+    const before = read();
+    await expect(
+      advanceStep(meta, { migrationId: "run-1", step: MAX_MIGRATION_STEP + 1 })
+    ).rejects.toThrowError(NextlyError);
+    // The refusal must leave the marker exactly as it was; a partial write here
+    // is the corruption the bound exists to prevent.
+    expect(read()).toEqual(before);
+  });
+
   it("refuses a step belonging to a different run", async () => {
     const { meta } = createMeta();
     await beginMigration(meta, {
@@ -216,6 +239,21 @@ describe("field-group migration marker", () => {
         direction: "up",
         migrationId: "r",
         step: Number.MAX_SAFE_INTEGER + 1,
+        manifestHash: "h",
+        planHash: "p",
+      },
+    ],
+    [
+      // The ceiling itself is refused too. Accepting it would hand a resume the
+      // step above, which increments to itself, gets recorded, and is then
+      // rejected by the next read -- a marker with no way forward.
+      "in-flight at the safe integer ceiling",
+      {
+        version: 1,
+        status: "migrating",
+        direction: "up",
+        migrationId: "r",
+        step: Number.MAX_SAFE_INTEGER,
         manifestHash: "h",
         planHash: "p",
       },

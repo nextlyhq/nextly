@@ -24,6 +24,21 @@ export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
 /** Marker payload version, so a later migration can evolve this shape. */
 export const MIGRATION_MARKER_VERSION = 1;
 
+/**
+ * Highest step the marker will hold, one below the safe-integer ceiling.
+ *
+ * The bound is enforced identically on read and on write, which is what makes
+ * it useful: every accepted step can be incremented exactly, and every step
+ * written can be read back afterwards. Allowing the ceiling itself would let a
+ * resume hand out `MAX_SAFE_INTEGER + 1`, which increments to itself, be
+ * recorded, and then be rejected as corrupt by the very next read — leaving the
+ * migration permanently unavailable with no way forward.
+ *
+ * A real plan has a handful of steps, so this is a corruption bound rather than
+ * a capacity one.
+ */
+export const MAX_MIGRATION_STEP = Number.MAX_SAFE_INTEGER - 1;
+
 /** Which way a run is travelling. `down` reverses a completed or partial `up`. */
 export type MigrationDirection = "up" | "down";
 
@@ -152,9 +167,16 @@ export async function readMigrationState(
     }
     // Safe rather than merely integral: at 2^53 and above `step + 1 === step`,
     // so a resume would compute the same position forever instead of advancing.
-    // A marker holding a number that cannot be incremented is corrupt, not
-    // resumable.
-    if (typeof step !== "number" || !Number.isSafeInteger(step) || step < 0) {
+    // Bounded one below that ceiling as well, so the step a resume derives from
+    // this one is itself recordable. A marker holding a number that cannot be
+    // incremented, or incremented into a value that cannot be stored, is
+    // corrupt rather than resumable.
+    if (
+      typeof step !== "number" ||
+      !Number.isSafeInteger(step) ||
+      step < 0 ||
+      step > MAX_MIGRATION_STEP
+    ) {
       throw markerCorrupt("in-flight marker carries no valid step");
     }
     if (typeof manifestHash !== "string" || manifestHash.length === 0) {
@@ -236,6 +258,18 @@ export async function advanceStep(
         reason: "migration steps must advance by exactly one",
         from: current.step,
         to: args.step,
+      },
+    });
+  }
+  // Refuse to record a position that could not be read back. Writing past the
+  // bound would settle the marker into a shape the next read rejects as
+  // corrupt, which is a worse outcome than declining to advance.
+  if (args.step > MAX_MIGRATION_STEP) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "migration step exceeds the highest recordable position",
+        step: args.step,
+        max: MAX_MIGRATION_STEP,
       },
     });
   }
