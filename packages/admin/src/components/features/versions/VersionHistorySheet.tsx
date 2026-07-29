@@ -111,7 +111,12 @@ export function VersionHistorySheet({
   const list = useVersions({ scope, enabled: open });
   // Destructured so the boundary-fetch effect can depend on the paging members
   // by identity rather than on the whole query object, which changes each render.
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = list;
+  const {
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+  } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
 
   const restore = useRestoreVersion({
@@ -172,20 +177,25 @@ export function VersionHistorySheet({
     selected !== latestVersionNo;
   const canComparePrevious = selected !== null && previousVersionNo !== null;
 
-  // When previewing the oldest loaded row while older versions remain unfetched,
-  // pull the next page so "Compare with previous" can resolve the preceding
-  // version instead of staying hidden until the list is paged by hand.
-  const atLoadedBottom = versions.at(-1)?.versionNo === selected;
+  // When previewing a version whose previous same-locale version has not loaded
+  // yet, page forward until it resolves or history runs out. Interleaved locales
+  // can place that previous version beyond the current page even when the
+  // selected row is not the last one loaded overall, so this keys off "no
+  // previous target found" rather than the loaded bottom. It stops after a
+  // failed fetch: React Query leaves `hasNextPage` true while `isFetchingNextPage`
+  // clears, which would otherwise spin the pager on a persistent error; the
+  // manual "Load more" control stays available to retry.
   useEffect(() => {
-    if (selected === null) return;
-    if (atLoadedBottom && hasNextPage && !isFetchingNextPage) {
+    if (selected === null || canComparePrevious) return;
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
       void fetchNextPage();
     }
   }, [
     selected,
-    atLoadedBottom,
+    canComparePrevious,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
     fetchNextPage,
   ]);
 

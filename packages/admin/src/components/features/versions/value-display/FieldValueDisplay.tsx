@@ -382,7 +382,7 @@ defineValueDisplay(["json"], ({ value }) => (
 // Containers
 // ============================================================
 
-export function childFields(field: FieldConfig): FieldConfig[] {
+function childFields(field: FieldConfig): FieldConfig[] {
   const nested = (field as { fields?: unknown }).fields;
   return Array.isArray(nested) ? (nested as FieldConfig[]) : [];
 }
@@ -397,7 +397,7 @@ export function childFields(field: FieldConfig): FieldConfig[] {
  * and falls back to those. Reading `field.fields` alone finds neither component
  * shape and renders an empty shell.
  */
-export function componentFieldsFor(
+function componentFieldsFor(
   field: FieldConfig,
   componentType: string | undefined
 ): FieldConfig[] {

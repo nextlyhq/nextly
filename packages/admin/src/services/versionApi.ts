@@ -11,9 +11,11 @@
 
 import type {
   FieldDiff,
+  FieldDisplay,
   ListItemDiff,
   RelationTarget,
   TextSegment,
+  ValueFieldDiff,
   VersionDiff,
 } from "nextly/api/versions-diff";
 
@@ -24,9 +26,11 @@ import type { ListResponse } from "@admin/lib/api/response-types";
 // so admin components import them from the same place as the other version types.
 export type {
   FieldDiff,
+  FieldDisplay,
   ListItemDiff,
   RelationTarget,
   TextSegment,
+  ValueFieldDiff,
   VersionDiff,
 };
 

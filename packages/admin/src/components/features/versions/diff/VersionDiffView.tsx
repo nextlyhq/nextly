@@ -29,7 +29,11 @@ export interface VersionDiffViewProps {
   from: number;
   /** Newer version being compared. */
   to: number;
-  /** Current schema fields, used to render each value by its real config. */
+  /**
+   * Current schema fields. Not needed to render values (each node carries its
+   * own display config); passed to the query so a schema change busts the cached
+   * diff, whose classifications are computed against the live schema.
+   */
   fields: FieldConfig[];
 }
 
@@ -56,7 +60,7 @@ export function VersionDiffView({
   fields,
 }: VersionDiffViewProps) {
   const [modifiedOnly, setModifiedOnly] = useState(true);
-  const diff = useVersionDiff({ scope, from, to, modifiedOnly });
+  const diff = useVersionDiff({ scope, from, to, modifiedOnly, fields });
 
   return (
     <div className="flex flex-col">
@@ -103,7 +107,7 @@ export function VersionDiffView({
       ) : diff.data ? (
         <div className="px-4">
           {diff.data.fields.map(node => (
-            <FieldDiffNode key={childKey(node)} node={node} fields={fields} />
+            <FieldDiffNode key={childKey(node)} node={node} />
           ))}
         </div>
       ) : null}

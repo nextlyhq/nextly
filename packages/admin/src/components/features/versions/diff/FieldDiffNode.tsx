@@ -8,12 +8,9 @@
  * relationships as added/removed target chips. All colours are theme tokens, so
  * it reads in light and dark alike.
  *
- * A node carries only its name, type, and label, which is not enough to render
- * a value faithfully: a `hasMany` field stores an array, a `select` maps stored
- * codes to labels, a date field formats by its picker. So the current schema
- * fields are threaded down alongside the tree and the real `FieldConfig` is
- * resolved by name at each level, falling back to a minimal stand-in only when
- * the field is no longer in the schema.
+ * Each value node carries its own display config (`display`), which the engine
+ * copied from the real field while it walked, so a `hasMany` array, a `select`
+ * label, or a date renders faithfully without the client re-deriving the schema.
  *
  * @module components/features/versions/diff/FieldDiffNode
  */
@@ -26,12 +23,10 @@ import type {
   ListItemDiff,
   RelationTarget,
   TextSegment,
+  ValueFieldDiff,
 } from "@admin/services/versionApi";
 
-import {
-  componentFieldsFor,
-  FieldValue,
-} from "../value-display/FieldValueDisplay";
+import { FieldValue } from "../value-display/FieldValueDisplay";
 
 type DiffStatus = FieldDiff["status"];
 
@@ -60,21 +55,19 @@ export function childKey(node: FieldDiff): string {
   return `${node.kind}:${node.name}:${node.status}`;
 }
 
-/** A minimal stand-in field for a node whose schema field cannot be resolved. */
-function fallbackField(node: {
-  name: string;
-  type: string;
-  label: string;
-}): FieldConfig {
-  return { name: node.name, type: node.type, label: node.label } as FieldConfig;
-}
-
-/** The real schema field for a node by name, or a minimal stand-in. */
-function resolveField(
-  node: { name: string; type: string; label: string },
-  fields: FieldConfig[]
-): FieldConfig {
-  return fields.find(f => f.name === node.name) ?? fallbackField(node);
+/**
+ * A field for the value-display kit, rebuilt from the node's own metadata and
+ * the display config the engine attached. Carrying that config on the node
+ * (rather than looking the field up in the live schema) is what lets a value
+ * inside a swapped component or a flattened group still render by its real type.
+ */
+function renderField(node: ValueFieldDiff): FieldConfig {
+  return {
+    name: node.name,
+    type: node.type,
+    label: node.label,
+    ...node.display,
+  } as FieldConfig;
 }
 
 /** A labelled block wrapping one field's diff. */
@@ -143,14 +136,7 @@ function formatUnknown(value: unknown): string {
   }
 }
 
-export function FieldDiffNode({
-  node,
-  fields,
-}: {
-  node: FieldDiff;
-  /** Current-level schema fields, so each value renders by its real config. */
-  fields: FieldConfig[];
-}) {
+export function FieldDiffNode({ node }: { node: FieldDiff }) {
   switch (node.kind) {
     case "text": {
       return (
@@ -165,7 +151,7 @@ export function FieldDiffNode({
     }
 
     case "value": {
-      const field = resolveField(node, fields);
+      const field = renderField(node);
       let body: React.ReactNode;
       if (node.status === "added") {
         body = <FieldValue field={field} value={node.after} />;
@@ -220,21 +206,11 @@ export function FieldDiffNode({
     }
 
     case "group": {
-      // A group or single component: its children come from the resolved field
-      // (inline `fields`, or the single component's `componentFields`).
-      const groupField = fields.find(f => f.name === node.name);
-      const childCfgs = groupField
-        ? componentFieldsFor(groupField, undefined)
-        : [];
       return (
         <FieldRow label={node.label} status={node.status}>
           <div className="pl-3 border-l border-border">
             {node.fields.map(child => (
-              <FieldDiffNode
-                key={childKey(child)}
-                node={child}
-                fields={childCfgs}
-              />
+              <FieldDiffNode key={childKey(child)} node={child} />
             ))}
           </div>
         </FieldRow>
@@ -242,12 +218,11 @@ export function FieldDiffNode({
     }
 
     case "list": {
-      const listField = fields.find(f => f.name === node.name);
       return (
         <FieldRow label={node.label} status={node.status}>
           <div className="flex flex-col gap-2">
             {node.items.map(item => (
-              <ListItemRow key={item.id} item={item} listField={listField} />
+              <ListItemRow key={item.id} item={item} />
             ))}
           </div>
         </FieldRow>
@@ -280,19 +255,8 @@ export function FieldDiffNode({
   }
 }
 
-function ListItemRow({
-  item,
-  listField,
-}: {
-  item: ListItemDiff;
-  listField: FieldConfig | undefined;
-}) {
+function ListItemRow({ item }: { item: ListItemDiff }) {
   const heading = item.componentType ?? "Item";
-  // The item's child fields depend on which component type it holds, so the
-  // list field's schema is resolved per item rather than once for the list.
-  const childCfgs = listField
-    ? componentFieldsFor(listField, item.componentType)
-    : [];
   return (
     <div className="rounded-md border border-border p-2">
       <div className="flex items-center gap-2 mb-1">
@@ -307,11 +271,7 @@ function ListItemRow({
       {item.fields.length > 0 ? (
         <div className="pl-1">
           {item.fields.map(child => (
-            <FieldDiffNode
-              key={childKey(child)}
-              node={child}
-              fields={childCfgs}
-            />
+            <FieldDiffNode key={childKey(child)} node={child} />
           ))}
         </div>
       ) : null}
