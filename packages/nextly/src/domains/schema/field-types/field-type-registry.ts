@@ -47,6 +47,26 @@ export function registerFieldType(def: PluginFieldType): void {
   map.set(def.type, def);
 }
 
+/**
+ * The registrable form of a field type contributed by `plugin`.
+ *
+ * A disabled plugin keeps its declarative schema — storage primitive, admin
+ * component, picker metadata — because its collections are retained and their
+ * fields still have to resolve and render. `validate` is not declarative: it is
+ * the plugin's code running on every write. Dropping it here rather than
+ * guarding at the call site keeps "disabled means no behavior" a property of
+ * what is in the registry.
+ */
+export function withoutDisabledBehavior(
+  fieldType: PluginFieldType,
+  plugin: { enabled?: boolean }
+): PluginFieldType {
+  if (plugin.enabled !== false) return fieldType;
+  const declarative = { ...fieldType };
+  delete declarative.validate;
+  return declarative;
+}
+
 /** Resolve a registered custom field type, or `undefined`. */
 export function getFieldType(type: string): PluginFieldType | undefined {
   return store().get(type);

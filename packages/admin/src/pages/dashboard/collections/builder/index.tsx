@@ -65,6 +65,9 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         // Cache revalidation opt-out at create; on by default, so only an
         // explicit false is forwarded as off. The server resolves the boolean.
         revalidate: values.revalidate !== false,
+        // Webhook recording opt-out at create; on by default, so only an
+        // explicit false is forwarded as off. The server resolves the boolean.
+        webhooks: values.webhooks !== false,
         // Why: useAsTitle + timestamps removed in PR B. Backend defaults
         // (timestamps always on, useAsTitle = system title) take over.
         // Code-first config can still override either.
@@ -95,6 +98,8 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
                     versions: values.versions === true,
                     // and with cache revalidation (on unless explicitly off).
                     revalidate: values.revalidate !== false,
+                    // and with webhook recording (on unless explicitly off).
+                    webhooks: values.webhooks !== false,
                   },
                   fields: [],
                 })

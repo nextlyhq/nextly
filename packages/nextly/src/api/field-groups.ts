@@ -1,8 +1,8 @@
 /**
- * Components API Route Handlers for Next.js
+ * Field Groups API Route Handlers for Next.js
  *
  * These route handlers can be re-exported in your Next.js application to provide
- * component definition management endpoints at /api/components.
+ * component definition management endpoints at /api/field-groups.
  *
  * Services are auto-initialized on first request using environment variables:
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
@@ -10,11 +10,11 @@
  *
  * @example
  * ```typescript
- * // In your Next.js app: app/api/components/route.ts
- * export { GET, POST } from 'nextly/api/components';
+ * // In your Next.js app: app/api/field-groups/route.ts
+ * export { GET, POST } from 'nextly/api/field-groups';
  * ```
  *
- * @module api/components
+ * @module api/field-groups
  */
 
 import { z } from "zod";
@@ -22,6 +22,7 @@ import { z } from "zod";
 import { getService } from "../di";
 import { clampLimit } from "../domains/collections/query/query-parser";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
@@ -84,7 +85,7 @@ const createComponentSchema = z.object({
  *
  * @example
  * ```bash
- * curl "http://localhost:3000/api/components?source=ui&limit=10"
+ * curl "http://localhost:3000/api/field-groups?source=ui&limit=10"
  * # => {"items":[...],"meta":{"total":5,"page":1,"limit":10,"totalPages":1,"hasNext":false,"hasPrev":false}}
  * ```
  */
@@ -148,7 +149,7 @@ export const GET = withErrorHandler(async (request: Request) => {
  * - admin: Optional admin UI configuration (category, icon, hidden, description, imageURL)
  *
  * Response Codes:
- * - 201 Created: Component created successfully
+ * - 201 Created: Field group created successfully
  * - 400 Bad Request: Invalid input
  * - 401 Unauthorized: Authentication required
  * - 409 Conflict: Component with slug already exists
@@ -182,10 +183,10 @@ export const POST = withErrorHandler(async (request: Request) => {
   assertValidFieldsPayload(validated.fields);
 
   // Generate table name from slug (comp_ prefix added by service)
-  const tableName = validated.slug
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  // Canonical name derivation (comp_ + normalized slug), matching the
+  // registry sync and dispatcher paths, so the stored registry row and the
+  // physical table always agree.
+  const tableName = resolveComponentTableName(validated.slug);
 
   // Validated by assertValidFieldsPayload above; cast through `unknown`
   // to the registry's config type while keeping the payload unstripped.
@@ -207,5 +208,5 @@ export const POST = withErrorHandler(async (request: Request) => {
     schemaHash,
   });
 
-  return respondMutation("Component created.", component, { status: 201 });
+  return respondMutation("Field group created.", component, { status: 201 });
 });

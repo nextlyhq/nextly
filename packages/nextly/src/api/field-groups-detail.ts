@@ -2,7 +2,7 @@
  * Components Detail API Route Handlers for Next.js
  *
  * These route handlers can be re-exported in your Next.js application to provide
- * individual component management endpoints at /api/components/[slug].
+ * individual component management endpoints at /api/field-groups/[slug].
  *
  * Services are auto-initialized on first request using environment variables:
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
@@ -10,11 +10,11 @@
  *
  * @example
  * ```typescript
- * // In your Next.js app: app/api/components/[slug]/route.ts
- * export { GET, PATCH, DELETE } from 'nextly/api/components-detail';
+ * // In your Next.js app: app/api/field-groups/[slug]/route.ts
+ * export { GET, PATCH, DELETE } from 'nextly/api/field-groups-detail';
  * ```
  *
- * @module api/components-detail
+ * @module api/field-groups-detail
  */
 
 import type { FieldConfig } from "@nextly/collections";
@@ -133,7 +133,7 @@ export const PATCH = withErrorHandler(
       source: "ui",
     });
 
-    return respondMutation("Component updated.", updated);
+    return respondMutation("Field group updated.", updated);
   }
 );
 

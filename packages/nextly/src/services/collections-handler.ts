@@ -339,6 +339,11 @@ export class CollectionsHandler {
     localized?: boolean;
     /** Whether writes bust cache tags. Default on; false opts the collection out. */
     revalidate?: boolean;
+    /**
+     * Whether writes are recorded to the webhook outbox. Default on; false
+     * keeps this collection's content out of the outbox and every delivery.
+     */
+    webhooks?: boolean;
     fields: FieldDefinition[];
     createdBy?: string;
   }) {
@@ -422,6 +427,8 @@ export class CollectionsHandler {
       hidden?: boolean;
       /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
       revalidate?: boolean;
+      /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
+      webhooks?: boolean;
       fields?: FieldDefinition[];
     }
   ) {

@@ -144,23 +144,6 @@ describe("ComponentRegistryService", () => {
       const row = ctx.adapter.insert.mock.calls[0][1];
       expect(row.locked).toBe(0);
     });
-
-    it("ensures comp_ table name prefix", async () => {
-      ctx.adapter.selectOne.mockResolvedValue(null);
-      ctx.adapter.insert.mockResolvedValue(dbRow());
-
-      await ctx.service.registerComponent({
-        slug: "seo",
-        label: "SEO",
-        tableName: "seo", // no prefix
-        fields: [],
-        source: "code",
-        schemaHash: "h",
-      });
-
-      const row = ctx.adapter.insert.mock.calls[0][1];
-      expect(row.table_name).toBe("comp_seo");
-    });
   });
 
   describe("getComponentBySlug", () => {
@@ -535,6 +518,26 @@ describe("ComponentRegistryService", () => {
       expect(result.created).toEqual([]);
     });
 
+    it("leaves an already-canonical table name unchanged", async () => {
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async () => {
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          table_name: "comp_seo",
+        });
+      });
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields },
+      ]);
+
+      expect(result.unchanged).toEqual(["seo"]);
+      expect(ctx.adapter.update).not.toHaveBeenCalled();
+    });
+
     it("marks components as unchanged when schema hash matches", async () => {
       // Use calculateSchemaHash to get the actual hash for empty fields array
       // Easier: mock selectOne to return whatever hash the service computes
@@ -743,5 +746,104 @@ describe("ComponentRegistryService", () => {
       const nested = (enriched[0].fields as Array<Record<string, unknown>>)[0];
       expect(nested.componentFields).toBeDefined();
     });
+  });
+});
+
+describe("ComponentRegistryService legacy table mismatch", () => {
+  it("reports a stored name that no longer matches the config", async () => {
+    // Storage is not repointed, but the mismatch must not pass silently:
+    // registry-backed reads follow the stored name.
+    const ctx = createCtx();
+    const fields = [{ name: "metaTitle", type: "text" }];
+    ctx.adapter.selectOne.mockImplementation(async () => {
+      const { calculateSchemaHash } = await import(
+        "../../schema/services/schema-hash"
+      );
+      return dbRow({
+        schema_hash: calculateSchemaHash(fields),
+        table_name: "comp_seo_meta",
+      });
+    });
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+    ]);
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].slug).toBe("seo");
+    expect(result.errors[0].error).toMatch(/migration/i);
+    expect(result.unchanged).toEqual([]);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("ComponentRegistryService legacy pointer repair", () => {
+  const fields = [{ name: "metaTitle", type: "text" }];
+
+  function stubExisting(ctx: RegistryTestCtx, storedName: string) {
+    ctx.adapter.selectOne.mockImplementation(async () => {
+      const { calculateSchemaHash } = await import(
+        "../../schema/services/schema-hash"
+      );
+      return dbRow({
+        schema_hash: calculateSchemaHash(fields),
+        table_name: storedName,
+      });
+    });
+  }
+
+  it("repairs a pointer whose table never existed when the configured one does", async () => {
+    // Written before names resolved canonically: the data has always been in
+    // the configured table, so correcting the row moves nothing.
+    const ctx = createCtx();
+    // An older version recorded a name the derived one no longer matches.
+    stubExisting(ctx, "comp_seo_legacy");
+    ctx.adapter.tableExists.mockImplementation(
+      async (name: string) => name === "comp_seo"
+    );
+    ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields },
+    ]);
+
+    expect(result.updated).toEqual(["seo"]);
+    const [, updateData] = ctx.adapter.update.mock.calls[0];
+    expect(updateData.table_name).toBe("comp_seo");
+  });
+
+  it("reports rather than repairs when the stored table still exists", async () => {
+    const ctx = createCtx();
+    stubExisting(ctx, "comp_seo_legacy");
+    ctx.adapter.tableExists.mockResolvedValue(true);
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields },
+    ]);
+
+    expect(result.errors).toHaveLength(1);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("ComponentRegistryService case-differing pointers", () => {
+  it("reports a pointer that differs only in case when its table exists", async () => {
+    // PostgreSQL keeps `Comp_SEO` and `comp_seo` distinct, so a single listed
+    // spelling says the other is absent — not that the server folded them.
+    const ctx = createCtx();
+    const fields = [{ name: "metaTitle", type: "text" }];
+    ctx.adapter.selectOne.mockImplementation(async () =>
+      dbRow({ schema_hash: "stale", table_name: "Comp_SEO" })
+    );
+    ctx.adapter.tableExists.mockImplementation(
+      async (name: string) => name === "Comp_SEO"
+    );
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      { slug: "seo", label: "SEO", fields },
+    ]);
+
+    expect(result.errors).toHaveLength(1);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });

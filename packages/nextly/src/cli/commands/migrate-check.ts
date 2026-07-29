@@ -183,8 +183,9 @@ export async function runMigrateCheck(
     codeSingles: toMinimalEntities(configResult.config.singles ?? [], e =>
       resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
     ),
-    codeComponents: toMinimalEntities(configResult.config.components ?? [], e =>
-      resolveComponentTableName(e.slug, e.dbName)
+    codeComponents: toMinimalEntities(
+      configResult.config.fieldGroups ?? [],
+      e => resolveComponentTableName(e.slug)
     ),
     manifest,
   });

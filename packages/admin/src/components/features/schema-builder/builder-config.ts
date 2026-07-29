@@ -21,6 +21,7 @@ export type AdvancedField =
   | "i18n"
   | "versions"
   | "revalidate"
+  | "webhooks"
   | "showSystemFields";
 
 export type BuilderConfig = {

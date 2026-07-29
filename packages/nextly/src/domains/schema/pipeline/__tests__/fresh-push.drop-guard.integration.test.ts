@@ -115,7 +115,13 @@ describe.skipIf(!PG_URL)(
         expect(names).toContain("users");
       } finally {
         await pool.end();
-        await admin.query("DROP DATABASE IF EXISTS nextly_freshpush_scope");
+        // The database that was actually created — dropping the bare prefix
+        // matched nothing, so every run left its database behind. Plain, not
+        // `WITH (FORCE)`: the pool above is already closed, and forcing
+        // terminates any session the server still considers open, which the
+        // driver reports as a fatal error on a live connection and fails the
+        // whole run rather than the one query.
+        await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
         await admin.end();
       }
     });

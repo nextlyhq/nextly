@@ -24,7 +24,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
-import { isComponentField } from "../../../collections/fields/guards";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 // PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
 import { toDbError } from "../../../database/errors";
@@ -77,6 +77,7 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
@@ -95,7 +96,7 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
-import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
+import { isRecordingDisabledByConfig } from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
 
@@ -121,6 +122,39 @@ import {
 type CompanionReadDb = Parameters<
   typeof populateCompanionFieldsAllLocales
 >[0]["db"];
+
+/**
+ * Errors raised AFTER a content row was written on a shared transaction — a
+ * version-capture or outbox-recording failure — where reporting the item as a
+ * soft per-item failure would commit the row without its promised snapshot or
+ * event. A batch runs every item on ONE transaction with no per-item savepoint,
+ * so the only way to keep such a row from committing is to abort the whole
+ * transaction: these errors are marked here and re-thrown by the bulk write
+ * loops instead of being swallowed. Tracked by object identity, so the original
+ * error propagates unwrapped.
+ */
+const writeIntegrityFailures = new WeakSet<object>();
+
+function markWriteIntegrityFailure<E>(error: E): E {
+  if (typeof error === "object" && error !== null) {
+    writeIntegrityFailures.add(error);
+  }
+  return error;
+}
+
+/**
+ * Whether `error` was marked a write-integrity failure — a post-write capture or
+ * recording failure that must roll the enclosing transaction back rather than be
+ * reported as a soft per-item failure. The bulk create/update loops re-throw
+ * these to abort the transaction.
+ */
+export function isWriteIntegrityFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    writeIntegrityFailures.has(error)
+  );
+}
 
 /**
  * Emit a post-commit `collection.<slug>.<action>` event (D8/D51). Observe-only,
@@ -366,13 +400,18 @@ export class CollectionMutationService extends BaseService {
     fields: readonly SensitiveFieldSource[],
     executor?: unknown
   ): Promise<readonly SensitiveFieldSource[]> {
-    // Gate only on the per-entity opt-out, NOT the endpoint/audit flag: that flag
-    // can flip on between this pre-record expansion and the in-transaction
-    // recordMutationEvent, and skipping expansion here while the choke point then
-    // records would ship component-nested secret/hidden values unstripped. The
-    // choke point still gates the actual write, so a gated-off collection records
-    // nothing — only this expansion runs, exactly as before endpoint gating.
-    if (!isWebhookRecordingEnabled("collection", collectionSlug)) return fields;
+    // Gate only on a decision that holds for the WHOLE write. The endpoint/audit
+    // flag can flip on between this pre-record expansion and the in-transaction
+    // recordMutationEvent, and a registry-stored (`db`) opt-out can be flipped by
+    // the background policy refresh for the same reason; skipping expansion here
+    // while the choke point then records would ship component-nested
+    // secret/hidden values unstripped. Config-sourced opt-outs (`code` and
+    // `plugin`, which is what the form-builder's submissions collection uses)
+    // cannot change mid-write, so they still skip the work. The choke point
+    // still gates the actual write, so a gated-off collection records nothing —
+    // only this expansion runs, exactly as before endpoint gating.
+    if (isRecordingDisabledByConfig("collection", collectionSlug))
+      return fields;
     return this.webhookFieldTree(fields, executor);
   }
 
@@ -433,6 +472,172 @@ export class CollectionMutationService extends BaseService {
       recorded = recorded || did;
     }
     return recorded;
+  }
+
+  /**
+   * The read-shape parent document a programmatic (tx-API / batch / publish)
+   * write event carries: JSON container fields parsed, then password hashes and
+   * the internal owner column (created_by) stripped — the same server-side
+   * fields the interactive create/update paths remove before building their
+   * event, so a stable user id never leaves in a webhook envelope. Operates on a
+   * shallow copy so the caller's row is not mutated. Many-to-many/component
+   * subtrees are not assembled here (the parent columns are the event payload on
+   * these paths); the full relational assembly rides the version-capture work.
+   */
+  private readShapeEventDocument(
+    row: Record<string, unknown>,
+    fields: readonly unknown[]
+  ): Record<string, unknown> {
+    const doc = convertTimestampsToCamelCase(
+      this.deserializeJsonFieldsForSnapshot(
+        { ...row },
+        fields as Parameters<typeof this.deserializeJsonFieldsForSnapshot>[1]
+      )
+    );
+    stripPasswordFieldValues(
+      doc,
+      fields as Parameters<typeof stripPasswordFieldValues>[1]
+    );
+    stripSystemOwnerField(doc);
+    return doc;
+  }
+
+  /**
+   * Assemble a full read-shape document for a row written on a caller's
+   * transaction: the already read-shaped parent columns plus a fresh read of the
+   * row's component subtrees and many-to-many id arrays on that same
+   * transaction. Returns both the composed parts (so a caller can index a
+   * version snapshot from them without a second relations read) and the
+   * assembled document (the shape the outbox event carries).
+   *
+   * The tx-API and batch write paths build only the parent row inline; routing
+   * their event payload through here gives it the same relational completeness
+   * the interactive paths carry. These paths route no localized write, so the
+   * relations are read without a locale (a single set of values).
+   *
+   * `needsRelations` gates the relational read: it is skipped when neither a
+   * version nor an event will consume the result (versioning off AND the
+   * collection opted out of webhooks). `buildFullSnapshotRelations` issues a
+   * query per component and m2m field and deliberately fails the write on a read
+   * error, so running it for a write that consumes nothing would add avoidable
+   * per-item query cost and could roll back an otherwise valid scalar write on an
+   * unrelated relation read. When skipped, the parent columns are the document.
+   */
+  private async readTxDocumentParts(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      tableName: string;
+      entryId: string;
+      // Already read-shaped (JSON parsed, timestamps camelCased) and stripped of
+      // password/system-owner fields by the caller.
+      parentRow: Record<string, unknown>;
+      fields: FieldDefinition[];
+      manyToManyFields: FieldDefinition[];
+      needsRelations: boolean;
+    }
+  ): Promise<{
+    documentParts: {
+      parentRow: Record<string, unknown>;
+      components: Record<string, unknown>;
+      manyToMany: Record<string, string[]>;
+    };
+    document: Record<string, unknown>;
+  }> {
+    let components: Record<string, unknown> = {};
+    let manyToMany: Record<string, string[]> = {};
+    if (args.needsRelations) {
+      try {
+        ({ components, manyToMany } = await this.buildFullSnapshotRelations(
+          tx,
+          args.entryId,
+          args.collectionName,
+          args.tableName,
+          args.fields,
+          args.manyToManyFields
+        ));
+      } catch (err) {
+        // The content row is already written on the caller's transaction. A
+        // failed relation read must abort it rather than be swallowed into a
+        // soft per-item failure that commits a row whose snapshot and event
+        // silently dropped a component or relationship; mark it so the batch
+        // loops re-throw instead of continuing.
+        throw markWriteIntegrityFailure(err);
+      }
+    }
+    const documentParts = {
+      parentRow: args.parentRow,
+      components,
+      manyToMany,
+    };
+    return { documentParts, document: assembleDocument(documentParts) };
+  }
+
+  /**
+   * Capture one durable version snapshot on a caller's transaction from parts
+   * already assembled by {@link readTxDocumentParts}, when the collection opts
+   * into versioning. A no-op otherwise, so a tx-API or batch write into a
+   * non-versioned collection stays free of the tagging walk.
+   *
+   * The snapshot commits atomically with the content write on the caller's
+   * transaction — history never records a write that later rolls back. These
+   * paths route no localized parent write, but an unlocalized collection can
+   * still embed a localized component, whose subtree was read at the default
+   * locale; the version is then tagged with that locale so a restore knows which
+   * language to write the component into (mirroring the interactive paths). A
+   * snapshot with no component state carries no locale.
+   */
+  private async captureTxVersion(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      // The written row's own status value; indexed as the version's status.
+      contentStatus: unknown;
+      createdBy: string | null;
+      versionsConfig: ResolvedVersionsConfig | null | undefined;
+      documentParts: {
+        parentRow: Record<string, unknown>;
+        components: Record<string, unknown>;
+        manyToMany: Record<string, string[]>;
+      };
+      fields: FieldDefinition[];
+    }
+  ): Promise<void> {
+    if (!args.versionsConfig?.enabled) {
+      return;
+    }
+    try {
+      await captureInTx(tx, this.versionCapture, {
+        ref: {
+          scopeKind: "collection",
+          scopeSlug: args.collectionName,
+          entryId: args.entryId,
+        },
+        contentStatus: args.contentStatus,
+        // Tagged for the snapshot alone: `documentParts` is also what the outbox
+        // event carries, and that payload is read shape.
+        parts: await this.snapshotPartsFor(args.documentParts, args.fields, tx),
+        createdBy: args.createdBy,
+        // The component subtrees were read at the default locale (these paths
+        // pass no write locale); tag the version with it so a localized
+        // component can be restored, exactly as the interactive create/update
+        // paths do. Null when the snapshot has no component state, since there is
+        // then one set of values and nothing to disambiguate.
+        locale:
+          Object.keys(args.documentParts.components ?? {}).length > 0
+            ? this.componentSnapshotLocale(undefined)
+            : null,
+        maxPerDoc: args.versionsConfig.maxPerDoc,
+      });
+    } catch (err) {
+      // The content row is already written on the caller's transaction. A
+      // capture failure (e.g. component-schema resolution while tagging) must
+      // abort that transaction rather than be swallowed into a soft per-item
+      // failure that commits an unversioned row; mark it so the batch loops
+      // re-throw instead of continuing.
+      throw markWriteIntegrityFailure(err);
+    }
   }
 
   /**
@@ -827,7 +1032,13 @@ export class CollectionMutationService extends BaseService {
     tx: { getDrizzle<T = unknown>(): T },
     collectionName: string,
     entryId: string,
-    locale: string
+    locale: string,
+    // When set, only a missing companion table is tolerated; any other read
+    // failure propagates. Callers whose result feeds a DURABLE record (the
+    // outbox `previous` payload, a "Before restore" version snapshot) pass this
+    // so a real companion failure aborts the write rather than persisting a
+    // preimage that silently drops a translation.
+    strict = false
   ): Promise<Record<string, unknown>> {
     // Bound to the transaction connection so the companion metadata read does not
     // re-enter the pool from inside the caller's transaction.
@@ -844,6 +1055,7 @@ export class CollectionMutationService extends BaseService {
       localizedFields: companion.localizedFields,
       rows: [row],
       localeChain: [locale],
+      strict,
     });
 
     const values: Record<string, unknown> = {};
@@ -1010,7 +1222,7 @@ export class CollectionMutationService extends BaseService {
   }> {
     const components: Record<string, unknown> = {};
     if (this.componentDataService) {
-      const componentFields = fields.filter(isComponentField);
+      const componentFields = fields.filter(isFieldGroupField);
       if (componentFields.length > 0) {
         try {
           const populated =
@@ -1030,6 +1242,11 @@ export class CollectionMutationService extends BaseService {
               // expansion reads through the pooled relationship service — taking
               // a second connection while this write holds its own.
               depth: 0,
+              // Propagate a component read failure instead of substituting a
+              // default: the result feeds a durable snapshot/event, so a real
+              // failure must roll the write back (caught below) rather than
+              // capture a document with silently-missing component data.
+              strict: true,
               // The write's locale, so a localized component is read back in the
               // same language it was just written in. Without it the read falls
               // back to the default component locale and the snapshot records
@@ -1076,14 +1293,18 @@ export class CollectionMutationService extends BaseService {
     const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
     for (const field of manyToManyFields) {
       try {
-        const relatedRows =
-          await this.relationshipService.fetchManyToManyRelations(
+        // Read only the ids, straight from the junction on the write
+        // transaction: a target created earlier in the same transaction is
+        // invisible to a pooled target-row fetch (and would stall a
+        // single-connection pool), so the snapshot must not depend on
+        // materializing the target rows.
+        manyToMany[field.name] =
+          await this.relationshipService.fetchManyToManyTargetIds(
             collectionName,
             entryId,
             field,
             txExecutor
           );
-        manyToMany[field.name] = relatedRows.map(r => (r as { id: string }).id);
       } catch (err) {
         // Same reasoning as the component read above.
         this.logger.error(
@@ -1772,7 +1993,7 @@ export class CollectionMutationService extends BaseService {
       // Extract component field data for separate storage in comp_{slug} tables
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (isComponentField(field) && finalData[field.name] !== undefined) {
+        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main insert
         }
@@ -2517,9 +2738,39 @@ export class CollectionMutationService extends BaseService {
       // payload exposes a stale pre-image of the non-status columns. The closure
       // sets it; it is read once after commit for the event.
       let publishedParentRow: Record<string, unknown> | undefined;
-      const needsFreshParent =
-        !!versionsConfig?.enabled ||
-        (hasMainStatus && previousStatus !== "published");
+      // Set inside the transaction when the publish records its outbox events, so
+      // the caller can flush the drain after IT commits.
+      let eventRecorded = false;
+      // Set inside the transaction when the row is gone by the time the lock is
+      // taken (deleted between the pre-transaction read and the lock), so the
+      // publish records nothing and the caller answers not-found rather than
+      // reporting a publish of content that no longer exists.
+      let entryVanished = false;
+      // The main row's status read UNDER the transaction lock, so the publish
+      // transition is judged against the committed value this publish overwrites
+      // rather than the stale pre-transaction read. The closure sets it; the
+      // post-commit transition event reads it. Defaults to the pre-read value so
+      // a companion-only (no main status) publish still has a sane fallback.
+      let lockedPreviousStatus = previousStatus;
+      // The per-locale publish transitions recorded to the outbox inside the
+      // transaction, replayed to the in-process workflow subscribers after it
+      // commits — the durable event and the reaction event must not diverge on
+      // which locales published. The closure rebuilds it each attempt.
+      let perLocaleTransitions: {
+        locale: string;
+        from: string | null;
+        data: Record<string, unknown>;
+      }[] = [];
+      // Whether the default locale's companion row transitions to published, so
+      // the post-commit workflow replay suppresses the untagged main transition
+      // (the default's locale-tagged replay stands in for it). Set in the tx.
+      let defaultCompanionTransitions = false;
+      // Read the fresh post-publish parent whenever the collection captures
+      // versions or carries a status: the pre-transaction `previousStatus` can
+      // be stale (a concurrent writer may commit between it and the lock), so a
+      // transition detected only under the lock still needs the committed row
+      // for its event payload rather than falling back to the stale pre-read.
+      const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
 
       // Bump `updated_at` alongside status so caches / revalidation see the change (a bare
       // status flip left the timestamp stale). On SQLite the dynamic tables store `updated_at`
@@ -2533,16 +2784,50 @@ export class CollectionMutationService extends BaseService {
       // race, mirroring updateEntry.
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
+          // Lock the main row up front. One read serves three needs: it is the
+          // liveness check (a row deleted between the pre-transaction read and
+          // this lock is gone here, so the publish writes and records nothing);
+          // it carries the committed status the publish transition is judged
+          // against; and it is the document a deferred publish rule re-checks.
+          // Reset per attempt because the conflict retry re-runs this closure.
+          entryVanished = false;
+          lockedPreviousStatus = previousStatus;
+          perLocaleTransitions = [];
+          defaultCompanionTransitions = false;
+          const lockedRow = await tx.selectOne<Record<string, unknown>>(
+            tableName,
+            { where: this.whereEq("id", params.entryId), forUpdate: true }
+          );
+          if (!lockedRow) {
+            // Nothing to publish — record nothing and roll back an empty tx.
+            entryVanished = true;
+            return;
+          }
+          const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
+          lockedPreviousStatus =
+            typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
+
+          // The committed pre-publish row in the main-table schema shape, read on
+          // the TRANSACTION connection (never the pool: the transaction already
+          // holds a connection, and a pooled read would wait on itself against a
+          // one-connection pool and deadlock). This is the concurrency-correct
+          // event pre-image; publishing changes only status, so its non-status
+          // columns are the post-publish columns too. Read after the lock, so on
+          // a retry it reflects the concurrent winner just like the pre-read did.
+          const [lockedSchemaRow] = (await tx
+            .getDrizzle<typeof this.db>()
+            .select()
+            .from(schema)
+            .where(eq(schema.id, params.entryId))
+            .limit(1)) as (Record<string, unknown> | undefined)[];
+          const preImageRow = lockedSchemaRow ?? existingEntry;
+
           // Re-check a deferred document-dependent (owner-only/custom) publish
           // rule against the row read UNDER the lock, before the status write, so
           // a concurrent change to a field the rule inspects is accounted for.
           // Throwing here rolls the publish back with nothing written.
           if (publishDocumentRule) {
-            const lockedRow = await tx.selectOne<Record<string, unknown>>(
-              tableName,
-              { where: this.whereEq("id", params.entryId), forUpdate: true }
-            );
-            if (lockedRow) {
+            {
               const documentDenied =
                 await this.accessService.evaluateTransitionDocumentRule(
                   publishDocumentRule.accessRules,
@@ -2556,6 +2841,37 @@ export class CollectionMutationService extends BaseService {
               }
             }
           }
+          // Each locale's committed per-locale status BEFORE the bulk companion
+          // flip below, so a real draft->published transition can be told from a
+          // locale that was already live. Read under the lock and inside the
+          // retry so it reflects the state this publish actually overwrites.
+          let priorCompanionStatuses: Map<string, string | null>;
+          try {
+            priorCompanionStatuses =
+              companion && companionPublishable
+                ? await readCompanionLocaleStatusAll(
+                    tx.getDrizzle<
+                      Parameters<typeof readCompanionLocaleStatusAll>[0]
+                    >(),
+                    companion.table,
+                    params.entryId
+                  )
+                : new Map<string, string | null>();
+          } catch (err) {
+            // The helper already tolerates a missing companion table; any error
+            // here is a real database failure. Normalize it to the canonical
+            // internal error so the raw driver message (which can carry schema
+            // or connection details) does not reach the API caller through the
+            // service's failure result.
+            throw NextlyError.internal({
+              cause: err instanceof Error ? err : undefined,
+              logContext: {
+                reason: "publish-all-companion-status-scan",
+                collection: params.collectionName,
+              },
+            });
+          }
+
           if (hasMainStatus) {
             await tx.execute(
               `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr} WHERE ${q("id")} = ${ph(2)}`,
@@ -2570,20 +2886,15 @@ export class CollectionMutationService extends BaseService {
           }
 
           if (needsFreshParent) {
-            // Pool read, so it excludes this tx's own uncommitted status write —
-            // publish only mutates status, so overlaying "published" onto the
-            // fresh non-status columns reconstructs the committed post-publish
-            // state. On retry this re-reads a concurrent winner's columns.
-            const freshRows = await this.db
-              .select()
-              .from(schema)
-              .where(eq(schema.id, params.entryId))
-              .limit(1);
-            const currentRow = freshRows[0] as
-              | Record<string, unknown>
-              | undefined;
-            publishedParentRow = currentRow
-              ? { ...currentRow, status: "published" }
+            // The committed post-publish parent, built from the pre-image read on
+            // the transaction connection above: publish only mutates status, so
+            // its non-status columns are already the post-publish ones — overlay
+            // the new status rather than taking a second pooled connection while
+            // this transaction holds one (which would deadlock a one-connection
+            // pool). Undefined only if the row vanished, which the lock above
+            // already rules out.
+            publishedParentRow = lockedSchemaRow
+              ? { ...lockedSchemaRow, status: "published" }
               : undefined;
 
             // Record a version snapshot for the publish: publishing changes the
@@ -2642,21 +2953,237 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // This path writes no base `entry.updated` outbox event, so recording
-          // a status-only lifecycle event here would ship an inconsistent
-          // partial surface (a status change with no corresponding write event).
-          // Its lifecycle events belong with its base write event, not in
-          // isolation, so none are recorded here.
+          // Append the base `entry.updated` outbox event for the publish write,
+          // then its publish lifecycle event, both on this transaction so they
+          // commit with the status write and never survive a rollback. Built from
+          // the post-publish document (the fresh in-tx row overlaid with the new
+          // status, or the pre-read row so the event still fires when no fresh
+          // read was needed). The publish event is gated on a real main-row
+          // transition, matching the post-commit `transitionStatus` below.
+          const publishedDocument = this.readShapeEventDocument(
+            {
+              ...(publishedParentRow ?? preImageRow),
+              status: "published",
+            },
+            fields
+          );
+          // Overlay the committed publish instant AFTER camelCasing: the source
+          // rows carry the pre-publish `updatedAt` (the pooled/pre-read excludes
+          // this tx's own `SET updated_at = now()`), and a snake-case overlay
+          // would be dropped because `convertTimestampsToCamelCase` keeps the
+          // existing camelCase value. Without this the event reports the stale
+          // timestamp and omits `updatedAt` from changedFields.
+          publishedDocument.updatedAt = new Date();
+          // Built from the pre-image read under the lock, so a concurrent write
+          // committed between the pre-transaction read and the lock is reflected
+          // rather than the stale pre-read (its non-status fields and its own
+          // prior status).
+          const previousDocument = this.readShapeEventDocument(
+            preImageRow as Record<string, unknown>,
+            fields
+          );
+          const publishEventFields = await this.webhookFieldTreeIfRecording(
+            params.collectionName,
+            fields,
+            tx.getDrizzle()
+          );
+          const publishActor = actorForWrite(undefined, params.user);
+          const baseRecorded = await recordMutationEvent(tx, {
+            type: "entry.updated",
+            resource: {
+              kind: "entry",
+              collection: params.collectionName,
+              id: params.entryId,
+            },
+            data: publishedDocument,
+            previous: previousDocument,
+            fields: publishEventFields,
+            actor: publishActor,
+          });
+          eventRecorded = baseRecorded || eventRecorded;
+          // Whether the default locale's own companion row transitions to
+          // published here. When it does, the per-locale loop below emits the
+          // default locale's transition tagged `locale: <default>` — matching
+          // the ordinary localized update path, where a default-locale status
+          // that rides the companion is emitted locale-tagged and the untagged
+          // main-row event is suppressed (its companion event already encodes
+          // the transition). So a consumer routing the default language by its
+          // locale still sees the default translation go live.
+          const defaultLocale = this.localization?.defaultLocale;
+          defaultCompanionTransitions =
+            defaultLocale !== undefined &&
+            priorCompanionStatuses.has(defaultLocale) &&
+            priorCompanionStatuses.get(defaultLocale) !== "published";
+          // The document-wide (main-row) publish transition, WITHOUT a locale
+          // tag. Emitted only when a default-companion event does not already
+          // encode it (a non-localized collection, or a default locale whose
+          // status lives only on the main row) — otherwise the locale-tagged
+          // default event below stands in, avoiding a duplicate. Gated on the
+          // status read under the lock so a concurrent unpublish/publish is
+          // judged correctly.
+          if (
+            hasMainStatus &&
+            lockedPreviousStatus !== "published" &&
+            !defaultCompanionTransitions
+          ) {
+            const statusRecorded = await this.recordStatusEvents(tx, {
+              collection: params.collectionName,
+              id: params.entryId,
+              from: lockedPreviousStatus,
+              to: "published",
+              isCreate: false,
+              data: publishedDocument,
+              previous: previousDocument,
+              fields: publishEventFields,
+              actor: publishActor,
+            });
+            eventRecorded = statusRecorded || eventRecorded;
+          }
+          // Per-locale publish transitions. The bulk flip above moved every
+          // companion locale to published in one statement, but a subscriber
+          // watching a single language needs its own `entry.published` — so each
+          // companion locale that actually transitioned gets a locale-tagged
+          // event, with the locale's own prior `_status` as the transition
+          // `from`. The default locale is included: its companion event replaces
+          // the untagged main event suppressed above.
+          // Only locales the app still configures get an event: a locale
+          // removed from configuration can leave stale companion rows behind,
+          // and a publish event tagged with a locale that normal reads/writes
+          // reject would mislead locale-routed consumers.
+          const configuredLocales = new Set(
+            this.localization?.locales.map(l => l.code) ?? []
+          );
+          for (const [
+            locale,
+            priorLocaleStatus,
+          ] of priorCompanionStatuses) {
+            if (configuredLocales.size > 0 && !configuredLocales.has(locale))
+              continue;
+            if (priorLocaleStatus === "published") continue;
+            // Build this locale's own before/after documents. Publishing changes
+            // only status, so the locale's translatable values AND its component
+            // subtrees are identical on both sides — read them at this locale and
+            // assemble them onto the main-row event shape so a `locale`-tagged
+            // event carries that language's full content (fields and localized
+            // components) and its own prior status, matching the ordinary
+            // localized update path. Read on the transaction (read-your-writes).
+            let rawLocaleValues: Record<string, unknown>;
+            try {
+              // These values feed a durable locale-tagged event; a real
+              // companion read failure must abort rather than commit a publish
+              // event missing this locale's translated fields.
+              rawLocaleValues = await this.readCompanionLocalizedValues(
+                tx,
+                params.collectionName,
+                params.entryId,
+                locale,
+                true
+              );
+            } catch (err) {
+              // Normalize the raw driver error the same way the status scan
+              // above does, so a schema/permission failure returns the canonical
+              // internal error instead of leaking the driver's message through
+              // the service failure result.
+              throw NextlyError.internal({
+                cause: err instanceof Error ? err : undefined,
+                logContext: {
+                  reason: "publish-all-locale-values-read",
+                  collection: params.collectionName,
+                  locale,
+                },
+              });
+            }
+            const localeValues = this.deserializeJsonFieldsForSnapshot(
+              rawLocaleValues,
+              fields
+            );
+            const { components: localeComponents, manyToMany: localeM2M } =
+              await this.buildFullSnapshotRelations(
+                tx,
+                params.entryId,
+                params.collectionName,
+                tableName,
+                fields,
+                manyToManyFields,
+                locale
+              );
+            // Strip parent-level password fields before assembling: a localized
+            // group/repeater can carry a nested password hash the overlay
+            // reintroduces after `publishedDocument` was already redacted. The
+            // durable outbox re-strips while building its envelope, but the
+            // in-process `transitionStatus` replay receives this document
+            // unchanged, so strip here to protect both paths. Component subtrees
+            // are already password-stripped by the snapshot read.
+            const localeDataParent = {
+              ...publishedDocument,
+              ...localeValues,
+              status: "published",
+            };
+            stripPasswordFieldValues(localeDataParent, fields);
+            const localePrevParent = {
+              ...previousDocument,
+              ...localeValues,
+              status: priorLocaleStatus,
+            };
+            stripPasswordFieldValues(localePrevParent, fields);
+            const localeData = assembleDocument({
+              parentRow: localeDataParent,
+              components: localeComponents,
+              manyToMany: localeM2M,
+            });
+            const localePrevious = assembleDocument({
+              parentRow: localePrevParent,
+              components: localeComponents,
+              manyToMany: localeM2M,
+            });
+            const localeRecorded = await this.recordStatusEvents(tx, {
+              collection: params.collectionName,
+              id: params.entryId,
+              locale,
+              from: priorLocaleStatus,
+              to: "published",
+              isCreate: false,
+              data: localeData,
+              previous: localePrevious,
+              fields: publishEventFields,
+              actor: publishActor,
+            });
+            eventRecorded = localeRecorded || eventRecorded;
+            // Remember the transition so the same locale is replayed to the
+            // in-process workflow subscribers post-commit, the way the localized
+            // update path does — otherwise `statusTransition`/`published`
+            // listeners never observe a companion locale going live.
+            perLocaleTransitions.push({
+              locale,
+              from: priorLocaleStatus,
+              data: localeData,
+            });
+          }
         })
       );
+
+      // The entry was deleted out from under the publish: nothing was written or
+      // recorded, so answer not-found rather than a success for absent content.
+      if (entryVanished) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
 
       // Post-commit status events: publishing is a real status transition, so
       // workflow subscribers on statusTransition/published must see it (this
       // path previously changed status without emitting anything). Skip when the
-      // main row was already published (no transition), matching updateEntry.
-      // Prefer the fresh in-tx row; fall back to the pre-read only if the row
-      // vanished mid-publish.
-      if (hasMainStatus && previousStatus !== "published") {
+      // main row was already published (no transition, judged on the status read
+      // under the lock), matching updateEntry. Prefer the fresh in-tx row; fall
+      // back to the pre-read only if the row vanished mid-publish.
+      if (
+        hasMainStatus &&
+        lockedPreviousStatus !== "published" &&
+        !defaultCompanionTransitions
+      ) {
         this.transitionStatus({
           collection: params.collectionName,
           id: params.entryId,
@@ -2665,9 +3192,25 @@ export class CollectionMutationService extends BaseService {
             status: "published",
           },
           user: params.user,
-          previousStatus,
+          previousStatus: lockedPreviousStatus,
           status: "published",
           emitStatusChanged: true,
+        });
+      }
+      // Each companion locale that went live, replayed to the in-process
+      // workflow subscribers with its own `locale` — mirroring the localized
+      // update path — so `statusTransition`/`statusChanged`/`published`
+      // listeners observe every published translation, not only the main row.
+      for (const transition of perLocaleTransitions) {
+        this.transitionStatus({
+          collection: params.collectionName,
+          id: params.entryId,
+          data: transition.data,
+          user: params.user,
+          previousStatus: transition.from,
+          status: "published",
+          emitStatusChanged: true,
+          locale: transition.locale,
         });
       }
 
@@ -2722,6 +3265,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "All languages published.",
         data: { id: params.entryId, status: "published" },
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error) {
@@ -3351,7 +3895,7 @@ export class CollectionMutationService extends BaseService {
       // Component fields should not be stored in the collection table
       const componentFieldData: Record<string, unknown> = {};
       fields.forEach(field => {
-        if (isComponentField(field) && finalData[field.name] !== undefined) {
+        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
           componentFieldData[field.name] = finalData[field.name];
           delete finalData[field.name]; // Remove from main update
         }
@@ -3719,7 +4263,12 @@ export class CollectionMutationService extends BaseService {
                   tx,
                   params.collectionName,
                   params.entryId,
-                  localizedUpdate.writeLocale
+                  localizedUpdate.writeLocale,
+                  // This preimage feeds the durable `previous` event and, on a
+                  // restore, the "Before restore" snapshot, so a real companion
+                  // read failure must abort rather than silently drop a
+                  // translation from a record the user cannot tell is incomplete.
+                  true
                 )
               : {};
             // The locale's committed status, read before the write. Gated on
@@ -3769,6 +4318,64 @@ export class CollectionMutationService extends BaseService {
               components: previousComponents,
               manyToMany: previousM2M,
             });
+
+            // On a restore, snapshot the document as it is NOW, before the
+            // restore overwrites it: content written while versioning was off
+            // lives in no version, so without this a restore would destroy it.
+            // Captured here — before the write, in this same transaction — so it
+            // takes the number just below the restore's own capture, which the
+            // retention pass already protects as "the content the restore
+            // replaced". Passed no `maxPerDoc`, so it never runs retention itself
+            // (that would trim with none of the restore protections, e.g.
+            // dropping the version being restored FROM); the restore's own
+            // capture below trims once, with those protections.
+            if (params.sourceVersionNo != null && versionsConfig?.enabled) {
+              const previousHoldsLocaleState =
+                Object.keys(previousLocalizedValues).length > 0 ||
+                Object.keys(previousComponents ?? {}).length > 0 ||
+                previousCompanionStatus !== null;
+              // For a per-locale restore into a locale whose companion row is
+              // absent (a locale disabled then re-enabled), the prior per-locale
+              // state is draft — an absent per-locale row starts as draft — not
+              // the main row's status. Recording the main row's "published" here
+              // would make undoing the restore recreate and PUBLISH an empty
+              // translation instead of returning the locale to its prior
+              // absent/draft state. Scoped to this snapshot, so the `previous`
+              // event above is unaffected.
+              const perLocaleAbsentRestore =
+                !!localizedUpdate?.hasStatus &&
+                localizedUpdate.writeLocale !==
+                  this.localization?.defaultLocale &&
+                previousCompanionStatus === null;
+              const preRestoreParent = perLocaleAbsentRestore
+                ? { ...previousParent, status: "draft" }
+                : previousParent;
+              await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                },
+                contentStatus: (preRestoreParent as { status?: unknown }).status,
+                parts: await this.snapshotPartsFor(
+                  {
+                    parentRow: preRestoreParent,
+                    components: previousComponents,
+                    manyToMany: previousM2M,
+                  },
+                  fields,
+                  tx
+                ),
+                createdBy: params.user?.id ?? null,
+                // Labelled with a locale only when the prior state actually held
+                // locale-specific values — see the post-write capture below.
+                locale: previousHoldsLocaleState
+                  ? (localizedUpdate?.writeLocale ??
+                    this.componentSnapshotLocale(params.locale))
+                  : null,
+                label: "Before restore",
+              });
+            }
           }
 
           // TOCTOU-safe authorization: classify the transition against the
@@ -5226,6 +5833,89 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction, so a create through the tx-API (importers, plugins, batch)
+      // is captured AND observable — the invariant the interactive and
+      // delete-in-tx paths already hold. Both are built from ONE relations read:
+      // the freshly-inserted parent row in read shape, plus its component
+      // subtrees and m2m id arrays read back on `tx`, so the version and the
+      // event carry the same complete document. Recorded on `tx` so they commit
+      // with the entry and never survive a rollback; the event is carried on the
+      // result so the owning caller flushes the drain after IT commits.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      // Skip the per-field component/m2m reads when neither a version nor an
+      // event will consume them (versioning off AND recording disabled by
+      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
+      // decision the webhook field-tree uses — so the relations and the stripped
+      // field tree are always assembled together: a decision that can flip
+      // mid-write (a stored opt-out or endpoint activation) never leaves a
+      // recorded event with a parent-only payload.
+      const needsRelations =
+        !!versionsConfig?.enabled ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
+      const { documentParts: createdParts, document: createdDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: (entry as Record<string, unknown>).id as string,
+          parentRow: this.readShapeEventDocument(
+            entry as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+          needsRelations,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId: (entry as Record<string, unknown>).id as string,
+        contentStatus: (entry as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: createdParts,
+        fields,
+      });
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.created",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+        },
+        data: createdDocument,
+        previous: null,
+        fields: eventFields,
+        actor: eventActor,
+      });
+      // A create landing directly on `published` is also a publish lifecycle
+      // event, gated on the collection's Draft/Published flag so an ordinary
+      // user `status` field is not mistaken for a lifecycle change. `from` is
+      // null (nothing to transition from), so only `entry.published` is emitted.
+      if ((collection as { status?: boolean }).status === true) {
+        const createdStatusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+          from: null,
+          to: (entry as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: true,
+          data: createdDocument,
+          previous: null,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = createdStatusRecorded || eventRecorded;
+      }
+
       // Compute the intent from the freshly inserted row, before the after-hooks
       // run or redaction can strip the slug.
       revalidationIntent = buildEntryRevalidationIntent(
@@ -5297,12 +5987,17 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: entry,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
       // Carry the intent (set only once the row was written) so a caller that
       // commits despite a hook failure still busts its tags.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
+      // A post-write capture/recording failure was marked to abort the caller's
+      // transaction; re-throw it rather than reporting a soft success:false that
+      // would let the caller commit an unversioned, unrecorded row.
+      if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
           error,
@@ -5672,6 +6367,45 @@ export class CollectionMutationService extends BaseService {
         }
       );
 
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      // Skip the per-field component/m2m reads when neither a version nor an
+      // event will consume them (versioning off AND recording disabled by
+      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
+      // decision the webhook field-tree uses — so the relations and the stripped
+      // field tree are always assembled together: a decision that can flip
+      // mid-write (a stored opt-out or endpoint activation) never leaves a
+      // recorded event with a parent-only payload.
+      const needsRelations =
+        !!versionsConfig?.enabled ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
+      // The `previous` document is carried ONLY by the outbox event, never by the
+      // version snapshot, so gate its relation read on webhook recording alone: a
+      // version-only update (versioning on, recording disabled by config) skips it
+      // instead of paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations = !isRecordingDisabledByConfig(
+        "collection",
+        params.collectionName
+      );
+
+      // Assemble the `previous` document BEFORE the junction rows are rewritten,
+      // so a relationship-only update still lists the changed field: reading m2m
+      // after the delete+insert below would report the new ids as the old ones.
+      // The pre-update parent row plus its current (pre-rewrite) component and
+      // m2m relations, read on `tx`.
+      const { document: previousDocument } = await this.readTxDocumentParts(
+        tx,
+        {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: params.entryId,
+          parentRow: this.readShapeEventDocument(existingEntry, fields),
+          fields,
+          manyToManyFields,
+          needsRelations: previousNeedsRelations,
+        }
+      );
+
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       for (const field of manyToManyFields) {
@@ -5694,6 +6428,74 @@ export class CollectionMutationService extends BaseService {
             );
           }
         }
+      }
+
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction, so an update through the tx-API (importers, plugins) is
+      // captured AND observable — the invariant the interactive path holds. The
+      // updated document is built from ONE post-rewrite relations read (parent
+      // row plus its component subtrees and m2m id arrays on `tx`), shared by the
+      // version and the event so both carry the same complete document. Recorded
+      // on `tx` so they commit with the update and never survive a rollback. A
+      // status-lifecycle transition also emits its publish/unpublish/
+      // status_changed event, gated on the collection's Draft/Published flag so
+      // an ordinary user `status` field is not mistaken for a lifecycle change.
+      const { documentParts: updatedParts, document: updatedDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: params.entryId,
+          parentRow: this.readShapeEventDocument(
+            updated as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+          needsRelations,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        contentStatus: (updated as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: updatedParts,
+        fields,
+      });
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.updated",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: params.entryId,
+        },
+        data: updatedDocument,
+        previous: previousDocument,
+        fields: eventFields,
+        actor: eventActor,
+      });
+      if ((collection as { status?: boolean }).status === true) {
+        const statusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: params.entryId,
+          from: readStringField(existingEntry, "status") ?? null,
+          to: (updated as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: false,
+          data: updatedDocument,
+          previous: previousDocument,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = eventRecorded || statusRecorded;
       }
 
       // Execute afterUpdate hooks (code-registered)
@@ -5757,12 +6559,17 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: updated,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
       // Carry the intent (set only once the row was updated) so a caller that
       // commits despite a hook failure still busts its tags.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
+      // A post-write capture/recording failure was marked to abort the caller's
+      // transaction; re-throw it rather than reporting a soft success:false that
+      // would let the caller commit an unversioned, unrecorded row.
+      if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
           error,
@@ -6440,6 +7247,88 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction so a batch create (createEntries) is captured AND observable
+      // — the same invariant the interactive path holds. Recording and capture
+      // are NOT hooks, so they run even under `skipHooks`; both are built from
+      // ONE relations read (the freshly-inserted parent row in read shape plus
+      // its component subtrees and m2m id arrays on `tx`), so the version and the
+      // event carry the same complete document, and recorded on `tx` so they
+      // commit with the entry and never survive a rollback.
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      // Skip the per-field component/m2m reads when neither a version nor an
+      // event will consume them (versioning off AND recording disabled by
+      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
+      // decision the webhook field-tree uses — so the relations and the stripped
+      // field tree are always assembled together: a decision that can flip
+      // mid-write (a stored opt-out or endpoint activation) never leaves a
+      // recorded event with a parent-only payload.
+      const needsRelations =
+        !!versionsConfig?.enabled ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
+      const { documentParts: createdParts, document: createdDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId: (entry as Record<string, unknown>).id as string,
+          parentRow: this.readShapeEventDocument(
+            entry as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+          needsRelations,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId: (entry as Record<string, unknown>).id as string,
+        contentStatus: (entry as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: createdParts,
+        fields,
+      });
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.created",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+        },
+        data: createdDocument,
+        previous: null,
+        fields: eventFields,
+        actor: eventActor,
+      });
+      // A create landing directly on `published` is also a publish lifecycle
+      // event, gated on the collection's Draft/Published flag so an ordinary
+      // user `status` field is not mistaken for a lifecycle change. `from` is
+      // null (nothing to transition from), so only `entry.published` is emitted.
+      if ((collection as { status?: boolean }).status === true) {
+        const createdStatusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: (entry as Record<string, unknown>).id as string,
+          from: null,
+          to: (entry as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: true,
+          data: createdDocument,
+          previous: null,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = createdStatusRecorded || eventRecorded;
+      }
+
       // Compute the intent from the freshly inserted row, before ANY after-hooks
       // run (a throwing afterCreate hook must not lose it) and before redaction
       // can strip the slug.
@@ -6520,12 +7409,17 @@ export class CollectionMutationService extends BaseService {
         statusCode: 201,
         message: "Entry created successfully",
         data: entry,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
       // Carry the intent (set only once the row was written) so a committed item
       // whose after-hook then threw still busts its tags via the batch caller.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
+      // A post-write capture/recording failure was marked to abort the whole
+      // batch transaction; re-throw it rather than reporting a soft success:false
+      // that the bulk loop would continue past, committing an unversioned row.
+      if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
           error,
@@ -6958,6 +7852,44 @@ export class CollectionMutationService extends BaseService {
         }
       );
 
+      const versionsConfig = (collection as Record<string, unknown>)
+        .versions as ResolvedVersionsConfig | null | undefined;
+      // Skip the per-field component/m2m reads when neither a version nor an
+      // event will consume them (versioning off AND recording disabled by
+      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
+      // decision the webhook field-tree uses — so the relations and the stripped
+      // field tree are always assembled together: a decision that can flip
+      // mid-write (a stored opt-out or endpoint activation) never leaves a
+      // recorded event with a parent-only payload.
+      const needsRelations =
+        !!versionsConfig?.enabled ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
+      // The `previous` document is carried ONLY by the outbox event, never by the
+      // version snapshot, so gate its relation read on webhook recording alone: a
+      // version-only update (versioning on, recording disabled by config) skips it
+      // instead of paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations = !isRecordingDisabledByConfig(
+        "collection",
+        params.collectionName
+      );
+
+      // Assemble the `previous` document BEFORE the junction rows are rewritten,
+      // so a relationship-only update still lists the changed field: reading m2m
+      // after the delete+insert below would report the new ids as the old ones.
+      // The pre-update parent row plus its current (pre-rewrite) relations on `tx`.
+      const { document: previousDocument } = await this.readTxDocumentParts(
+        tx,
+        {
+          collectionName: params.collectionName,
+          tableName,
+          entryId,
+          parentRow: this.readShapeEventDocument(existingEntry, fields),
+          fields,
+          manyToManyFields,
+          needsRelations: previousNeedsRelations,
+        }
+      );
+
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
@@ -6983,6 +7915,73 @@ export class CollectionMutationService extends BaseService {
             );
           }
         }
+      }
+
+      // Record a durable version snapshot and the outbox event on the caller's
+      // transaction so a batch update (updateEntries) is captured AND observable.
+      // Recording and capture are NOT hooks, so they run even under `skipHooks`;
+      // both are built from ONE post-rewrite relations read (parent row plus its
+      // component subtrees and m2m id arrays on `tx`), shared by the version and
+      // the event so both carry the same complete document, and recorded on `tx`
+      // so they commit with the update and never survive a rollback. A
+      // status-lifecycle transition also emits its publish/unpublish/
+      // status_changed event, gated on the collection's Draft/Published flag.
+      const { documentParts: updatedParts, document: updatedDocument } =
+        await this.readTxDocumentParts(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entryId,
+          parentRow: this.readShapeEventDocument(
+            updated as Record<string, unknown>,
+            fields
+          ),
+          fields,
+          manyToManyFields,
+          needsRelations,
+        });
+      await this.captureTxVersion(tx, {
+        collectionName: params.collectionName,
+        entryId,
+        contentStatus: (updated as { status?: unknown }).status,
+        createdBy: params.user?.id ?? null,
+        versionsConfig,
+        documentParts: updatedParts,
+        fields,
+      });
+      const eventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        fields,
+        tx.getDrizzle()
+      );
+      const eventActor = actorForWrite(undefined, params.user);
+      let eventRecorded = await recordMutationEvent(tx, {
+        type: "entry.updated",
+        resource: {
+          kind: "entry",
+          collection: params.collectionName,
+          id: entryId,
+        },
+        data: updatedDocument,
+        previous: previousDocument,
+        fields: eventFields,
+        actor: eventActor,
+      });
+      if ((collection as { status?: boolean }).status === true) {
+        const statusRecorded = await this.recordStatusEvents(tx, {
+          collection: params.collectionName,
+          id: entryId,
+          from: readStringField(existingEntry, "status") ?? null,
+          to: (updated as { status?: unknown }).status as
+            | string
+            | null
+            | undefined,
+          isCreate: false,
+          data: updatedDocument,
+          previous: previousDocument,
+          fields: eventFields,
+          actor: eventActor,
+        });
+        eventRecorded = eventRecorded || statusRecorded;
       }
 
       // Execute afterUpdate hooks (unless skipped)
@@ -7054,12 +8053,17 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         data: updated,
+        eventRecorded,
         revalidationIntent,
       };
     } catch (error: unknown) {
       // Carry the intent (set only once the row was updated) so a committed item
       // whose after-hook then threw still busts its tags via the batch caller.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
+      // A post-write capture/recording failure was marked to abort the whole
+      // batch transaction; re-throw it rather than reporting a soft success:false
+      // that the bulk loop would continue past, committing an unversioned row.
+      if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
           error,

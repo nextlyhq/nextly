@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getSQLiteDrizzleKit } from "../../../../database/drizzle-kit-lazy";
 import { SchemaRegistry } from "../../../../database/schema-registry";
-import { dynamicComponentsSqlite } from "../../../../schemas/dynamic-components/sqlite";
+import { dynamicFieldGroupsSqlite } from "../../../../schemas/dynamic-components/sqlite";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive";
 import { ComponentRegistryService } from "../../../components/services/component-registry-service";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
@@ -40,7 +40,7 @@ async function registryDdl(): Promise<string[]> {
   const statements = await kit.generateMigration(
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
-      dynamicComponents: dynamicComponentsSqlite,
+      dynamicFieldGroups: dynamicFieldGroupsSqlite,
     })
   );
   return splitStatements(statements);
@@ -94,7 +94,7 @@ beforeEach(async () => {
 
   const schemaRegistry = new SchemaRegistry();
   schemaRegistry.registerStaticSchemas({
-    dynamicComponents: dynamicComponentsSqlite,
+    dynamicFieldGroups: dynamicFieldGroupsSqlite,
   });
   adapter.setTableResolver(schemaRegistry);
 });

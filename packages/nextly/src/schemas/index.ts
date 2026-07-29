@@ -30,9 +30,9 @@ import {
   dynamicCollectionsSqlite,
 } from "./dynamic-collections";
 import {
-  dynamicComponentsPg,
-  dynamicComponentsMysql,
-  dynamicComponentsSqlite,
+  dynamicFieldGroupsPg,
+  dynamicFieldGroupsMysql,
+  dynamicFieldGroupsSqlite,
 } from "./dynamic-components";
 import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
 import { dynamicSinglesPg } from "./dynamic-singles/postgres";
@@ -51,6 +51,7 @@ import { schemaEventsTables } from "./schema-events";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
+import { STORAGE_FORMAT } from "./storage-format";
 import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
@@ -105,7 +106,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsPg,
         dynamicSinglesPg,
-        dynamicComponentsPg,
+        dynamicFieldGroupsPg,
         siteSettingsPg,
         userFieldDefinitionsPg,
         emailProvidersPg,
@@ -116,7 +117,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsMysql,
         dynamicSinglesMysql,
-        dynamicComponentsMysql,
+        dynamicFieldGroupsMysql,
         siteSettingsMysql,
         userFieldDefinitionsMysql,
         emailProvidersMysql,
@@ -127,7 +128,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsSqlite,
         dynamicSinglesSqlite,
-        dynamicComponentsSqlite,
+        dynamicFieldGroupsSqlite,
         siteSettingsSqlite,
         userFieldDefinitionsSqlite,
         emailProvidersSqlite,
@@ -169,7 +170,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_meta",
   "dynamic_collections",
   "dynamic_singles",
-  "dynamic_components",
+  STORAGE_FORMAT.registryTable,
   "site_settings",
   "user_field_definitions",
   "email_providers",
@@ -186,7 +187,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
 export const CORE_TABLE_PREFIXES: readonly string[] = [
   "dc_",
   "single_",
-  "comp_",
+  STORAGE_FORMAT.tablePrefix,
 ];
 
 // =============================================================================

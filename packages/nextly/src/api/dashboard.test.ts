@@ -70,7 +70,7 @@ describe("getDashboardStats", () => {
       users: 1,
       roles: 2,
       permissions: 10,
-      components: 0,
+      fieldGroups: 0,
       singles: 0,
       apiKeys: 0,
     };
@@ -118,9 +118,7 @@ describe("getDashboardRecentEntries", () => {
 describe("getDashboardActivity", () => {
   it("emits respondData with cursor-shaped { activities, total, hasMore }", async () => {
     const result = {
-      activities: [
-        { id: "a1", action: "create", collection: "posts" },
-      ],
+      activities: [{ id: "a1", action: "create", collection: "posts" }],
       total: 1,
       hasMore: false,
     };

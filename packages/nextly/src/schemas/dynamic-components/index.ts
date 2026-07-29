@@ -10,10 +10,10 @@
  * @example
  * ```typescript
  * import {
- *   type DynamicComponentRecord,
- *   type DynamicComponentInsert,
- *   type ComponentSource,
- *   type ComponentMigrationStatus,
+ *   type DynamicFieldGroupRecord,
+ *   type DynamicFieldGroupInsert,
+ *   type FieldGroupSource,
+ *   type FieldGroupMigrationStatus,
  * } from '@nextly/schemas/dynamic-components';
  * ```
  */
@@ -24,24 +24,27 @@
 
 export type {
   // Source and status types
-  ComponentSource,
-  ComponentMigrationStatus,
+  FieldGroupSource,
+  FieldGroupMigrationStatus,
 
   // Dynamic component types
-  DynamicComponentInsert,
-  DynamicComponentRecord,
+  DynamicFieldGroupInsert,
+  DynamicFieldGroupRecord,
 } from "./types";
 
-export { COMPONENT_SOURCE_TYPES, COMPONENT_MIGRATION_STATUSES } from "./types";
+export {
+  FIELD_GROUP_SOURCE_TYPES,
+  FIELD_GROUP_MIGRATION_STATUSES,
+} from "./types";
 
 // ============================================================
 // PostgreSQL Schema Exports
 // ============================================================
 
 export {
-  dynamicComponentsPg,
-  type DynamicComponentPg,
-  type DynamicComponentInsertPg,
+  dynamicFieldGroupsPg,
+  type DynamicFieldGroupPg,
+  type DynamicFieldGroupInsertPg,
 } from "./postgres";
 
 // ============================================================
@@ -49,9 +52,9 @@ export {
 // ============================================================
 
 export {
-  dynamicComponentsMysql,
-  type DynamicComponentMysql,
-  type DynamicComponentInsertMysql,
+  dynamicFieldGroupsMysql,
+  type DynamicFieldGroupMysql,
+  type DynamicFieldGroupInsertMysql,
 } from "./mysql";
 
 // ============================================================
@@ -59,7 +62,7 @@ export {
 // ============================================================
 
 export {
-  dynamicComponentsSqlite,
-  type DynamicComponentSqlite,
-  type DynamicComponentInsertSqlite,
+  dynamicFieldGroupsSqlite,
+  type DynamicFieldGroupSqlite,
+  type DynamicFieldGroupInsertSqlite,
 } from "./sqlite";

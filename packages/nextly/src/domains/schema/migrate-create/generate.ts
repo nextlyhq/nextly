@@ -103,7 +103,7 @@ export interface MinimalConfigEntity {
   status?: boolean;
   /**
    * Whether content-localization is enabled for this collection, single, OR component
-   * (`defineCollection({ localized: true })` / `defineSingle` / `defineComponent`). When
+   * (`defineCollection({ localized: true })` / `defineSingle` / `defineFieldGroup`). When
    * true, fields resolved as translatable are omitted from the main-table desired snapshot
    * and relocated to the migration-owned companion `_locales` table (i18n Option B).
    */

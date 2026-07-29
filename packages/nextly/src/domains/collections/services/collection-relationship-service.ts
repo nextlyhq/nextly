@@ -1747,11 +1747,19 @@ export class CollectionRelationshipService extends BaseService {
 
       const collection =
         await this.collectionService.getCollection(collectionName);
-      return ((
-        (collection as Record<string, unknown>).schemaDefinition as
-          | Record<string, unknown>
-          | undefined
-      )?.fields || []) as FieldDefinition[];
+      // Both shapes, the same way `getRedactionFields` reads them: a
+      // Builder-created collection carries `schemaDefinition`, while
+      // `getCollection` returns the raw row for a code-first one and its fields
+      // sit at the top level. Reading only the first resolved a code-first
+      // target to nothing, and the caller's `targetFields.length > 0` guard
+      // then skipped the nested hop entirely — silently, at any depth.
+      const fields =
+        (
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields ?? (collection as Record<string, unknown>).fields;
+      return Array.isArray(fields) ? (fields as FieldDefinition[]) : [];
     } catch {
       return [];
     }
@@ -1930,6 +1938,54 @@ export class CollectionRelationshipService extends BaseService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Read ONLY the related target ids from the junction table, on the supplied
+   * executor. Unlike {@link fetchManyToManyRelations}, it does not materialize
+   * the target rows through the pool — so a caller building a snapshot inside a
+   * write transaction sees a target created earlier in that same transaction
+   * (whose row is not yet visible on a pooled connection), and a single-
+   * connection pool never stalls waiting for a second connection. The ids are
+   * exactly what the junction stores, so nothing about the targets is needed.
+   *
+   * @param sourceCollectionName - Name of the source collection
+   * @param sourceEntryId - ID of the source entry
+   * @param field - Field definition
+   * @param executor - Transaction-bound executor to read the junction on
+   * @returns The related target ids (empty on any read failure — the caller that
+   *   requires completeness fails the write itself)
+   */
+  async fetchManyToManyTargetIds(
+    sourceCollectionName: string,
+    sourceEntryId: string,
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
+  ): Promise<string[]> {
+    const targetCollectionName = getTargetCollection(field);
+    if (!targetCollectionName) {
+      console.error(
+        `[CollectionRelationshipService] fetchManyToManyTargetIds: cannot determine target for field "${field.name}".`
+      );
+      return [];
+    }
+    const junctionTableName = this.getJunctionTableName(
+      sourceCollectionName,
+      targetCollectionName,
+      field
+    );
+    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
+    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const junctionQuery = sql`
+      SELECT ${targetIdCol} as target_id
+      FROM ${sql.identifier(junctionTableName)}
+      WHERE ${sourceIdCol} = ${sourceEntryId}
+    `;
+    const junctionResults = (await this.selectRawSql(
+      junctionQuery,
+      executor
+    )) as { rows: Array<{ target_id: string }> };
+    return junctionResults.rows.map(row => row.target_id);
   }
 
   /**

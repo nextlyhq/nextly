@@ -17,7 +17,7 @@ import type { BlocksFieldConfig } from "./blocks";
 import type { CheckboxFieldConfig } from "./checkbox";
 import type { ChipsFieldConfig } from "./chips";
 import type { CodeFieldConfig } from "./code";
-import type { ComponentFieldConfig } from "./component";
+import type { FieldGroupFieldConfig } from "./component";
 import type { DateFieldConfig } from "./date";
 import type { EmailFieldConfig } from "./email";
 import type { GroupFieldConfig } from "./group";
@@ -102,7 +102,7 @@ export type DataFieldConfig =
   | RepeaterFieldConfig
   | GroupFieldConfig
   | JSONFieldConfig
-  | ComponentFieldConfig
+  | FieldGroupFieldConfig
   | ChipsFieldConfig
   // A page built from blocks, stored as one document.
   | BlocksFieldConfig;
