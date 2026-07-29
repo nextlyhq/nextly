@@ -33,6 +33,8 @@ import type { NextlyServiceConfig } from "../../di/register";
 import {
   clearFieldTypes,
   registerFieldType,
+  restoreFieldTypes,
+  snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -270,6 +272,11 @@ async function loadConfigInternal(
 
   if (!configPath) {
     debugLog(options, "No config file found, using default config");
+    // Cleared here too: a long-lived process that had loaded a plugin config
+    // and then lost its config file would otherwise keep the removed plugins'
+    // types registered, and Builder saves would go on recognizing them and
+    // running their `validate` and `validateOptions`.
+    clearFieldTypes();
     return {
       config: defineConfig({}),
       configPath: undefined,
@@ -288,6 +295,12 @@ async function loadConfigInternal(
   }
 
   debugLog(options, "Loading config from:", configPath);
+
+  // Held across the whole load so a failure below can put the registry back.
+  // Callers that keep running on the previous config after a bad edit — the
+  // `db:sync` watcher, the HMR reload — would otherwise resolve that config's
+  // plugin field types against an empty registry.
+  const previousFieldTypes = snapshotFieldTypes();
 
   try {
     // bundleAndRequire is our Turbopack-safe alternative to the
@@ -344,6 +357,13 @@ async function loadConfigInternal(
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
     const plugins = orderConfigPlugins(config.plugins ?? []);
+
+    // Cleared on EVERY load, not only when plugins are present. A reload that
+    // removes the last plugin would otherwise leave its types in the
+    // process-global registry, so its `validateOptions` would keep running and
+    // later Builder saves would keep treating the type as registered.
+    clearFieldTypes();
+
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let transformedConfig: any = { ...config, plugins };
@@ -386,7 +406,6 @@ async function loadConfigInternal(
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
-      clearFieldTypes();
       for (const fieldTypePlugin of plugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
           registerFieldType(
@@ -443,6 +462,10 @@ async function loadConfigInternal(
       deferredExtends,
     };
   } catch (error) {
+    // The load owns the registry from the clear above until it returns, so
+    // every failure between them leaves it half-built or empty.
+    restoreFieldTypes(previousFieldTypes);
+
     if (NextlyError.is(error)) {
       throw error;
     }

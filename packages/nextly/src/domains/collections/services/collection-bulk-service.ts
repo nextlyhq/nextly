@@ -1084,72 +1084,72 @@ export class CollectionBulkService extends BaseService {
             const entryData = batch[j];
 
             try {
-                // Create entry using transaction method
-                const createResult =
-                  await this.mutationService.createSingleEntryInTransaction(
-                    tx,
-                    { ...params, transitionAuth },
-                    entryData,
-                    skipHooks
-                  );
+              // Create entry using transaction method
+              const createResult =
+                await this.mutationService.createSingleEntryInTransaction(
+                  tx,
+                  { ...params, transitionAuth },
+                  entryData,
+                  skipHooks
+                );
 
-                // Collect regardless of success: the worker sets an intent only
-                // once the row was written, so a committed item whose after-hook
-                // then threw (returning success:false) still busts its tags.
-                if (createResult.revalidationIntent) {
-                  collectedIntents.push(createResult.revalidationIntent);
-                }
-                // Aggregate the outbox signal so the wrapper drains only when at
-                // least one item actually recorded — a batch of only opted-out
-                // (`webhooks: false`) creates records nothing and owes no drain.
-                if (createResult.eventRecorded) result.eventRecorded = true;
-                if (createResult.success && createResult.data) {
-                  result.successful++;
-                  result.ids.push(
-                    (createResult.data as Record<string, unknown>).id as string
-                  );
-                } else {
-                  result.failed++;
-                  result.errors.push({
-                    index: entryIndex,
-                    error: createResult.message,
-                  });
-
-                  // If stopOnError, throw to trigger transaction rollback
-                  if (stopOnError) {
-                    throw new Error(
-                      `Entry at index ${entryIndex} failed: ${createResult.message}`
-                    );
-                  }
-                }
-              } catch (error: unknown) {
-                // A post-write capture/recording failure is marked to abort the
-                // whole batch: the row is already inserted on this shared
-                // transaction with no per-item savepoint, so continuing would
-                // commit it without its version/event. Re-throw regardless of
-                // stopOnError so the transaction rolls back; record it on a flag
-                // the outer catch reads (the error is re-wrapped by then).
-                if (isWriteIntegrityFailure(error)) {
-                  integrityRollback = true;
-                  throw error;
-                }
-                // Handle unexpected errors during entry creation
+              // Collect regardless of success: the worker sets an intent only
+              // once the row was written, so a committed item whose after-hook
+              // then threw (returning success:false) still busts its tags.
+              if (createResult.revalidationIntent) {
+                collectedIntents.push(createResult.revalidationIntent);
+              }
+              // Aggregate the outbox signal so the wrapper drains only when at
+              // least one item actually recorded — a batch of only opted-out
+              // (`webhooks: false`) creates records nothing and owes no drain.
+              if (createResult.eventRecorded) result.eventRecorded = true;
+              if (createResult.success && createResult.data) {
+                result.successful++;
+                result.ids.push(
+                  (createResult.data as Record<string, unknown>).id as string
+                );
+              } else {
                 result.failed++;
                 result.errors.push({
                   index: entryIndex,
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : "Unknown error occurred",
+                  error: createResult.message,
                 });
 
+                // If stopOnError, throw to trigger transaction rollback
                 if (stopOnError) {
-                  throw error; // Re-throw to trigger transaction rollback
+                  throw new Error(
+                    `Entry at index ${entryIndex} failed: ${createResult.message}`
+                  );
                 }
+              }
+            } catch (error: unknown) {
+              // A post-write capture/recording failure is marked to abort the
+              // whole batch: the row is already inserted on this shared
+              // transaction with no per-item savepoint, so continuing would
+              // commit it without its version/event. Re-throw regardless of
+              // stopOnError so the transaction rolls back; record it on a flag
+              // the outer catch reads (the error is re-wrapped by then).
+              if (isWriteIntegrityFailure(error)) {
+                integrityRollback = true;
+                throw error;
+              }
+              // Handle unexpected errors during entry creation
+              result.failed++;
+              result.errors.push({
+                index: entryIndex,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Unknown error occurred",
+              });
+
+              if (stopOnError) {
+                throw error; // Re-throw to trigger transaction rollback
               }
             }
           }
-        });
+        }
+      });
       // Reached only when the transaction committed, so the collected intents
       // describe rows that actually persist.
       if (collectedIntents.length > 0) {
@@ -1520,71 +1520,71 @@ export class CollectionBulkService extends BaseService {
             const { id, data } = batch[j];
 
             try {
-                // Update entry using transaction method
-                const updateResult =
-                  await this.mutationService.updateSingleEntryInTransaction(
-                    tx,
-                    { ...params, transitionAuth },
-                    id,
-                    data,
-                    skipHooks
-                  );
+              // Update entry using transaction method
+              const updateResult =
+                await this.mutationService.updateSingleEntryInTransaction(
+                  tx,
+                  { ...params, transitionAuth },
+                  id,
+                  data,
+                  skipHooks
+                );
 
-                // Collect regardless of success: the worker sets an intent only
-                // once the row was updated, so a committed item whose after-hook
-                // then threw (returning success:false) still busts its tags.
-                if (updateResult.revalidationIntent) {
-                  collectedIntents.push(updateResult.revalidationIntent);
-                }
-                // Aggregate the outbox signal (see the batch-create loop).
-                if (updateResult.eventRecorded) result.eventRecorded = true;
-                if (updateResult.success && updateResult.data) {
-                  result.successful++;
-                  result.ids.push(
-                    (updateResult.data as Record<string, unknown>).id as string
-                  );
-                } else {
-                  result.failed++;
-                  result.errors.push({
-                    index: entryIndex,
-                    error: updateResult.message,
-                  });
-
-                  // If stopOnError, throw to trigger transaction rollback
-                  if (stopOnError) {
-                    throw new Error(
-                      `Entry at index ${entryIndex} failed: ${updateResult.message}`
-                    );
-                  }
-                }
-              } catch (error: unknown) {
-                // A post-write capture/recording failure is marked to abort the
-                // whole batch: the row is already updated on this shared
-                // transaction with no per-item savepoint, so continuing would
-                // commit it without its version/event. Re-throw regardless of
-                // stopOnError so the transaction rolls back; record it on a flag
-                // the outer catch reads (the error is re-wrapped by then).
-                if (isWriteIntegrityFailure(error)) {
-                  integrityRollback = true;
-                  throw error;
-                }
-                // Handle unexpected errors during entry update
+              // Collect regardless of success: the worker sets an intent only
+              // once the row was updated, so a committed item whose after-hook
+              // then threw (returning success:false) still busts its tags.
+              if (updateResult.revalidationIntent) {
+                collectedIntents.push(updateResult.revalidationIntent);
+              }
+              // Aggregate the outbox signal (see the batch-create loop).
+              if (updateResult.eventRecorded) result.eventRecorded = true;
+              if (updateResult.success && updateResult.data) {
+                result.successful++;
+                result.ids.push(
+                  (updateResult.data as Record<string, unknown>).id as string
+                );
+              } else {
                 result.failed++;
                 result.errors.push({
                   index: entryIndex,
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : "Unknown error occurred",
+                  error: updateResult.message,
                 });
 
+                // If stopOnError, throw to trigger transaction rollback
                 if (stopOnError) {
-                  throw error; // Re-throw to trigger transaction rollback
+                  throw new Error(
+                    `Entry at index ${entryIndex} failed: ${updateResult.message}`
+                  );
                 }
+              }
+            } catch (error: unknown) {
+              // A post-write capture/recording failure is marked to abort the
+              // whole batch: the row is already updated on this shared
+              // transaction with no per-item savepoint, so continuing would
+              // commit it without its version/event. Re-throw regardless of
+              // stopOnError so the transaction rolls back; record it on a flag
+              // the outer catch reads (the error is re-wrapped by then).
+              if (isWriteIntegrityFailure(error)) {
+                integrityRollback = true;
+                throw error;
+              }
+              // Handle unexpected errors during entry update
+              result.failed++;
+              result.errors.push({
+                index: entryIndex,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Unknown error occurred",
+              });
+
+              if (stopOnError) {
+                throw error; // Re-throw to trigger transaction rollback
               }
             }
           }
-        });
+        }
+      });
       // Reached only when the transaction committed, so the collected intents
       // describe rows that actually persist.
       if (collectedIntents.length > 0) {
