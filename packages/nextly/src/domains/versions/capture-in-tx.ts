@@ -61,6 +61,12 @@ export interface CaptureInTxArgs {
    * document distinguishes it from someone retyping the same content.
    */
   sourceVersionNo?: number | null;
+  /**
+   * A human-readable marker for this version, when one is meaningful — e.g. the
+   * pre-restore snapshot a restore takes of the content it is about to replace,
+   * so history reads it as that state rather than an ordinary save.
+   */
+  label?: string | null;
 }
 
 /**
@@ -83,6 +89,7 @@ export async function captureInTx(
     createdBy: args.createdBy ?? null,
     locale: args.locale ?? null,
     sourceVersionNo: args.sourceVersionNo ?? null,
+    label: args.label ?? null,
     maxPerDoc: args.maxPerDoc,
   });
 }
