@@ -188,6 +188,15 @@ export interface UserFieldDefinitionRecord extends UserFieldDefinitionInsert {
   /** Options for select/radio (required on record, nullable). */
   options: { label: string; value: string }[] | null;
 
+  /**
+   * Options belonging to the field's own plugin type, carried verbatim.
+   *
+   * The record is otherwise built from a fixed list of core properties, which
+   * drops anything a plugin type declared for itself — leaving codegen to emit
+   * the broad fallback for a type whose options would have narrowed it.
+   */
+  pluginOptions?: Record<string, unknown> | null;
+
   /** Multi-value flag for select fields (required on record, nullable). */
   hasMany: boolean | null;
 

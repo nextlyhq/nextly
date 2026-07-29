@@ -24,7 +24,8 @@ export { definePlugin } from "nextly";
  *   not yet exercised by a first-party plugin (see STABILITY.md). Phase-2
  *   contribution types — `PluginRole` (D67), `PluginEmailProvider` /
  *   `PluginEmailTemplate` (D65), `ScheduledTask` (D61, reserved) — are also
- *   `@experimental`.
+ *   `@experimental`, as are `PluginFieldCodegen` / `PluginFieldCodegenImport`:
+ *   the codegen callbacks are new and unexercised by a first-party plugin.
  */
 export type {
   PluginDefinition,

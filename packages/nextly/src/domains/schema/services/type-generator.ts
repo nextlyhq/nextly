@@ -266,10 +266,14 @@ export class TypeGenerator {
     // Whatever the plugin types present here need for the expressions they
     // emit. Collected from the declared fields rather than from the registry,
     // so a registered type nobody uses adds no import.
+    // User fields are a flat list rather than an entity, so they are wrapped
+    // to be scanned alongside the rest: a plugin type used only there still
+    // names types the generated `User` interface has to import.
     const pluginImports = pluginCodegenImports([
       ...collections,
       ...singles,
       ...components,
+      { fields: userFields },
     ]);
     if (pluginImports.length > 0) {
       lines.push(...pluginImports);
@@ -815,12 +819,27 @@ export class TypeGenerator {
         }
         break;
 
-      default:
-        // A plugin-contributed type renders itself; `string` remains the
-        // fallback for a type nothing in the process knows about, which is what
-        // a UI-authored field of a since-removed plugin type is.
-        tsType = pluginTsType(field) ?? "string";
+      default: {
+        // A plugin-contributed type renders itself; failing that, what the
+        // registry says it stores. `string` remains the fallback only for a
+        // type nothing in the process knows about, which is what a UI-authored
+        // field of a since-removed plugin type is.
+        const contributed = pluginTsType(field);
+        if (contributed !== undefined) {
+          tsType = contributed;
+          break;
+        }
+        const storageType = pluginStorageFieldType(field);
+        const asStorage =
+          storageType === undefined
+            ? null
+            : this.generateUserFieldType(
+                asStorageEquivalentField(field, storageType)
+              );
+        if (asStorage !== null) return asStorage;
+        tsType = "string";
         break;
+      }
     }
 
     return `  ${field.name}${optional}: ${tsType};`;

@@ -359,7 +359,7 @@ function convertToRecords(
 /**
  * Convert SingleConfig[] to DynamicSingleRecord[] format
  */
-function convertToSingleRecords(
+export function convertToSingleRecords(
   singles: SingleConfig[]
 ): DynamicSingleRecord[] {
   return singles.map(single => ({
@@ -389,7 +389,7 @@ function convertToSingleRecords(
 /**
  * Convert FieldGroupConfig[] to DynamicFieldGroupRecord[] format
  */
-function convertToComponentRecords(
+export function convertToComponentRecords(
   components: FieldGroupConfig[]
 ): DynamicFieldGroupRecord[] {
   return components.map(component => ({
@@ -420,7 +420,60 @@ function convertToComponentRecords(
  * Convert UserFieldConfig[] to UserFieldDefinitionRecord[] format.
  * Code-first fields are marked with `source: "code"` for precise type generation.
  */
-function convertToUserFieldRecords(
+/**
+ * Properties the user-field record models itself. Anything else on a declared
+ * field belongs to whoever declared its type, and is carried rather than
+ * rebuilt so a plugin type's options survive into codegen.
+ */
+const MODELLED_USER_FIELD_KEYS: ReadonlySet<string> = new Set([
+  "name",
+  "label",
+  "type",
+  "required",
+  "defaultValue",
+  "options",
+  "hasMany",
+  "minLength",
+  "maxLength",
+  "min",
+  "max",
+  "placeholder",
+  "description",
+  "admin",
+  "pluginOptions",
+]);
+
+/** The declared options a user field carries beyond the modelled set. */
+function carriedUserFieldOptions(
+  field: UserFieldConfig
+): Record<string, unknown> | null {
+  const carried: Record<string, unknown> = {};
+  const collect = (key: string, value: unknown): void => {
+    if (value === undefined) return;
+    // Defined, not assigned: an option named after a prototype accessor would
+    // otherwise repoint this object instead of being collected.
+    Object.defineProperty(carried, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+
+  for (const [key, value] of Object.entries(field)) {
+    if (MODELLED_USER_FIELD_KEYS.has(key)) continue;
+    collect(key, value);
+  }
+
+  const container = (field as { pluginOptions?: unknown }).pluginOptions;
+  if (container !== null && typeof container === "object") {
+    for (const [key, value] of Object.entries(container)) collect(key, value);
+  }
+
+  return Object.keys(carried).length > 0 ? carried : null;
+}
+
+export function convertToUserFieldRecords(
   fields: UserFieldConfig[]
 ): UserFieldDefinitionRecord[] {
   return fields.map((field, index) => {
@@ -445,6 +498,7 @@ function convertToUserFieldRecords(
           ? String(field.defaultValue ?? "") || null
           : null,
       options,
+      pluginOptions: carriedUserFieldOptions(field),
       hasMany: "hasMany" in field ? Boolean(field.hasMany) : null,
       minLength:
         "minLength" in field ? ((field.minLength as number) ?? null) : null,

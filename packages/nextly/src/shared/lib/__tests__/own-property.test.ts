@@ -34,8 +34,11 @@ describe("defineOwnProperty", () => {
 
   it("is what plain assignment fails to do", () => {
     const assigned: Record<string, unknown> = {};
-    // eslint-disable-next-line no-proto
-    assigned["__proto__"] = { marker: 1 };
+    // Written through a variable so this is the ordinary keyed assignment the
+    // helper replaces, reaching the inherited setter exactly as the code paths
+    // it guards used to.
+    const key = "__proto__";
+    assigned[key] = { marker: 1 };
 
     // Pins the hazard the helper exists for: the key never becomes a property.
     expect(hasOwnProperty(assigned, "__proto__")).toBe(false);

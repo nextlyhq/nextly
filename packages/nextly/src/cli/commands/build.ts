@@ -64,6 +64,12 @@ import {
   getSortedBaseNames,
 } from "../utils/migration-discovery";
 
+import {
+  convertToComponentRecords,
+  convertToSingleRecords,
+  convertToUserFieldRecords,
+} from "./generate-types";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -657,6 +663,16 @@ async function generateAllFiles(
   // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
   const records = convertToRecords(config.collections);
 
+  // The other entity kinds, converted with the same functions `generate:types`
+  // uses. Passing collections alone produced a different types file from the
+  // two commands, so a field declared on a single, a field group, or the user
+  // schema was absent from the build-generated types.
+  const singleRecords = convertToSingleRecords(config.singles ?? []);
+  const componentRecords = convertToComponentRecords(config.fieldGroups ?? []);
+  const userFieldRecords = convertToUserFieldRecords(
+    config.users?.fields ?? []
+  );
+
   // Generate Zod schemas
   if (options.zod !== false) {
     logger.debug("Generating Zod schemas...");
@@ -697,7 +713,12 @@ async function generateAllFiles(
     };
 
     const typeGenerator = new TypeGenerator(typeGeneratorOptions);
-    const typesFile = typeGenerator.generateTypesFile(records);
+    const typesFile = typeGenerator.generateTypesFile(
+      records,
+      singleRecords,
+      componentRecords,
+      userFieldRecords
+    );
 
     const typesFilePath = resolve(cwd, config.typescript.outputFile);
     await ensureDir(dirname(typesFilePath));

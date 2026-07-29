@@ -12,6 +12,7 @@
  */
 import type { BlockFieldCatalogType } from "../../../collections/fields/catalog";
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../../collections/fields/catalog";
+import { NextlyError } from "../../../errors/nextly-error";
 import type {
   PluginFieldCodegenImport,
   PluginFieldInstance,
@@ -114,6 +115,17 @@ export function pluginZodSchema(field: CodegenField): string | undefined {
   return emit?.(optionView(field));
 }
 
+/**
+ * Local names the generators import on their own behalf, and where from.
+ *
+ * A blocks field is typed as the engine's document, emitted by `TypeGenerator`
+ * whenever one is present. A plugin importing that name from anywhere else
+ * would produce two declarations of it.
+ */
+const GENERATOR_OWNED_IMPORTS: ReadonlyArray<readonly [string, string]> = [
+  ["BlockDocument", "nextly"],
+];
+
 /** Every field in a tree, container children included. */
 function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
   for (const entry of fields) {
@@ -136,11 +148,36 @@ export function pluginCodegenImports(
   entities: ReadonlyArray<{ fields?: unknown }>
 ): string[] {
   const byModule = new Map<string, Set<string>>();
+  // Names the generators emit themselves, reserved so a plugin claiming one
+  // collides here rather than in the generated file.
+  const claimedBy = new Map<string, string>(GENERATOR_OWNED_IMPORTS);
+  // Which module first claimed each local name. Two modules exporting the same
+  // name would each emit a declaration of it and the generated file would not
+  // compile, so the clash is refused here with something the plugin author can
+  // act on rather than written out as broken source.
 
   const record = (imports: readonly PluginFieldCodegenImport[]): void => {
     for (const entry of imports) {
       const names = byModule.get(entry.from) ?? new Set<string>();
-      for (const name of entry.names) names.add(name);
+      for (const name of entry.names) {
+        const owner = claimedBy.get(name);
+        if (owner !== undefined && owner !== entry.from) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "contributes.fieldTypes",
+                code: "GENERATED_IMPORT_NAME_COLLISION",
+                message:
+                  `'${owner}' and '${entry.from}' both supply '${name}' to ` +
+                  `code generation. A generated file declares each name once, ` +
+                  `so one of them must be exported under a different name.`,
+              },
+            ],
+          });
+        }
+        claimedBy.set(name, entry.from);
+        names.add(name);
+      }
       byModule.set(entry.from, names);
     }
   };

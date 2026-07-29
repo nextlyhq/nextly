@@ -9,6 +9,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
+
 import type { PluginFieldType } from "../../../../plugins/contributions";
 import type { DynamicCollectionRecord } from "../../../../schemas/dynamic-collections/types";
 import {
@@ -141,6 +143,110 @@ describe("plugin field types in the TypeScript generator", () => {
 
     expect(file.code).toContain("Rating<10>");
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
+  });
+});
+
+describe("plugin field types on user fields", () => {
+  const userField = (extra: Record<string, unknown>) =>
+    ({
+      id: "f1",
+      name: "score",
+      label: "Score",
+      required: false,
+      ...extra,
+    }) as unknown as Parameters<TypeGenerator["generateTypesFile"]>[3][number];
+
+  it("emits the type and its import for a field only on users", () => {
+    registerFieldType(RATING);
+    const file = new TypeGenerator().generateTypesFile(
+      [],
+      [],
+      [],
+      [
+        userField({
+          type: "star-rating",
+          pluginOptions: { ratingScale: { max: 4 } },
+        }),
+      ]
+    );
+
+    expect(file.code).toContain("Rating<4>");
+    // The interface would otherwise name a type the file never imports.
+    expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
+  });
+
+  it("falls back to what a silent type stores rather than string", () => {
+    registerFieldType(TALLY);
+    const file = new TypeGenerator().generateTypesFile(
+      [],
+      [],
+      [],
+      [userField({ type: "tally" })]
+    );
+
+    expect(file.code).toContain("score?: number;");
+  });
+});
+
+describe("codegen import collisions", () => {
+  /** The issue messages a generation refusal carries. */
+  const refusalMessages = (generate: () => unknown): string[] => {
+    try {
+      generate();
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      return (data?.errors ?? []).map(issue => issue.message);
+    }
+    return [];
+  };
+
+  it("refuses two modules claiming one local name", () => {
+    registerFieldType(RATING);
+    registerFieldType({
+      type: "other-rating",
+      storage: "number",
+      component: "@other/ratings/admin#Input",
+      codegen: {
+        imports: [{ names: ["Rating"], from: "@other/ratings" }],
+        tsType: () => "Rating",
+      },
+    });
+
+    // Two `import type { Rating }` lines would not compile, so the clash is
+    // reported where an author can act on it.
+    const messages = refusalMessages(() =>
+      new TypeGenerator().generateTypesFile([
+        collection([
+          { name: "a", type: "star-rating" },
+          { name: "b", type: "other-rating" },
+        ]),
+      ])
+    );
+
+    expect(messages.join(" ")).toContain("'Rating'");
+  });
+
+  it("refuses a plugin claiming a name the generator emits itself", () => {
+    registerFieldType({
+      type: "doc-thing",
+      storage: "json",
+      component: "@acme/docs/admin#Input",
+      codegen: {
+        imports: [{ names: ["BlockDocument"], from: "@acme/docs" }],
+        tsType: () => "BlockDocument",
+      },
+    });
+
+    const messages = refusalMessages(() =>
+      new TypeGenerator().generateTypesFile([
+        collection([{ name: "body", type: "doc-thing" }]),
+      ])
+    );
+
+    expect(messages.join(" ")).toContain("BlockDocument");
   });
 });
 

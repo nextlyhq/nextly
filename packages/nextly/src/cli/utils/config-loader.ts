@@ -211,6 +211,12 @@ let cachedConfig: LoadConfigResult | null = null;
 
 let fileWatcher: FSWatcher | null = null;
 
+/** The reload currently running for the watched file, if any. */
+let watcherReload: Promise<void> | null = null;
+
+/** Whether a save arrived while that reload was running. */
+let watcherReloadPending = false;
+
 const changeCallbacks: Set<ConfigChangeCallback> = new Set();
 
 function findConfigFile(cwd: string): string | undefined {
@@ -237,31 +243,60 @@ function startWatching(configPath: string, options: LoadConfigOptions): void {
   debugLog(options, "Starting file watcher for:", configPath);
 
   fileWatcher = watch(configPath, eventType => {
-    void (async () => {
-      if (eventType === "change") {
-        debugLog(options, "Config file changed, reloading...");
-
-        cachedConfig = null;
-
-        try {
-          const result = await loadConfigInternal(options);
-
-          for (const callback of changeCallbacks) {
-            try {
-              callback(result);
-            } catch (error) {
-              console.error("[config-loader] Error in change callback:", error);
-            }
-          }
-        } catch (error) {
-          console.error("[config-loader] Error reloading config:", error);
-        }
-      }
-    })();
+    if (eventType !== "change") return;
+    debugLog(options, "Config file changed, reloading...");
+    scheduleWatchReload(options);
   });
 
   fileWatcher.on("error", error => {
     console.error("[config-loader] File watcher error:", error);
+  });
+}
+
+/** One reload of the watched file, notifying every registered callback. */
+async function runWatchReload(options: LoadConfigOptions): Promise<void> {
+  cachedConfig = null;
+  try {
+    const result = await loadConfigInternal(options);
+
+    for (const callback of changeCallbacks) {
+      try {
+        callback(result);
+      } catch (error) {
+        console.error("[config-loader] Error in change callback:", error);
+      }
+    }
+  } catch (error) {
+    console.error("[config-loader] Error reloading config:", error);
+  }
+}
+
+/**
+ * Serialize reloads triggered by the watcher.
+ *
+ * A load clears and rebuilds the process-wide field-type registry and captures
+ * what it registered on its result. Two overlapping loads share that registry,
+ * so each could capture the other's types and hand a caller a config paired
+ * with the wrong ones — which is exactly what the result's snapshot exists to
+ * prevent.
+ *
+ * Saves arriving during a reload collapse into one trailing run rather than
+ * queueing per event: they all want the state after the last of them, and the
+ * file is read fresh when that run starts.
+ */
+function scheduleWatchReload(options: LoadConfigOptions): void {
+  if (watcherReload) {
+    watcherReloadPending = true;
+    return;
+  }
+
+  watcherReload = (async () => {
+    do {
+      watcherReloadPending = false;
+      await runWatchReload(options);
+    } while (watcherReloadPending);
+  })().finally(() => {
+    watcherReload = null;
   });
 }
 
