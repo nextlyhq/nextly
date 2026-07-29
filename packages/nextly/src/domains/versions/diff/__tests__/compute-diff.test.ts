@@ -473,6 +473,95 @@ describe("computeVersionDiff — round-2 hardening", () => {
   });
 });
 
+describe("computeVersionDiff — round-3 hardening", () => {
+  it("detects a change in a hasMany text field stored as an array", () => {
+    const diff = computeVersionDiff({ aliases: ["a"] }, { aliases: ["b"] }, [
+      field({ name: "aliases", type: "text", hasMany: true }),
+    ]);
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.fields[0]).toMatchObject({ kind: "value", status: "changed" });
+  });
+
+  it("surfaces a removed user field named id inside a plain group", () => {
+    const fields = [
+      field({
+        name: "meta",
+        type: "group",
+        fields: [field({ name: "title", type: "text" })],
+      }),
+    ];
+    const diff = computeVersionDiff(
+      { meta: { title: "same", id: "external-old" } },
+      { meta: { title: "same", id: "external-new" } },
+      fields
+    );
+    expect(diff.hasChanges).toBe(true);
+    const group = diff.fields[0];
+    if (group.kind === "group") {
+      expect(group.fields.find(n => n.name === "id")?.status).toBe("changed");
+    }
+  });
+
+  it("diffs a single dynamic-zone type swap field-by-field, masking secrets", () => {
+    const hash = "$2b$12$" + "d".repeat(53);
+    const hero = field({
+      name: "hero",
+      type: "component",
+      components: ["a", "b"],
+      componentSchemas: {
+        a: {
+          fields: [
+            field({ name: "secret", type: "password" }),
+            field({ name: "x", type: "text" }),
+          ],
+        },
+        b: { fields: [field({ name: "y", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { hero: { id: "1", _componentType: "a", secret: hash, x: "hi" } },
+      { hero: { id: "1", _componentType: "b", y: "yo" } },
+      [hero]
+    );
+    const node = diff.fields[0];
+    // A group diff over the union of both schemas, not a raw object dump.
+    expect(node.kind).toBe("group");
+    if (node.kind === "group") {
+      expect(node.fields.find(n => n.name === "secret")).toBeUndefined();
+    }
+  });
+
+  it("omits a protected before-type field when a list item changes type", () => {
+    const hash = "$2b$12$" + "e".repeat(53);
+    const zone = field({
+      name: "zone",
+      type: "component",
+      components: ["a", "b"],
+      repeatable: true,
+      componentSchemas: {
+        a: {
+          fields: [
+            field({ name: "secret", type: "password" }),
+            field({ name: "x", type: "text" }),
+          ],
+        },
+        b: { fields: [field({ name: "y", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { zone: [{ id: "1", _componentType: "a", secret: hash, x: "hi" }] },
+      { zone: [{ id: "1", _componentType: "b", y: "yo" }] },
+      [zone]
+    );
+    const list = diff.fields[0];
+    if (list.kind === "list") {
+      const item = list.items[0];
+      expect(item.status).toBe("changed");
+      expect(item.fields.find(n => n.name === "secret")).toBeUndefined();
+    }
+  });
+});
+
 describe("computeVersionDiff — modifiedOnly", () => {
   it("drops unchanged nodes when asked", () => {
     const fields = [

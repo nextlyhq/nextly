@@ -59,20 +59,26 @@ const SYSTEM_KEYS = new Set([
   "status",
 ]);
 
-// The only framework keys on a NESTED row (a component or repeater item). A
-// user field named like a top-level system column (`status` on a collection
-// with no lifecycle, say) must still surface when removed, so the broader set
-// applies at the top level only; `_componentType` is caught by the `_` prefix.
-const NESTED_SYSTEM_KEYS = new Set(["id"]);
+// The only framework key on a NESTED ROW (a component instance or repeater
+// item). A plain group has no framework columns at all, so a group child named
+// `id`/`status` is user content and must still surface when removed; the broad
+// document set applies only at the top. `_componentType` is caught by `_`.
+const ROW_SYSTEM_KEYS = new Set(["id"]);
+const NO_SYSTEM_KEYS = new Set<string>();
 
-/** Where in the tree a walk is: the top document, and/or inside a component. */
+/** Where in the tree a walk is, which decides framework-key and redaction rules. */
 interface WalkContext {
+  /** The top-level document object (framework columns live here). */
   top: boolean;
+  /** A component-instance or repeater ROW object (its `id` is framework). */
+  inRow: boolean;
   /**
    * True once the walk has descended through a component. Redaction never runs
    * there (the field-function registry holds no component-child functions), so
    * the engine omits any field declaring a read rule rather than risk exposing
-   * a value the caller may not read.
+   * a value the caller may not read. Best-effort: a component persisted through
+   * the registry has its access callbacks stripped, so this cannot catch every
+   * rule; passwords are additionally masked by value.
    */
   inComponent: boolean;
 }
@@ -384,6 +390,34 @@ function itemChildFields(
   return [];
 }
 
+/** The declared child schema for one dynamic-zone component type. */
+function zoneFieldsForType(
+  field: FieldConfig,
+  type: string | undefined
+): FieldConfig[] {
+  if (type === undefined) return [];
+  return enrichedComponentSchemas(field)?.[type]?.fields ?? [];
+}
+
+/**
+ * Fields from both schemas, deduped by name. Used when an item or single
+ * dynamic zone changes component type, so a protected/nested field present in
+ * EITHER the before or after schema is still recognised (not just the newer).
+ */
+function unionFields(a: FieldConfig[], b: FieldConfig[]): FieldConfig[] {
+  const seen = new Set<string>();
+  const out: FieldConfig[] = [];
+  for (const field of [...a, ...b]) {
+    const name = (field as { name?: string }).name;
+    if (typeof name === "string" && name !== "") {
+      if (seen.has(name)) continue;
+      seen.add(name);
+    }
+    out.push(field);
+  }
+  return out;
+}
+
 function itemDiff(
   match: ItemMatch,
   field: FieldConfig,
@@ -394,7 +428,17 @@ function itemDiff(
   const afterType =
     match.presence === "removed" ? undefined : componentTypeOf(match.afterItem);
   const componentType = afterType ?? beforeType;
-  const childFields = itemChildFields(field, componentType);
+  // A stable id whose component type changed is a real change even if the two
+  // schemas share equal-valued field names; a discriminator appearing on a
+  // previously-untagged (older or imported) item counts too. Diff against BOTH
+  // schemas so a protected field from either side is still recognised.
+  const typeChanged = match.presence === "both" && beforeType !== afterType;
+  const childFields = typeChanged
+    ? unionFields(
+        itemChildFields(field, beforeType),
+        itemChildFields(field, afterType)
+      )
+    : itemChildFields(field, componentType);
 
   if (match.presence === "added") {
     return {
@@ -424,10 +468,6 @@ function itemDiff(
     childFields.length > 0
       ? collectNodes(childFields, match.beforeItem, match.afterItem, ctx)
       : [];
-  // A stable id whose component type changed is a real change even if the two
-  // schemas share equal-valued field names; a discriminator appearing on a
-  // previously-untagged (older or imported) item counts too.
-  const typeChanged = beforeType !== afterType;
   const contentChanged =
     typeChanged ||
     (childFields.length > 0
@@ -455,12 +495,12 @@ function listNode(
   const beforeArr = asArray(before);
   const afterArr = asArray(after);
   const { items: matches } = reconcileById(beforeArr, afterArr);
-  // A repeater's rows keep the current context; a component list descends into
-  // a component subtree.
+  // Every list item is a row (its `id` is framework metadata). A repeater's
+  // rows keep the current component context; a component list descends into one.
   const itemCtx: WalkContext =
     field.type === "repeater"
-      ? { top: false, inComponent: ctx.inComponent }
-      : { top: false, inComponent: true };
+      ? { top: false, inRow: true, inComponent: ctx.inComponent }
+      : { top: false, inRow: true, inComponent: true };
   const items = matches.map(m => itemDiff(m, field, itemCtx));
   const changed = items.some(i => i.status !== "unchanged" || i.hasMoved);
   let status: DiffStatus = "unchanged";
@@ -499,23 +539,41 @@ function diffField(
 
   if (isListField(field)) return listNode(meta, field, before, after, ctx);
   if (isGroupField(field)) {
-    // A named group's value is a nested object (no longer the top level), but it
-    // is not itself a component subtree.
+    // A named group's value is a nested object (no longer the top level) but has
+    // no framework columns of its own, and it is not a component subtree.
     if (field.type === "group") {
       return groupNode(meta, inlineFields(field) ?? [], before, after, {
         top: false,
+        inRow: false,
         inComponent: ctx.inComponent,
       });
     }
-    const componentCtx: WalkContext = { top: false, inComponent: true };
+    // A component instance is a row (its `id` is framework) inside a component.
+    const componentCtx: WalkContext = {
+      top: false,
+      inRow: true,
+      inComponent: true,
+    };
     // Non-repeatable component. A single-mode component keeps a fixed schema; a
-    // dynamic zone whose stored type differs between versions — including a
-    // discriminator that appeared or disappeared — is a whole-value change
-    // rather than a field-by-field one.
+    // dynamic zone whose stored type differs between versions — a discriminator
+    // that changed, appeared, or disappeared — is diffed over the union of both
+    // type schemas, so nested values are masked/omitted field-by-field rather
+    // than dumped as raw objects.
     if (Array.isArray(componentSlugs(field))) {
       const beforeType = componentTypeOf(asObject(before));
       const afterType = componentTypeOf(asObject(after));
-      if (beforeType !== afterType) return valueNode(meta, before, after);
+      if (beforeType !== afterType) {
+        return groupNode(
+          meta,
+          unionFields(
+            zoneFieldsForType(field, beforeType),
+            zoneFieldsForType(field, afterType)
+          ),
+          before,
+          after,
+          componentCtx
+        );
+      }
     }
     return groupNode(
       meta,
@@ -526,7 +584,11 @@ function diffField(
     );
   }
   if (isSetField(field, before, after)) return setNode(meta, before, after);
-  if (TEXT_TYPES.has(field.type)) return textNode(meta, before, after);
+  // A hasMany text field stores an ARRAY, not a single string, so it cannot be
+  // word-diffed; fall through to a value comparison.
+  if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {
+    return textNode(meta, before, after);
+  }
   return valueNode(meta, before, after);
 }
 
@@ -555,10 +617,10 @@ function collectNodes(
       const inner = presentationalChildren(field);
       if (inner) {
         // A nameless container's children live flat on THIS object, so the
-        // level (top-ness) is unchanged; only component-ness may change.
+        // level (top-ness, row-ness) is unchanged; only component-ness may.
         const innerCtx: WalkContext = isComponentField(field)
-          ? { top: ctx.top, inComponent: true }
-          : { top: ctx.top, inComponent: ctx.inComponent };
+          ? { top: ctx.top, inRow: ctx.inRow, inComponent: true }
+          : { top: ctx.top, inRow: ctx.inRow, inComponent: ctx.inComponent };
         nodes.push(...collectNodes(inner, beforeObj, afterObj, innerCtx));
       }
       continue;
@@ -571,7 +633,14 @@ function collectNodes(
     nodes.push(diffField(field, name, beforeObj[name], afterObj[name], ctx));
   }
 
-  const systemKeys = ctx.top ? SYSTEM_KEYS : NESTED_SYSTEM_KEYS;
+  // Framework keys depend on the object: the document has the full set, a
+  // component/repeater row has only `id`, and a plain group has none (a group
+  // child named `id`/`status` is user content).
+  const systemKeys = ctx.top
+    ? SYSTEM_KEYS
+    : ctx.inRow
+      ? ROW_SYSTEM_KEYS
+      : NO_SYSTEM_KEYS;
   const consumed = topLevelNames(fields);
   const keys = new Set([...Object.keys(beforeObj), ...Object.keys(afterObj)]);
   for (const key of keys) {
@@ -632,6 +701,7 @@ export function computeVersionDiff(
 ): VersionDiffBody {
   const nodes = collectNodes(fields, before, after, {
     top: true,
+    inRow: false,
     inComponent: false,
   });
   const hasChanges = nodes.some(n => n.status !== "unchanged");
