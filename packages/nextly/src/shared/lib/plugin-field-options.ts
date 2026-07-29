@@ -14,7 +14,10 @@
  *
  * @module shared/lib/plugin-field-options
  */
-import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
+import {
+  getFieldType,
+  isPluginFieldTypeOnSurface,
+} from "../../domains/schema/field-types/field-type-registry";
 
 import { detachedField } from "./detached-field";
 
@@ -45,6 +48,14 @@ export function pluginFieldOptionIssues(field: {
   name?: unknown;
 }): PluginFieldOptionIssue[] {
   if (typeof field.type !== "string") return [];
+  // Only for a type that opted into the entry-schema surface, which is the one
+  // these callers validate — collections, singles and field groups all gate on
+  // it. A type offered solely on `users`, `forms`, or `blocks` writes rules for
+  // a declaration shape this path never sees, and running them here would let
+  // it reject entry metadata it was never written about. The same applies to a
+  // type whose author later drops `entries` while instances of it remain: those
+  // keep rendering, and they must not start failing a boot.
+  if (!isPluginFieldTypeOnSurface(field.type, "entries")) return [];
   const custom = getFieldType(field.type);
   if (!custom?.validateOptions) return [];
 

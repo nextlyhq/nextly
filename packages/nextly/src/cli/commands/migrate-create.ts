@@ -76,6 +76,7 @@ import {
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { createContext, type CommandContext } from "../program";
 import {
   getDialectDisplayName,
@@ -259,6 +260,22 @@ export async function runMigrateCreate(
     manifest,
     configResult.deferredExtends ?? []
   );
+
+  // After the deferred extends land, because a field extended onto a
+  // Builder-made entity is only present from here on. A migration is the one
+  // artifact that outlives the process that wrote it: emitting DDL for a
+  // declaration the next boot refuses would produce a deployment that
+  // materializes the schema and then cannot start on it.
+  assertPluginFieldDeclarations({
+    collections: configResult.config.collections,
+    singles: configResult.config.singles,
+    fieldGroups: configResult.config.fieldGroups,
+  });
+  assertPluginFieldDeclarations({
+    collections: manifest.collections,
+    singles: manifest.singles,
+    fieldGroups: manifest.components,
+  });
 
   const merged = mergeUiEntities({
     codeCollections,

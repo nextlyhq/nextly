@@ -593,6 +593,20 @@ export async function reloadNextlyConfig(opts?: {
         };
       }
     ).config;
+
+    // The reload repopulates the field-type registry through `loadConfig` but
+    // never goes back through `registerServices`, so the boot gate does not run
+    // again. Editing a plugin field's options while the dev server is up would
+    // otherwise materialize a declaration its own type rejects, and the app
+    // would only refuse it on the next restart — long after the schema changed.
+    const { assertPluginFieldDeclarations } = await import(
+      "../shared/lib/assert-plugin-field-declarations"
+    );
+    assertPluginFieldDeclarations({
+      collections: newConfig?.collections,
+      singles: newConfig?.singles,
+      fieldGroups: newConfig?.fieldGroups,
+    });
   } catch (err) {
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to

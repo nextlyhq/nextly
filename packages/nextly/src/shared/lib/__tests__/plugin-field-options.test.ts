@@ -146,6 +146,24 @@ describe("plugin field-type option validation", () => {
     );
   });
 
+  it("does not run for a type that never opted into the entry surface", () => {
+    // These callers validate entry-schema declarations. A type offered solely
+    // on `users`, `forms`, or `blocks` wrote its rules about a different
+    // declaration shape, and running them here would let it reject metadata it
+    // was never written about.
+    registerFieldType({
+      type: "avatar",
+      storage: "text",
+      component: "@acme/users/admin#AvatarInput",
+      surfaces: ["users"],
+      validateOptions: () => "this must never run here",
+    });
+
+    expect(pluginFieldOptionIssues({ name: "pic", type: "avatar" })).toEqual(
+      []
+    );
+  });
+
   it("leaves built-in and unregistered types alone", () => {
     registerDocument(() => "never runs");
 
