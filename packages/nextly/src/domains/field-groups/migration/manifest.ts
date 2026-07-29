@@ -14,8 +14,6 @@ import { createHash } from "node:crypto";
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
-import type { MigrationDirection } from "./state";
-
 /**
  * The names storage moves to.
  *
@@ -29,20 +27,20 @@ export const MIGRATION_TARGET = {
   columnType: "_field_group_type",
 } as const;
 
-/** The names this direction moves storage from and to. */
-function vocabulary(direction: MigrationDirection) {
-  const up = direction === "up";
+/**
+ * The names an up migration moves storage from and to.
+ *
+ * There is no down variant on purpose: a rollback inverts what was applied
+ * rather than deriving the reverse from these. See `invertManifest`.
+ */
+function vocabulary() {
   return {
-    tableFrom: up ? STORAGE_FORMAT.tablePrefix : MIGRATION_TARGET.tablePrefix,
-    tableTo: up ? MIGRATION_TARGET.tablePrefix : STORAGE_FORMAT.tablePrefix,
-    registryFrom: up
-      ? STORAGE_FORMAT.registryTable
-      : MIGRATION_TARGET.registryTable,
-    registryTo: up
-      ? MIGRATION_TARGET.registryTable
-      : STORAGE_FORMAT.registryTable,
-    columnFrom: up ? STORAGE_FORMAT.columns.type : MIGRATION_TARGET.columnType,
-    columnTo: up ? MIGRATION_TARGET.columnType : STORAGE_FORMAT.columns.type,
+    tableFrom: STORAGE_FORMAT.tablePrefix,
+    tableTo: MIGRATION_TARGET.tablePrefix,
+    registryFrom: STORAGE_FORMAT.registryTable,
+    registryTo: MIGRATION_TARGET.registryTable,
+    columnFrom: STORAGE_FORMAT.columns.type,
+    columnTo: MIGRATION_TARGET.columnType,
   };
 }
 
@@ -71,6 +69,16 @@ export interface ManifestEntry {
   to: string;
   /** Set for `column`, naming the table the column belongs to. */
   table?: string;
+  /**
+   * This rename is already reflected in the database.
+   *
+   * Annotated rather than removed. The plan is indexed by position and
+   * identified by hash, so dropping an entry would renumber every later step
+   * and change the identity the marker recorded — making a resume refuse the
+   * very plan it is resuming. Steps are idempotent, so a satisfied one costs a
+   * verification and nothing more.
+   */
+  satisfied?: boolean;
 }
 
 export interface MigrationManifest {
@@ -92,13 +100,37 @@ export interface MigrationManifest {
  * `table_name` has to be read rather than derived: it decides not just what the
  * objects are called, but which of them are ours to rename at all.
  */
-export function retargetName(
-  name: string,
-  direction: MigrationDirection = "up"
-): string | null {
-  const { tableFrom, tableTo } = vocabulary(direction);
+export function retargetName(name: string): string | null {
+  const { tableFrom, tableTo } = vocabulary();
   if (!name.startsWith(tableFrom)) return null;
   return `${tableTo}${name.slice(tableFrom.length)}`;
+}
+
+/**
+ * Reverse a plan that was applied, for a rollback.
+ *
+ * A down plan is **inverted, never derived.** Deriving it from the prefix
+ * cannot work: a field group whose author named its table `fg_hero` before any
+ * migration existed is left untouched on the way up, and a prefix rule going
+ * back down would rename it to `comp_hero` — destroying an author-chosen
+ * identifier that this migration never created. Nothing in the database
+ * distinguishes a name we made from a name that was always there; only the
+ * record of what was applied does.
+ *
+ * Order is reversed as well as direction. The column rename therefore runs
+ * while its table still carries the migrated name, which is why each column
+ * entry keeps the table it already names.
+ */
+export function invertManifest(
+  entries: readonly ManifestEntry[]
+): MigrationManifest {
+  const inverted = [...entries].reverse().map(entry => ({
+    kind: entry.kind,
+    from: entry.to,
+    to: entry.from,
+    ...(entry.table === undefined ? {} : { table: entry.table }),
+  }));
+  return { entries: inverted, hash: hashManifest(inverted) };
 }
 
 /**
@@ -119,7 +151,6 @@ export function retargetName(
 export function buildMigrationManifest(
   rows: readonly RegistryRow[],
   options: {
-    direction?: MigrationDirection;
     /**
      * Every table in the database, not only the ones this migration expects.
      *
@@ -130,8 +161,7 @@ export function buildMigrationManifest(
     existingTables?: readonly string[];
   } = {}
 ): MigrationManifest {
-  const direction = options.direction ?? "up";
-  const v = vocabulary(direction);
+  const v = vocabulary();
   const entries: ManifestEntry[] = [];
 
   // Sorted by the stored table name so the plan is stable across runs. Step
@@ -145,7 +175,7 @@ export function buildMigrationManifest(
     // Idempotent by construction: a row already carrying a migrated name
     // produces no rename, so a plan rebuilt after a partial run contains only
     // the work still outstanding.
-    const target = retargetName(row.tableName, direction);
+    const target = retargetName(row.tableName);
     if (target === null) {
       // Custom-named: nothing to retire. Its column may still need renaming,
       // which is why this continues rather than skipping the row entirely.
@@ -208,6 +238,9 @@ export function buildMigrationManifest(
  * Nextly upgrade can reorder steps while this map is untouched.
  */
 export function hashManifest(entries: readonly ManifestEntry[]): string {
+  // Deliberately excludes `satisfied`: progress is not identity. A plan whose
+  // steps have partly run is the same plan, and the marker must still recognise
+  // it on resume.
   const canonical = entries
     .map(e => `${e.kind}:${e.table ?? ""}:${e.from}>${e.to}`)
     .join("\n");
@@ -215,85 +248,93 @@ export function hashManifest(entries: readonly ManifestEntry[]): string {
 }
 
 /**
- * Compare identifiers the way the loosest supported database would.
+ * Fold a name for *occupancy* comparisons only.
  *
- * SQLite matches table names case-insensitively, and MySQL does too under the
- * usual `lower_case_table_names` settings. Comparing case-sensitively would let
- * an existing `FG_HERO` slip past a check for `fg_hero` and fail the rename
- * after the run had already started. Postgres can genuinely hold both, so this
- * is stricter than Postgres requires — deliberately, because a refusal before
- * the run costs an operator a rename while a failure during it leaves storage
- * half-migrated.
+ * SQLite matches table names case-insensitively and MySQL usually does, so a
+ * `FG_HERO` sitting where `fg_hero` is headed would otherwise slip past and
+ * fail the rename mid-run. Folding makes that check stricter than Postgres
+ * needs, which is the safe direction for detecting a squatter.
+ *
+ * It is the unsafe direction for deciding whether something *exists*: on
+ * Postgres a quoted `COMP_HERO` would make a genuinely missing `comp_hero` look
+ * present, and the pre-flight refusal would be skipped for a rename that then
+ * fails anyway. Presence is therefore matched exactly, and only occupancy is
+ * folded.
  */
 function fold(name: string): string {
   return name.toLowerCase();
 }
 
 /**
- * Decide each rename against what the database actually contains.
+ * Annotate each rename with what the database says about it, or refuse.
  *
- * Four states, and only one of them is ordinary work:
+ * Presence is judged on exact names; a target being *occupied* is judged
+ * loosely, since that is the comparison where being too strict is safe.
  *
  * | source | target | meaning |
  * |---|---|---|
- * | present | absent  | the rename still has to happen |
- * | absent  | present | this migration already did it; drop the entry |
- * | present | present | something else owns the target; refuse |
- * | absent  | absent  | the registry names a table that is gone; refuse |
+ * | present | free     | outstanding work |
+ * | absent  | present  | already applied — marked satisfied, never removed |
+ * | present | occupied | something else owns the target; refuse |
+ * | absent  | absent   | the registry names a table that is gone; refuse |
  *
- * The second row is what makes a resume work. A run that crashed after a rename
- * committed but before its marker write must be able to rebuild the plan and
- * find that step already satisfied, rather than reading its own finished work
- * as a conflict.
+ * Entries are annotated rather than filtered: the plan is positionally indexed
+ * and hash-identified, so removing one renumbers later steps and changes the
+ * identity the marker holds.
  */
 function reconcileWithCatalog(
   entries: readonly ManifestEntry[],
   existingTables: readonly string[]
 ): ManifestEntry[] {
-  const catalog = new Set(existingTables.map(fold));
-  const kept: ManifestEntry[] = [];
+  const exact = new Set(existingTables);
+  const loose = new Set(existingTables.map(fold));
 
+  // A table this plan is about to create by renaming counts as present for the
+  // column rename that follows it; the column's table names the post-rename
+  // table, which is legitimately absent from a pre-migration catalog.
+  const willExist = new Set<string>();
   for (const entry of entries) {
+    if (entry.kind !== "column") willExist.add(entry.to);
+  }
+
+  return entries.map(entry => {
     if (entry.kind === "column") {
-      // A column belongs to a table; if that table is not there, neither is it.
-      if (entry.table === undefined || catalog.has(fold(entry.table))) {
-        kept.push(entry);
-      }
-      continue;
+      const table = entry.table;
+      if (table === undefined) return entry;
+      const present = exact.has(table) || willExist.has(table);
+      // A column on a table that neither exists nor is about to is not work,
+      // and cannot be verified either.
+      return present ? entry : { ...entry, satisfied: true };
     }
 
-    const sourcePresent = catalog.has(fold(entry.from));
-    const targetPresent = catalog.has(fold(entry.to));
+    const sourcePresent = exact.has(entry.from);
+    const targetPresent = exact.has(entry.to);
+    const targetOccupied = loose.has(entry.to);
 
-    if (sourcePresent && targetPresent) {
+    if (sourcePresent && targetOccupied) {
       throw refuseRename(
         entry,
         "migration target name is already in use",
         `${entry.to} already exists while ${entry.from} still does`
       );
     }
-    if (!sourcePresent && !targetPresent) {
-      throw refuseRename(
-        entry,
-        "migration source object is missing",
-        `neither ${entry.from} nor ${entry.to} exists`
-      );
-    }
-    if (sourcePresent) kept.push(entry);
-    // Otherwise the target is present and the source is gone: already renamed.
-  }
-
-  return kept;
+    if (sourcePresent) return entry;
+    if (targetPresent) return { ...entry, satisfied: true };
+    throw refuseRename(
+      entry,
+      "migration source object is missing",
+      `neither ${entry.from} nor ${entry.to} exists`
+    );
+  });
 }
 
 /**
  * No two entries may claim the same name, and none may claim a name a registry
  * row is keeping.
  *
- * Checked without needing a catalog, because both facts are properties of the
- * plan and its inputs. A row whose table is left alone — one named through
- * `dbName` — still occupies its name, and `table_name` being unique does not
- * stop `comp_hero` and `fg_hero` coexisting.
+ * Both are properties of the plan and its inputs, so this needs no catalog. A
+ * row whose table is left alone still occupies its name, and `table_name` being
+ * unique does not stop `comp_hero` and `fg_hero` coexisting.
  */
 function assertNoTargetConflict(
   entries: readonly ManifestEntry[],
