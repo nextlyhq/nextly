@@ -8,11 +8,22 @@
 // defense in depth, mirroring renderDefaultValue's stance in
 // @nextlyhq/adapter-drizzle.
 
+import { NextlyError } from "../../../../errors";
+
 function rejectNulByte(identifier: string): void {
   if (identifier.includes("\0")) {
-    throw new Error(
-      `Invalid identifier (contains NUL byte): ${JSON.stringify(identifier)}`
-    );
+    // Typed like every other package error; the offending identifier is
+    // log-only so a hostile value never echoes back on the wire.
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "identifier",
+          code: "INVALID_IDENTIFIER",
+          message: "Identifier contains a NUL byte.",
+        },
+      ],
+      logContext: { identifier: JSON.stringify(identifier) },
+    });
   }
 }
 
