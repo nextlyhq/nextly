@@ -287,4 +287,55 @@ describe("FieldDiffNode", () => {
     expect(screen.getByText(/no longer in the schema/)).toBeInTheDocument();
     expect(screen.getByText("seo term")).toBeInTheDocument();
   });
+
+  it("labels before and after for a changed dropped field", () => {
+    const node: FieldDiff = {
+      kind: "unknown",
+      name: "legacyKeyword",
+      status: "changed",
+      before: "old term",
+      after: "new term",
+    };
+    render(<FieldDiffNode node={node} />);
+
+    expect(screen.getByText(/^Before/)).toBeInTheDocument();
+    expect(screen.getByText(/^After/)).toBeInTheDocument();
+    expect(screen.getByText("old term")).toBeInTheDocument();
+    expect(screen.getByText("new term")).toBeInTheDocument();
+  });
+
+  it("renders a stored JSON null rather than treating it as empty", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "meta",
+      label: "Meta",
+      type: "json",
+      status: "unchanged",
+      before: null,
+      after: null,
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // A json field can hold the primitive null; it must read as `null`, not the
+    // "Not set" placeholder used for an absent value.
+    expect(screen.getByText("null")).toBeInTheDocument();
+    expect(screen.queryByText(/Not set/)).not.toBeInTheDocument();
+  });
+
+  it("says there is no change for an unchanged relationship set", () => {
+    const node: FieldDiff = {
+      kind: "set",
+      name: "tags",
+      label: "Tags",
+      type: "relationship",
+      status: "unchanged",
+      added: [],
+      removed: [],
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // With "Changed only" off an unchanged set carries no targets; it says so
+    // rather than leaving a blank body under the "Unchanged" badge.
+    expect(screen.getByText("No change")).toBeInTheDocument();
+  });
 });

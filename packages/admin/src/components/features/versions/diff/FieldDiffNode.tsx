@@ -131,6 +131,48 @@ function ValueSide({
   );
 }
 
+/**
+ * The before/after presentation shared by scalar and dropped-field values:
+ * added shows one value, removed shows one struck value, changed shows both
+ * labelled, and unchanged shows the value once. `renderValue` decides how a
+ * single side is drawn (the typed kit for a live field, raw text for a dropped
+ * one), so the labelling stays in one place.
+ */
+function BeforeAfter({
+  status,
+  before,
+  after,
+  renderValue,
+}: {
+  status: DiffStatus;
+  before: unknown;
+  after: unknown;
+  renderValue: (value: unknown) => React.ReactNode;
+}) {
+  if (status === "added") {
+    return <ValueSide label="New value">{renderValue(after)}</ValueSide>;
+  }
+  if (status === "removed") {
+    return (
+      <ValueSide label="Removed value" struck>
+        {renderValue(before)}
+      </ValueSide>
+    );
+  }
+  if (status === "unchanged") {
+    // Nothing changed: show the value once, unlabelled and not struck.
+    return <>{renderValue(after)}</>;
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <ValueSide label="Before" struck>
+        {renderValue(before)}
+      </ValueSide>
+      <ValueSide label="After">{renderValue(after)}</ValueSide>
+    </div>
+  );
+}
+
 function targetLabel(target: RelationTarget): string {
   return target.relationTo ? `${target.relationTo}: ${target.id}` : target.id;
 }
@@ -180,35 +222,14 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
         ) : (
           <FieldValue field={field} value={value} preNormalized />
         );
-
-      let body: React.ReactNode;
-      if (node.status === "added") {
-        body = (
-          <ValueSide label="New value">{renderValue(node.after)}</ValueSide>
-        );
-      } else if (node.status === "removed") {
-        body = (
-          <ValueSide label="Removed value" struck>
-            {renderValue(node.before)}
-          </ValueSide>
-        );
-      } else if (node.status === "unchanged") {
-        // Reachable only with "Changed only" off: nothing changed, so show the
-        // value once, unlabelled and not struck.
-        body = renderValue(node.after);
-      } else {
-        body = (
-          <div className="flex flex-col gap-1">
-            <ValueSide label="Before" struck>
-              {renderValue(node.before)}
-            </ValueSide>
-            <ValueSide label="After">{renderValue(node.after)}</ValueSide>
-          </div>
-        );
-      }
       return (
         <FieldRow label={node.label} status={node.status}>
-          {body}
+          <BeforeAfter
+            status={node.status}
+            before={node.before}
+            after={node.after}
+            renderValue={renderValue}
+          />
         </FieldRow>
       );
     }
@@ -236,6 +257,12 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
                   </Badge>
                 ))}
               </div>
+            ) : null}
+            {node.added.length === 0 && node.removed.length === 0 ? (
+              // An unchanged relationship (reachable with "Changed only" off)
+              // carries no targets, so say so rather than leaving a blank body
+              // under the "Unchanged" badge.
+              <span className="text-xs text-muted-foreground">No change</span>
             ) : null}
           </div>
         </FieldRow>
@@ -268,24 +295,24 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
 
     case "unknown": {
       // A field no longer in the schema: its type is unknown, so render the raw
-      // stored values plainly rather than guessing a typed display. Show the
-      // struck "before" only when it was actually removed or changed; an
-      // unchanged value (reachable with "Changed only" off) reads once.
+      // stored values plainly rather than guessing a typed display. The
+      // before/after labelling is shared with live values so a screen reader can
+      // tell the two sides apart.
       return (
         <FieldRow label={node.name} status={node.status}>
           <p className="text-xs text-muted-foreground mb-1">
             This field is no longer in the schema.
           </p>
-          {node.status === "removed" || node.status === "changed" ? (
-            <code className="block text-sm break-words line-through text-muted-foreground">
-              {formatUnknown(node.before)}
-            </code>
-          ) : null}
-          {node.status !== "removed" ? (
-            <code className="block text-sm break-words">
-              {formatUnknown(node.after)}
-            </code>
-          ) : null}
+          <BeforeAfter
+            status={node.status}
+            before={node.before}
+            after={node.after}
+            renderValue={value => (
+              <code className="block text-sm break-words">
+                {formatUnknown(value)}
+              </code>
+            )}
+          />
         </FieldRow>
       );
     }

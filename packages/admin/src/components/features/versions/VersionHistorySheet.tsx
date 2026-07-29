@@ -9,7 +9,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Alert,
@@ -37,6 +37,12 @@ import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionPreview } from "./VersionPreview";
 import { VersionRow } from "./VersionRow";
+
+// How many extra history pages the panel will auto-fetch while searching for a
+// previewed version's previous same-locale version before deferring to the
+// manual "Load more" control. Bounds the search in a long, retention-disabled,
+// multi-locale history where a lone-locale row would otherwise page to the end.
+const MAX_AUTO_PREVIOUS_PAGES = 3;
 
 export interface VersionHistorySheetProps {
   open: boolean;
@@ -111,10 +117,13 @@ export function VersionHistorySheet({
   const list = useVersions({ scope, enabled: open });
   // Destructured so the boundary-fetch effect can depend on the paging members
   // by identity rather than on the whole query object, which changes each render.
+  // `isRefetching` is a whole-list revalidation (not a page fetch), during which
+  // the cached head may be one save behind the server.
   const {
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    isRefetching,
     fetchNextPage,
   } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
@@ -171,10 +180,14 @@ export function VersionHistorySheet({
     sameLocaleIndex >= 0
       ? (sameLocaleVersions[sameLocaleIndex + 1]?.versionNo ?? null)
       : null;
+  // "Current" is only offered once the list has revalidated: reopening after a
+  // save serves the cached head while `staleTime: 0` refetches, and comparing
+  // against that stale head would mislabel an outdated version as current.
   const canCompareCurrent =
     selected !== null &&
     latestVersionNo !== null &&
-    selected !== latestVersionNo;
+    selected !== latestVersionNo &&
+    !isRefetching;
   const canComparePrevious = selected !== null && previousVersionNo !== null;
 
   // When previewing a version whose previous same-locale version has not loaded
@@ -182,12 +195,29 @@ export function VersionHistorySheet({
   // can place that previous version beyond the current page even when the
   // selected row is not the last one loaded overall, so this keys off "no
   // previous target found" rather than the loaded bottom. It stops after a
-  // failed fetch: React Query leaves `hasNextPage` true while `isFetchingNextPage`
-  // clears, which would otherwise spin the pager on a persistent error; the
-  // manual "Load more" control stays available to retry.
+  // failed fetch (React Query leaves `hasNextPage` true while `isFetchingNextPage`
+  // clears, which would otherwise spin the pager) and after a bounded number of
+  // pages, so a lone-locale version in a long history does not walk the whole
+  // list to prove no target exists. The manual "Load more" control stays
+  // available to search deeper.
+  const previousSearchRef = useRef<{ selected: number | null; pages: number }>({
+    selected: null,
+    pages: 0,
+  });
   useEffect(() => {
     if (selected === null || canComparePrevious) return;
-    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+    const search = previousSearchRef.current;
+    if (search.selected !== selected) {
+      search.selected = selected;
+      search.pages = 0;
+    }
+    if (
+      hasNextPage &&
+      !isFetchingNextPage &&
+      !isFetchNextPageError &&
+      search.pages < MAX_AUTO_PREVIOUS_PAGES
+    ) {
+      search.pages += 1;
       void fetchNextPage();
     }
   }, [

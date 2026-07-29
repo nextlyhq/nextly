@@ -597,10 +597,10 @@ export function FieldValue({
   // A `json` field may legitimately store the JSON primitive `null`, which
   // normalizes to the same value as an absent field. An absent key arrives as
   // `undefined`, while a stored null arrives as `null` (or as the characters
-  // "null" from a serialized column); only the first is treated as unset. A
-  // pre-normalized value has already resolved this upstream, so `null` is empty.
+  // "null" from a serialized column); only the first is treated as unset. This
+  // holds for a pre-normalized value too: the engine hands a stored JSON null
+  // through as `null`, which must still render rather than read as empty.
   const isStoredJsonNull =
-    !preNormalized &&
     field.type === "json" &&
     (value === null || (typeof value === "string" && value.trim() === "null"));
 
