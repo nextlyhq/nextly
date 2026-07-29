@@ -124,6 +124,7 @@ export function VersionHistorySheet({
     isFetchingNextPage,
     isFetchNextPageError,
     isRefetching,
+    isRefetchError,
     fetchNextPage,
   } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
@@ -182,12 +183,15 @@ export function VersionHistorySheet({
       : null;
   // "Current" is only offered once the list has revalidated: reopening after a
   // save serves the cached head while `staleTime: 0` refetches, and comparing
-  // against that stale head would mislabel an outdated version as current.
+  // against that stale head would mislabel an outdated version as current. A
+  // failed revalidation clears `isRefetching` but leaves the head stale, so
+  // `isRefetchError` keeps the action disabled until a fetch succeeds.
   const canCompareCurrent =
     selected !== null &&
     latestVersionNo !== null &&
     selected !== latestVersionNo &&
-    !isRefetching;
+    !isRefetching &&
+    !isRefetchError;
   const canComparePrevious = selected !== null && previousVersionNo !== null;
 
   // When previewing a version whose previous same-locale version has not loaded
@@ -291,7 +295,11 @@ export function VersionHistorySheet({
             />
           ) : list.isLoading ? (
             <ListSkeleton />
-          ) : list.isError ? (
+          ) : list.isError && versions.length === 0 ? (
+            // Only a genuine load failure (no pages) replaces the panel. A failed
+            // speculative next-page (from the automatic previous-version search)
+            // also flips the query to error, but the loaded history stays on
+            // screen; its "Load more" control offers the retry.
             <div className="p-4 flex flex-col gap-3">
               <Alert variant="destructive">
                 <AlertDescription>

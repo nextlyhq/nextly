@@ -270,9 +270,20 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "group": {
+      // A dynamic-zone component whose type changed carries the slug transition,
+      // so the swap is legible even when neither side has field values to show.
+      const swapped =
+        node.componentTypeBefore !== undefined ||
+        node.componentTypeAfter !== undefined;
       return (
         <FieldRow label={node.label} status={node.status}>
           <div className="pl-3 border-l border-border">
+            {swapped ? (
+              <p className="text-xs text-muted-foreground mb-1">
+                Type: {node.componentTypeBefore ?? "none"} &rarr;{" "}
+                {node.componentTypeAfter ?? "none"}
+              </p>
+            ) : null}
             {node.fields.map(child => (
               <FieldDiffNode key={childKey(child)} node={child} />
             ))}

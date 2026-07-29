@@ -238,6 +238,24 @@ describe("FieldDiffNode", () => {
     expect(screen.getByText("New")).toBeInTheDocument();
   });
 
+  it("shows the component type transition for a dynamic-zone swap", () => {
+    // A swap with no field values still tells the user what changed.
+    const node: FieldDiff = {
+      kind: "group",
+      name: "block",
+      label: "Block",
+      type: "component",
+      status: "changed",
+      componentTypeBefore: "hero",
+      componentTypeAfter: "cta",
+      fields: [],
+    };
+    render(<FieldDiffNode node={node} />);
+
+    expect(screen.getByText(/hero/)).toBeInTheDocument();
+    expect(screen.getByText(/cta/)).toBeInTheDocument();
+  });
+
   it("renders both sides when a component swap reuses a field name", () => {
     // A dynamic-zone type swap emits a removed and an added node with the same
     // name as siblings; both must render (distinct keys, no collision).
