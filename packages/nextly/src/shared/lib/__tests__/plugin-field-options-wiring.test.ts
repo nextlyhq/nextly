@@ -18,6 +18,7 @@ import {
 } from "../../../domains/schema/field-types/field-type-registry";
 import { assertValidFieldsPayload } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors/nextly-error";
+import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
 import { validateSingleConfig } from "../../../singles/config/validate-single";
 import type { SingleConfig } from "../../../singles/config/types";
@@ -105,11 +106,12 @@ describe("declaration checks reach every authoring path", () => {
     );
   });
 
-  it("refuses the declaration through defineCollection itself", () => {
-    // The validator is reached through the define call, which is where a
-    // code-first config is actually checked. Registration has to have happened
-    // by the time the config module evaluates — the same condition the field
-    // type is already under, since an unregistered type is refused outright.
+  it("refuses the declaration through defineCollection once the type is known", () => {
+    // A define call reaches the check only when the type is already registered.
+    // On a real cold load it is not — the config bundle is evaluated before
+    // `contributes.fieldTypes` is registered, so the define call rejects the
+    // type as unknown first. This covers the reachable case; the gates that
+    // actually protect a plugin type all run after registration.
     registerDocument();
 
     expect(() =>
@@ -118,6 +120,17 @@ describe("declaration checks reach every authoring path", () => {
         fields: [badField],
       } as unknown as CollectionConfig)
     ).toThrow(/policy\.kinds must name at least one kind/);
+  });
+
+  it("rejects an unregistered plugin type as unknown, before any option check", () => {
+    // No registration: this is the cold-load ordering, and it is why the
+    // define* calls are not advertised as a gate for plugin field types.
+    expect(() =>
+      defineCollection({
+        slug: "posts",
+        fields: [badField],
+      } as unknown as CollectionConfig)
+    ).toThrow(/Invalid field type 'document'/);
   });
 
   it("refuses a code-first single field", () => {
@@ -184,7 +197,7 @@ describe("declaration checks reach every authoring path", () => {
     ).toEqual([]);
   });
 
-  it("strips the option from the manifest copy, which is why the check reads the original", () => {
+  it("strips the option from the field schema, which is why the check reads the original", () => {
     registerDocument();
 
     // Pins the stripping this arrangement exists because of: the parsed field
@@ -194,6 +207,69 @@ describe("declaration checks reach every authoring path", () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data).not.toHaveProperty("policy");
+  });
+
+  it("keeps a plugin type's option in the written manifest", () => {
+    registerDocument();
+    const good = {
+      name: "body",
+      type: "document",
+      policy: { kinds: ["page"] },
+    };
+
+    const next = mutateManifest(
+      {
+        $schema: "s",
+        version: 1,
+        collections: [],
+        singles: [],
+        components: [],
+      },
+      {
+        type: "upsert",
+        kind: "collections",
+        entity: {
+          slug: "posts",
+          label: { singular: "Post", plural: "Posts" },
+          fields: [good],
+        },
+      }
+    );
+
+    // The database keeps the option, so the committed manifest has to as well:
+    // a deployment built from a manifest missing it would rebuild the field
+    // without the rules the option carries.
+    expect(next.collections[0]?.fields[0]).toMatchObject({
+      name: "body",
+      type: "document",
+      policy: { kinds: ["page"] },
+    });
+  });
+
+  it("still drops an undeclared key on a built-in field", () => {
+    const next = mutateManifest(
+      {
+        $schema: "s",
+        version: 1,
+        collections: [],
+        singles: [],
+        components: [],
+      },
+      {
+        type: "upsert",
+        kind: "collections",
+        entity: {
+          slug: "posts",
+          label: { singular: "Post", plural: "Posts" },
+          fields: [{ name: "title", type: "text", tpyo: true }],
+        },
+      }
+    );
+
+    // Stripping stays load-bearing for everything core does know: an
+    // undeclared key on a built-in is a typo or a stale option, and keeping it
+    // would persist a field reading as if it constrains something it does not.
+    expect(next.collections[0]?.fields[0]).not.toHaveProperty("tpyo");
   });
 
   it("accepts the same field once its declaration is coherent", () => {

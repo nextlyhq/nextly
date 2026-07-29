@@ -205,10 +205,13 @@ export interface PluginFieldType {
    * writer cannot fix it, and it fails every write until whoever declared the
    * field notices.
    *
-   * Runs on every path a declaration reaches storage by: the `define*` calls,
-   * a Schema Builder write, `nextly build`, and boot — where a plugin's own raw
-   * contributions are checked once the registry is populated, since they cannot
-   * go through a `define*` call that would reject their not-yet-registered type.
+   * Runs on every path a declaration reaches storage by: boot, `db:sync` and
+   * its watcher, a Schema Builder write, `nextly build`, `migrate:create`, and
+   * an HMR reload. Each sits after the field-type registry is populated,
+   * because the config bundle is evaluated before `contributes.fieldTypes` is
+   * registered — so the `define*` calls, where a code-first config is otherwise
+   * validated, reject a custom type as unknown before any option check of it
+   * could run.
    *
    * Checks the declaration as WRITTEN. On the Builder path that means the
    * submitted payload rather than the parsed copy, because the manifest schema
