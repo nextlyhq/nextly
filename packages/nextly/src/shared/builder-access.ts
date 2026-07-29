@@ -89,7 +89,7 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     ]),
   ],
   [
-    "components",
+    "field-groups",
     new Set([
       "createComponent",
       "updateComponent",

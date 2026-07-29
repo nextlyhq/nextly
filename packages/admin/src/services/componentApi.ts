@@ -83,7 +83,7 @@ export const fetchComponents = async (
   params: TableParams
 ): Promise<ListResponse<ApiComponent>> => {
   const query = buildQuery(params);
-  const url = `/components${query ? `?${query}` : ""}`;
+  const url = `/field-groups${query ? `?${query}` : ""}`;
   return fetcher<ListResponse<ApiComponent>>(url, {}, true);
 };
 
@@ -94,7 +94,7 @@ export const fetchComponents = async (
  */
 export const deleteComponent = async (componentSlug: string): Promise<void> => {
   await fetcher<MutationResponse<unknown>>(
-    `/components/${componentSlug}`,
+    `/field-groups/${componentSlug}`,
     {
       method: "DELETE",
     },
@@ -120,7 +120,7 @@ export const componentApi = {
    */
   list: async (): Promise<ApiComponent[]> => {
     const result =
-      await protectedApi.get<ListResponse<ApiComponent>>("/components");
+      await protectedApi.get<ListResponse<ApiComponent>>("/field-groups");
     return result.items;
   },
 
@@ -128,7 +128,7 @@ export const componentApi = {
    * Get a single Component definition by slug.
    */
   get: async (componentSlug: string): Promise<ApiComponent> => {
-    return protectedApi.get<ApiComponent>(`/components/${componentSlug}`);
+    return protectedApi.get<ApiComponent>(`/field-groups/${componentSlug}`);
   },
 
   /**
@@ -136,7 +136,7 @@ export const componentApi = {
    */
   create: async (payload: CreateComponentPayload): Promise<ApiComponent> => {
     const result = await protectedApi.post<MutationResponse<ApiComponent>>(
-      "/components",
+      "/field-groups",
       payload
     );
     return result.item;
@@ -150,7 +150,7 @@ export const componentApi = {
     payload: UpdateComponentPayload
   ): Promise<ApiComponent> => {
     const result = await protectedApi.patch<MutationResponse<ApiComponent>>(
-      `/components/${componentSlug}`,
+      `/field-groups/${componentSlug}`,
       payload
     );
     return result.item;
@@ -161,7 +161,7 @@ export const componentApi = {
    */
   remove: async (componentSlug: string): Promise<{ message: string }> => {
     const result = await protectedApi.delete<MutationResponse<ApiComponent>>(
-      `/components/${componentSlug}`
+      `/field-groups/${componentSlug}`
     );
     return { message: result.message };
   },
@@ -175,7 +175,7 @@ export const componentApi = {
     fields: unknown[]
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
-      `/components/schema/${componentSlug}/preview`,
+      `/field-groups/schema/${componentSlug}/preview`,
       { fields }
     );
   },
@@ -196,7 +196,7 @@ export const componentApi = {
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
-    >(`/components/schema/${componentSlug}/apply`, {
+    >(`/field-groups/schema/${componentSlug}/apply`, {
       fields,
       confirmed: true,
       schemaVersion,

@@ -1,6 +1,6 @@
 /**
  * Guards the auth tier of the dynamic dispatcher routes. The standalone
- * `nextly/api/components` route gates listing behind a permission check, so
+ * `nextly/api/field-groups` route gates listing behind a permission check, so
  * the dispatcher path (which templates actually mount via
  * `createDynamicHandlers`) must not leave the same listing unauthenticated —
  * otherwise anonymous callers could still enumerate component schemas.
@@ -11,15 +11,15 @@ import { isPublicEndpoint, requiresAuthOnly } from "../route-parser";
 
 describe("component route auth tier", () => {
   it("does not expose component listing or retrieval as public endpoints", () => {
-    expect(isPublicEndpoint("components", "listComponents")).toBe(false);
-    expect(isPublicEndpoint("components", "getComponent")).toBe(false);
+    expect(isPublicEndpoint("field-groups", "listComponents")).toBe(false);
+    expect(isPublicEndpoint("field-groups", "getComponent")).toBe(false);
   });
 
   it("requires authentication (no specific permission) to list components", () => {
     // Same class as listCollections/listSingles/getComponent: any signed-in
     // user may read builder-surface metadata; the palette needs it.
-    expect(requiresAuthOnly("components", "listComponents")).toBe(true);
-    expect(requiresAuthOnly("components", "getComponent")).toBe(true);
+    expect(requiresAuthOnly("field-groups", "listComponents")).toBe(true);
+    expect(requiresAuthOnly("field-groups", "getComponent")).toBe(true);
   });
 
   it("keeps genuinely public endpoints public", () => {

@@ -132,9 +132,9 @@ describe("builder gate over HTTP", () => {
       [
         handlers.DELETE(
           request("components/hero", "DELETE"),
-          ctx(["components", "hero"])
+          ctx(["field-groups", "hero"])
         ),
-        "DELETE /components/hero",
+        "DELETE /field-groups/hero",
       ],
       [
         handlers.POST(
