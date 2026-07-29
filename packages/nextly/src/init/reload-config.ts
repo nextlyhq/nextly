@@ -574,7 +574,19 @@ async function ensureLocalizedCompanionsForReload(
     singles?: unknown[];
     fieldGroups?: unknown[];
     localization?: { defaultLocale?: string };
-  }
+  },
+  // `<kind>:<slug>` for every entity whose schema change was classified unsafe (or whose diff
+  // threw) this cycle, so it was NOT applied. Those must be skipped: creating a companion for
+  // a transition that has not happened is worse than leaving it absent. The Schema Builder
+  // later applies the real transition, and `buildCompanionTransitionStatements` decides
+  // whether to SEED the existing main-table values by looking at whether the companion is
+  // already there. Finding one — empty, created from a config that was never applied — sends
+  // it down the plain reconcile branch instead, and the default-locale content is lost.
+  //
+  // Deliberately per entity rather than a single "something was deferred" flag: entities whose
+  // schema IS in step still need provisioning on this pass, and skipping them wholesale
+  // reintroduces the missing-companion window this function exists to close.
+  deferred: ReadonlySet<string> = new Set()
 ): Promise<void> {
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
   if (process.env.NODE_ENV === "production") return;
@@ -595,24 +607,30 @@ async function ensureLocalizedCompanionsForReload(
     status?: boolean;
     fields?: { name: string; type: string; localized?: boolean }[];
   };
-  const groups: [Localizable[], (e: Localizable) => string][] = [
+  // The kind prefixes the `deferred` keys, because a collection and a single may share a slug
+  // and only one of them may have been deferred.
+  const groups: [string, Localizable[], (e: Localizable) => string][] = [
     [
+      "collection",
       (config.collections ?? []) as Localizable[],
       e => resolveCollectionTableName(e.slug!, e.dbName),
     ],
     [
+      "single",
       (config.singles ?? []) as Localizable[],
       e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
     ],
     [
+      "fieldGroup",
       (config.fieldGroups ?? []) as Localizable[],
       e => resolveComponentTableName(e.slug!),
     ],
   ];
 
-  for (const [entities, resolveTableName] of groups) {
+  for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {
       if (!entity.slug || entity.localized !== true) continue;
+      if (deferred.has(`${kind}:${entity.slug}`)) continue;
       await ensureCompanionTable(
         adapter,
         {
@@ -1032,6 +1050,10 @@ async function runReload(opts?: {
   // metadata-only sync below must be skipped rather than persist unmigrated
   // schema metadata; it retries on the next clean reload or restart.
   let deferredSchemaChange = false;
+  // Which entities were deferred, as `<kind>:<slug>`. The flag above answers "may the
+  // metadata-only sync run at all"; this answers "may THIS entity be provisioned", which is a
+  // per-entity question — see `ensureLocalizedCompanionsForReload`.
+  const deferredEntities = new Set<string>();
 
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
@@ -1076,6 +1098,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`collection:${target.slug}`);
         desiredCollections[target.slug] = entry;
         continue;
       }
@@ -1087,6 +1110,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`collection:${target.slug}`);
     }
   }
 
@@ -1128,6 +1152,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`single:${target.slug}`);
         desiredSingles[target.slug] = entry;
         continue;
       }
@@ -1139,6 +1164,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`single:${target.slug}`);
     }
   }
 
@@ -1176,6 +1202,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`fieldGroup:${target.slug}`);
         desiredComponents[target.slug] = entry;
         continue;
       }
@@ -1187,6 +1214,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping component '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`fieldGroup:${target.slug}`);
     }
   }
 
@@ -1200,7 +1228,11 @@ async function runReload(opts?: {
   // reload would return before ever reaching the call after the apply, which is exactly
   // the missing-companion state this repairs. Idempotent, so running it here and after
   // a successful apply costs one existence probe per localized entity.
-  await ensureLocalizedCompanionsForReload(adapter, newConfig);
+  await ensureLocalizedCompanionsForReload(
+    adapter,
+    newConfig,
+    deferredEntities
+  );
 
   if (!hasChanges) {
     // Only sync when the schema is genuinely in step (every entity had a zero-op
@@ -1388,7 +1420,11 @@ async function runReload(opts?: {
     // database had no such table — non-default writes were then refused until a
     // restart. Runs after the apply because the companion carries a foreign key to
     // its main table, which a brand-new entity does not have before it.
-    await ensureLocalizedCompanionsForReload(adapter, newConfig);
+    await ensureLocalizedCompanionsForReload(
+      adapter,
+      newConfig,
+      deferredEntities
+    );
 
     // Publish each scope's recording policy only AFTER its field-tree metadata
     // sync succeeds (see the assignment after the syncs below): the DDL applied,

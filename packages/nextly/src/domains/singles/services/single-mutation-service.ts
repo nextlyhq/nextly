@@ -930,11 +930,12 @@ export class SingleMutationService extends BaseService {
       // keeps the refusal exactly as raised: errors leaving a transaction callback
       // pass through the adapter's error classification, which rewraps anything that
       // is not already a `DatabaseError`.
-      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-        fields: fieldConfigs,
-        data: componentFieldData,
-        locale: options.locale,
-      });
+      const fieldGroupPresence =
+        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+          fields: fieldConfigs,
+          data: componentFieldData,
+          locale: options.locale,
+        })) ?? new Map<string, boolean>();
 
       try {
         // Retry the whole update+capture transaction on a version_no allocation
@@ -1569,7 +1570,8 @@ export class SingleMutationService extends BaseService {
                   fields: fieldConfigs,
                   data: attemptComponentData,
                   locale: options.locale,
-                }
+                },
+                fieldGroupPresence
               );
             }
 

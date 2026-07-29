@@ -2265,11 +2265,12 @@ export class CollectionMutationService extends BaseService {
       // connection and deadlock a single-connection pool, and a NextlyError raised in
       // the callback is reclassified by the adapter into an opaque database error —
       // so the actionable 409 would never reach the caller.
-      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-        fields: fields as unknown as FieldConfig[],
-        data: componentFieldData,
-        locale: params.locale,
-      });
+      const fieldGroupPresence =
+        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+          fields: fields as unknown as FieldConfig[],
+          data: componentFieldData,
+          locale: params.locale,
+        })) ?? new Map<string, boolean>();
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -2312,15 +2313,19 @@ export class CollectionMutationService extends BaseService {
           this.fieldGroupDataService &&
           Object.keys(componentFieldData).length > 0
         ) {
-          await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
-            parentId: entry.id as string,
-            parentTable: tableName,
-            fields: fields as unknown as FieldConfig[],
-            data: componentFieldData,
-            // i18n: thread the write locale so an embedded localized component writes
-            // translatable fields to its companion within the same transaction.
-            locale: params.locale,
-          });
+          await this.fieldGroupDataService.saveComponentDataInTransaction(
+            tx,
+            {
+              parentId: entry.id as string,
+              parentTable: tableName,
+              fields: fields as unknown as FieldConfig[],
+              data: componentFieldData,
+              // i18n: thread the write locale so an embedded localized component writes
+              // translatable fields to its companion within the same transaction.
+              locale: params.locale,
+            },
+            fieldGroupPresence
+          );
         }
 
         // Write many-to-many junction rows inside the transaction so a junction
@@ -4277,11 +4282,12 @@ export class CollectionMutationService extends BaseService {
       // connection and deadlock a single-connection pool, and a NextlyError raised in
       // the callback is reclassified by the adapter into an opaque database error —
       // so the actionable 409 would never reach the caller.
-      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-        fields: fields as unknown as FieldConfig[],
-        data: componentFieldData,
-        locale: params.locale,
-      });
+      const fieldGroupPresence =
+        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+          fields: fields as unknown as FieldConfig[],
+          data: componentFieldData,
+          locale: params.locale,
+        })) ?? new Map<string, boolean>();
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;
@@ -4605,7 +4611,8 @@ export class CollectionMutationService extends BaseService {
                 // i18n: thread the write locale so an embedded localized component writes
                 // translatable fields to its companion within the same transaction.
                 locale: params.locale,
-              }
+              },
+              fieldGroupPresence
             );
           }
 

@@ -803,7 +803,7 @@ export async function ensureLocalizedCompanions(
   // write from destroying content until it runs.
   if (process.env.NODE_ENV === "production") return;
   const dialect = adapter.getCapabilities().dialect;
-  const { ensureCompanionTable } = await import(
+  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
     "../../domains/i18n/runtime/companion-io"
   );
   // Each entity kind resolves its physical table differently, and a custom
@@ -869,6 +869,31 @@ export async function ensureLocalizedCompanions(
           logger.error(
             `Could not prepare the translations table for "${entity.slug}" (${tableName}_locales). ` +
               `Writes in a non-default locale will be refused until it exists: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+          failures.push(entity.slug!);
+        }
+      );
+      // Creating the companion is not enough on its own. `ensureCompanionTable` returns
+      // immediately once the table is there, so marking a FURTHER field localized on an
+      // entity that is already localized leaves the companion a column short — while the
+      // main-table sync above has already added that column to `comp_*` / `dc_*`. The write
+      // then splits the value into a companion column that does not exist. Additive only,
+      // and confined to `db:sync`: the reload path stays creation-only, because a running
+      // deployment must not alter its schema off a config edit.
+      await reconcileCompanionColumns(
+        adapter as unknown as DrizzleAdapter,
+        {
+          slug: entity.slug,
+          tableName,
+          fields: entity.fields ?? [],
+          dialect,
+          status: entity.status === true,
+        },
+        error => {
+          logger.error(
+            `Could not update the translations table for "${entity.slug}" (${tableName}_locales). ` +
+              `Newly translatable fields will fail to save until it matches: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
           failures.push(entity.slug!);

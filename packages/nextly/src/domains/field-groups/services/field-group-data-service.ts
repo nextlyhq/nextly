@@ -11,6 +11,7 @@ import {
   FieldGroupMutationService,
   type SaveComponentDataParams,
   type DeleteComponentDataParams,
+  type FieldGroupCompanionPresence,
 } from "./field-group-mutation-service";
 import {
   FieldGroupQueryService,
@@ -126,20 +127,31 @@ export class FieldGroupDataService {
 
   saveComponentDataInTransaction(
     tx: TransactionContext,
-    params: SaveComponentDataParams
+    params: SaveComponentDataParams,
+    presence: FieldGroupCompanionPresence
   ): Promise<void> {
-    return this.mutationService.saveComponentDataInTransaction(tx, params);
+    return this.mutationService.saveComponentDataInTransaction(
+      tx,
+      params,
+      presence
+    );
   }
 
   /**
    * Verify every localized field group in a payload can be written, BEFORE the caller opens its
-   * transaction. See {@link FieldGroupMutationService.assertLocalizedFieldGroupsWritable} — this
-   * cannot run inside the transaction without risking pool starvation, and answering it first
-   * keeps a refusal exactly as raised.
+   * transaction, and return what it found out. See
+   * {@link FieldGroupMutationService.assertLocalizedFieldGroupsWritable} — this cannot run inside
+   * the transaction without risking pool starvation, and answering it first keeps a refusal
+   * exactly as raised.
+   *
+   * The returned map is not optional bookkeeping: it must be handed to
+   * `saveComponentDataInTransaction`, because that is the only way the in-transaction write can
+   * learn whether a companion exists without probing for it, which would abort the transaction
+   * on PostgreSQL when it does not.
    */
   assertLocalizedFieldGroupsWritable(
     params: Pick<SaveComponentDataParams, "fields" | "data" | "locale">
-  ): Promise<void> {
+  ): Promise<FieldGroupCompanionPresence> {
     return this.mutationService.assertLocalizedFieldGroupsWritable(params);
   }
 

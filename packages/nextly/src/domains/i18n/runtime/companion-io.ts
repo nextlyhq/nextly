@@ -209,6 +209,84 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
  * raised: errors leaving a transaction callback pass through the adapter's error classification,
  * which rewraps anything that is not already a `DatabaseError`.
  */
+/**
+ * Add localized columns an EXISTING companion is missing. No-op when the companion is absent —
+ * creating it is {@link ensureCompanionTable}'s job.
+ *
+ * Needed because a companion is created once and then never revisited, while the entity's field
+ * list keeps moving. Marking a further field localized on an already-localized entity leaves the
+ * companion a column short, and the write splits that value straight into a column that is not
+ * there.
+ *
+ * **Additive only, deliberately.** A field that stops being localized leaves its companion column
+ * in place rather than dropping it: this runs unattended, and `db:sync` persists registry metadata
+ * BEFORE its destructive prompt, so a drop here would execute even for an operator who then
+ * declined the change. An unused column is recoverable; a dropped one is not.
+ *
+ * Issues DDL, so it belongs to `db:sync` and never to boot — a running deployment must not alter
+ * its own schema because a config file changed.
+ */
+export async function reconcileCompanionColumns(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    fields: CompanionFieldLike[];
+    dialect: SupportedDialect;
+    status?: boolean;
+  },
+  onError?: (error: unknown) => void
+): Promise<void> {
+  const companionTableName = `${args.tableName}_locales`;
+  try {
+    if (!(await companionTableExists(adapter, companionTableName))) return;
+
+    const localizedNames = new Set(
+      resolveLocalizedFieldNames(args.fields, true)
+    );
+    const desired = args.fields.filter(f => localizedNames.has(f.name));
+    if (desired.length === 0) return;
+
+    const { introspectLiveSnapshot } = await import(
+      "../../schema/pipeline/diff/introspect-live"
+    );
+    const snapshot = await introspectLiveSnapshot(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      [companionTableName]
+    );
+    const present = new Set(
+      snapshot.tables
+        .find(t => t.name === companionTableName)
+        ?.columns.map(c => c.name) ?? []
+    );
+    // Nothing missing — the overwhelmingly common case, and worth leaving before the
+    // statement builder runs.
+    if (desired.every(f => present.has(toColumn(f.name)))) return;
+
+    // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
+    // emits is exactly the difference. `old` is a subset of `new` by construction here, which
+    // is what keeps the result additive.
+    const { buildCompanionReconcileStatements } = await import(
+      "../migration/reconcile-companion"
+    );
+    const statements = buildCompanionReconcileStatements({
+      slug: args.slug,
+      tableName: args.tableName,
+      oldLocalized: desired.filter(f => present.has(toColumn(f.name))),
+      newLocalized: desired,
+      dialect: args.dialect,
+      status: args.status === true,
+      companionExists: true,
+    });
+    for (const stmt of statements) {
+      await adapter.executeQuery(stmt);
+    }
+  } catch (error) {
+    onError?.(error);
+  }
+}
+
 export async function mainTableHasColumn(
   adapter: CompanionIntrospectAdapter,
   tableName: string,
