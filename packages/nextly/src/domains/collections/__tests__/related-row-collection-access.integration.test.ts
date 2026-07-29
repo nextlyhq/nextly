@@ -13,7 +13,7 @@
  * learns no more than a reference pointing at nothing would tell them.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -25,6 +25,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { CollectionAccessService } from "../services/collection-access-service";
 import type { CollectionRelationshipService } from "../services/collection-relationship-service";
 
 /**
@@ -428,5 +429,85 @@ describe("related-row collection access — owner-only targets (integration)", (
 
     expect(result.success).toBe(true);
     expect(JSON.stringify(result.data)).not.toContain("Owned note");
+  });
+});
+
+describe("related-row collection access — policy resolution (integration)", () => {
+  // The policy is a collection-wide fact, but resolving it costs a metadata
+  // read, and expansion fetches its references concurrently and recursively.
+  // `getOwnerConstraint` runs once per resolution and nowhere else, so counting
+  // it counts resolutions.
+  it("resolves a target's policy once across a nested expansion", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "orgs", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "title" }),
+            relationship({ name: "org", relationTo: "orgs" }),
+          ],
+        }),
+        defineCollection({
+          slug: "posts",
+          fields: [
+            text({ name: "title" }),
+            relationship({
+              name: "authors",
+              relationTo: "authors",
+              hasMany: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const org = await handler.createEntry(
+      { collectionName: "orgs", overrideAccess: true },
+      { title: "Acme" }
+    );
+    const orgId = (org.data as { id: string }).id;
+
+    // Several authors, all pointing at the SAME org: without a shared cache
+    // each of them resolves that org's policy on its own.
+    const authorIds: string[] = [];
+    for (const name of ["a", "b", "c", "d", "e"]) {
+      const author = await handler.createEntry(
+        { collectionName: "authors", overrideAccess: true },
+        { title: name, org: orgId }
+      );
+      authorIds.push((author.data as { id: string }).id);
+    }
+    const post = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "Post", authors: authorIds }
+    );
+
+    const spy = vi.spyOn(
+      CollectionAccessService.prototype,
+      "getOwnerConstraint"
+    );
+    try {
+      const result = await handler.getEntry({
+        collectionName: "posts",
+        entryId: (post.data as { id: string }).id,
+        depth: 2,
+        user: { id: "reader-1" },
+        routeAuthorized: true,
+      });
+      expect(result.success).toBe(true);
+
+      // The second hop ran, so the count below describes a real nested walk
+      // rather than an expansion that stopped at the first level.
+      expect(JSON.stringify(result.data)).toContain("Acme");
+
+      const orgResolutions = spy.mock.calls.filter(
+        call => call[0] === "orgs"
+      ).length;
+      expect(orgResolutions).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

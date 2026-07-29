@@ -86,7 +86,7 @@ interface RelatedRowAccess {
 }
 
 /** A target collection's read policy, as one expansion needs it. */
-interface TargetReadPolicy {
+export interface TargetReadPolicy {
   rules: CollectionAccessRules | undefined;
   ownerConstraint: { field: string; value: unknown } | null;
 }
@@ -135,6 +135,16 @@ export interface RelationshipExpansionOptions {
    * read paths that forward a real caller; see {@link RelatedRowAccess}.
    */
   enforceFieldAccess?: boolean;
+
+  /**
+   * Target read policies already resolved during this expansion.
+   *
+   * Carried by a nested hop so the whole expansion resolves each target
+   * collection's rules once. Not part of what a caller supplies.
+   *
+   * @internal
+   */
+  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
 
   /**
    * The caller's authenticated scope, when one applies.
@@ -1263,9 +1273,13 @@ export class CollectionRelationshipService extends BaseService {
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
       // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. Scoped to this call
-      // because a collection's rules can change between requests.
-      targetPolicies: new Map(),
+      // target's rules once rather than once per value. A nested hop inherits
+      // the map rather than starting its own: several children populating the
+      // same collection would otherwise each resolve its policy again, which
+      // is the repetition this cache exists to remove. Created fresh only for
+      // the outermost call, because a collection's rules can change between
+      // requests.
+      targetPolicies: options.targetPolicies ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -1909,9 +1923,13 @@ export class CollectionRelationshipService extends BaseService {
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
       // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. Scoped to this call
-      // because a collection's rules can change between requests.
-      targetPolicies: new Map(),
+      // target's rules once rather than once per value. A nested hop inherits
+      // the map rather than starting its own: several children populating the
+      // same collection would otherwise each resolve its policy again, which
+      // is the repetition this cache exists to remove. Created fresh only for
+      // the outermost call, because a collection's rules can change between
+      // requests.
+      targetPolicies: options.targetPolicies ?? new Map(),
     };
 
     // Clamp depth to valid range
