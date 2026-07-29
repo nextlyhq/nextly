@@ -185,6 +185,65 @@ describe("generateMigration", () => {
     expect(sql).toContain('ALTER TABLE "dc_posts" ADD COLUMN "excerpt"');
   });
 
+  it("renaming an indexed field: the new index is created after the rename", async () => {
+    // Accepting the rename collapses the (drop_column, add_column) pair, so
+    // the new column only comes into existence via RENAME COLUMN. An
+    // add_index left after the raw column ops would then run before that
+    // rename and reference a column the table does not have yet.
+    const before: MinimalConfigEntity = {
+      slug: "posts",
+      tableName: "dc_posts",
+      fields: [
+        { name: "description", type: "text", required: true },
+        { name: "heroImage", type: "text", index: true },
+      ],
+    };
+    const after: MinimalConfigEntity = {
+      slug: "posts",
+      tableName: "dc_posts",
+      fields: [
+        { name: "description", type: "text", required: true },
+        { name: "image", type: "text", index: true },
+      ],
+    };
+    const desired = buildDesiredSnapshotFromConfigForTest(
+      [before],
+      [],
+      [],
+      "postgresql"
+    );
+    await writeSnapshot(
+      join(migrationsDir, "meta"),
+      "20260101_000000_000_initial",
+      desired,
+      ""
+    );
+
+    const result = await generateMigration({
+      name: "rename_hero_image",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [after],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      autoAcceptRenames: true,
+      now: NOW,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.renamesAccepted).toBe(1);
+
+    const sql = await readFile(result!.sqlPath, "utf-8");
+    const up = sql.slice(sql.indexOf("-- UP"), sql.indexOf("-- DOWN"));
+    const renameAt = up.indexOf('RENAME COLUMN "hero_image" TO "image"');
+    const createIndexAt = up.indexOf(
+      'CREATE INDEX IF NOT EXISTS "idx_dc_posts_image"'
+    );
+    expect(renameAt).toBeGreaterThan(-1);
+    expect(createIndexAt).toBeGreaterThan(-1);
+    expect(renameAt).toBeLessThan(createIndexAt);
+  });
+
   it("removing an indexed field: UP drops the index before the column, DOWN re-adds in reverse", async () => {
     // SQLite refuses ALTER TABLE ... DROP COLUMN while an index still covers
     // the column, so the generated statement order is load-bearing, not

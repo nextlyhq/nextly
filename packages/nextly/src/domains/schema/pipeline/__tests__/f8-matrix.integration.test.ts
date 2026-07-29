@@ -279,6 +279,15 @@ describe("F8 matrix — SQLite — drop field", () => {
     // column, so the apply only succeeds if the pipeline pre-drops the
     // index before the column drop.
     const tableName = "dc_gallery";
+    // The LIVE table is spelled out rather than generated, matching the other
+    // fixtures in this file. On SQLite a managed table is created through
+    // drizzle-kit from generateRuntimeSchema, which declares no secondary
+    // indexes and its own column shape; the desired-side
+    // buildDesiredTableFromFields spec differs from it (it lists the system
+    // slug/created_at/created_by indexes), so generating the live table from
+    // that spec produces a table drizzle-kit then wants to DROP and recreate.
+    // What matters here is the one thing a Builder-made table really carries:
+    // the per-field index, which the index-restore step creates.
     sqlite.exec(`
       CREATE TABLE ${quoteIdent(tableName)} (
         "id" text PRIMARY KEY,

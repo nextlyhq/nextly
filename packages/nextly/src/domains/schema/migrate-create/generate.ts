@@ -666,6 +666,7 @@ function applyRenameDecisions(
   }
 
   // Append rename_column ops for each effective acceptance.
+  const renames: Operation[] = [];
   for (const d of effectiveAccepts) {
     const c = d.candidate;
     const renameOp: RenameColumnOp = {
@@ -676,10 +677,24 @@ function applyRenameDecisions(
       fromType: c.fromType,
       toType: c.toType,
     };
-    remaining.push(renameOp);
+    renames.push(renameOp);
   }
 
-  return remaining;
+  // The renames land ahead of any add_index, not at the very end. Collapsing a
+  // (drop_column, add_column) pair removes the statement that would have
+  // created the new column, so an index declared on it can only be created
+  // once the rename has produced that name — otherwise the generated UP reads
+  // `CREATE INDEX ... (image); RENAME COLUMN hero_image TO image` and fails on
+  // a column that does not exist yet. Everything else keeps its relative
+  // order, so index drops still precede the column work.
+  const beforeRenames: Operation[] = [];
+  const addIndexes: Operation[] = [];
+  for (const op of remaining) {
+    if (op.type === "add_index") addIndexes.push(op);
+    else beforeRenames.push(op);
+  }
+
+  return [...beforeRenames, ...renames, ...addIndexes];
 }
 
 /**
