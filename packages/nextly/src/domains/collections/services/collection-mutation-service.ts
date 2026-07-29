@@ -2495,7 +2495,18 @@ export class CollectionMutationService extends BaseService {
             entry,
             params.collectionName,
             fields,
-            { depth }
+            {
+              depth,
+              // Related rows carry the TARGET collection's own field rules, and
+              // the response redaction below runs against THIS collection's
+              // schema, so it cannot reach inside a populated row. A writer
+              // supplied a relationship id, not the related row's protected
+              // columns, so a mutation response is a read of that row and is
+              // judged the same way a GET would judge it.
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+            }
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
@@ -5015,7 +5026,18 @@ export class CollectionMutationService extends BaseService {
             updated,
             params.collectionName,
             fields,
-            { depth }
+            {
+              depth,
+              // Related rows carry the TARGET collection's own field rules, and
+              // the response redaction below runs against THIS collection's
+              // schema, so it cannot reach inside a populated row. A writer
+              // supplied a relationship id, not the related row's protected
+              // columns, so a mutation response is a read of that row and is
+              // judged the same way a GET would judge it.
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+            }
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
