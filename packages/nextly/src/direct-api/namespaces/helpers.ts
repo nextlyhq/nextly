@@ -12,8 +12,8 @@
 import { NextlyError } from "../../errors/nextly-error";
 import type { RequestContext } from "../../shared/types/index";
 import type {
-  ComponentDefinition,
   DirectAPIConfig,
+  FieldGroupDefinition,
   ListResult,
   Permission,
   Role,
@@ -269,9 +269,9 @@ export function mapPermission(perm: RawPermissionRecord): Permission {
 }
 
 /**
- * Shape of a raw component record as returned by the component registry service.
+ * Shape of a raw field group record as returned by the registry service.
  */
-export interface RawComponentRecord {
+export interface RawFieldGroupRecord {
   id: string;
   slug: string;
   label: string;
@@ -292,11 +292,11 @@ export interface RawComponentRecord {
 }
 
 /**
- * Normalize a raw component record into the public `ComponentDefinition` type.
+ * Normalize a raw field group record into the public `FieldGroupDefinition` type.
  */
-export function mapComponentRecord(
-  record: RawComponentRecord
-): ComponentDefinition {
+export function mapFieldGroupRecord(
+  record: RawFieldGroupRecord
+): FieldGroupDefinition {
   return {
     id: record.id,
     slug: record.slug,
@@ -307,14 +307,14 @@ export function mapComponentRecord(
       string,
       unknown
     >[],
-    admin: record.admin as ComponentDefinition["admin"],
+    admin: record.admin as FieldGroupDefinition["admin"],
     source: record.source as "code" | "ui",
     locked: record.locked,
     configPath: record.configPath ?? undefined,
     schemaHash: record.schemaHash,
     schemaVersion: record.schemaVersion,
     migrationStatus:
-      record.migrationStatus as ComponentDefinition["migrationStatus"],
+      record.migrationStatus as FieldGroupDefinition["migrationStatus"],
     lastMigrationId: record.lastMigrationId ?? undefined,
     createdBy: record.createdBy ?? undefined,
     createdAt: record.createdAt,

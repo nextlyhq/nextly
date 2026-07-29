@@ -72,8 +72,8 @@ export interface PluginMetadata {
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
   singles?: string[];
-  /** Slugs of contributed components, for the detail page's contributions view. */
-  components?: string[];
+  /** Slugs of contributed field groups, for the detail page's contributions view. */
+  fieldGroups?: string[];
   /** Declared custom permissions (identity + display fields only; enabled plugins). */
   permissions?: Array<{
     action: string;
