@@ -47,6 +47,12 @@ import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 
+import {
+  isPluginDataField,
+  pluginCodegenImports,
+  pluginTsType,
+} from "./plugin-codegen";
+
 // ============================================================
 // Types
 // ============================================================
@@ -255,6 +261,19 @@ export class TypeGenerator {
       lines.push("");
     }
 
+    // Whatever the plugin types present here need for the expressions they
+    // emit. Collected from the declared fields rather than from the registry,
+    // so a registered type nobody uses adds no import.
+    const pluginImports = pluginCodegenImports([
+      ...collections,
+      ...singles,
+      ...components,
+    ]);
+    if (pluginImports.length > 0) {
+      lines.push(...pluginImports);
+      lines.push("");
+    }
+
     this.assertNoInterfaceNameCollisions(collections, singles, components);
 
     // Generate interfaces for each component (before collections/singles since they may reference components)
@@ -369,7 +388,7 @@ export class TypeGenerator {
 
     // Generate field types
     for (const field of collection.fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,
@@ -445,7 +464,7 @@ export class TypeGenerator {
 
     // Generate field types
     for (const field of single.fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,
@@ -522,7 +541,7 @@ export class TypeGenerator {
 
     // Generate field types
     for (const field of component.fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,
@@ -713,9 +732,11 @@ export class TypeGenerator {
     else if (isFieldGroupField(field)) {
       tsType = this.buildComponentType(field, allComponents);
     }
-    // Unknown field type
+    // Anything the built-ins above did not claim. A plugin-contributed type may
+    // state its own rendering; asked once, because the callback is plugin code
+    // and nothing requires it to be pure.
     else {
-      tsType = "unknown";
+      tsType = pluginTsType(field) ?? "unknown";
     }
 
     return `  ${fieldName}${optional}: ${tsType};`;
@@ -774,7 +795,10 @@ export class TypeGenerator {
         break;
 
       default:
-        tsType = "string";
+        // A plugin-contributed type renders itself; `string` remains the
+        // fallback for a type nothing in the process knows about, which is what
+        // a UI-authored field of a since-removed plugin type is.
+        tsType = pluginTsType(field) ?? "string";
         break;
     }
 
@@ -1044,7 +1068,7 @@ ${properties}
     const lines: string[] = [];
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,

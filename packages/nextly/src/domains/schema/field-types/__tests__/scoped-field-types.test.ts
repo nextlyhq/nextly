@@ -21,13 +21,13 @@ import {
 const RATING: PluginFieldType = {
   type: "star-rating",
   storage: "number",
-  adminComponent: "StarRating",
+  component: "@acme/ratings/admin#StarRating",
 };
 
 const SWATCH: PluginFieldType = {
   type: "color-swatch",
   storage: "text",
-  adminComponent: "ColorSwatch",
+  component: "@acme/swatch/admin#ColorSwatch",
 };
 
 afterEach(() => {

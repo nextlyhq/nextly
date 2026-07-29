@@ -40,6 +40,8 @@ import {
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 
+import { isPluginDataField, pluginZodSchema } from "./plugin-codegen";
+
 /** What a blocks field accepts when it declares no kinds of its own. */
 const DEFAULT_BLOCKS_DOCUMENT_KIND = "page";
 
@@ -251,7 +253,7 @@ export class ZodGenerator {
 
     // Add field schemas
     for (const field of collection.fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldSchema = this.generateFieldSchema(field);
       if (fieldSchema) {
@@ -417,9 +419,13 @@ export class ZodGenerator {
     else if (isBlocksField(field)) {
       zodSchema = this.buildBlocksSchema(field);
     }
-    // Unknown field type
+    // A plugin-contributed type that states its own schema. Asked after the
+    // built-ins, so a plugin cannot change how a core type is generated, and a
+    // type that stays silent still yields no schema rather than a loose one.
     else {
-      return null;
+      const contributed = pluginZodSchema(field);
+      if (contributed === undefined) return null;
+      zodSchema = contributed;
     }
 
     // Apply modifiers
@@ -683,7 +689,7 @@ export class ZodGenerator {
     const fieldSchemas: string[] = [];
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       // Skip fields without names
       if (!("name" in field) || !field.name) continue;
@@ -733,7 +739,11 @@ export class ZodGenerator {
         // generated schema would strip the document from a group or row.
         zodSchema = this.buildBlocksSchema(field);
       } else {
-        continue;
+        // Same for a nested plugin type: skipping it would drop the value from
+        // the row's schema even though it is stored.
+        const contributed = pluginZodSchema(field);
+        if (contributed === undefined) continue;
+        zodSchema = contributed;
       }
 
       // Apply optional if not required

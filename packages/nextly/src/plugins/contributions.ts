@@ -250,6 +250,65 @@ export interface PluginFieldType {
    * learn its own index.
    */
   validateOptions?: (field: PluginFieldInstance) => PluginFieldValidationResult;
+
+  /**
+   * What `nextly build` emits for a field of this type.
+   *
+   * Without it a custom type is generated as its storage primitive's default —
+   * `string` for the TypeScript types, an unconstrained value for the Zod
+   * schemas — because the generators know the built-in types and nothing else.
+   * That is the difference between a type an app can consume and one it has to
+   * cast at every use, and it is the reason a structured type is worth
+   * contributing rather than storing as opaque JSON.
+   *
+   * Both callbacks receive the field as DECLARED, so a type whose options
+   * narrow what it stores can narrow what it generates: a field restricted to
+   * two kinds can emit a union of those two rather than the whole set.
+   *
+   * The strings are written verbatim into the generated file, which is source
+   * the app compiles. A malformed expression breaks that app's build rather
+   * than anything here, so a type is expected to emit something it has checked;
+   * the generators do not parse it. Keep the output deterministic — the file is
+   * committed, and a value that varies between runs shows up as a spurious
+   * diff.
+   */
+  codegen?: PluginFieldCodegen;
+}
+
+/** A type-only import a generated file needs for one field type's expressions. */
+export interface PluginFieldCodegenImport {
+  /** Names to import, e.g. `["BlockDocument"]`. */
+  names: readonly string[];
+  /**
+   * Module to import them from.
+   *
+   * Name a package the app already depends on. The generated file sits in the
+   * app, not in the plugin, so it resolves against the app's dependency tree —
+   * an import of a plugin's own transitive dependency may not resolve there.
+   */
+  from: string;
+}
+
+/** How a plugin field type is rendered by the code generators. */
+export interface PluginFieldCodegen {
+  /**
+   * Type-only imports both expressions may rely on. Emitted once per generated
+   * file when any field of this type is present, and merged with every other
+   * type's, so two types importing the same name from the same module produce
+   * one import.
+   */
+  imports?: readonly PluginFieldCodegenImport[];
+  /**
+   * The TypeScript type of a stored value, e.g. `"BlockDocument"` or
+   * `'"draft" | "live"'`. Omitted falls back to the storage primitive's type.
+   */
+  tsType?: (field: PluginFieldInstance) => string;
+  /**
+   * A Zod expression validating a stored value, e.g.
+   * `"z.object({ kind: z.enum([\"page\"]) })"`. Omitted falls back to the
+   * storage primitive's schema.
+   */
+  zodSchema?: (field: PluginFieldInstance) => string;
 }
 
 /** What a plugin field type's `validate` is given. */
