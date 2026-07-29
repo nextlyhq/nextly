@@ -544,6 +544,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
 
+      // The schema preview/apply handlers validate; this create path persists
+      // and runs DDL without them, so a declaration the Builder endpoints
+      // refuse could be stored and then refused by the next boot.
+      assertValidFieldsPayload(b.fields);
+
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry
       // and DDL so every call site writes and reads the same physical table.

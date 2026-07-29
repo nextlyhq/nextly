@@ -8,7 +8,6 @@
  * @packageDocumentation
  */
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
 import type { FieldConfig } from "../../collections/fields/types";
 import { assertValidFieldGroupConfig } from "../../components/config/validate-field-group";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
@@ -225,11 +224,20 @@ export function createFieldGroupsNamespace(
       }
 
       if (args.data.fields !== undefined) {
-        // The create path validates through assertValidFieldGroupConfig; an
-        // update replaced the stored fields without any equivalent check, so a
-        // declaration the Builder endpoints refuse was persistable here.
-        assertValidFieldsPayload(args.data.fields);
         const fieldsTyped = args.data.fields as unknown as FieldConfig[];
+        // The same validator `create` uses, so a field group can always submit
+        // its own unchanged fields back. The manifest schema is stricter in
+        // ways that are legal here — a camelCase field name, an empty nested
+        // group mid-scaffold — so validating an update against it would make
+        // some groups creatable and then unupdatable.
+        assertValidFieldGroupConfig({
+          slug: args.slug,
+          label:
+            typeof args.data.label === "string"
+              ? { singular: args.data.label }
+              : { singular: args.slug },
+          fields: fieldsTyped,
+        });
         updateData.fields = fieldsTyped;
         const { calculateSchemaHash } = await import(
           "../../domains/schema/services/schema-hash"

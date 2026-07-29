@@ -261,22 +261,6 @@ export async function runMigrateCreate(
     configResult.deferredExtends ?? []
   );
 
-  // After the deferred extends land, because a field extended onto a
-  // Builder-made entity is only present from here on. A migration is the one
-  // artifact that outlives the process that wrote it: emitting DDL for a
-  // declaration the next boot refuses would produce a deployment that
-  // materializes the schema and then cannot start on it.
-  assertPluginFieldDeclarations({
-    collections: configResult.config.collections,
-    singles: configResult.config.singles,
-    fieldGroups: configResult.config.fieldGroups,
-  });
-  assertPluginFieldDeclarations({
-    collections: manifest.collections,
-    singles: manifest.singles,
-    fieldGroups: manifest.components,
-  });
-
   const merged = mergeUiEntities({
     codeCollections,
     codeSingles,
@@ -289,6 +273,19 @@ export async function runMigrateCreate(
     );
   }
   const { collections, singles, components } = merged;
+
+  // Checked on the MERGED set, not on either input. A migration is the one
+  // artifact that outlives the process that wrote it, so a declaration its own
+  // field type rejects would become a deployment that materializes the schema
+  // and then cannot boot on it. Post-merge because a Builder entity shadowed by
+  // a code-first one of the same slug contributes nothing to this migration —
+  // failing on a definition that was just discarded would demand a cleanup that
+  // changes none of the DDL below. Deferred extends are already folded in.
+  assertPluginFieldDeclarations({
+    collections,
+    singles,
+    fieldGroups: components,
+  });
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
   // survived the merge (code-first wins → shadowed UI slugs are skipped).

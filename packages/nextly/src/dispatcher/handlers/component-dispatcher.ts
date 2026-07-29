@@ -310,6 +310,13 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         throw new Error("Component slug and fields are required");
       }
 
+      // The preview/apply handlers below already validate; these direct
+      // create/update handlers persist and run DDL without going through them,
+      // so an authenticated caller could store a declaration the Builder
+      // endpoints refuse — and the next boot would then reject the stored
+      // entity it has to load.
+      assertValidFieldsPayload(b.fields);
+
       const isLocalized = b.localized === true;
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical name derivation, shared with the registry sync and
@@ -476,6 +483,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         b?.localized !== undefined ? b.localized === true : wasLocalized;
 
       if (b?.fields) {
+        assertValidFieldsPayload(b.fields);
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
       }

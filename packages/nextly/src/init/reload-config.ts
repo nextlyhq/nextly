@@ -71,6 +71,7 @@ import {
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
+import type { PluginFieldType } from "../plugins/contributions";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import type { VersionsConfig } from "../schemas/versions/types";
@@ -577,10 +578,27 @@ export async function reloadNextlyConfig(opts?: {
         webhookAuditEnabled?: boolean;
       }
     | undefined;
+  let previousFieldTypes: PluginFieldType[] | undefined;
+  let restoreFieldTypes: (() => void) | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
       "../cli/utils/config-loader"
     );
+    const { allFieldTypes, clearFieldTypes, registerFieldType } = await import(
+      "../domains/schema/field-types/field-type-registry"
+    );
+    // `loadConfig` clears and repopulates the process-global field-type
+    // registry, so a reload that is then rejected would leave the new
+    // definitions installed under the retained config — writes would run the
+    // refused reload's `validate` and storage mapping until the next good one.
+    // The previous set is captured here and put back if anything below fails.
+    previousFieldTypes = allFieldTypes();
+    restoreFieldTypes = () => {
+      clearFieldTypes();
+      for (const fieldType of previousFieldTypes ?? []) {
+        registerFieldType(fieldType);
+      }
+    };
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (
@@ -608,6 +626,10 @@ export async function reloadNextlyConfig(opts?: {
       fieldGroups: newConfig?.fieldGroups,
     });
   } catch (err) {
+    // The registry was rebuilt from the config that just failed; put the
+    // working set back so the retained config keeps the behavior it was
+    // validated with.
+    restoreFieldTypes?.();
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to
     // load Nextly configuration."). Surface BOTH the public message
