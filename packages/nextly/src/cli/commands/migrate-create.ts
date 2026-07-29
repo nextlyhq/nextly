@@ -286,9 +286,18 @@ export async function runMigrateCreate(
   // A Builder entity shadowed by a code-first one of the same slug contributes
   // nothing to this migration, so it is skipped rather than failed on — a
   // cleanup that changes no DDL is not worth blocking on.
-  const shadowed = new Set(merged.droppedUiSlugs);
-  const surviving = <T extends { slug: string }>(list: readonly T[]): T[] =>
-    list.filter(e => !shadowed.has(e.slug));
+  // Shadowing is per KIND: the manifest allows the same slug on a collection, a
+  // single and a field group, and the merge resolves each kind separately. A
+  // single set of dropped slugs would filter out an unshadowed single named
+  // `home` because a collection of that name was shadowed, and it would then
+  // reach the migration unchecked.
+  const survivingOf = <T extends { slug: string }>(
+    list: readonly T[],
+    codeFirst: ReadonlyArray<{ slug: string }>
+  ): T[] => {
+    const shadowed = new Set(codeFirst.map(e => e.slug));
+    return list.filter(e => !shadowed.has(e.slug));
+  };
 
   assertPluginFieldDeclarations({
     collections: configResult.config.collections,
@@ -296,9 +305,15 @@ export async function runMigrateCreate(
     fieldGroups: configResult.config.fieldGroups,
   });
   assertPluginFieldDeclarations({
-    collections: surviving(manifest.collections),
-    singles: surviving(manifest.singles),
-    fieldGroups: surviving(manifest.components),
+    collections: survivingOf(
+      manifest.collections,
+      configResult.config.collections
+    ),
+    singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
+    fieldGroups: survivingOf(
+      manifest.components,
+      configResult.config.fieldGroups ?? []
+    ),
   });
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that

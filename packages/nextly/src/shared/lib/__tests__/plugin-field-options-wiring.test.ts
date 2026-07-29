@@ -246,6 +246,41 @@ describe("declaration checks reach every authoring path", () => {
     });
   });
 
+  it("keeps a plugin option nested under a key the schema also declares", () => {
+    registerDocument();
+
+    const next = mutateManifest(
+      {
+        $schema: "s",
+        version: 1,
+        collections: [],
+        singles: [],
+        components: [],
+      },
+      {
+        type: "upsert",
+        kind: "collections",
+        entity: {
+          slug: "posts",
+          label: { singular: "Post", plural: "Posts" },
+          // `admin` survives the parse as a key while its plugin-owned member
+          // is stripped, so a top-level presence check would restore nothing.
+          fields: [
+            {
+              name: "body",
+              type: "document",
+              admin: { width: "50%", toolbar: "compact" },
+            },
+          ],
+        },
+      }
+    );
+
+    expect(next.collections[0]?.fields[0]?.admin).toMatchObject({
+      toolbar: "compact",
+    });
+  });
+
   it("still drops an undeclared key on a built-in field", () => {
     const next = mutateManifest(
       {

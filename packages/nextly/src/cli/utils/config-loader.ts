@@ -344,6 +344,13 @@ async function loadConfigInternal(
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
     const plugins = orderConfigPlugins(config.plugins ?? []);
+
+    // Cleared on EVERY load, not only when plugins are present. A reload that
+    // removes the last plugin would otherwise leave its types in the
+    // process-global registry, so its `validateOptions` would keep running and
+    // later Builder saves would keep treating the type as registered.
+    clearFieldTypes();
+
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let transformedConfig: any = { ...config, plugins };
@@ -386,7 +393,6 @@ async function loadConfigInternal(
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
-      clearFieldTypes();
       for (const fieldTypePlugin of plugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
           registerFieldType(

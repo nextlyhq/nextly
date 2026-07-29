@@ -17,6 +17,30 @@
 import type { UiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import { getFieldType } from "../field-types/field-type-registry";
 
+/**
+ * Copy back every key the parse dropped, at any depth.
+ *
+ * Shallow would not be enough: a plugin option that reuses a core key survives
+ * as a key while losing its own members. `admin: { width, toolbar }` parses with
+ * `admin` retained and `toolbar` stripped, so a top-level presence check finds
+ * `admin` there and restores nothing.
+ *
+ * Only fills gaps — a value the parse kept is the validated one and wins.
+ */
+function mergeMissing(
+  parsed: Record<string, unknown>,
+  original: Record<string, unknown>
+): void {
+  for (const [key, value] of Object.entries(original)) {
+    if (!(key in parsed)) {
+      parsed[key] = value;
+      continue;
+    }
+    const kept = parsed[key];
+    if (isRecord(kept) && isRecord(value)) mergeMissing(kept, value);
+  }
+}
+
 /** Whether a value is a `{}` literal, as opposed to an array or null. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -51,9 +75,7 @@ export function restorePluginFieldOptions(
         typeof parsedField.type === "string" &&
         getFieldType(parsedField.type)
       ) {
-        for (const [key, value] of Object.entries(original)) {
-          if (!(key in parsedField)) parsedField[key] = value;
-        }
+        mergeMissing(parsedField, original);
       }
       if (Array.isArray(parsedField.fields)) {
         restoreFields(parsedField.fields, original.fields);

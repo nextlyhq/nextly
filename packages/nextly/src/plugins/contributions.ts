@@ -235,6 +235,14 @@ export interface PluginFieldType {
    * canonical member is used and the message carries the detail. Throwing is
    * treated as a refusal.
    *
+   * One constraint on the options themselves: an option key must not collide
+   * with a key the field schema already declares (`options`, `fields`, `admin`,
+   * `label`, and the rest of the built-in field surface). The manifest applies
+   * the built-in shape to every field regardless of type, so a colliding key is
+   * judged against the core meaning — `options` as a select's choice array, for
+   * instance — and is rejected before this ever runs. Namespace anything that
+   * might clash.
+   *
    * Paths here are RELATIVE, where `validate`'s are absolute. The difference is
    * deliberate: a value validator may address a position deep inside a stored
    * document and is told where the field sits so it can build that, while this

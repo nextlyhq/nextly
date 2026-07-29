@@ -271,6 +271,13 @@ is the submitted payload, not the parsed copy: the manifest schema drops keys it
 does not declare, while the write persists the original, so your options are
 present in what gets stored and absent from what was parsed.
 
+**Naming your options.** An option key must not collide with one the field
+schema already declares — `options`, `fields`, `admin`, `label` and the rest of
+the built-in field surface. The manifest applies the built-in shape to every
+field whatever its type, so a colliding key is judged against the core meaning
+(`options` as a select's choice array) and rejected before your check runs.
+Namespace anything that might clash, e.g. `policy` rather than `options`.
+
 Fields nested in a `repeater` or `group` are covered. A type offered only on the
 `users`, `forms`, or `blocks` surface is **not**: those surfaces have their own
 config validators, which do not consult this registry.
