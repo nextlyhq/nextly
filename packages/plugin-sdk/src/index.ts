@@ -41,6 +41,8 @@ export type {
   PluginFieldInstance,
   PluginFieldIssue,
   PluginFieldValidationResult,
+  PluginFieldCodegen,
+  PluginFieldCodegenImport,
   ScheduledTask,
   PermissionSlug,
   ServiceOpts,
@@ -56,6 +58,20 @@ export type {
  */
 export { text, textarea, checkbox, upload, group } from "nextly";
 export type { FieldConfig } from "nextly";
+
+/**
+ * Validating values against field declarations. A plugin storing structured
+ * content of its own — block props, form submissions — applies the same rules a
+ * write does instead of reimplementing `required`, the per-type checks and
+ * every plugin field type's own `validate`.
+ * @public
+ */
+export { validateFieldValues } from "nextly";
+export type {
+  ValidateFieldValuesOptions,
+  ValidatableField,
+  ValidationIssue,
+} from "nextly";
 
 /**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich

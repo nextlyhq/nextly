@@ -357,6 +357,15 @@ export type {
 } from "./services/shared";
 export { SYSTEM_CONTEXT, consoleLogger } from "./services/shared";
 
+// Validating loose values against field declarations, for plugins that store
+// structured content of their own and must apply the same rules a write does.
+export {
+  validateFieldValues,
+  type ValidateFieldValuesOptions,
+  type ValidatableField,
+  type ValidationIssue,
+} from "./plugins/validate-field-values";
+
 // Plugin System - Types and helpers for creating plugins
 export {
   AdminPlacement,
@@ -377,6 +386,8 @@ export {
   type PluginFieldInstance,
   type PluginFieldIssue,
   type PluginFieldValidationResult,
+  type PluginFieldCodegen,
+  type PluginFieldCodegenImport,
   type FieldSurface,
   type ScheduledTask,
   type PermissionSlug,
