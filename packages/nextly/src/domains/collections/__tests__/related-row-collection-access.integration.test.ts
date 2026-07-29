@@ -435,8 +435,8 @@ describe("related-row collection access — owner-only targets (integration)", (
 describe("related-row collection access — policy resolution (integration)", () => {
   // The policy is a collection-wide fact, but resolving it costs a metadata
   // read, and expansion fetches its references concurrently and recursively.
-  // `getOwnerConstraint` runs once per resolution and nowhere else, so counting
-  // it counts resolutions.
+  // A policy is a collection-wide fact, but resolving it costs a metadata read,
+  // and expansion fetches its references concurrently and recursively.
   it("resolves a target's policy once across a nested expansion", async () => {
     current = await createTestNextly({
       collections: [
@@ -484,9 +484,21 @@ describe("related-row collection access — policy resolution (integration)", ()
       { title: "Post", authors: authorIds }
     );
 
+    // The org carries a stored rule, so resolving its policy is unambiguous
+    // rather than depending on how a rule-less collection short-circuits.
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: { read: { type: "custom", functionPath: ID_RULE_PATH } },
+      },
+      { and: [{ column: "slug", op: "=", value: "orgs" }] }
+    );
+
+    // Unique to policy resolution: the row fetches and the redaction pass read
+    // collection metadata too, so counting that would count them as well.
     const spy = vi.spyOn(
       CollectionAccessService.prototype,
-      "getOwnerConstraint"
+      "getAccessQueryConstraint"
     );
     try {
       const result = await handler.getEntry({

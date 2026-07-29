@@ -97,7 +97,6 @@ interface RelatedRowAccess {
 /** A target collection's read policy, as one expansion needs it. */
 export interface TargetReadPolicy {
   rules: CollectionAccessRules | undefined;
-  ownerConstraint: { field: string; value: unknown } | null;
   /**
    * The predicate a stored rule answered with, when it answered with one
    * rather than a verdict. Applied to the target table rather than compared in
@@ -1044,17 +1043,6 @@ export class CollectionRelationshipService extends BaseService {
         rules: accessService.getAccessRules(
           collection as Record<string, unknown>
         ),
-        // Owner-only reads answer with a predicate rather than a verdict, so
-        // the owner column and the caller's id are what decide. Resolved
-        // through the helper the direct read path uses, so both compare the
-        // same column.
-        ownerConstraint: await accessService.getOwnerConstraint(
-          targetCollection,
-          "read",
-          access.user as UserContext | undefined,
-          false,
-          access.authenticatedScope
-        ),
         queryConstraint: await accessService.getAccessQueryConstraint(
           targetCollection,
           access.user as UserContext | undefined,
@@ -1139,19 +1127,21 @@ export class CollectionRelationshipService extends BaseService {
     }
   }
 
-  /** Whether one fetched row survives the target collection's read policy. */
+  /**
+   * Whether one fetched row survives the target collection's read policy.
+   *
+   * Only verdicts are decided here. An owner-only rule answers a read with a
+   * predicate, and it travels the same route every other predicate does — the
+   * database applies it — so there is no comparison in this process for any
+   * rule shape, and nothing that could read an operator differently from the
+   * query the direct read compiles.
+   */
   private async rowPassesTargetPolicy(
     row: Record<string, unknown>,
     policy: TargetReadPolicy,
     accessService: CollectionAccessService,
     user: UserContext | undefined
   ): Promise<boolean> {
-    if (policy.ownerConstraint) {
-      // An exact comparison against the same column the direct read filters on,
-      // so no predicate is being re-interpreted here.
-      return row[policy.ownerConstraint.field] === policy.ownerConstraint.value;
-    }
-
     const result = await this.accessControl.evaluateAccess(
       policy.rules,
       "read",
