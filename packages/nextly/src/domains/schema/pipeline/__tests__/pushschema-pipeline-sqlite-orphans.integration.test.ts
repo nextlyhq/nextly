@@ -23,6 +23,8 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../../database/index";
+import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { buildCompanionReconcileStatements } from "../../../i18n/migration/reconcile-companion";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
 import { freshPushSchema } from "../fresh-push";
@@ -43,6 +45,18 @@ describe("PushSchemaPipeline — SQLite applies with orphan live tables", () => 
   let sqlite: Database.Database;
   let db: ReturnType<typeof drizzle>;
 
+  /** Run production-generated migration SQL (breakpoint-separated). */
+  function execMigrationSql(sql: string): void {
+    for (const statement of sql.split("--> statement-breakpoint")) {
+      const clean = statement
+        .split("\n")
+        .filter(line => !line.trim().startsWith("--"))
+        .join("\n")
+        .trim();
+      if (clean) sqlite.exec(clean);
+    }
+  }
+
   beforeAll(async () => {
     sqlite = new Database(":memory:");
     db = drizzle({ client: sqlite });
@@ -53,15 +67,35 @@ describe("PushSchemaPipeline — SQLite applies with orphan live tables", () => 
     // "created" set and change what this file is measuring.
     await freshPushSchema("sqlite", db, getDialectTables("sqlite"));
 
-    // Live tables OUTSIDE any desired schema this file applies:
-    // a localized companion (pipeline-excluded by design) and a
-    // UI-created entity's main table (never part of a code-first apply).
-    sqlite.exec(
-      `CREATE TABLE "dc_${P}_other_locales" ("_parent" text NOT NULL, "_locale" text NOT NULL, "heading" text, PRIMARY KEY ("_parent", "_locale"))`
+    // Live tables OUTSIDE any desired schema this file applies: a localized
+    // companion (pipeline-excluded by design) and a UI-created entity's main
+    // table (never part of a code-first apply). Both come from the SAME
+    // production generators the real create paths use, so the fixtures track
+    // whatever those paths produce.
+    // Explicit dialect: the default constructor derives it from env, which
+    // this bare-pipeline test intentionally leaves unset.
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      "sqlite"
     );
-    sqlite.exec(
-      `CREATE TABLE "dc_${P}_ui_made" ("id" text PRIMARY KEY NOT NULL, "title" text, "note" text)`
+    execMigrationSql(
+      schemaService.generateMigrationSQL(
+        `dc_${P}_ui_made`,
+        [{ name: "note", type: "text" }],
+        { localized: false }
+      )
     );
+    for (const stmt of buildCompanionReconcileStatements({
+      slug: `${P}_other`,
+      tableName: `dc_${P}_other`,
+      oldLocalized: [],
+      newLocalized: [{ name: "heading", type: "text" }],
+      dialect: "sqlite",
+      status: false,
+      companionExists: false,
+    })) {
+      sqlite.exec(stmt);
+    }
   });
 
   afterAll(() => {
@@ -116,18 +150,19 @@ describe("PushSchemaPipeline — SQLite applies with orphan live tables", () => 
 
   it("mixed apply (new table + column-type rebuild) pre-creates then lets the kit finish", async () => {
     // A managed table with drift that forces the drizzle-kit path: `views`
-    // is INTEGER live but the desired field type maps to text, and SQLite
-    // implements that as a whole-table rebuild the fast path cannot emit.
-    sqlite.exec(
-      `CREATE TABLE "dc_${P}_posts" (
-        "id" text PRIMARY KEY NOT NULL,
-        "title" text,
-        "slug" text NOT NULL,
-        "created_at" integer,
-        "updated_at" integer,
-        "created_by" text,
-        "views" integer
-      )`
+    // is INTEGER live (the production generator maps number → INTEGER) but
+    // the desired field type below maps to text, and SQLite implements that
+    // as a whole-table rebuild the fast path cannot emit.
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      "sqlite"
+    );
+    execMigrationSql(
+      schemaService.generateMigrationSQL(
+        `dc_${P}_posts`,
+        [{ name: "views", type: "number" }],
+        { localized: false }
+      )
     );
 
     const result = await makePipeline().apply({
