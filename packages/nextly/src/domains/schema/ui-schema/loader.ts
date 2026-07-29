@@ -20,6 +20,8 @@ import {
   type UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 
+import { restorePluginFieldOptions } from "./preserve-plugin-options";
+
 export interface LoadUiSchemaArgs {
   /** Project root (where `nextly.config.ts` lives). */
   projectRoot: string;
@@ -68,5 +70,9 @@ export async function loadUiSchema(
       publicMessage: `ui-schema.json failed validation: ${issues}`,
     });
   }
-  return result.data;
+  // Restored on the way in as well as on the way out. The parse strips a plugin
+  // field type's options, so a manifest loaded without this would hand every
+  // later write a declaration already missing them — and rewriting the file for
+  // one entity would quietly drop the options of all the others.
+  return restorePluginFieldOptions(result.data, json);
 }

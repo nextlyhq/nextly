@@ -10,8 +10,8 @@ import { describe, expect, it, afterEach } from "vitest";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import type { CollectionConfig } from "../../../collections/config/define-collection";
-import type { FieldGroupConfig } from "../../../components/config/types";
-import { validateFieldGroupConfig } from "../../../components/config/validate-field-group";
+import type { FieldGroupConfig } from "../../../field-groups/config/types";
+import { validateFieldGroupConfig } from "../../../field-groups/config/validate-field-group";
 import {
   clearFieldTypes,
   registerFieldType,

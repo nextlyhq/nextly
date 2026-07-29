@@ -15,7 +15,8 @@ import {
   parseUiSchema,
   type UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
-import { getFieldType } from "../field-types/field-type-registry";
+
+import { restorePluginFieldOptions } from "./preserve-plugin-options";
 
 export type ManifestKind = "collections" | "singles" | "components";
 
@@ -83,59 +84,4 @@ export function mutateManifest(
   // from the one stored — and a deployment sourced from it would rebuild the
   // field without its options.
   return restorePluginFieldOptions(result.data, draft);
-}
-
-/** Whether a value is a `{}` literal, as opposed to an array or null. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-/**
- * Put back the option keys a registered plugin field type owns.
- *
- * Deliberately narrow: only fields whose `type` resolves to a plugin type get
- * their extra keys back. Stripping is load-bearing everywhere else — an
- * undeclared key on a built-in field is a typo or a stale option, and keeping
- * it would persist a field that reads as if it constrains something it does
- * not. A plugin type is the one case where core cannot know the vocabulary, so
- * it is the one case where the submitted keys are authoritative.
- */
-function restorePluginFieldOptions(
-  parsed: UiSchemaManifest,
-  submitted: Record<string, unknown>
-): UiSchemaManifest {
-  const restoreFields = (
-    parsedFields: readonly unknown[],
-    submittedFields: unknown
-  ): void => {
-    if (!Array.isArray(submittedFields)) return;
-    parsedFields.forEach((parsedField, index) => {
-      const original = submittedFields[index];
-      if (!isRecord(parsedField) || !isRecord(original)) return;
-      // Positional pairing is safe: the parse preserves array order and never
-      // drops elements — a field it could not accept fails the whole parse.
-      if (
-        typeof parsedField.type === "string" &&
-        getFieldType(parsedField.type)
-      ) {
-        for (const [key, value] of Object.entries(original)) {
-          if (!(key in parsedField)) parsedField[key] = value;
-        }
-      }
-      if (Array.isArray(parsedField.fields)) {
-        restoreFields(parsedField.fields, original.fields);
-      }
-    });
-  };
-
-  for (const kind of ["collections", "singles", "components"] as const) {
-    const submittedEntities = submitted[kind];
-    if (!Array.isArray(submittedEntities)) continue;
-    parsed[kind].forEach((entity, index) => {
-      const original = submittedEntities[index];
-      if (isRecord(original)) restoreFields(entity.fields, original.fields);
-    });
-  }
-
-  return parsed;
 }

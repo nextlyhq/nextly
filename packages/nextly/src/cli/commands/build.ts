@@ -36,14 +36,14 @@ import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
-import type { FieldGroupConfig } from "../../components/config/types";
-import { assertValidFieldGroupConfig } from "../../components/config/validate-field-group";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
+import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";

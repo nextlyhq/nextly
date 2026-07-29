@@ -274,17 +274,31 @@ export async function runMigrateCreate(
   }
   const { collections, singles, components } = merged;
 
-  // Checked on the MERGED set, not on either input. A migration is the one
-  // artifact that outlives the process that wrote it, so a declaration its own
-  // field type rejects would become a deployment that materializes the schema
-  // and then cannot boot on it. Post-merge because a Builder entity shadowed by
-  // a code-first one of the same slug contributes nothing to this migration —
-  // failing on a definition that was just discarded would demand a cleanup that
-  // changes none of the DDL below. Deferred extends are already folded in.
+  // Checked on the FULL field objects, not the minimal projection below: that
+  // keeps only what DDL needs (name, type, required) and drops the very options
+  // a plugin type's rules read, so validating it would accept an invalid option
+  // because it looks absent, or reject a valid field whose option it cannot see.
+  //
+  // A migration is the one artifact that outlives the process that wrote it, so
+  // a declaration its own field type rejects would become a deployment that
+  // materializes the schema and then cannot boot on it.
+  //
+  // A Builder entity shadowed by a code-first one of the same slug contributes
+  // nothing to this migration, so it is skipped rather than failed on — a
+  // cleanup that changes no DDL is not worth blocking on.
+  const shadowed = new Set(merged.droppedUiSlugs);
+  const surviving = <T extends { slug: string }>(list: readonly T[]): T[] =>
+    list.filter(e => !shadowed.has(e.slug));
+
   assertPluginFieldDeclarations({
-    collections,
-    singles,
-    fieldGroups: components,
+    collections: configResult.config.collections,
+    singles: configResult.config.singles,
+    fieldGroups: configResult.config.fieldGroups,
+  });
+  assertPluginFieldDeclarations({
+    collections: surviving(manifest.collections),
+    singles: surviving(manifest.singles),
+    fieldGroups: surviving(manifest.components),
   });
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
