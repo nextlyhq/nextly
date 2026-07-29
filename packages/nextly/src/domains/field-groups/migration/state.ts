@@ -486,6 +486,18 @@ function parseAppliedManifest(value: unknown): ManifestEntry[] {
   if (!Array.isArray(value)) {
     throw markerCorrupt("recorded plan is not a list");
   }
+  // Every plan renames the registry exactly once, so a recorded plan without
+  // that entry is a fragment rather than a plan. Accepting one would let a
+  // rollback reverse the data tables and leave the registry migrated, which is
+  // a state no direction can then interpret. An empty list fails here too.
+  const registryEntries = value.filter(
+    raw => isRecord(raw) && raw.kind === "registry"
+  ).length;
+  if (registryEntries !== 1) {
+    throw markerCorrupt(
+      `recorded plan renames the registry ${String(registryEntries)} times, not once`
+    );
+  }
   return value.map(raw => {
     if (!isRecord(raw)) {
       throw markerCorrupt("recorded plan contains a non-object entry");

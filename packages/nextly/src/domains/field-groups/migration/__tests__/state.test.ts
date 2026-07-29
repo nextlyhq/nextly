@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
+import { buildMigrationManifest } from "../manifest";
 import {
   advanceStep,
   MAX_MIGRATION_STEP,
@@ -197,7 +198,14 @@ describe("field-group migration marker", () => {
     });
     await settleMigration(meta, {
       generation: "field-groups-v2",
-      appliedManifest: [{ kind: "table", from: "comp_hero", to: "fg_hero" }],
+      appliedManifest: [
+        { kind: "table", from: "comp_hero", to: "fg_hero" },
+        {
+          kind: "registry",
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+      ],
     });
     await expect(readMigrationState(meta)).resolves.toMatchObject({
       status: "settled",
@@ -211,6 +219,11 @@ describe("field-group migration marker", () => {
   it("carries the applied plan through a run and its steps", async () => {
     const { meta } = createMeta();
     const applied = [
+      {
+        kind: "registry" as const,
+        from: "dynamic_field_groups",
+        to: "dynamic_components",
+      },
       { kind: "table" as const, from: "fg_hero", to: "comp_hero" },
       {
         kind: "column" as const,
@@ -238,6 +251,48 @@ describe("field-group migration marker", () => {
     });
   });
 
+  // Every plan renames the registry exactly once, so a recorded plan without
+  // that entry is a fragment. Reversing it would restore the data tables and
+  // leave the registry migrated -- a state no direction can then interpret.
+  it.each([
+    ["an empty list", []],
+    [
+      "a list with no registry rename",
+      [{ kind: "table" as const, from: "fg_a", to: "comp_a" }],
+    ],
+    [
+      "a list renaming the registry twice",
+      [
+        { kind: "registry" as const, from: "a", to: "b" },
+        { kind: "registry" as const, from: "c", to: "d" },
+      ],
+    ],
+  ])("refuses a recorded plan that is %s", async (_label, appliedManifest) => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest,
+    });
+    await expect(readMigrationState(meta)).rejects.toThrowError(NextlyError);
+  });
+
+  // A plan built by the manifest always satisfies that invariant, so the
+  // round-trip has to keep working.
+  it("accepts a plan built by the manifest builder", async () => {
+    const { meta } = createMeta();
+    const built = buildMigrationManifest([
+      { slug: "hero", tableName: "comp_hero", hasCompanion: false },
+    ]);
+    await settleMigration(meta, {
+      generation: "field-groups-v2",
+      appliedManifest: built.entries,
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      appliedManifest: built.entries,
+    });
+  });
+
   // The writer holds itself to the reader's rules. Writing a plan the next read
   // refuses would strand a run after its first step had already committed.
   it.each([
@@ -258,7 +313,16 @@ describe("field-group migration marker", () => {
         direction: "down",
         migrationId: "run-1",
         plan: { manifestHash: "h", planHash: "p" },
-        appliedManifest: [entry],
+        // Otherwise valid: the registry entry is present, so the refusal is
+        // attributable to the bad entry rather than to a missing registry.
+        appliedManifest: [
+          {
+            kind: "registry" as const,
+            from: "dynamic_field_groups",
+            to: "dynamic_components",
+          },
+          entry,
+        ],
       })
     ).rejects.toThrowError(NextlyError);
     expect(read()).toBe(ABSENT);
@@ -269,7 +333,14 @@ describe("field-group migration marker", () => {
     await expect(
       settleMigration(meta, {
         generation: "field-groups-v2",
-        appliedManifest: [{ kind: "table", from: "comp_a", to: "" }],
+        appliedManifest: [
+          {
+            kind: "registry",
+            from: "dynamic_components",
+            to: "dynamic_field_groups",
+          },
+          { kind: "table", from: "comp_a", to: "" },
+        ],
       })
     ).rejects.toThrowError(NextlyError);
     expect(read()).toBe(ABSENT);
@@ -283,6 +354,11 @@ describe("field-group migration marker", () => {
       status: "settled",
       generation: "field-groups-v2",
       appliedManifest: [
+        {
+          kind: "registry",
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
         { kind: "column", from: "_component_type", to: "_field_group_type" },
       ],
     });
@@ -301,6 +377,11 @@ describe("field-group migration marker", () => {
         from: "_component_type",
         to: "_field_group_type",
         table: "fg_hero",
+      },
+      {
+        kind: "registry" as const,
+        from: "dynamic_components",
+        to: "dynamic_field_groups",
       },
     ];
     await settleMigration(meta, {
