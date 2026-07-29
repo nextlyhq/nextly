@@ -87,6 +87,14 @@ interface RelatedRowAccess {
    */
   authenticatedScope?: AuthenticatedScope;
   /**
+   * Ids withheld because the target collection's rules refused this caller.
+   *
+   * A caller that checks its expansion for completeness cannot otherwise tell
+   * a deliberate refusal from a load that failed, and would report the first
+   * as evidence that went missing.
+   */
+  withheldByAccess?: Set<string>;
+  /**
    * Target read policies already resolved during this expansion, so a
    * relationship holding many references reads its collection's metadata once
    * instead of once per value.
@@ -149,6 +157,14 @@ export interface RelationshipExpansionOptions {
    * read paths that forward a real caller; see {@link RelatedRowAccess}.
    */
   enforceFieldAccess?: boolean;
+
+  /**
+   * Collects the ids withheld because a target collection refused the caller,
+   * so a completeness check can tell a refusal from a failure.
+   *
+   * @internal
+   */
+  withheldByAccess?: Set<string>;
 
   /**
    * Target read policies already resolved during this expansion.
@@ -993,6 +1009,7 @@ export class CollectionRelationshipService extends BaseService {
     } catch {
       // A target whose rules cannot be read is not a target whose rules are
       // satisfied.
+      this.recordWithheld(rows, [], access);
       return [];
     }
 
@@ -1006,13 +1023,33 @@ export class CollectionRelationshipService extends BaseService {
       )
     );
     const admitted = rows.filter((_, index) => verdicts[index]);
+    this.recordWithheld(rows, admitted, access);
 
     if (!policy.queryConstraint || admitted.length === 0) return admitted;
-    return this.narrowByTargetPredicate(
+    const narrowed = await this.narrowByTargetPredicate(
       targetCollection,
       admitted,
       policy.queryConstraint
     );
+    this.recordWithheld(admitted, narrowed, access);
+    return narrowed;
+  }
+
+  /**
+   * Note which ids a refusal removed, so a caller checking its expansion for
+   * completeness reads them as absent on purpose rather than as evidence lost.
+   */
+  private recordWithheld(
+    before: Record<string, unknown>[],
+    after: Record<string, unknown>[],
+    access: RelatedRowAccess
+  ): void {
+    if (!access.withheldByAccess || before.length === after.length) return;
+    const kept = new Set(after.map(row => row.id as string));
+    for (const row of before) {
+      const id = row.id as string | undefined;
+      if (id && !kept.has(id)) access.withheldByAccess.add(id);
+    }
   }
 
   /**
@@ -1157,9 +1194,17 @@ export class CollectionRelationshipService extends BaseService {
       DEFAULT_OWNER_FIELD
     );
 
-    // A predicate is not a verdict: it narrows which rows are readable, and
-    // the narrowing is applied to the target table afterwards. Answering
-    // "denied" here would hide rows the rule admits.
+    // A predicate is not a verdict: it narrows which rows are readable, and the
+    // narrowing is applied to the target table afterwards. Answering "denied"
+    // here would hide rows the rule admits.
+    //
+    // But the narrowing has to actually be available. The lookup that resolves
+    // it reports its own failure as "no predicate", which is indistinguishable
+    // from a rule that never had one — and a rule that answered with a
+    // predicate whose predicate went missing would otherwise admit every row.
+    // Withhold instead, so a transient failure cannot widen a restricted
+    // target into an open one.
+    if (result.query && !policy.queryConstraint) return false;
     return result.allowed;
   }
 
@@ -1360,6 +1405,7 @@ export class CollectionRelationshipService extends BaseService {
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
       // the map rather than starting its own: several children populating the
@@ -2010,6 +2056,7 @@ export class CollectionRelationshipService extends BaseService {
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
       // the map rather than starting its own: several children populating the

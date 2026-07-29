@@ -611,3 +611,64 @@ describe("related-row collection access — query predicates (integration)", () 
     expect(JSON.stringify(result.data)).not.toContain("Their page");
   });
 });
+
+describe("related-row collection access — predicate resolution failure", () => {
+  // The lookup that resolves a predicate reports its own failure as "no
+  // predicate", which looks exactly like a rule that never had one. A rule that
+  // DID answer with a predicate must not then be treated as unrestricted.
+  it("withholds rows when the predicate could not be resolved", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          fields: [text({ name: "title" }), text({ name: "tenant" })],
+        }),
+        defineCollection({
+          slug: "refs",
+          fields: [
+            text({ name: "name" }),
+            relationship({ name: "target", relationTo: "pages" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const page = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "Scoped page", tenant: "acme" }
+    );
+    const ref = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      { name: "r", target: (page.data as { id: string }).id }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: { read: { type: "custom", functionPath: ID_RULE_PATH } },
+      },
+      { and: [{ column: "slug", op: "=", value: "pages" }] }
+    );
+
+    // Stand in for the transient failure the real lookup swallows: the rule
+    // still answers with a predicate, but the predicate does not arrive.
+    const spy = vi
+      .spyOn(CollectionAccessService.prototype, "getAccessQueryConstraint")
+      .mockResolvedValue(null);
+    try {
+      const result = await handler.getEntry({
+        collectionName: "refs",
+        entryId: (ref.data as { id: string }).id,
+        depth: 1,
+        user: { id: "tenant-scoped", tenant: "acme" },
+        routeAuthorized: true,
+      });
+
+      // The parent is still served; the target it could not narrow is absent.
+      expect(result.success).toBe(true);
+      expect(JSON.stringify(result.data)).not.toContain("Scoped page");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

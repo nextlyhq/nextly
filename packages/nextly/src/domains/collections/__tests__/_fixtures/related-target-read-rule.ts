@@ -18,8 +18,11 @@ export default function relatedTargetReadRule({
   id?: string;
 }): unknown {
   switch (req.user?.id) {
-    // Refuses the caller outright, whatever they ask for.
+    // Refuses the caller outright, whatever they ask for. `always` is refused
+    // too: the Single read rule admits that caller, so the pair describes a
+    // readable document whose relationship target is not readable.
     case "denied":
+    case "always":
       return false;
     // Everything except one document. Evaluated without the id this reads as
     // "allowed" and hands back the one row it exists to withhold.

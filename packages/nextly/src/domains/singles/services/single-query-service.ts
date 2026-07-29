@@ -282,10 +282,40 @@ function isExpandedRow(value: unknown): boolean {
  * could not fetch, so a shorter list — or an empty one — is evidence that went
  * missing rather than evidence that says nothing is there.
  */
-function referencesExpanded(stored: unknown, assembled: unknown): boolean {
+/** The id a stored reference points at, in either shape it is stored in. */
+function referenceId(reference: unknown): string {
+  if (typeof reference === "string") return reference;
+  if (reference !== null && typeof reference === "object") {
+    const { value, id } = reference as Record<string, unknown>;
+    if (typeof value === "string") return value;
+    if (typeof id === "string") return id;
+  }
+  return "";
+}
+
+function referencesExpanded(
+  stored: unknown,
+  assembled: unknown,
+  /**
+   * Ids the target collection's own rules refused this caller.
+   *
+   * Such a reference is absent on purpose. Counting it as evidence that went
+   * missing would refuse a document the caller may read because something it
+   * points at is something they may not.
+   */
+  withheldByAccess?: Set<string>
+): boolean {
   const parsedStored = parseReferenceValue(stored);
   if (parsedStored === UNREADABLE_CONTAINER) return false;
   const storedList = parsedStored;
+  if (withheldByAccess?.size) {
+    const refusedEveryReference = (
+      Array.isArray(storedList) ? storedList : [storedList]
+    )
+      .filter(ref => !isEmptyValue(ref))
+      .every(ref => withheldByAccess.has(referenceId(ref)));
+    if (refusedEveryReference) return true;
+  }
   const storedRefs = Array.isArray(storedList)
     ? storedList.filter(id => !isEmptyValue(id))
     : undefined;
@@ -660,6 +690,11 @@ export class SingleQueryService extends BaseService {
      * for a document an access rule is about to be judged on.
      */
     strict?: boolean;
+    /**
+     * Collects references a target collection refused, so the completeness
+     * check can tell a refusal from a load that failed.
+     */
+    withheldByAccess?: Set<string>;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -715,6 +750,9 @@ export class SingleQueryService extends BaseService {
         user: options.user,
         overrideAccess: options.overrideAccess,
         authenticatedScope: options.authenticatedScope,
+        // Collects the references a target collection refused, so the
+        // completeness check below reads them as absent on purpose.
+        withheldByAccess: params.withheldByAccess,
       },
       strict,
       // The read path threads a caller, so the target collection's field rules
@@ -807,7 +845,12 @@ export class SingleQueryService extends BaseService {
      * unaffected: they populate whatever depth is asked for.
      */
     expandsRelationships = true,
-    path = ""
+    path = "",
+    /**
+     * Ids a target collection's rules refused this caller, so an absence they
+     * caused is not read as evidence that failed to load.
+     */
+    withheldByAccess?: Set<string>
   ): void {
     if (!assembled) return;
 
@@ -834,7 +877,7 @@ export class SingleQueryService extends BaseService {
         // populated whatever depth is configured, so the same exemption would
         // skip their only check.
         if (type !== "upload" && relationshipMaxDepth(field) === 0) continue;
-        if (!referencesExpanded(before, after)) {
+        if (!referencesExpanded(before, after, withheldByAccess)) {
           this.logger.error(
             "Refusing a single read: relationship evidence could not be assembled",
             { single: slug, field: where }
@@ -890,7 +933,8 @@ export class SingleQueryService extends BaseService {
           storedRows[index],
           assembledRows[index],
           expandsRelationships,
-          type === "repeater" ? `${where}[${index}]` : where
+          type === "repeater" ? `${where}[${index}]` : where,
+          withheldByAccess
         );
       }
     }
@@ -1430,6 +1474,10 @@ export class SingleQueryService extends BaseService {
       // Whether a stored rule will be judged on what this assembly produces.
       const judgedRead = deferCustomRule && !options.overrideAccess;
       let responseReferences: SingleDocument | undefined;
+      // References a target collection refuses this caller. Collected during
+      // the response assembly so the completeness check can tell an absence
+      // the rules caused from one a failed load caused.
+      const responseWithheld = new Set<string>();
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
@@ -1447,6 +1495,7 @@ export class SingleQueryService extends BaseService {
         captureReferences: captured => {
           responseReferences = detachData(captured);
         },
+        withheldByAccess: responseWithheld,
       });
 
       // The response assembly is best-effort, and the decision below is made on
@@ -1467,7 +1516,12 @@ export class SingleQueryService extends BaseService {
           // The response honours the caller's depth, and `0` means "give me
           // references". The authorization view has already judged the same
           // relationships at the full read depth.
-          (options.depth ?? DEFAULT_READ_DEPTH) > 0
+          (options.depth ?? DEFAULT_READ_DEPTH) > 0,
+          "",
+          // A relationship the target's own rules refused is absent because the
+          // caller may not read it, not because the read failed. Refusing the
+          // document over it would deny a Single they are allowed to see.
+          responseWithheld
         );
       }
 
@@ -2310,6 +2364,7 @@ export class SingleQueryService extends BaseService {
        * a related row's collection rules are evaluated.
        */
       authenticatedScope?: AuthenticatedScope;
+      withheldByAccess?: Set<string>;
     } = {},
     /**
      * Propagate expansion failures instead of returning the document
@@ -2363,6 +2418,7 @@ export class SingleQueryService extends BaseService {
           user: access.user as Record<string, unknown> | undefined,
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
+          withheldByAccess: access.withheldByAccess,
         }
       );
       return expandedDoc as SingleDocument;

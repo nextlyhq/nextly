@@ -10,6 +10,7 @@ import type { FieldGroupRegistryService } from "../../../services/field-groups/f
 import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import type { TargetReadPolicy } from "../../collections/services/collection-relationship-service";
 import {
   isMissingCompanionTableError,
   populateCompanionFields,
@@ -50,6 +51,14 @@ export interface ComponentReadAccess {
    * owner's super-admin bypass there either.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * Target read policies resolved during this population.
+   *
+   * Component rows are expanded concurrently, and rows pointing at the same
+   * target would otherwise each resolve its policy — so one map is shared
+   * across them all rather than created per row.
+   */
+  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
 }
 
 export interface PopulateComponentDataParams {
@@ -1107,6 +1116,7 @@ export class FieldGroupQueryService extends BaseService {
           user: access.user,
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
+          targetPolicies: access.targetPolicies,
         }
       );
 

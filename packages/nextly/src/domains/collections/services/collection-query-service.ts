@@ -1187,6 +1187,9 @@ export class CollectionQueryService extends BaseService {
               user: params.user,
               overrideAccess: params.overrideAccess,
               authenticatedScope: params.authenticatedScope,
+              // Shared across every component row this listing expands, so
+              // rows pointing at the same target resolve its policy once.
+              targetPolicies: new Map(),
             },
           });
       }

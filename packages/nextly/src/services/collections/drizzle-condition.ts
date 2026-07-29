@@ -14,6 +14,7 @@
  * unresolved, which its own untranslatable check is expected to catch before
  * this point rather than silently dropping the predicate.
  */
+import type { SQL } from "drizzle-orm";
 import {
   and,
   eq,
@@ -63,8 +64,7 @@ export type LocalizedExistsBuilder = (
   op: string,
   value: unknown,
   dialect: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic condition
-) => any;
+) => SQL | undefined;
 
 export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
