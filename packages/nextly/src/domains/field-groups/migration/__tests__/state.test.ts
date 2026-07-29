@@ -195,8 +195,11 @@ describe("field-group migration marker", () => {
       migrationId: "run-1",
       plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
-    await settleMigration(meta, "field-groups-v2");
-    await expect(readMigrationState(meta)).resolves.toEqual({
+    await settleMigration(meta, {
+      generation: "field-groups-v2",
+      appliedManifest: [{ kind: "table", from: "comp_hero", to: "fg_hero" }],
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
       status: "settled",
       generation: "field-groups-v2",
       recorded: true,
@@ -263,7 +266,10 @@ describe("field-group migration marker", () => {
         table: "fg_hero",
       },
     ];
-    await settleMigration(meta, "field-groups-v2", applied);
+    await settleMigration(meta, {
+      generation: "field-groups-v2",
+      appliedManifest: applied,
+    });
     await expect(readMigrationState(meta)).resolves.toMatchObject({
       status: "settled",
       generation: "field-groups-v2",
@@ -271,9 +277,12 @@ describe("field-group migration marker", () => {
     });
   });
 
-  it("settles without a plan when none was recorded", async () => {
+  // Settling back at `legacy` ends a reversal, so there is nothing left to
+  // reverse and no plan to carry. The v2 case cannot be settled this way: the
+  // type does not allow it.
+  it("settles at legacy without a plan", async () => {
     const { meta } = createMeta();
-    await settleMigration(meta, "legacy");
+    await settleMigration(meta, { generation: "legacy" });
     const state = await readMigrationState(meta);
     expect(state).toMatchObject({ status: "settled", generation: "legacy" });
     expect(

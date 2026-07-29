@@ -22,15 +22,27 @@ const COLUMN_RENAME = {
 };
 
 describe("field-group migration manifest", () => {
-  it("moves a prefixed table onto the new prefix", () => {
-    expect(retargetName("comp_hero")).toBe("fg_hero");
+  it("moves a canonically named table onto the new prefix", () => {
+    expect(retargetName({ slug: "hero", tableName: "comp_hero" })).toBe(
+      "fg_hero"
+    );
   });
 
   // A table named through `dbName` was never named after the concept, so there
   // is no vocabulary in it to retire. Renaming it would change a name its
   // author chose, for no benefit.
   it("leaves a custom-named table alone", () => {
-    expect(retargetName("my_seo_block")).toBeNull();
+    expect(retargetName({ slug: "seo", tableName: "my_seo_block" })).toBeNull();
+  });
+
+  // Ownership is decided against the canonical name for the slug, not the
+  // prefix. `dbName` was taken verbatim for field groups, so an author could
+  // name a table `comp_archive` under the slug `hero`; a prefix rule reads that
+  // as generated and renames an identifier this migration never created.
+  it("leaves a custom name alone even when it carries the legacy prefix", () => {
+    expect(
+      retargetName({ slug: "hero", tableName: "comp_archive" })
+    ).toBeNull();
   });
 
   it("renames the table, its companion, and its discriminator", () => {
@@ -52,9 +64,9 @@ describe("field-group migration manifest", () => {
   // for some would leave the rest reachable under the wrong name.
   it("renames the discriminator on every field group", () => {
     const { entries } = buildMigrationManifest([
-      row({ tableName: "comp_a" }),
-      row({ tableName: "comp_b" }),
-      row({ tableName: "my_seo_block" }),
+      row({ slug: "a", tableName: "comp_a" }),
+      row({ slug: "b", tableName: "comp_b" }),
+      row({ slug: "seo", tableName: "my_seo_block" }),
     ]);
     const columns = entries.filter(e => e.kind === "column");
     expect(columns).toHaveLength(3);
@@ -66,11 +78,11 @@ describe("field-group migration manifest", () => {
     ]);
   });
 
-  // The companion name is built from the table name that was read, so a table
-  // with an unexpected name still has its companion found.
+  // The companion name is built from the table name that was read, so a slug
+  // whose canonical name was normalized still has its companion found.
   it("derives the companion from the read table name", () => {
     const { entries } = buildMigrationManifest([
-      row({ tableName: "comp_odd_name", hasCompanion: true }),
+      row({ slug: "odd-name", tableName: "comp_odd_name", hasCompanion: true }),
     ]);
     expect(entries).toContainEqual({
       kind: "companion",
@@ -100,8 +112,8 @@ describe("field-group migration manifest", () => {
   // plan from it. Renaming it first would strand the resume.
   it("renames the registry last", () => {
     const { entries } = buildMigrationManifest([
-      row({ tableName: "comp_a", hasCompanion: true }),
-      row({ tableName: "comp_b" }),
+      row({ slug: "a", tableName: "comp_a", hasCompanion: true }),
+      row({ slug: "b", tableName: "comp_b" }),
     ]);
     expect(entries[entries.length - 1]).toEqual({
       kind: "registry",
@@ -115,12 +127,12 @@ describe("field-group migration manifest", () => {
   // would make a resumed step point at a different object.
   it("orders the plan the same way regardless of row order", () => {
     const a = buildMigrationManifest([
-      row({ tableName: "comp_b" }),
-      row({ tableName: "comp_a" }),
+      row({ slug: "b", tableName: "comp_b" }),
+      row({ slug: "a", tableName: "comp_a" }),
     ]);
     const b = buildMigrationManifest([
-      row({ tableName: "comp_a" }),
-      row({ tableName: "comp_b" }),
+      row({ slug: "a", tableName: "comp_a" }),
+      row({ slug: "b", tableName: "comp_b" }),
     ]);
     expect(a.entries).toEqual(b.entries);
     expect(a.hash).toBe(b.hash);
@@ -128,7 +140,10 @@ describe("field-group migration manifest", () => {
 
   it("changes the hash when the object map changes", () => {
     const before = buildMigrationManifest([row()]);
-    const after = buildMigrationManifest([row(), row({ tableName: "comp_x" })]);
+    const after = buildMigrationManifest([
+      row(),
+      row({ slug: "x", tableName: "comp_x" }),
+    ]);
     expect(after.hash).not.toBe(before.hash);
   });
 
@@ -170,8 +185,8 @@ describe("field-group migration manifest", () => {
   it("refuses when a target is taken by a row it leaves alone", () => {
     try {
       buildMigrationManifest([
-        row({ tableName: "comp_hero" }),
-        row({ slug: "other", tableName: "fg_hero" }),
+        row({ slug: "hero", tableName: "comp_hero" }),
+        row({ slug: "hero2", tableName: "fg_hero" }),
       ]);
       expect.fail("expected a refusal");
     } catch (error) {
@@ -185,8 +200,8 @@ describe("field-group migration manifest", () => {
   it("refuses a target conflict that differs only in case", () => {
     expect(() =>
       buildMigrationManifest([
-        row({ tableName: "comp_hero" }),
-        row({ slug: "other", tableName: "FG_HERO" }),
+        row({ slug: "hero", tableName: "comp_hero" }),
+        row({ slug: "hero2", tableName: "FG_HERO" }),
       ])
     ).toThrowError(NextlyError);
   });
@@ -197,8 +212,8 @@ describe("field-group migration manifest", () => {
   it("refuses when a target is taken by a kept row's companion", () => {
     try {
       buildMigrationManifest([
-        row({ tableName: "fg_x", hasCompanion: true }),
-        row({ slug: "other", tableName: "comp_x_locales" }),
+        row({ slug: "x", tableName: "fg_x", hasCompanion: true }),
+        row({ slug: "x_locales", tableName: "comp_x_locales" }),
       ]);
       expect.fail("expected a refusal");
     } catch (error) {
@@ -212,8 +227,8 @@ describe("field-group migration manifest", () => {
   it("does not reserve a companion name for a row that has none", () => {
     expect(() =>
       buildMigrationManifest([
-        row({ tableName: "fg_y", hasCompanion: false }),
-        row({ slug: "other", tableName: "comp_y_locales" }),
+        row({ slug: "y", tableName: "fg_y", hasCompanion: false }),
+        row({ slug: "y_locales", tableName: "comp_y_locales" }),
       ])
     ).not.toThrow();
   });
@@ -223,7 +238,7 @@ describe("field-group migration manifest", () => {
   it("allows a target whose occupant is itself renamed away", () => {
     expect(() =>
       buildMigrationManifest([
-        row({ tableName: "comp_a" }),
+        row({ slug: "a", tableName: "comp_a" }),
         row({ slug: "b", tableName: "comp_b" }),
       ])
     ).not.toThrow();
@@ -258,7 +273,9 @@ describe("field-group migration manifest", () => {
   // The case this protects: an author whose dbName was already `fg_hero` before
   // any migration. Up leaves the table alone, so a rollback cannot rename it.
   it("never renames a custom table the up plan left alone", () => {
-    const up = buildMigrationManifest([row({ tableName: "fg_hero" })]);
+    const up = buildMigrationManifest([
+      row({ slug: "hero", tableName: "fg_hero" }),
+    ]);
     const down = invertManifest(up.entries);
     expect(
       down.entries.some(

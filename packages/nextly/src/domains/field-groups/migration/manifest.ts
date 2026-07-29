@@ -20,6 +20,8 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { normalizeIdentifier } from "../../singles/services/resolve-single-table-name";
 
 /**
  * The names storage moves to.
@@ -79,20 +81,26 @@ export interface MigrationManifest {
 }
 
 /**
- * Rename a legacy-prefixed name onto the new prefix, or leave it alone.
+ * The name this migration would have generated for a field group, or `null` if
+ * the stored one is not a name it generated.
  *
- * A table only gets renamed when it actually carries the prefix this migration
- * is retiring. One named through `dbName` was never named after the concept —
- * `my_seo_block` contains no vocabulary to migrate — and rewriting it would
- * change a name its author chose, for no benefit. This is the second reason
- * `table_name` has to be read rather than derived: it decides not just what the
- * objects are called, but which of them are ours to rename at all.
+ * Ownership is decided by comparing against the canonical name for the slug,
+ * not by looking at the prefix. `dbName` was historically taken verbatim for
+ * field groups, so an author could name a table `comp_archive` while its slug is
+ * `hero` — a prefix rule reads that as generated and renames it to `fg_archive`,
+ * changing an identifier this migration never created. Only the canonical name
+ * for the slug distinguishes the two.
+ *
+ * `resolveComponentTableName` is the single source of truth for that canonical
+ * name; deriving it here again would let the two drift, which is exactly the
+ * drift that helper was written to end.
  */
-export function retargetName(name: string): string | null {
-  if (!name.startsWith(STORAGE_FORMAT.tablePrefix)) return null;
-  return `${MIGRATION_TARGET.tablePrefix}${name.slice(
-    STORAGE_FORMAT.tablePrefix.length
-  )}`;
+export function retargetName(row: {
+  slug: string;
+  tableName: string;
+}): string | null {
+  if (row.tableName !== resolveComponentTableName(row.slug)) return null;
+  return `${MIGRATION_TARGET.tablePrefix}${normalizeIdentifier(row.slug)}`;
 }
 
 /**
@@ -153,7 +161,7 @@ export function buildMigrationManifest(
     // Idempotent by construction: a row already carrying a migrated name
     // produces no rename, so a plan rebuilt after a partial run contains only
     // the work still outstanding.
-    const target = retargetName(row.tableName);
+    const target = retargetName(row);
 
     if (target !== null) {
       entries.push({ kind: "table", from: row.tableName, to: target });

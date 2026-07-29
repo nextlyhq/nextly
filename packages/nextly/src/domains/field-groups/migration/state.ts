@@ -251,15 +251,33 @@ export async function readMigrationState(
  * this write resumes at step 1 and re-runs the first step from scratch. Every
  * step is idempotent precisely so that re-run is safe.
  */
+/**
+ * Starting a run, with the plan required exactly where a run cannot do without it.
+ *
+ * A `down` run reverses a recorded plan; it cannot derive one, because nothing in
+ * the database says which names this migration created. An `up` run builds its
+ * plan from registry rows, so it has none to carry in. Expressing that as a union
+ * rather than an optional field with a comment means the unsafe call does not
+ * typecheck — a comment saying "required" while the type says otherwise is the
+ * kind of claim that goes unenforced.
+ */
+export type BeginMigrationArgs =
+  | {
+      direction: "up";
+      migrationId: string;
+      plan: MigrationPlanIdentity;
+      appliedManifest?: undefined;
+    }
+  | {
+      direction: "down";
+      migrationId: string;
+      plan: MigrationPlanIdentity;
+      appliedManifest: readonly ManifestEntry[];
+    };
+
 export async function beginMigration(
   meta: MetaService,
-  args: {
-    direction: MigrationDirection;
-    migrationId: string;
-    plan: MigrationPlanIdentity;
-    /** Required for `down`, which reverses a recorded plan rather than deriving one. */
-    appliedManifest?: readonly ManifestEntry[];
-  }
+  args: BeginMigrationArgs
 ): Promise<void> {
   // The writer holds itself to the reader's invariants. Persisting a marker the
   // next read would reject leaves the database unavailable with no way forward,
@@ -419,11 +437,28 @@ function planMoved(
  * Called only after structural verification passes, so the generation the
  * marker reports is one that has been checked rather than assumed.
  */
+/**
+ * Settling, with the plan required exactly where a rollback will need it.
+ *
+ * Settling at `field-groups-v2` is the only moment the plan that produced it can
+ * still be recorded, and a rollback has no other source for it. Settling back at
+ * `legacy` is the end of a reversal, with nothing left to reverse. Making the
+ * distinction a union stops the v2 case being settled without a plan, which the
+ * previous optional argument allowed and which no comment could prevent.
+ */
+export type SettleArgs =
+  | { generation: "field-groups-v2"; appliedManifest: readonly ManifestEntry[] }
+  | { generation: "legacy" };
+
 export async function settleMigration(
   meta: MetaService,
-  generation: StorageGeneration,
-  appliedManifest?: readonly ManifestEntry[]
+  settled: SettleArgs
 ): Promise<void> {
+  const { generation } = settled;
+  const appliedManifest =
+    settled.generation === "field-groups-v2"
+      ? settled.appliedManifest
+      : undefined;
   const marker: StoredMarker = {
     version: MIGRATION_MARKER_VERSION,
     status: "settled",
