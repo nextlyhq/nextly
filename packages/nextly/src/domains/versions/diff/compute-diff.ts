@@ -520,6 +520,11 @@ function itemDiff(
   return {
     id: match.id,
     componentType,
+    // Carry the type transition so a same-id row that swapped component type is
+    // legible even when neither component has field values to diff.
+    ...(typeChanged
+      ? { componentTypeBefore: beforeType, componentTypeAfter: afterType }
+      : {}),
     status: contentChanged ? "changed" : "unchanged",
     hasMoved: hasMoved ? true : undefined,
     fromIndex: match.fromIndex,
@@ -558,12 +563,13 @@ function unknownNode(
   before: unknown,
   after: unknown
 ): UnknownFieldDiff {
+  // Presence still classifies the change, but the value is never emitted: a
+  // field gone from the schema has no findable access rule, so its history
+  // cannot be proven readable and must not leave the server.
   return {
     kind: "unknown",
     name: key,
     status: statusFromPresence(before, after, !dequal(before, after)),
-    before: maskSecret(before),
-    after: maskSecret(after),
   };
 }
 

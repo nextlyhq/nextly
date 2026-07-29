@@ -114,6 +114,13 @@ export interface ListItemDiff {
   id: string;
   /** The component slug (`_componentType`) when the snapshot carries one. */
   componentType?: string;
+  /**
+   * For a row that kept its id but changed component type, the before and after
+   * slugs, so the swap is visible even when neither component has field values
+   * to diff. Absent when the type did not change.
+   */
+  componentTypeBefore?: string;
+  componentTypeAfter?: string;
   status: DiffStatus;
   /** True when the item kept its identity but changed position. */
   hasMoved?: boolean;
@@ -135,13 +142,16 @@ export interface ListFieldDiff extends FieldDiffBase {
  * A snapshot key with no matching field in the CURRENT schema (a field deleted
  * since capture). Surfaced rather than dropped so a diff never silently hides
  * that something changed.
+ *
+ * The value is deliberately NOT carried. A field absent from the current schema
+ * has no findable `access.read` rule, so redaction cannot prove the caller may
+ * read it; a since-removed protected field (a salary, a token) would otherwise
+ * leak its history. Only the field's name and whether it changed are exposed.
  */
 export interface UnknownFieldDiff {
   kind: "unknown";
   name: string;
   status: DiffStatus;
-  before: unknown;
-  after: unknown;
 }
 
 export type FieldDiff =

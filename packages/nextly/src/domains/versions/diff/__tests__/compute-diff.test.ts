@@ -93,6 +93,35 @@ describe("computeVersionDiff — per field kind", () => {
     });
   });
 
+  it("carries the type transition on a repeatable zone item that swaps type", () => {
+    const zone = field({
+      name: "blocks",
+      type: "component",
+      repeatable: true,
+      components: ["hero", "cta"],
+      componentSchemas: {
+        hero: { fields: [field({ name: "headline", type: "text" })] },
+        cta: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    // Same row id, changed discriminator: the swap must survive on the item.
+    const diff = computeVersionDiff(
+      { blocks: [{ id: "1", _componentType: "hero" }] },
+      { blocks: [{ id: "1", _componentType: "cta" }] },
+      [zone]
+    );
+    const node = diff.fields[0];
+    expect(node.kind).toBe("list");
+    if (node.kind === "list") {
+      expect(node.items[0]).toMatchObject({
+        id: "1",
+        status: "changed",
+        componentTypeBefore: "hero",
+        componentTypeAfter: "cta",
+      });
+    }
+  });
+
   it("diffs a text field into word segments", () => {
     const diff = computeVersionDiff(
       { title: "hello world" },
@@ -310,19 +339,17 @@ describe("computeVersionDiff — never leaks a password", () => {
 });
 
 describe("computeVersionDiff — never leaks a password", () => {
-  it("masks a bcrypt hash left by a password field deleted from the schema", () => {
-    // The `legacy` field no longer exists in the schema, so its stored hash
-    // surfaces as an unknown key; it must be masked rather than exposed.
+  it("withholds the value of a field deleted from the schema", () => {
+    // The `legacy` field no longer exists in the schema, so its stored value has
+    // no verifiable access rule. The change surfaces, but the value is withheld
+    // entirely rather than masked, so nothing can leak.
     const hashA = "$2b$12$" + "a".repeat(53);
     const hashB = "$2b$12$" + "b".repeat(53);
     const diff = computeVersionDiff({ legacy: hashA }, { legacy: hashB }, []);
     const node = diff.fields.find(n => n.name === "legacy");
-    // The change is surfaced, but neither hash is exposed.
     expect(node).toMatchObject({ kind: "unknown", status: "changed" });
-    if (node && node.kind === "unknown") {
-      expect(node.before).toBe("[protected]");
-      expect(node.after).toBe("[protected]");
-    }
+    expect(node).not.toHaveProperty("before");
+    expect(node).not.toHaveProperty("after");
   });
 });
 
@@ -420,19 +447,19 @@ describe("computeVersionDiff — components", () => {
 });
 
 describe("computeVersionDiff — round-2 hardening", () => {
-  it("masks a bcrypt hash nested inside a removed (opaque) node", () => {
+  it("withholds a value nested inside an opaque removed node", () => {
     const hash = "$2b$12$" + "c".repeat(53);
-    // `oldBlock` is absent from the schema, so it surfaces as one opaque
-    // unknown node; the nested hash must still be masked.
+    // `oldBlock` is absent from the schema, so it surfaces as one opaque unknown
+    // node; its value, and any nested secret, is withheld entirely.
     const diff = computeVersionDiff(
       { oldBlock: { id: "1", secret: hash } },
       { oldBlock: { id: "1", secret: hash } },
       []
     );
     const node = diff.fields.find(n => n.name === "oldBlock");
-    if (node && node.kind === "unknown") {
-      expect((node.before as { secret?: string }).secret).toBe("[protected]");
-    }
+    expect(node?.kind).toBe("unknown");
+    expect(node).not.toHaveProperty("before");
+    expect(node).not.toHaveProperty("after");
   });
 
   it("marks a list item that gained a component discriminator", () => {
