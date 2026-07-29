@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * Static redirect for `/admin/field-groups` → `/admin/builder/field-groups`.
+ * Static redirect for `/admin/field-groups` to `/admin/builder/field-groups`.
  *
- * Components are field-group templates with no content surface, so
- * unlike Collections / Singles there's nothing to land on per-record.
- * Sending the user into the Builder list is the closest equivalent —
+ * Field groups have no content surface, so unlike Collections and Singles
+ * there is nothing to land on per record. The Builder list is the closest
+ * equivalent, so the section icon goes straight there.
  */
 
 import { useEffect } from "react";

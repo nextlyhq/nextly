@@ -394,7 +394,7 @@ export function SubSidebarContent({
               >
                 <Link href={ROUTES.BUILDER_FIELD_GROUPS}>
                   <Puzzle className="h-4 w-4" />
-                  <span>Components</span>
+                  <span>Field Groups</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

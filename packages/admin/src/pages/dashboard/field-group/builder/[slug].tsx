@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * Field Group Builder — Edit Page
+ * Field Group Builder, edit page.
  *
- * Mirrors the Collection / Single edit pages: BuilderToolbar at top,
+ * Mirrors the Collection and Single edit pages: BuilderToolbar at top,
  * BuilderFieldList in body inside DndContext, overlays mounted lazily.
  *
- * Schema-change preview + apply pipeline wired the same way as the
- * collection builder — SafeChangeConfirmDialog / SchemaChangeDialog /
- * RestartContext. Field-group-specific deltas:
- * - No HooksEditorSheet (showHooks: false in COMPONENT_BUILDER_CONFIG).
+ * The schema-change preview and apply pipeline is wired the same way as the
+ * collection builder, through SafeChangeConfirmDialog, SchemaChangeDialog and
+ * RestartContext. Field groups differ in that:
+ * - No HooksEditorSheet (showHooks: false in FIELD_GROUP_BUILDER_CONFIG).
  * - Uses fieldGroupApi.previewSchemaChanges / applySchemaChanges.
  * - Settings modal uses Category instead of adminGroup; no Status/Order/Plural.
  *
@@ -68,7 +68,7 @@ import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
 
-import { COMPONENT_BUILDER_CONFIG } from "./builder-config";
+import { FIELD_GROUP_BUILDER_CONFIG } from "./builder-config";
 
 const componentFormSchema = z.object({
   singularName: z
@@ -308,7 +308,7 @@ export default function FieldGroupBuilderEditPage({
             const errorObj = err as { message?: string };
             toast.error(
               errorObj?.message ||
-                "An unexpected error occurred while updating the fieldGroup."
+                "An unexpected error occurred while updating the field group."
             );
           },
         }
@@ -490,7 +490,7 @@ export default function FieldGroupBuilderEditPage({
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <BuilderToolbar
-        config={COMPONENT_BUILDER_CONFIG}
+        config={FIELD_GROUP_BUILDER_CONFIG}
         name={settings.singularName || slug}
         locked={isLocked}
         unsavedCount={unsavedCount}
@@ -535,7 +535,7 @@ export default function FieldGroupBuilderEditPage({
         <BuilderSettingsModal
           open
           mode="edit"
-          config={COMPONENT_BUILDER_CONFIG}
+          config={FIELD_GROUP_BUILDER_CONFIG}
           initialValues={settings}
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
@@ -559,7 +559,7 @@ export default function FieldGroupBuilderEditPage({
                 }`
               : undefined
           }
-          excludedTypes={COMPONENT_BUILDER_CONFIG.picker.excludedTypes ?? []}
+          excludedTypes={FIELD_GROUP_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
           // Why: PR C flow change -- pick opens sheet in create mode.
           // PR D: thread parentFieldId through.

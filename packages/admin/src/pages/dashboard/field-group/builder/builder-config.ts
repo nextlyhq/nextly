@@ -1,22 +1,17 @@
-// Why: page-local config for the field group builder. Per the per-kind audit:
-// - Field groups have a Name (labeled "Singular name" in the modal but the
-//   user is naming the field group itself), Description, Icon. Slug is
-//   auto from name and used as the field group identifier.
-// - Advanced has Category (Field-group-specific grouping, replaces
-//   Collection's adminGroup) and i18n placeholder. NO Order, useAsTitle,
-//   Status (Field groups are reusable building blocks, not records),
-//   Timestamps.
-// - No Hooks button — Field groups don't support hooks (audit).
-// - Schema-change preview disabled — Field groups have no rows of their
-//   own; mutations apply directly.
-// - No excluded picker types per the audit (the spec speculated about
-//   restricting `relationship`/`blocks` but the current code doesn't).
+// Page-local builder config for field groups. Their Basics tab collects a name
+// (labelled "Singular name", though the user is naming the field group itself),
+// description and icon; the slug is derived from the name and identifies the
+// field group. Advanced offers Category, which groups field groups in the admin
+// the way adminGroup groups collections, plus i18n. Order, useAsTitle, Status
+// and Timestamps do not apply: a field group is a reusable building block
+// rather than a record. Hooks are unsupported, and schema-change preview is off
+// because a field group owns no rows of its own, so mutations apply directly.
 import type { BuilderConfig } from "@admin/components/features/schema-builder/builder-config";
 
-export const COMPONENT_BUILDER_CONFIG: BuilderConfig = {
+export const FIELD_GROUP_BUILDER_CONFIG: BuilderConfig = {
   kind: "field-group",
   basicsFields: ["singularName", "slug", "description", "icon"],
-  // showSystemFields added in PR B so field groups also surface the toggle.
+  // Field-group schemas surface the system-field toggle like the other kinds.
   advancedFields: ["category", "i18n", "showSystemFields"],
   toolbar: { previewSchemaChange: false },
   picker: {},

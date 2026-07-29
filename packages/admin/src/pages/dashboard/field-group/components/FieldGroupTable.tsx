@@ -218,7 +218,7 @@ export default function FieldGroupTable() {
           description:
             err instanceof Error
               ? err.message
-              : "Failed to delete the fieldGroup.",
+              : "Failed to delete the field group.",
         });
       },
     });
@@ -622,8 +622,8 @@ export default function FieldGroupTable() {
       <BulkDeleteDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
-        entityType="Component"
-        entityTypePlural="Components"
+        entityType="Field Group"
+        entityTypePlural="Field Groups"
         items={
           fieldGroupToDelete
             ? [
@@ -642,8 +642,8 @@ export default function FieldGroupTable() {
       <BulkDeleteDialog
         open={bulkDeleteDialogOpen}
         onOpenChange={setBulkDeleteDialogOpen}
-        entityType="Component"
-        entityTypePlural="Components"
+        entityType="Field Group"
+        entityTypePlural="Field Groups"
         items={filteredData
           .filter(c => selectedIds.includes(c.id) && !c.locked)
           .map(c => ({ id: c.id, name: c.label, secondary: c.slug }))}

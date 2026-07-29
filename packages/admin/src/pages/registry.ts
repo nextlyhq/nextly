@@ -242,8 +242,8 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.SINGLE_EDIT]: { component: SingleEditPage, type: "private" },
 
   // ============================================================
-  // Builder — Components (schema management).
-  // /admin/builder/field-groups/*. Components have no content surface.
+  // Builder: field groups (schema management).
+  // /admin/builder/field-groups/*. Field groups have no content surface.
   // ============================================================
   [ROUTES.BUILDER_FIELD_GROUPS]: {
     component: FieldGroupsPage,

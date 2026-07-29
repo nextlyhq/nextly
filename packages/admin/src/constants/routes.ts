@@ -25,7 +25,7 @@ export const ROUTES = {
   // Why the /admin/builder/* prefix cleanly separates
   // schema-management surfaces from content-management surfaces. The
   // primary sidebar's "Builder" icon lands here; the secondary
-  // "Builders" sidebar shows Collections / Singles / Components links
+  // "Builders" sidebar shows Collections, Singles and Field Groups links
   // pointing into this prefix.
   // ============================================================
   BUILDER_COLLECTIONS: "/admin/builder/collections",

@@ -199,7 +199,7 @@ export function DynamicFieldGroupNav({ isActive }: DynamicFieldGroupNavProps) {
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
               <SidebarMenuButton
-                tooltip="Components"
+                tooltip="Field Groups"
                 isActive={isAnyComponentActive}
                 className="group/trigger"
               >
@@ -264,7 +264,7 @@ export function DynamicFieldGroupNav({ isActive }: DynamicFieldGroupNavProps) {
         <SidebarMenuItem>
           <CollapsibleTrigger asChild>
             <SidebarMenuButton
-              tooltip="Components"
+              tooltip="Field Groups"
               isActive={isAnyComponentActive}
               className="group/trigger"
             >
@@ -361,7 +361,7 @@ export function DynamicFieldGroupNav({ isActive }: DynamicFieldGroupNavProps) {
     <SidebarMenuItem>
       <SidebarMenuButton
         asChild
-        tooltip="Components"
+        tooltip="Field Groups"
         isActive={isAnyComponentActive}
       >
         <Link href={ROUTES.BUILDER_FIELD_GROUPS}>

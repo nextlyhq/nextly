@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Field Group Builder — Create Page
+ * Field Group Builder, create page.
  *
  * Mirrors the Collection / Single create flow: opens BuilderSettingsModal
  * directly, on Continue creates the field group (no fields yet) and
@@ -27,7 +27,7 @@ import { fieldGroupToManifestEntity } from "@admin/lib/builder/to-manifest-entit
 import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 
-import { COMPONENT_BUILDER_CONFIG } from "./builder-config";
+import { FIELD_GROUP_BUILDER_CONFIG } from "./builder-config";
 
 export default function FieldGroupBuilderPage(): React.ReactElement | null {
   const [open, setOpen] = useState(true);
@@ -90,7 +90,7 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
         onError: err => {
           const error = err as { message?: string };
           toast.error(
-            error?.message || "Could not create fieldGroup. Please try again."
+            error?.message || "Could not create field group. Please try again."
           );
         },
       }
@@ -102,7 +102,7 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
       <BuilderSettingsModal
         open={open}
         mode="create"
-        config={COMPONENT_BUILDER_CONFIG}
+        config={FIELD_GROUP_BUILDER_CONFIG}
         initialValues={null}
         onCancel={() => setOpen(false)}
         onSubmit={handleSubmit}
