@@ -9,7 +9,7 @@
 
 import type { ListResponse, TableParams } from "@nextlyhq/ui";
 
-import type { ApiComponent } from "@admin/types/entities";
+import type { ApiFieldGroup } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
@@ -81,10 +81,10 @@ const buildQuery = (params: TableParams): string => {
  */
 export const fetchComponents = async (
   params: TableParams
-): Promise<ListResponse<ApiComponent>> => {
+): Promise<ListResponse<ApiFieldGroup>> => {
   const query = buildQuery(params);
   const url = `/field-groups${query ? `?${query}` : ""}`;
-  return fetcher<ListResponse<ApiComponent>>(url, {}, true);
+  return fetcher<ListResponse<ApiFieldGroup>>(url, {}, true);
 };
 
 /**
@@ -92,9 +92,11 @@ export const fetchComponents = async (
  * we discard the response body (which may be MutationResponse or
  * ActionResponse depending on the dispatcher path).
  */
-export const deleteComponent = async (componentSlug: string): Promise<void> => {
+export const deleteFieldGroup = async (
+  fieldGroupSlug: string
+): Promise<void> => {
   await fetcher<MutationResponse<unknown>>(
-    `/field-groups/${componentSlug}`,
+    `/field-groups/${fieldGroupSlug}`,
     {
       method: "DELETE",
     },
@@ -107,35 +109,35 @@ export const deleteComponent = async (componentSlug: string): Promise<void> => {
  *
  * Server emits canonical `respondX` shapes (spec §5.1): list ->
  * `ListResponse<T>`; bare reads -> `T`; create/update ->
- * `MutationResponse<T>`. We surface the bare `ApiComponent` to
+ * `MutationResponse<T>`. We surface the bare `ApiFieldGroup` to
  * callers so mutations match the read shape; toast text comes from
  * `message` when needed.
  */
-export const componentApi = {
+export const fieldGroupApi = {
   fetchComponents,
-  deleteComponent,
+  deleteFieldGroup,
 
   /**
    * List all Component definitions (simple list, no pagination).
    */
-  list: async (): Promise<ApiComponent[]> => {
+  list: async (): Promise<ApiFieldGroup[]> => {
     const result =
-      await protectedApi.get<ListResponse<ApiComponent>>("/field-groups");
+      await protectedApi.get<ListResponse<ApiFieldGroup>>("/field-groups");
     return result.items;
   },
 
   /**
    * Get a single Component definition by slug.
    */
-  get: async (componentSlug: string): Promise<ApiComponent> => {
-    return protectedApi.get<ApiComponent>(`/field-groups/${componentSlug}`);
+  get: async (fieldGroupSlug: string): Promise<ApiFieldGroup> => {
+    return protectedApi.get<ApiFieldGroup>(`/field-groups/${fieldGroupSlug}`);
   },
 
   /**
    * Create a new Component definition.
    */
-  create: async (payload: CreateComponentPayload): Promise<ApiComponent> => {
-    const result = await protectedApi.post<MutationResponse<ApiComponent>>(
+  create: async (payload: CreateComponentPayload): Promise<ApiFieldGroup> => {
+    const result = await protectedApi.post<MutationResponse<ApiFieldGroup>>(
       "/field-groups",
       payload
     );
@@ -146,11 +148,11 @@ export const componentApi = {
    * Update an existing Component definition.
    */
   update: async (
-    componentSlug: string,
+    fieldGroupSlug: string,
     payload: UpdateComponentPayload
-  ): Promise<ApiComponent> => {
-    const result = await protectedApi.patch<MutationResponse<ApiComponent>>(
-      `/field-groups/${componentSlug}`,
+  ): Promise<ApiFieldGroup> => {
+    const result = await protectedApi.patch<MutationResponse<ApiFieldGroup>>(
+      `/field-groups/${fieldGroupSlug}`,
       payload
     );
     return result.item;
@@ -159,9 +161,9 @@ export const componentApi = {
   /**
    * Remove a Component definition.
    */
-  remove: async (componentSlug: string): Promise<{ message: string }> => {
-    const result = await protectedApi.delete<MutationResponse<ApiComponent>>(
-      `/field-groups/${componentSlug}`
+  remove: async (fieldGroupSlug: string): Promise<{ message: string }> => {
+    const result = await protectedApi.delete<MutationResponse<ApiFieldGroup>>(
+      `/field-groups/${fieldGroupSlug}`
     );
     return { message: result.message };
   },
@@ -171,11 +173,11 @@ export const componentApi = {
    * Mirrors schemaApi.preview() for collections.
    */
   previewSchemaChanges: async (
-    componentSlug: string,
+    fieldGroupSlug: string,
     fields: unknown[]
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
-      `/field-groups/schema/${componentSlug}/preview`,
+      `/field-groups/schema/${fieldGroupSlug}/preview`,
       { fields }
     );
   },
@@ -185,7 +187,7 @@ export const componentApi = {
    * Mirrors schemaApi.apply() for collections.
    */
   applySchemaChanges: async (
-    componentSlug: string,
+    fieldGroupSlug: string,
     fields: unknown[],
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
@@ -196,7 +198,7 @@ export const componentApi = {
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
-    >(`/field-groups/schema/${componentSlug}/apply`, {
+    >(`/field-groups/schema/${fieldGroupSlug}/apply`, {
       fields,
       confirmed: true,
       schemaVersion,

@@ -20,16 +20,16 @@ import {
 } from "@admin/components/layout/sidebar";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import { useComponents } from "@admin/hooks/queries";
+import { useFieldGroups } from "@admin/hooks/queries";
 import type {
-  ApiComponent,
+  ApiFieldGroup,
   FieldGroupMigrationStatus,
 } from "@admin/types/entities";
 
 /**
- * Props for the DynamicComponentNav component
+ * Props for the DynamicFieldGroupNav component
  */
-interface DynamicComponentNavProps {
+interface DynamicFieldGroupNavProps {
   /** Function to check if a route is active */
   isActive: (href?: string) => boolean;
 }
@@ -97,9 +97,9 @@ function ComponentSkeleton() {
  * Groups Components by their admin.category property
  */
 function groupComponentsByCategory(
-  components: ApiComponent[]
-): Map<string, ApiComponent[]> {
-  const groups = new Map<string, ApiComponent[]>();
+  components: ApiFieldGroup[]
+): Map<string, ApiFieldGroup[]> {
+  const groups = new Map<string, ApiFieldGroup[]>();
 
   // Filter out hidden Components
   const visibleComponents = components.filter(
@@ -136,15 +136,15 @@ function groupComponentsByCategory(
  * ## Usage
  *
  * ```tsx
- * <DynamicComponentNav isActive={isActive} />
+ * <DynamicFieldGroupNav isActive={isActive} />
  * ```
  */
-export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
+export function DynamicFieldGroupNav({ isActive }: DynamicFieldGroupNavProps) {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
 
   // Fetch Components with a simple list (first page, large page size for sidebar)
-  const { data, isLoading, error } = useComponents(
+  const { data, isLoading, error } = useFieldGroups(
     {
       pagination: { page: 0, pageSize: 100 },
       sorting: [{ field: "label", direction: "asc" }],
@@ -175,13 +175,15 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
   }
 
   // Build the edit URL for a Component (links to builder edit page)
-  const getComponentUrl = (component: ApiComponent) => {
-    return buildRoute(ROUTES.BUILDER_COMPONENTS_EDIT, { slug: component.slug });
+  const getFieldGroupUrl = (component: ApiFieldGroup) => {
+    return buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, {
+      slug: component.slug,
+    });
   };
 
   // Check if any Component route is active
   const isAnyComponentActive = visibleComponents.some(component =>
-    isActive(getComponentUrl(component))
+    isActive(getFieldGroupUrl(component))
   );
 
   // Group Components by admin.category
@@ -197,7 +199,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
               <SidebarMenuButton
-                tooltip="Components"
+                tooltip="Field Groups"
                 isActive={isAnyComponentActive}
                 className="group/trigger"
               >
@@ -205,14 +207,14 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                     tracks its resting/active states, as every other nav icon
                     does. */}
                 <Puzzle />
-                <span className="flex-1">Components</span>
+                <span className="flex-1">Field Groups</span>
                 <ChevronDown className="ml-auto transition-transform duration-300 ease-out group-data-[state=open]/trigger:rotate-180" />
               </SidebarMenuButton>
             </CollapsibleTrigger>
             <CollapsibleContent>
               <SidebarMenuSub>
                 {visibleComponents.map(component => {
-                  const href = getComponentUrl(component);
+                  const href = getFieldGroupUrl(component);
                   const isSubActive = isActive(href);
 
                   return (
@@ -262,12 +264,12 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
         <SidebarMenuItem>
           <CollapsibleTrigger asChild>
             <SidebarMenuButton
-              tooltip="Components"
+              tooltip="Field Groups"
               isActive={isAnyComponentActive}
               className="group/trigger"
             >
               <Puzzle />
-              <span className="flex-1">Components</span>
+              <span className="flex-1">Field Groups</span>
               <ChevronDown className="ml-auto transition-transform duration-300 ease-out group-data-[state=open]/trigger:rotate-180" />
             </SidebarMenuButton>
           </CollapsibleTrigger>
@@ -276,7 +278,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
               {Array.from(groupedComponents.entries()).map(
                 ([categoryName, categoryComponents]) => {
                   const isCategoryActive = categoryComponents.some(component =>
-                    isActive(getComponentUrl(component))
+                    isActive(getFieldGroupUrl(component))
                   );
 
                   return (
@@ -301,7 +303,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                         <CollapsibleContent>
                           <div className="ml-4  border-l border-border border-sidebar-border pl-2">
                             {categoryComponents.map(component => {
-                              const href = getComponentUrl(component);
+                              const href = getFieldGroupUrl(component);
                               const isSubActive = isActive(href);
 
                               return (
@@ -359,10 +361,10 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
     <SidebarMenuItem>
       <SidebarMenuButton
         asChild
-        tooltip="Components"
+        tooltip="Field Groups"
         isActive={isAnyComponentActive}
       >
-        <Link href={ROUTES.BUILDER_COMPONENTS}>
+        <Link href={ROUTES.BUILDER_FIELD_GROUPS}>
           <Puzzle />
         </Link>
       </SidebarMenuButton>

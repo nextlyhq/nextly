@@ -11,18 +11,18 @@ import ResetPasswordPage from "./(auth)/reset-password";
 import SetupPage from "./(auth)/setup";
 import VerifyEmailPage from "./(auth)/verify-email";
 import CollectionsPage from "./dashboard/collection/index";
-import ComponentsPage from "./dashboard/component/index";
 import EditEntryPage from "./dashboard/entries/[slug]/[id]/index";
 import APIPlaygroundPage from "./dashboard/entries/[slug]/api";
 import CreateEntryPage from "./dashboard/entries/[slug]/create";
 import CollectionEntriesPage from "./dashboard/entries/[slug]/index";
+import FieldGroupsPage from "./dashboard/field-group/index";
 import DashboardPage from "./dashboard/index";
 import MediaLibraryPage from "./dashboard/media/index";
 import PluginDetailPage from "./dashboard/plugins/[slug]";
 import PluginSettingsPage from "./dashboard/plugins/[slug]/settings";
 import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
-import ComponentsLandingRedirect from "./dashboard/redirects/ComponentsLandingRedirect";
+import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
 import SinglesLandingRedirect from "./dashboard/redirects/SinglesLandingRedirect";
 import RolesPage from "./dashboard/roles";
 import RolesCreatePage from "./dashboard/roles/create";
@@ -65,11 +65,11 @@ const CollectionBuilderPage = lazy(
 const CollectionBuilderEditPage = lazy(
   () => import("./dashboard/collections/builder/[slug]")
 );
-const ComponentBuilderPage = lazy(
-  () => import("./dashboard/component/builder/index")
+const FieldGroupBuilderPage = lazy(
+  () => import("./dashboard/field-group/builder/index")
 );
-const ComponentBuilderEditPage = lazy(
-  () => import("./dashboard/component/builder/[slug]")
+const FieldGroupBuilderEditPage = lazy(
+  () => import("./dashboard/field-group/builder/[slug]")
 );
 const SingleBuilderPage = lazy(
   () => import("./dashboard/singles/builder/index")
@@ -171,8 +171,8 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: SinglesLandingRedirect,
     type: "private",
   },
-  [ROUTES.COMPONENTS]: {
-    component: ComponentsLandingRedirect,
+  [ROUTES.FIELD_GROUPS]: {
+    component: FieldGroupsLandingRedirect,
     type: "private",
   },
 
@@ -242,21 +242,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.SINGLE_EDIT]: { component: SingleEditPage, type: "private" },
 
   // ============================================================
-  // Builder — Components (schema management).
-  // /admin/builder/components/*. Components have no content surface.
+  // Builder: field groups (schema management).
+  // /admin/builder/field-groups/*. Field groups have no content surface.
   // ============================================================
-  [ROUTES.BUILDER_COMPONENTS]: {
-    component: ComponentsPage,
+  [ROUTES.BUILDER_FIELD_GROUPS]: {
+    component: FieldGroupsPage,
     type: "private",
     requiresBuilder: true,
   },
-  [ROUTES.BUILDER_COMPONENTS_NEW]: {
-    component: ComponentBuilderPage,
+  [ROUTES.BUILDER_FIELD_GROUPS_NEW]: {
+    component: FieldGroupBuilderPage,
     type: "private",
     requiresBuilder: true,
   },
-  [ROUTES.BUILDER_COMPONENTS_EDIT]: {
-    component: ComponentBuilderEditPage,
+  [ROUTES.BUILDER_FIELD_GROUPS_EDIT]: {
+    component: FieldGroupBuilderEditPage,
     type: "private",
     requiresBuilder: true,
   },
@@ -409,8 +409,8 @@ if (process.env.NODE_ENV === "production") {
     ROUTES.BUILDER_COLLECTIONS_EDIT,
     ROUTES.BUILDER_SINGLES_NEW,
     ROUTES.BUILDER_SINGLES_EDIT,
-    ROUTES.BUILDER_COMPONENTS_NEW,
-    ROUTES.BUILDER_COMPONENTS_EDIT,
+    ROUTES.BUILDER_FIELD_GROUPS_NEW,
+    ROUTES.BUILDER_FIELD_GROUPS_EDIT,
   ];
   for (const key of devOnlyBuilderRoutes) {
     delete routeConfig[key];

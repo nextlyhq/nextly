@@ -20,7 +20,7 @@ const collectionConfig: BuilderConfig = {
 };
 
 const componentConfig: BuilderConfig = {
-  kind: "component",
+  kind: "field-group",
   basicsFields: ["singularName", "slug", "description", "icon"],
   advancedFields: ["category", "i18n", "showSystemFields"],
   toolbar: { previewSchemaChange: false },
