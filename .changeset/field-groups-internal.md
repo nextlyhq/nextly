@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Internal modules, services and DI keys for reusable field structures now use field-group naming. Removes an unused schema-code generator from the field group schema service. No stored data, table names, config keys or API surfaces change.
+Internal modules and services for reusable field structures now use field-group naming. This renames three container keys reachable through the exported `getService()`: `componentRegistryService`, `componentSchemaService` and `componentDataService` become `fieldGroupRegistryService`, `fieldGroupSchemaService` and `fieldGroupDataService`. The old keys are not aliased, so a call using one no longer resolves. The field group schema service also drops `generateSchemaCode()`, an unused generator that was reachable through that same accessor. Stored data, table names, config keys and HTTP routes are unchanged.
