@@ -15,6 +15,7 @@ import type {
 import { normalizeRelationshipValue } from "../../domains/collections/services/collection-utils";
 import { NextlyError } from "../../errors";
 
+import { detachData } from "./detach";
 import {
   formatRichTextOutput,
   isRichTextValue,
@@ -557,6 +558,27 @@ export function normalizeRelationshipFields(
       }
     }
   }
+}
+
+/**
+ * The document a validator is shown.
+ *
+ * A relationship read at a populating depth comes back as the related row, and
+ * a multi-target one wrapped with the collection it names. A field's public
+ * value is the document id, and a custom validator is written against that —
+ * handed a row it compares an object to a string, or calls a string method on
+ * it and throws, rejecting a form the user did not otherwise change.
+ *
+ * Reduced on a detached copy rather than in place, because the submitted shape
+ * is what the hooks between validation and storage still expect to see.
+ */
+export function relationshipValidationView(
+  data: Record<string, unknown>,
+  fields: FieldConfig[]
+): Record<string, unknown> {
+  const view = detachData(data);
+  normalizeRelationshipFields(view, fields);
+  return view;
 }
 
 /**

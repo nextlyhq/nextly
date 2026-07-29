@@ -1273,6 +1273,14 @@ export class FieldGroupMutationService extends BaseService {
         ],
       });
     }
+    // Reduced in place, and before validation, because both halves of the write
+    // depend on it. A validator is written against a field's public value, the
+    // document id, and would otherwise be handed the populated row. The
+    // localized split then copies values out of this same object into the
+    // companion payload, which never reaches `serializeComponentRow` — so a
+    // reference left populated here is stored there as a snapshot of the row.
+    normalizeRelationshipFields(instance, componentFields);
+
     const issues = await validateEntryData(instance, componentFields, { mode });
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });

@@ -58,6 +58,7 @@ import {
 import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
+  relationshipValidationView,
 } from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
@@ -656,7 +657,7 @@ export class SingleMutationService extends BaseService {
       // semantics: absent keys stay untouched, provided keys must hold.
       {
         const validationIssues = await validateEntryData(
-          currentData,
+          relationshipValidationView(currentData, fieldConfigs),
           attachFieldValidators("single", slug, fieldConfigs),
           {
             mode: "update",

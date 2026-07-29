@@ -58,7 +58,6 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
-import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -70,6 +69,7 @@ import {
 import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
+  relationshipValidationView,
 } from "../../../shared/lib/field-transform";
 import {
   hashPasswordFieldValues,
@@ -774,9 +774,7 @@ export class CollectionMutationService extends BaseService {
     data: Record<string, unknown>,
     fields: FieldDefinition[]
   ): Record<string, unknown> {
-    const view = detachData(data);
-    normalizeRelationshipFields(view, fields as unknown as FieldConfig[]);
-    return view;
+    return relationshipValidationView(data, fields as unknown as FieldConfig[]);
   }
 
   /**

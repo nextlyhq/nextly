@@ -1047,6 +1047,65 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     });
   });
 
+  // A field's public value is the document id, and a custom validator is
+  // written against that. Saving a Single read at depth hands the validator the
+  // populated row instead, so a check like `value.value.startsWith(...)` throws
+  // and blocks an edit to some unrelated field.
+  it("shows a validator the id when a populated single value is saved back", async () => {
+    const seen: unknown[] = [];
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: ["authors", "orgs"],
+              validate: (value: unknown) => {
+                seen.push(value);
+                return true;
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Ada" }
+    );
+    const authorId = (author.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        author: { relationTo: "authors", value: authorId },
+      },
+      { overrideAccess: true }
+    );
+
+    const read = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    seen.length = 0;
+    await entry.update(
+      "branding",
+      { siteName: "Acme Two", author: read.data!.author },
+      { overrideAccess: true }
+    );
+
+    expect(seen).toContainEqual({ relationTo: "authors", value: authorId });
+  });
+
   // A container is serialized to JSON wholesale, so a reference left populated
   // inside one is written as the row and never read back as a reference again.
   it("stores a reference for a populated value inside a group", async () => {
