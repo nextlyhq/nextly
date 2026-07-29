@@ -23,6 +23,7 @@ import type { UserContext } from "../domains/singles/types";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
+import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -481,6 +482,27 @@ export function assertDiffVersionPair(from: number, to: number): void {
       ],
     });
   }
+}
+
+/**
+ * Resolve the relationship and upload references in a version snapshot to the
+ * value kit's display shape, in place, for the caller.
+ *
+ * Runs AFTER redaction, on the same enriched schema the diff walks, so a
+ * preview renders labels through the one value kit and a field the caller may
+ * not read is dropped before its references are ever resolved. The dispatcher
+ * read and the standalone route both call this, so the fields-resolution and
+ * hydration are defined once rather than duplicated between them.
+ */
+export async function hydrateVersionSnapshot(
+  snapshot: unknown,
+  scopeKind: VersionScopeKind,
+  slug: string,
+  user: UserContext
+): Promise<void> {
+  const lookupKind = scopeKind === "single" ? "single" : "collection";
+  const fields = await resolveEnrichedFields(lookupKind, slug);
+  await hydrateSnapshotReferences(snapshot, fields, user);
 }
 
 /**

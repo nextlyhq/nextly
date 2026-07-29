@@ -15,14 +15,16 @@
 
 import type { UserContext } from "../singles/types";
 
-import type { FieldDiff, ResolvedReference } from "./diff/types";
+import type { FieldDiff } from "./diff/types";
 import {
+  referenceDisplayValue,
   referenceLabelKey,
   resolveReferenceLabels,
   storedRefsOf,
+  toReferenceRequest,
   type ReferenceKind,
   type ReferenceRequest,
-  type StoredRef,
+  type ResolvedReference,
 } from "./reference-labels";
 
 /** The reference kind a value node's field type resolves to, if any. */
@@ -44,33 +46,21 @@ function displayTargets(
 }
 
 /**
- * A resolvable request for one stored reference. The target collection is the
- * value's own when polymorphic, otherwise the field's first declared target;
- * uploads always resolve against media.
+ * One side of a value node resolved to the value kit's display shape, or the
+ * value returned unchanged when it carries no reference (an empty side, or one
+ * past the resolve cap whose id must be kept).
  */
-function toRequest(
-  kind: ReferenceKind,
-  stored: StoredRef,
-  displayCollections: string[]
-): ReferenceRequest | null {
-  const collection =
-    kind === "upload" ? "media" : (stored.relationTo ?? displayCollections[0]);
-  if (!collection || !stored.id) return null;
-  return { kind, collection, id: stored.id };
-}
-
-/** The resolved reference for one side of a value node, or null if none. */
-function resolvedFor(
+function resolveValueSide(
   value: unknown,
   kind: ReferenceKind,
   displayCollections: string[],
   labels: Map<string, ResolvedReference>
-): ResolvedReference | null {
+): unknown {
   const [stored] = storedRefsOf(value);
-  if (!stored) return null;
-  const request = toRequest(kind, stored, displayCollections);
-  if (!request) return null;
-  return labels.get(referenceLabelKey(request)) ?? null;
+  if (!stored) return value;
+  const request = toReferenceRequest(kind, stored, displayCollections);
+  const resolved = request ? labels.get(referenceLabelKey(request)) : undefined;
+  return referenceDisplayValue(stored, resolved);
 }
 
 /** Push every reference in the tree onto `out`, descending groups and lists. */
@@ -84,7 +74,7 @@ function collect(fields: FieldDiff[], out: ReferenceRequest[]): void {
           kind === "upload" ? ["media"] : displayTargets(node.display);
         for (const side of [node.before, node.after]) {
           for (const stored of storedRefsOf(side)) {
-            const request = toRequest(kind, stored, cols);
+            const request = toReferenceRequest(kind, stored, cols);
             if (request) out.push(request);
           }
         }
@@ -93,7 +83,7 @@ function collect(fields: FieldDiff[], out: ReferenceRequest[]): void {
       case "set": {
         const cols = displayTargets(node.display);
         for (const target of [...node.added, ...node.removed]) {
-          const request = toRequest(
+          const request = toReferenceRequest(
             "relationship",
             { id: target.id, relationTo: target.relationTo },
             cols
@@ -125,14 +115,14 @@ function annotate(
         if (!kind) break;
         const cols =
           kind === "upload" ? ["media"] : displayTargets(node.display);
-        node.beforeRef = resolvedFor(node.before, kind, cols, labels);
-        node.afterRef = resolvedFor(node.after, kind, cols, labels);
+        node.before = resolveValueSide(node.before, kind, cols, labels);
+        node.after = resolveValueSide(node.after, kind, cols, labels);
         break;
       }
       case "set": {
         const cols = displayTargets(node.display);
         for (const target of [...node.added, ...node.removed]) {
-          const request = toRequest(
+          const request = toReferenceRequest(
             "relationship",
             { id: target.id, relationTo: target.relationTo },
             cols

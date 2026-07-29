@@ -22,7 +22,6 @@ import type {
   FieldDiff,
   ListItemDiff,
   RelationTarget,
-  ResolvedReference,
   TextSegment,
   ValueFieldDiff,
 } from "@admin/services/versionApi";
@@ -133,39 +132,44 @@ function ValueSide({
 }
 
 /**
- * The before/after presentation shared by scalar and reference values: added
- * shows one value, removed shows one struck value, changed shows both labelled,
- * and unchanged shows the value once. `renderSide` draws a single side (the
- * typed kit for a scalar, a resolved label for a reference), so the labelling
- * stays in one place while each side can consult its own resolved data.
+ * The before/after presentation shared by every value node: added shows one
+ * value, removed shows one struck value, changed shows both labelled, and
+ * unchanged shows the value once. `renderValue` draws a single side through the
+ * typed value kit, so the labelling stays in one place. A relationship or upload
+ * value is resolved into the kit's display shape upstream, so the kit renders
+ * its label with no reference-specific handling here.
  */
 function BeforeAfter({
   status,
-  renderSide,
+  before,
+  after,
+  renderValue,
 }: {
   status: DiffStatus;
-  renderSide: (side: "before" | "after") => React.ReactNode;
+  before: unknown;
+  after: unknown;
+  renderValue: (value: unknown) => React.ReactNode;
 }) {
   if (status === "added") {
-    return <ValueSide label="New value">{renderSide("after")}</ValueSide>;
+    return <ValueSide label="New value">{renderValue(after)}</ValueSide>;
   }
   if (status === "removed") {
     return (
       <ValueSide label="Removed value" struck>
-        {renderSide("before")}
+        {renderValue(before)}
       </ValueSide>
     );
   }
   if (status === "unchanged") {
     // Nothing changed: show the value once, unlabelled and not struck.
-    return <>{renderSide("after")}</>;
+    return <>{renderValue(after)}</>;
   }
   return (
     <div className="flex flex-col gap-1">
       <ValueSide label="Before" struck>
-        {renderSide("before")}
+        {renderValue(before)}
       </ValueSide>
-      <ValueSide label="After">{renderSide("after")}</ValueSide>
+      <ValueSide label="After">{renderValue(after)}</ValueSide>
     </div>
   );
 }
@@ -183,30 +187,6 @@ function targetKey(target: RelationTarget): string {
 function targetLabel(target: RelationTarget): string {
   const display = target.label ?? target.id;
   return target.relationTo ? `${target.relationTo}: ${display}` : display;
-}
-
-/**
- * One resolved relationship or upload reference. Media shows a thumbnail and
- * filename; a relationship shows its label, or its id (muted) when the target is
- * unreadable or unlabelled, so a reference is never silently dropped.
- */
-function ReferenceValue({ reference }: { reference: ResolvedReference }) {
-  if (reference.media) {
-    const src = reference.media.thumbnailUrl ?? reference.media.url;
-    return (
-      <span className="inline-flex items-center gap-1.5">
-        {src ? (
-          <img src={src} alt="" className="h-5 w-5 rounded object-cover" />
-        ) : null}
-        <span>{reference.media.filename ?? reference.id}</span>
-      </span>
-    );
-  }
-  return reference.label != null ? (
-    <span>{reference.label}</span>
-  ) : (
-    <span className="text-muted-foreground">{reference.id}</span>
-  );
 }
 
 export function FieldDiffNode({ node }: { node: FieldDiff }) {
@@ -227,24 +207,18 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
       // The value is already normalized by the engine, so the kit renders it
       // without normalizing a second time. A schema-less container never reaches
       // here: the engine emits it as an unknown node so its value stays hidden.
+      // A relationship or upload value arrives resolved to the kit's display
+      // shape, so the same kit renders its label with no special-casing here.
       const field = renderField(node);
-      const isReference =
-        node.type === "relationship" || node.type === "upload";
       return (
         <FieldRow label={node.label} status={node.status}>
           <BeforeAfter
             status={node.status}
-            renderSide={side => {
-              const value = side === "before" ? node.before : node.after;
-              const reference =
-                side === "before" ? node.beforeRef : node.afterRef;
-              // A resolved reference renders its label; anything else (a scalar,
-              // or a reference past the resolve cap) falls back to the raw value.
-              if (isReference && reference) {
-                return <ReferenceValue reference={reference} />;
-              }
-              return <FieldValue field={field} value={value} preNormalized />;
-            }}
+            before={node.before}
+            after={node.after}
+            renderValue={value => (
+              <FieldValue field={field} value={value} preNormalized />
+            )}
           />
         </FieldRow>
       );

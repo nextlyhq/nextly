@@ -23,7 +23,26 @@
 import { getService } from "../../di";
 import type { UserContext } from "../singles/types";
 
-import type { ResolvedReference } from "./diff/types";
+/** Media detail a history view renders for a resolved upload reference. */
+export interface ResolvedMedia {
+  originalFilename: string | null;
+  filename: string | null;
+  url: string | null;
+  thumbnailUrl: string | null;
+  mimeType: string | null;
+}
+
+/**
+ * A relationship or upload reference resolved to display data. `label` is a
+ * relationship's display string (null when the target is unreadable or
+ * unlabelled); `media` carries an upload's file detail. The id is always kept,
+ * so the value a caller renders never loses its identity.
+ */
+export interface ResolvedReference {
+  id: string;
+  label: string | null;
+  media?: ResolvedMedia;
+}
 
 /**
  * Upper bound on how many distinct references one payload resolves.
@@ -108,6 +127,22 @@ export function storedRefsOf(value: unknown): StoredRef[] {
   return [];
 }
 
+/**
+ * A resolvable request for one stored reference. The target collection is the
+ * value's own when polymorphic, otherwise the field's first declared target;
+ * an upload always resolves against media. Null when no collection is known.
+ */
+export function toReferenceRequest(
+  kind: ReferenceKind,
+  stored: StoredRef,
+  collections: string[]
+): ReferenceRequest | null {
+  const collection =
+    kind === "upload" ? "media" : (stored.relationTo ?? collections[0]);
+  if (!collection || !stored.id) return null;
+  return { kind, collection, id: stored.id };
+}
+
 /** First populated candidate column, or null when none carries a string. */
 function labelFor(row: Record<string, unknown>): string | null {
   for (const key of LABEL_FIELDS) {
@@ -167,7 +202,13 @@ async function resolveUpload(
   const unresolved: ResolvedReference = {
     id: ref.id,
     label: null,
-    media: { filename: null, url: null, thumbnailUrl: null, mimeType: null },
+    media: {
+      originalFilename: null,
+      filename: null,
+      url: null,
+      thumbnailUrl: null,
+      mimeType: null,
+    },
   };
 
   try {
@@ -183,8 +224,11 @@ async function resolveUpload(
     const file = await media.findById(ref.id, {});
     return {
       id: ref.id,
-      label: file.filename ?? null,
+      // The user-facing name, falling back to the internal filename, matching
+      // what every other admin surface shows for an upload.
+      label: file.originalFilename ?? file.filename ?? null,
       media: {
+        originalFilename: file.originalFilename ?? null,
         filename: file.filename ?? null,
         url: file.url ?? null,
         thumbnailUrl: file.thumbnailUrl ?? null,
@@ -228,4 +272,37 @@ export async function resolveReferenceLabels(
     })
   );
   return resolved;
+}
+
+/**
+ * The value form a resolved reference takes in the read-only value kit, which
+ * already renders `{ id, label }` relationships and `{ id, filename,
+ * thumbnailUrl, ... }` uploads. Resolving into that shape in place lets the
+ * preview and the diff reuse the one kit rather than a second renderer.
+ *
+ * A polymorphic relationship keeps its `{ relationTo, value }` wrapper (with the
+ * label inlined) so the kit still reads it as polymorphic. When the reference
+ * was not resolved (past the cap), the original stored form is returned so the
+ * id is never lost.
+ */
+export function referenceDisplayValue(
+  stored: StoredRef,
+  resolved: ResolvedReference | undefined
+): unknown {
+  if (!resolved) {
+    return stored.relationTo !== undefined
+      ? { relationTo: stored.relationTo, value: stored.id }
+      : stored.id;
+  }
+  if (resolved.media) {
+    return { id: resolved.id, ...resolved.media };
+  }
+  if (stored.relationTo !== undefined) {
+    return {
+      relationTo: stored.relationTo,
+      value: resolved.id,
+      label: resolved.label,
+    };
+  }
+  return { id: resolved.id, label: resolved.label };
 }

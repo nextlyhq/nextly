@@ -15,6 +15,7 @@ import {
   assertVersionDocumentReadable,
   assertVersionDocumentUpdatable,
   diffDocumentVersions,
+  hydrateVersionSnapshot,
   redactSnapshotForUser,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
@@ -206,6 +207,16 @@ export async function getVersionForDocument(
   );
 
   await redactSnapshotForUser(
+    row.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user
+  );
+
+  // Resolve relationship and upload ids in the snapshot to display labels
+  // through the access-checked path, so a preview renders labels rather than
+  // ids. Runs after redaction, so a dropped field is never resolved.
+  await hydrateVersionSnapshot(
     row.snapshot,
     args.scopeKind,
     args.slug,
