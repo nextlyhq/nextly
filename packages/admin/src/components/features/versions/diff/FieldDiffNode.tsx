@@ -177,20 +177,6 @@ function targetLabel(target: RelationTarget): string {
   return target.relationTo ? `${target.relationTo}: ${target.id}` : target.id;
 }
 
-/** A raw value from a dropped field, whose type is unknown. */
-function formatUnknown(value: unknown): string {
-  if (value === null || value === undefined) return "Not set";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  try {
-    return JSON.stringify(value) ?? "";
-  } catch {
-    return "[unserializable]";
-  }
-}
-
 export function FieldDiffNode({ node }: { node: FieldDiff }) {
   switch (node.kind) {
     case "text": {
@@ -206,29 +192,19 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "value": {
-      // A value node typed as a container is the engine's opaque fallback for a
-      // component or group whose schema no longer resolves; its value is the raw
-      // stored object. Render that plainly rather than through the typed kit,
-      // which would show an empty shell. Every other value is already normalized
-      // by the engine, so the kit renders it without normalizing a second time.
-      const isOpaqueContainer =
-        node.type === "group" || node.type === "component";
+      // The value is already normalized by the engine, so the kit renders it
+      // without normalizing a second time. A schema-less container never reaches
+      // here: the engine emits it as an unknown node so its value stays hidden.
       const field = renderField(node);
-      const renderValue = (value: unknown) =>
-        isOpaqueContainer ? (
-          <code className="block text-sm break-words">
-            {formatUnknown(value)}
-          </code>
-        ) : (
-          <FieldValue field={field} value={value} preNormalized />
-        );
       return (
         <FieldRow label={node.label} status={node.status}>
           <BeforeAfter
             status={node.status}
             before={node.before}
             after={node.after}
-            renderValue={renderValue}
+            renderValue={value => (
+              <FieldValue field={field} value={value} preNormalized />
+            )}
           />
         </FieldRow>
       );
@@ -305,14 +281,15 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "unknown": {
-      // A field gone from the current schema has no findable access rule, so its
-      // historical value cannot be proven readable and the engine withholds it.
-      // Only the field's name and that it changed are shown.
+      // A field (or a container's children) gone from the current schema has no
+      // findable access rule, so its historical value cannot be proven readable
+      // and the engine withholds it. Only the field name and that it changed are
+      // shown.
       return (
         <FieldRow label={node.name} status={node.status}>
           <p className="text-xs text-muted-foreground">
-            This field is no longer in the schema; its value is hidden because
-            its access rules can no longer be verified.
+            Value hidden: the schema needed to verify who may read this field is
+            no longer available.
           </p>
         </FieldRow>
       );

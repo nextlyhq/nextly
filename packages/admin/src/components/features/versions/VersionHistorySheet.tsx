@@ -222,7 +222,12 @@ export function VersionHistorySheet({
   // pages, so a lone-locale version in a long history does not walk the whole
   // list to prove no target exists. The manual "Load more" control stays
   // available to search deeper.
-  const previousSearchRef = useRef<{ selected: number | null; pages: number }>({
+  const previousSearchRef = useRef<{
+    scopeId: string | null;
+    selected: number | null;
+    pages: number;
+  }>({
+    scopeId: null,
     selected: null,
     pages: 0,
   });
@@ -234,7 +239,11 @@ export function VersionHistorySheet({
     // trust.
     if (isRefetching) return;
     const search = previousSearchRef.current;
-    if (search.selected !== selected) {
+    // Keyed by document too: version numbers repeat across documents, so a spent
+    // budget for version N in one document must not suppress paging for version N
+    // in another.
+    if (search.scopeId !== scopeId || search.selected !== selected) {
+      search.scopeId = scopeId;
       search.selected = selected;
       search.pages = 0;
     }
@@ -248,6 +257,7 @@ export function VersionHistorySheet({
       void fetchNextPage();
     }
   }, [
+    scopeId,
     selected,
     canComparePrevious,
     isRefetching,
@@ -365,7 +375,9 @@ export function VersionHistorySheet({
                     variant="outline"
                     size="sm"
                     className="w-full"
-                    disabled={isFetchingNextPage}
+                    // Disabled during a head revalidation too: `fetchNextPage`
+                    // would otherwise cancel it and leave a stale head.
+                    disabled={isFetchingNextPage || isRefetching}
                     onClick={() => void fetchNextPage()}
                   >
                     {isFetchingNextPage ? "Loading…" : "Load more"}
