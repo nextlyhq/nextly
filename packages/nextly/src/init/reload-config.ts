@@ -99,8 +99,9 @@ type LoggerLike = {
 interface AdapterLike {
   readonly dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle<T = unknown>(): T;
-  // Needed to provision the localized companion below: creating it is DDL, and
-  // seeding it from the main table is a write.
+  // Needed to provision the localized companion below: creating the table and adding
+  // columns to it are both DDL, and the status backfill that accompanies a new `_status`
+  // column is a write.
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
@@ -556,8 +557,14 @@ function republishRecordingPolicies(
 }
 
 /**
- * Create and seed the `_locales` companion of every localized collection, single and field group
- * in the reloaded config.
+ * Create, and bring into step, the `_locales` companion of every localized collection, single
+ * and field group in the reloaded config.
+ *
+ * It does NOT seed existing content into the companion. `ensureCompanionTable` is
+ * creation-only and leaves whatever is already on the main table where it is, so a successful
+ * reload is not evidence that default-locale data has been carried across — enabling
+ * localization on an entity that already has content still leaves that content unreadable
+ * until the transition seeds it. Copying it is the gated pipeline's job.
  *
  * The reload path is the `next dev` counterpart to the CLI's `ensureLocalizedCompanions`: it is
  * where a config edit lands when the app is running under plain `next dev` rather than
@@ -665,6 +672,10 @@ async function ensureLocalizedCompanionsForReload(
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
           status: entity.status === true,
+          // Lets the reconcile backfill the default-locale row's status from the main row
+          // when `_status` has to be added; without it, already-published content reads as
+          // draft and drops out of published localized reads.
+          defaultLocale: config.localization?.defaultLocale,
         },
         error => {
           console.warn(

@@ -203,27 +203,6 @@ export class FieldGroupMutationService extends BaseService {
       ? (tx.presence.get(meta.slug) ?? false)
       : await companionTableExists(this.adapter, schema.companionTableName);
     if (!companionExists) {
-      // A payload carrying nothing companion-owned has no stake in the missing table: no
-      // translatable value to strand, none to overwrite. A shared-only edit is therefore safe
-      // and must not be refused. Note this is evaluated on the REAL payload, so the
-      // pre-transaction pass — which calls with `{}` purely to reach the existence decision —
-      // is unaffected and still records presence for every slug the write touches.
-      const { companion: localizedInPayload } = splitLocalizedWrite(
-        data,
-        schema.localizedFields
-      );
-      if (
-        Object.keys(data).length > 0 &&
-        Object.keys(localizedInPayload).length === 0
-      ) {
-        return {
-          schema: null,
-          main: data,
-          companion: {},
-          companionExists: false,
-        };
-      }
-
       const writeLocale = resolveRequestedLocale(this.localization, locale);
       if (writeLocale !== this.localization.defaultLocale) {
         throw NextlyError.conflict({

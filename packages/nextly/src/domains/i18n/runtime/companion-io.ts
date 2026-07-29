@@ -210,6 +210,13 @@ export async function reconcileCompanionColumns(
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
+    /**
+     * The configured default locale. Needed only when `_status` has to be ADDed: the builder
+     * backfills the default-locale companion row's status from the main row, which is the row
+     * whose status it actually is. Omitting it leaves already-published content reading as
+     * draft.
+     */
+    defaultLocale?: string;
   },
   onError?: (error: unknown) => void
 ): Promise<void> {
@@ -270,6 +277,13 @@ export async function reconcileCompanionColumns(
       // went on to decline it. Removing it stays the gated pipeline's job.
       status: wantStatus || hasStatus,
       companionHasStatus: hasStatus,
+      // Required for the builder to emit its default-locale status backfill. ADD COLUMN seeds
+      // every existing companion row at 'draft', including the default-locale row — but the
+      // default locale's status IS the main row's, which may already be 'published'. Without
+      // this, enabling Draft/Published on an entity that already has content makes all of it
+      // read as draft and vanish from published localized reads until each row is republished
+      // by hand.
+      defaultLocale: args.defaultLocale,
       companionExists: true,
     });
     for (const stmt of statements) {

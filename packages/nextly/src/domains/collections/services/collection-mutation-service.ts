@@ -92,7 +92,6 @@ import {
 import {
   companionTableExists as sharedCompanionTableExists,
   mainTableHasColumn,
-  splitLocalizedWrite,
 } from "../../i18n/runtime/companion-io";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -966,21 +965,6 @@ export class CollectionMutationService extends BaseService {
       // its own process while the running server has yet to create the companion.
       // Refuse either way; the default language still writes to main, which is
       // the documented pre-migration fallback.
-      // Before refusing anything: a payload carrying nothing companion-owned has no stake
-      // in the missing table. There is no translatable value to strand and none to
-      // overwrite, so a shared-only edit — a PATCH of one non-translatable field, say — is
-      // entirely safe and must not be blocked. Both refusals below are about protecting
-      // translatable values, and this payload has none.
-      //
-      // Membership goes through the canonical split rather than a hand-rolled key check,
-      // because it accepts either the camelCase field name or the snake_case companion
-      // column, and collection writes arrive already converted to snake_case.
-      const { companion: localizedInPayload } = splitLocalizedWrite(
-        entryData,
-        companion.localizedFields
-      );
-      if (Object.keys(localizedInPayload).length === 0) return null;
-
       const requested = resolveRequestedLocale(this.localization, locale);
       if (requested !== this.localization.defaultLocale) {
         throw NextlyError.conflict({

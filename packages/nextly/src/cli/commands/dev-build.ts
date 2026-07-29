@@ -879,8 +879,8 @@ export async function ensureLocalizedCompanions(
       // entity that is already localized leaves the companion a column short — while the
       // main-table sync above has already added that column to `comp_*` / `dc_*`. The write
       // then splits the value into a companion column that does not exist. Additive only,
-      // and confined to `db:sync`: the reload path stays creation-only, because a running
-      // deployment must not alter its schema off a config edit.
+      // Additive only. The reload path reconciles too — it is dev-only, behind its own
+      // production return — so the two stay in step.
       await reconcileCompanionColumns(
         adapter as unknown as DrizzleAdapter,
         {
@@ -889,6 +889,10 @@ export async function ensureLocalizedCompanions(
           fields: entity.fields ?? [],
           dialect,
           status: entity.status === true,
+          // Lets the reconcile backfill the default-locale row's status from the main row
+          // when `_status` has to be added; without it, already-published content reads as
+          // draft and drops out of published localized reads after a sync.
+          defaultLocale: config.localization?.defaultLocale,
         },
         error => {
           logger.error(

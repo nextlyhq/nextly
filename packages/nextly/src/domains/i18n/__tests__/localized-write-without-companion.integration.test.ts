@@ -437,66 +437,56 @@ describe.each(getConfiguredTestDialects())(
   }
 );
 
-/**
- * The guard exists to protect translatable values, so a payload that carries none of them has
- * nothing to protect. Editing only a shared field while the companion is missing touches neither
- * the absent table nor the default language, and refusing it would block a perfectly safe write —
- * an editor changing one non-translatable field in a non-default locale would simply be stuck.
- */
 describe.each(getConfiguredTestDialects())(
-  "shared-only write with no companion on %s (integration)",
+  "non-repeatable dynamic zone with no companion on %s (integration)",
   dialect => {
-    it("permits a non-default-locale edit that touches no translatable field", async () => {
+    it("refuses with a 409 rather than a database failure", async () => {
       current = await createTestNextly({
         dialect,
-        collections: [mixedPosts(true)],
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "znsingle",
+            localized: true,
+            fields: [text({ name: "heading", localized: true })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "i18nwin_single",
+            fields: [
+              text({ name: "title" }),
+              // No `repeatable`, so the payload below is one object, not an array.
+              fieldGroup({ name: "hero", components: ["znsingle"] }),
+            ],
+          }),
+        ],
         localization,
       });
+
+      await current.adapter.executeQuery(
+        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`comp_znsingle_locales`" : '"comp_znsingle_locales"'}`
+      );
 
       const created = await current
         .getService<CollectionsHandler>("collectionsHandler")
         .createEntry(
           {
-            collectionName: "i18nwin_mixed",
-            overrideAccess: true,
-            locale: "en",
-          },
-          { title: "Original", author: "Ada" }
-        );
-      expect(created.success).toBe(true);
-      const id = (created.data as { id: string }).id;
-
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_mixed_locales`" : '"dc_i18nwin_mixed_locales"'}`
-      );
-
-      // `author` is the only shared field; `title` is companion-owned and absent here.
-      const updated = await current
-        .getService<CollectionsHandler>("collectionsHandler")
-        .updateEntry(
-          {
-            collectionName: "i18nwin_mixed",
-            entryId: id,
+            collectionName: "i18nwin_single",
             overrideAccess: true,
             locale: "es",
           },
-          { author: "Grace" }
+          {
+            title: "Page",
+            hero: { _componentType: "znsingle", heading: "Hola" },
+          }
         );
 
-      expect(
-        updated.success
-          ? "ok"
-          : `refused ${updated.statusCode}: ${updated.message}`
-      ).toBe("ok");
-
-      const rows = await current.adapter.executeQuery<{ author: string }>(
-        `SELECT author FROM ${dialect === "mysql" ? "`dc_i18nwin_mixed`" : '"dc_i18nwin_mixed"'}`
-      );
-      expect(rows[0]?.author).toBe("Grace");
+      expect(created.success).toBe(false);
+      expect(created.statusCode).toBe(409);
+      expect(created.message).toMatch(/Translations are not ready/);
     });
   }
 );
-
 describe("dynamic zone whose unused field group has no companion (integration)", () => {
   it("saves a block type whose companion exists while another permitted type's is missing", async () => {
     current = await createTestNextly({
