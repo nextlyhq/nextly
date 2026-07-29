@@ -610,6 +610,12 @@ function diffField(
           ...meta,
           kind: "group",
           status: statusFromPresence(before, after, true),
+          // Carry the type transition so a swap still shows what changed even
+          // when neither component instance has field values to diff.
+          ...(beforeType !== undefined
+            ? { componentTypeBefore: beforeType }
+            : {}),
+          ...(afterType !== undefined ? { componentTypeAfter: afterType } : {}),
           fields: componentSwapFields(
             field,
             beforeType,

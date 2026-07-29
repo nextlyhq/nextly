@@ -71,6 +71,15 @@ export interface ValueFieldDiff extends FieldDiffBase {
 export interface GroupFieldDiff extends FieldDiffBase {
   kind: "group";
   fields: FieldDiff[];
+  /**
+   * For a dynamic-zone component whose stored type changed between versions, the
+   * before and after component slugs (either side is absent when the component
+   * appeared or disappeared). Carried so a type swap still shows what changed
+   * even when both schemas have no field values to diff. Absent for a plain
+   * group or a fixed-schema component.
+   */
+  componentTypeBefore?: string;
+  componentTypeAfter?: string;
 }
 
 /**

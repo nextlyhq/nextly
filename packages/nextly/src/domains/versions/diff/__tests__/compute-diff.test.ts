@@ -68,6 +68,31 @@ describe("computeVersionDiff — per field kind", () => {
     if (node.kind === "value") expect(node.display).toBeUndefined();
   });
 
+  it("carries the component type transition on a dynamic-zone swap", () => {
+    const zone = field({
+      name: "block",
+      type: "component",
+      components: ["hero", "cta"],
+      componentSchemas: {
+        hero: { fields: [field({ name: "headline", type: "text" })] },
+        cta: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    // Both instances carry only their discriminator: no field values to diff, so
+    // the type change is the only visible change and must survive on the node.
+    const diff = computeVersionDiff(
+      { block: { _componentType: "hero" } },
+      { block: { _componentType: "cta" } },
+      [zone]
+    );
+    expect(diff.fields[0]).toMatchObject({
+      kind: "group",
+      status: "changed",
+      componentTypeBefore: "hero",
+      componentTypeAfter: "cta",
+    });
+  });
+
   it("diffs a text field into word segments", () => {
     const diff = computeVersionDiff(
       { title: "hello world" },
