@@ -104,6 +104,12 @@ export function withoutDisabledBehavior(
   const declarative = { ...fieldType };
   delete declarative.validate;
   delete declarative.validateOptions;
+  // `codegen` is behavior too: its callbacks are the plugin's code, run by
+  // `nextly build` and `generate:types`. Left in place, a disabled plugin would
+  // keep shaping generated output and could fail the app's build. Dropping it
+  // makes generation fall back to the storage primitive, which is declarative
+  // and is what the retained schema means.
+  delete declarative.codegen;
   return declarative;
 }
 

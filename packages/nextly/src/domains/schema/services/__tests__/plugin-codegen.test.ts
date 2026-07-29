@@ -16,6 +16,7 @@ import type { DynamicCollectionRecord } from "../../../../schemas/dynamic-collec
 import {
   clearFieldTypes,
   registerFieldType,
+  withoutDisabledBehavior,
 } from "../../field-types/field-type-registry";
 import { TypeGenerator } from "../type-generator";
 import { ZodGenerator } from "../zod-generator";
@@ -314,6 +315,22 @@ describe("codegen import collisions", () => {
   });
 });
 
+describe("disabled plugins", () => {
+  it("does not run codegen callbacks for a disabled plugin's type", () => {
+    registerFieldType(withoutDisabledBehavior(RATING, { enabled: false }));
+    const file = new TypeGenerator().generateTypesFile([
+      collection([
+        { name: "score", type: "star-rating", ratingScale: { max: 5 } },
+      ]),
+    ]);
+
+    // Its callbacks are the plugin's code; a disabled plugin contributes none,
+    // so generation falls back to what the type stores.
+    expect(file.code).toContain("score?: number;");
+    expect(file.code).not.toContain("@acme/ratings");
+  });
+});
+
 describe("plugin field types in the Zod generator", () => {
   it("emits the schema the field's own type declares", () => {
     registerFieldType(RATING);
@@ -355,6 +372,55 @@ describe("plugin field types in the Zod generator", () => {
     expect(schema.code).toContain(
       'import type { Rating } from "@acme/ratings";'
     );
+  });
+
+  it("refuses a Zod import colliding with a binding the file already holds", () => {
+    registerFieldType({
+      type: "z-ish",
+      storage: "number",
+      component: "@acme/z/admin#Input",
+      codegen: {
+        imports: [{ names: ["z"], from: "@acme/z" }],
+        zodSchema: () => "z.number()",
+      },
+    });
+
+    // The file imports `z` from zod at the top, so a second binding of that
+    // name would not compile.
+    let message = "";
+    try {
+      new ZodGenerator().generateSchema(
+        collection([{ name: "n", type: "z-ish" }])
+      );
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'z'");
+  });
+
+  it("omits an import the Zod expression does not need", () => {
+    // `RATING` declares its import for the TypeScript expression; the Zod file
+    // emitting it too would be an unused import under `noUnusedLocals`.
+    registerFieldType({
+      type: "ts-only",
+      storage: "number",
+      component: "@acme/tsonly/admin#Input",
+      codegen: {
+        imports: [{ names: ["OnlyTs"], from: "@acme/tsonly" }],
+        tsType: () => "OnlyTs",
+      },
+    });
+
+    const schema = new ZodGenerator().generateSchema(
+      collection([{ name: "n", type: "ts-only" }])
+    );
+
+    expect(schema.code).not.toContain("@acme/tsonly");
   });
 
   it("reads an option the Schema Builder moved into the container", () => {

@@ -139,13 +139,16 @@ function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
  * The `import type` lines a generated file needs for the plugin types it uses.
  *
  * Collected from the fields actually emitted, so a registered type nobody
- * declares adds nothing. Names are merged per module and sorted, so the file is
- * byte-identical between runs — it is committed, and an unstable import block
- * would read as a change on every build.
+ * declares adds nothing, and scoped to the callback the file is generated from,
+ * so a name only the other one needs is not emitted here unused. Names are
+ * merged per module and sorted, so the file is byte-identical between runs — it
+ * is committed, and an unstable import block would read as a change on every
+ * build.
  */
 export function pluginCodegenImports(
   entities: ReadonlyArray<{ fields?: unknown }>,
-  declaredNames: ReadonlySet<string> = new Set()
+  declaredNames: ReadonlySet<string> = new Set(),
+  usedBy: "tsType" | "zodSchema" = "tsType"
 ): string[] {
   const byModule = new Map<string, Set<string>>();
   // Which module first claimed each local name. Two modules exporting the same
@@ -209,8 +212,13 @@ export function pluginCodegenImports(
   for (const entity of entities) {
     if (!Array.isArray(entity?.fields)) continue;
     for (const field of walkFields(entity.fields)) {
-      const imports = codegenFor(field)?.imports;
-      if (imports) record(imports);
+      const codegen = codegenFor(field);
+      // Only when the callback this file is generated from exists. A name a
+      // type needs for its TypeScript expression is not needed in the Zod file,
+      // and emitting it there is an unused import — which fails a consuming app
+      // compiled with `noUnusedLocals`.
+      if (!codegen?.imports || codegen[usedBy] === undefined) continue;
+      record(codegen.imports);
     }
   }
 

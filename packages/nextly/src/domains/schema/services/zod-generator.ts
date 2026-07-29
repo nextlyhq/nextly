@@ -230,8 +230,33 @@ export class ZodGenerator {
    * identifier it never imported and break the consuming app's build.
    */
   private generateImports(collection: DynamicCollectionRecord): string {
-    const pluginImports = pluginCodegenImports([collection]);
+    const pluginImports = pluginCodegenImports(
+      [collection],
+      this.declaredNames(collection),
+      "zodSchema"
+    );
     return [`import { z } from "zod";`, ...pluginImports].join("\n");
+  }
+
+  /**
+   * Every binding this file already holds.
+   *
+   * `z` is imported at the top, and the schema and inferred-type exports are
+   * declared below. An import sharing any of those names conflicts with what is
+   * already there, so the scan is given them to refuse the clash before the file
+   * is written.
+   */
+  private declaredNames(collection: DynamicCollectionRecord): Set<string> {
+    const schemaName = this.getSchemaName(collection.slug);
+    return new Set([
+      "z",
+      schemaName,
+      `${schemaName}Schema`,
+      `${schemaName}CreateInput`,
+      `${schemaName}CreateInputSchema`,
+      `${schemaName}UpdateInput`,
+      `${schemaName}UpdateInputSchema`,
+    ]);
   }
 
   // ============================================================
