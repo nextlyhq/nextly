@@ -1393,6 +1393,8 @@ export class SingleMutationService extends BaseService {
               // content — the exact data loss this capture exists to prevent.
               // The component subtrees are read only when the service is present.
               preRestoreComponents = {};
+              // The named component fields whose current subtrees the snapshot
+              // must read before the restore overwrites them.
               const preComponentFields = fieldConfigs.filter(
                 (f): f is typeof f & { name: string } =>
                   isComponentField(f) && !!f.name
