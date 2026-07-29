@@ -122,15 +122,20 @@ export function VersionHistorySheet({
       : `collection:${scope.slug}:${scope.entryId ?? ""}`;
 
   // Reset every mode when the document changes under a still-open sheet: the
-  // custom admin router can navigate between entries without unmounting, and a
-  // surviving `selected`/`comparing` would request the new document's versions
-  // and (via keepPreviousData) briefly show the previous document's diff.
-  useEffect(() => {
+  // custom admin router can navigate between entries without unmounting. This
+  // resets DURING render, not in an effect, so the very first render under the
+  // new scope already has the modes cleared. An effect would run one render too
+  // late, letting that interim render mount the diff view with the previous
+  // document's version pair, fetch it against the new document, and briefly
+  // paint the old diff via keepPreviousData.
+  const [renderedScopeId, setRenderedScopeId] = useState(scopeId);
+  if (renderedScopeId !== scopeId) {
+    setRenderedScopeId(scopeId);
     setSelected(null);
     setComparing(null);
     setConfirmingRestore(false);
     setRenaming(null);
-  }, [scopeId]);
+  }
 
   const list = useVersions({ scope, enabled: open });
   // Destructured so the boundary-fetch effect can depend on the paging members
@@ -199,18 +204,24 @@ export function VersionHistorySheet({
     sameLocaleIndex >= 0
       ? (sameLocaleVersions[sameLocaleIndex + 1]?.versionNo ?? null)
       : null;
+  // The previewed version must still be in the refreshed list. Retention can
+  // prune it out from under the preview (a save in another tab, then a focus
+  // refetch), and comparing a version that no longer exists would request a diff
+  // whose `from` 404s.
+  const selectedPresent =
+    selected !== null && versions.some(v => v.versionNo === selected);
   // "Current" is only offered once the list has revalidated: reopening after a
   // save serves the cached head while `staleTime: 0` refetches, and comparing
   // against that stale head would mislabel an outdated version as current. A
   // failed revalidation clears `isRefetching` but leaves the head stale, so
   // `isRefetchError` keeps the action disabled until a fetch succeeds.
   const canCompareCurrent =
-    selected !== null &&
+    selectedPresent &&
     latestVersionNo !== null &&
     selected !== latestVersionNo &&
     !isRefetching &&
     !isRefetchError;
-  const canComparePrevious = selected !== null && previousVersionNo !== null;
+  const canComparePrevious = selectedPresent && previousVersionNo !== null;
 
   // When previewing a version whose previous same-locale version has not loaded
   // yet, page forward until it resolves or history runs out. Interleaved locales
