@@ -1,8 +1,8 @@
 /**
- * Components API Route Handlers for Next.js
+ * Field Groups API Route Handlers for Next.js
  *
  * These route handlers can be re-exported in your Next.js application to provide
- * component definition management endpoints at /api/components.
+ * component definition management endpoints at /api/field-groups.
  *
  * Services are auto-initialized on first request using environment variables:
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
@@ -10,11 +10,11 @@
  *
  * @example
  * ```typescript
- * // In your Next.js app: app/api/components/route.ts
- * export { GET, POST } from 'nextly/api/components';
+ * // In your Next.js app: app/api/field-groups/route.ts
+ * export { GET, POST } from 'nextly/api/field-groups';
  * ```
  *
- * @module api/components
+ * @module api/field-groups
  */
 
 import { z } from "zod";
@@ -85,7 +85,7 @@ const createComponentSchema = z.object({
  *
  * @example
  * ```bash
- * curl "http://localhost:3000/api/components?source=ui&limit=10"
+ * curl "http://localhost:3000/api/field-groups?source=ui&limit=10"
  * # => {"items":[...],"meta":{"total":5,"page":1,"limit":10,"totalPages":1,"hasNext":false,"hasPrev":false}}
  * ```
  */

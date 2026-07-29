@@ -22,6 +22,24 @@ describe("component route auth tier", () => {
     expect(requiresAuthOnly("field-groups", "getComponent")).toBe(true);
   });
 
+  it("keeps field-group mutations behind a permission check", () => {
+    // Mutations must be neither public nor merely authenticated: they resolve
+    // to the settings grants in `resolveAuthorization`, which keys on this same
+    // service name. A rename that moves the parser but not that branch drops
+    // these into the default `<action>-field-groups` grants, which are never
+    // seeded — so every mutation 403s for users who should be allowed.
+    for (const method of [
+      "createComponent",
+      "updateComponent",
+      "deleteComponent",
+      "previewComponentSchemaChanges",
+      "applyComponentSchemaChanges",
+    ]) {
+      expect(isPublicEndpoint("field-groups", method)).toBe(false);
+      expect(requiresAuthOnly("field-groups", method)).toBe(false);
+    }
+  });
+
   it("keeps genuinely public endpoints public", () => {
     // Regression guard: the change must not tighten unrelated public routes.
     expect(isPublicEndpoint("forms", "submit")).toBe(true);
