@@ -34,6 +34,7 @@ import { withErrorHandler } from "./with-error-handler";
 export type {
   DiffStatus,
   FieldDiff,
+  FieldDisplay,
   GroupFieldDiff,
   ListFieldDiff,
   ListItemDiff,
