@@ -107,9 +107,18 @@ function getRelationshipLabel(value: unknown): string {
     // A relationship naming several collections arrives as
     // `{ relationTo, value }`, and `value` holds the populated row once the
     // list was read at a populating depth. The label fields live on that row,
-    // so reading the wrapper alone falls through to the generic badge and
-    // discards a label that was already fetched.
-    if (typeof obj.relationTo === "string" && "value" in obj) {
+    // so reading the wrapper alone discards a label that was already fetched.
+    //
+    // The row is identified first, because a target collection may itself
+    // define fields called `relationTo` and `value` — neither is reserved —
+    // and such a row is shaped exactly like a wrapper. A row carries an id and
+    // a wrapper does not, so unwrapping only what has no id reads the row's
+    // own `value` field as a label for nobody.
+    if (
+      !("id" in obj) &&
+      typeof obj.relationTo === "string" &&
+      "value" in obj
+    ) {
       return getRelationshipLabel(obj.value);
     }
     // Try common title fields in order of preference
