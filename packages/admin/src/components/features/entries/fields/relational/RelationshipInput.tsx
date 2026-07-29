@@ -338,13 +338,12 @@ export function RelationshipInput<
       if (hasMany) {
         const currentValues = Array.isArray(value) ? [...value] : [];
 
-        // Check if already selected
-        const isAlreadySelected = currentValues.some(v => {
-          if (typeof v === "string") return v === item.id;
-          if (typeof v === "object" && "id" in v) return v.id === item.id;
-          if (typeof v === "object" && "value" in v) return v.value === item.id;
-          return false;
-        });
+        // Check if already selected. Read the same way removal and quick-edit
+        // read it, or a value whose target was populated compares an object
+        // against an id, matches nothing, and the guard admits a duplicate.
+        const isAlreadySelected = currentValues.some(
+          v => referenceIdOf(v) === item.id
+        );
 
         if (!isAlreadySelected) {
           if (isPolymorphicField) {

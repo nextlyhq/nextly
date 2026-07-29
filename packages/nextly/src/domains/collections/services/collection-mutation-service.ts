@@ -58,6 +58,7 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -755,6 +756,27 @@ export class CollectionMutationService extends BaseService {
     if (args.status === "published" && args.previousStatus !== "published") {
       emitDocumentEvent("published", args.collection, docBase);
     }
+  }
+
+  /**
+   * The document a validator is shown.
+   *
+   * A relationship read at a populating depth comes back as the related row,
+   * and a multi-target one wrapped with the collection it names. A field's
+   * public value is the document id, and a custom validator is written against
+   * that — handed a row it compares an object to a string, or calls a string
+   * method on it and throws.
+   *
+   * Reduced on a detached copy rather than in place, because the submitted
+   * shape is what the hooks between here and storage still expect to see.
+   */
+  private validationView(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Record<string, unknown> {
+    const view = detachData(data);
+    normalizeRelationshipFields(view, fields as unknown as FieldConfig[]);
+    return view;
   }
 
   /**
@@ -1900,7 +1922,7 @@ export class CollectionMutationService extends BaseService {
           params.locale
         );
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
@@ -3798,7 +3820,7 @@ export class CollectionMutationService extends BaseService {
           params.locale
         );
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
@@ -5662,7 +5684,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
@@ -6191,7 +6213,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
@@ -7046,7 +7068,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
@@ -7644,7 +7666,7 @@ export class CollectionMutationService extends BaseService {
 
       {
         const validationIssues = await validateEntryData(
-          finalData,
+          this.validationView(finalData, fields),
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",

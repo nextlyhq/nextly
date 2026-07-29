@@ -326,6 +326,66 @@ describeEachDialect("polymorphic relationship expansion", dialect => {
     ).toMatchObject({ relationTo: "pages", value: { title: "A page" } });
   });
 
+  // A field's public value is the document id, and a custom validator is
+  // written against that. Saving a document read at depth hands the validator
+  // the populated row instead, so it compares an object to a string — or calls
+  // a string method on it and throws — and rejects an unchanged form.
+  it("shows a validator the id when a populated value is saved back", async () => {
+    const seen: unknown[] = [];
+    current = await createTestNextly({
+      dialect,
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+        defineCollection({ slug: "pages", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "refs",
+          fields: [
+            text({ name: "name" }),
+            relationship({
+              name: "target",
+              relationTo: ["posts", "pages"],
+              validate: (value: unknown) => {
+                seen.push(value);
+                return true;
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const handler = current.getService<Handler>("collectionsHandler");
+    const page = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "A page" }
+    );
+    const pageId = (page.data as { id: string }).id;
+    const ref = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      { name: "r", target: { relationTo: "pages", value: pageId } }
+    );
+
+    const read = await handler.getEntry({
+      collectionName: "refs",
+      entryId: (ref.data as { id: string }).id,
+      depth: 1,
+      overrideAccess: true,
+    });
+
+    seen.length = 0;
+    await handler.updateEntry(
+      {
+        collectionName: "refs",
+        entryId: (ref.data as { id: string }).id,
+        overrideAccess: true,
+      },
+      { name: "renamed", target: (read.data as { target: unknown }).target }
+    );
+
+    // The row travelled in; the validator was shown the reference it stands for.
+    expect(seen).toContainEqual({ relationTo: "pages", value: pageId });
+  });
+
   it("keeps the pair intact when no expansion was asked for", async () => {
     const { handler, postRefId } = await bootPolymorphic(dialect);
 
