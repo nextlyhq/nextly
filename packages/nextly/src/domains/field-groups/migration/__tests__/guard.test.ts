@@ -213,13 +213,43 @@ describe("field-group storage verdict", () => {
     });
   });
 
-  // A `down` run interrupted at step 4 is not a `up` run interrupted at step 4,
-  // and the verdict is the only thing telling them apart.
+  // A `down` run interrupted at step 4 is not an `up` run interrupted at step 4,
+  // and the verdict is the only thing telling them apart. A rollback also cannot
+  // derive the plan it is reversing, so that plan travels with the verdict.
   it("distinguishes an interrupted down run from an interrupted up run", () => {
-    const down: MigratingState = { ...IN_FLIGHT, direction: "down" };
+    const applied = [
+      { kind: "table" as const, from: "fg_hero", to: "comp_hero" },
+    ];
+    const down: MigratingState = {
+      ...IN_FLIGHT,
+      direction: "down",
+      appliedManifest: applied,
+    };
     expect(
       resolveStorageVerdict({ state: down, probe: probe() })
-    ).toMatchObject({ action: "resume", direction: "down" });
+    ).toMatchObject({
+      action: "resume",
+      direction: "down",
+      appliedManifest: applied,
+    });
+  });
+
+  // An in-flight rollback with no recorded plan cannot be resumed at all:
+  // guessing the reverse from the database would rename names this migration
+  // never created.
+  it("refuses to resume a rollback that recorded no plan", () => {
+    const down: MigratingState = { ...IN_FLIGHT, direction: "down" };
+    const refusal = captureRefusal(() =>
+      resolveStorageVerdict({ state: down, probe: probe() })
+    );
+    expect(refusal.logContext?.reason).toMatch(/recorded no plan to reverse/);
+  });
+
+  // An up run derives its plan from registry rows, so it carries none.
+  it("resumes an up run without a recorded plan", () => {
+    expect(
+      resolveStorageVerdict({ state: IN_FLIGHT, probe: probe() })
+    ).toMatchObject({ action: "resume", direction: "up" });
   });
 
   // An interrupted run is interpretable only by the step list, whatever the
