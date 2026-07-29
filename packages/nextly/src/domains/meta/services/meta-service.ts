@@ -8,6 +8,17 @@ import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 
 /**
+ * A key's stored value plus whether the key exists.
+ *
+ * `value` is nullable on a present key because the row's value column may be
+ * SQL NULL or may hold the JSON literal `null`; neither is distinguishable
+ * from the other once decoded, but both are distinguishable from absence.
+ */
+export type MetaEntry<T = unknown> =
+  | { present: true; value: T | null }
+  | { present: false };
+
+/**
  * MetaService — small KV API over the `nextly_meta` table.
  *
  * Used for runtime flags that don't belong in collection schemas
@@ -41,21 +52,38 @@ export class MetaService extends BaseService {
     return this.adapter.getDrizzle();
   }
 
-  async get<T = unknown>(key: string): Promise<T | null> {
+  /**
+   * Read a key together with whether a row for it exists at all.
+   *
+   * `get` collapses three different situations onto `null`: no row, a row whose
+   * value column is SQL NULL, and a row holding the JSON literal `null`.
+   * Callers for which "absent" and "present but carrying nothing readable" mean
+   * different things must use this instead, because for them the difference
+   * decides whether it is safe to proceed.
+   */
+  async getEntry<T = unknown>(key: string): Promise<MetaEntry<T>> {
     const rows = await this.drizzle
       .select()
       .from(this.table)
       .where(eq(this.table.key, key))
       .limit(1);
-    if (rows.length === 0) return null;
+    if (rows.length === 0) return { present: false };
     const raw = rows[0].value as string | null;
-    if (raw === null || raw === undefined) return null;
+    if (raw === null || raw === undefined)
+      return { present: true, value: null };
     try {
-      return JSON.parse(raw) as T;
+      return { present: true, value: JSON.parse(raw) as T };
     } catch {
       // Stored as a non-JSON string somehow — return as-is
-      return raw as T;
+      return { present: true, value: raw as T };
     }
+  }
+
+  // Delegates so there is one query and one decoding path; an absent row and a
+  // row carrying no value both read as `null`, as callers of `get` expect.
+  async get<T = unknown>(key: string): Promise<T | null> {
+    const entry = await this.getEntry<T>(key);
+    return entry.present ? entry.value : null;
   }
 
   async set(key: string, value: unknown): Promise<void> {
