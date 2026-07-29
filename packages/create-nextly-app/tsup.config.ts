@@ -24,6 +24,9 @@ function renameGitignoresForPacking(dir: string): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
+      // A template dir may carry a local node_modules from testing the dev/
+      // playground in place; recursing into it is pure waste.
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
       renameGitignoresForPacking(full);
     } else if (entry.name === ".gitignore") {
       renameSync(full, path.join(dir, "gitignore"));

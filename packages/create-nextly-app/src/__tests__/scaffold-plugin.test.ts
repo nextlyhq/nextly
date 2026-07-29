@@ -1,4 +1,13 @@
-import { cp, mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -238,6 +247,49 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     // The dotted file is restored with its rules intact, and the transport
     // name does not leak into the scaffold.
     const gitignore = await readFile(path.join(target, ".gitignore"), "utf-8");
+    expect(gitignore).toContain("node_modules");
+    expect(gitignore).toContain(".env");
+    expect(await exists(path.join(target, "gitignore"))).toBe(false);
+  });
+
+  it("merges into a pre-existing .gitignore instead of replacing it", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-overlay-"));
+    target = path.join(workdir, "my-plugin");
+
+    const packedTemplate = path.join(workdir, "packed-template");
+    await cp(path.join(templatesRoot, "plugin"), packedTemplate, {
+      recursive: true,
+    });
+    await rename(
+      path.join(packedTemplate, ".gitignore"),
+      path.join(packedTemplate, "gitignore")
+    );
+
+    // Overlay scenario: the user chose "ignore" on a non-empty directory
+    // that already carries their own ignore rules. Restoration must keep
+    // them — a rename would silently un-ignore whatever they covered.
+    await mkdir(target, { recursive: true });
+    await writeFile(
+      path.join(target, ".gitignore"),
+      "# user rules\nmy-secret.txt\n",
+      "utf-8"
+    );
+
+    await copyTemplate({
+      projectName: "overlay-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: { type: "sqlite" } as unknown as DatabaseConfig,
+      allowExistingTarget: true,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: packedTemplate,
+      },
+    });
+
+    const gitignore = await readFile(path.join(target, ".gitignore"), "utf-8");
+    // User rules survive AND the template's required rules (dev/.env!) land.
+    expect(gitignore).toContain("my-secret.txt");
     expect(gitignore).toContain("node_modules");
     expect(gitignore).toContain(".env");
     expect(await exists(path.join(target, "gitignore"))).toBe(false);

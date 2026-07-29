@@ -149,6 +149,29 @@ describe("alpha pin survives a registry lookup failure", () => {
     expect(pkg.dependencies["nextly"]).toBe("alpha");
   });
 
+  it("rejects a malformed registry version instead of wrapping it", async () => {
+    // The registry payload is untrusted: a dist-tag pointing at a
+    // non-semver value must fall back to the tag name (a valid npm spec),
+    // never become an invalid "^not-a-version" install spec.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ latest: "not-a-version", alpha: "also bad" }),
+      }))
+    );
+    const { generatePackageJson: gen, templateNextlyChannel: channelOf } =
+      await import("../utils/template");
+    const pkg = JSON.parse(await gen("my-plugin", pgDatabase, false, "plugin"));
+    expect(pkg.devDependencies["nextly"]).toBe(channelOf("plugin"));
+    expect(pkg.peerDependencies["nextly"]).toBe(">=0.0.0");
+
+    const blogPkg = JSON.parse(
+      await gen("blog-app", pgDatabase, false, "blog")
+    );
+    expect(blogPkg.dependencies["nextly"]).toBe(channelOf("blog"));
+  });
+
   it("keeps plugin devDeps on its channel tag but peers on a semver range when the registry fails", async () => {
     vi.stubGlobal(
       "fetch",

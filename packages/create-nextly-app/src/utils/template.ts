@@ -223,7 +223,26 @@ export async function restoreBundledGitignores(dir: string): Promise<void> {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       await restoreBundledGitignores(fullPath);
     } else if (entry.isFile() && entry.name === "gitignore") {
-      await fs.rename(fullPath, path.join(dir, ".gitignore"));
+      const target = path.join(dir, ".gitignore");
+      if (await fs.pathExists(target)) {
+        // Overlay scaffolds ("ignore" on a non-empty directory) can already
+        // have user ignore rules at the destination. A rename would replace
+        // them — silently un-ignoring whatever they covered — so append the
+        // template's rules instead (duplicate patterns are harmless to
+        // git), unless a previous scaffold already appended them.
+        const existing = await fs.readFile(target, "utf-8");
+        const templateRules = await fs.readFile(fullPath, "utf-8");
+        if (!existing.includes(templateRules)) {
+          await fs.writeFile(
+            target,
+            `${existing.trimEnd()}\n\n${templateRules}`,
+            "utf-8"
+          );
+        }
+        await fs.remove(fullPath);
+      } else {
+        await fs.rename(fullPath, target);
+      }
     }
   }
 }
@@ -300,7 +319,13 @@ async function fetchLatestVersion(
     if (!res.ok) return channel;
     const data = (await res.json()) as Record<string, string>;
     const version = data[channel];
-    return version ? `^${version}` : channel;
+    // The registry payload is untrusted input: only wrap a value that is a
+    // complete semver version — anything else would become an invalid
+    // install spec (e.g. "^not-a-version") in every generated package.json.
+    // The dist-tag name is itself a valid npm spec, so it stays the fallback.
+    return version && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)
+      ? `^${version}`
+      : channel;
   } catch {
     return channel;
   }
@@ -494,11 +519,14 @@ async function resolvePluginNextlyRange(useYalc: boolean): Promise<string> {
   if (useYalc) return ">=0.0.0";
   // Plugin scaffolds track the alpha train (see templateNextlyChannel), so
   // the declared compat range comes from the same channel the devDeps
-  // install from. A failed lookup yields the dist-tag NAME, which is not a
-  // valid semver range — fall back to an open range instead.
+  // install from. The registry value is wrapped as `^version` upstream
+  // without being parsed, so validate the COMPLETE caret range here — a
+  // malformed dist-tags payload (or a failed lookup, which yields the bare
+  // dist-tag name) must fall back to an open range, never leak into the
+  // plugin's declared compat range.
   const versions = await resolveNextlyVersions(templateNextlyChannel("plugin"));
   const v = versions["nextly"];
-  return v && v.startsWith("^") ? v : ">=0.0.0";
+  return v && /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v) ? v : ">=0.0.0";
 }
 
 /**
