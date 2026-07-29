@@ -8,18 +8,18 @@ import {
   invertManifest,
   MIGRATION_TARGET,
   retargetName,
+  type ManifestEntry,
   type RegistryRow,
 } from "../manifest";
 
 function row(over: Partial<RegistryRow> = {}): RegistryRow {
-  return {
-    slug: "hero",
-    tableName: "comp_hero",
-    hasCompanion: false,
-    hasTypeColumn: false,
-    ...over,
-  };
+  return { slug: "hero", tableName: "comp_hero", hasCompanion: false, ...over };
 }
+
+const COLUMN_RENAME = {
+  from: STORAGE_FORMAT.columns.type,
+  to: MIGRATION_TARGET.columnType,
+};
 
 describe("field-group migration manifest", () => {
   it("moves a prefixed table onto the new prefix", () => {
@@ -33,16 +33,36 @@ describe("field-group migration manifest", () => {
     expect(retargetName("my_seo_block")).toBeNull();
   });
 
-  it("renames the table and, when localized, its companion", () => {
+  it("renames the table, its companion, and its discriminator", () => {
     const { entries } = buildMigrationManifest([row({ hasCompanion: true })]);
     expect(entries).toEqual([
       { kind: "table", from: "comp_hero", to: "fg_hero" },
       { kind: "companion", from: "comp_hero_locales", to: "fg_hero_locales" },
+      { kind: "column", ...COLUMN_RENAME, table: "fg_hero" },
       {
         kind: "registry",
         from: "dynamic_components",
         to: "dynamic_field_groups",
       },
+    ]);
+  });
+
+  // The schema service emits the discriminator unconditionally and so do all
+  // three runtime schemas, so every field-group table has one. Renaming it only
+  // for some would leave the rest reachable under the wrong name.
+  it("renames the discriminator on every field group", () => {
+    const { entries } = buildMigrationManifest([
+      row({ tableName: "comp_a" }),
+      row({ tableName: "comp_b" }),
+      row({ tableName: "my_seo_block" }),
+    ]);
+    const columns = entries.filter(e => e.kind === "column");
+    expect(columns).toHaveLength(3);
+    expect(columns.map(c => c.table)).toEqual([
+      "fg_a",
+      "fg_b",
+      // Not renamed, so its column is addressed by the name it keeps.
+      "my_seo_block",
     ]);
   });
 
@@ -59,44 +79,21 @@ describe("field-group migration manifest", () => {
     });
   });
 
-  // Only dynamic zones carry the discriminator column.
-  it("renames the type column only where it exists", () => {
-    const without = buildMigrationManifest([row()]);
-    expect(without.entries.some(e => e.kind === "column")).toBe(false);
-
-    const withColumn = buildMigrationManifest([row({ hasTypeColumn: true })]);
-    expect(withColumn.entries).toContainEqual({
-      kind: "column",
-      from: STORAGE_FORMAT.columns.type,
-      to: MIGRATION_TARGET.columnType,
-      table: "fg_hero",
-    });
+  // A localized group with no translatable fields has no companion table, and
+  // the create path accepts exactly that. Naming one would make the step fail.
+  it("does not rename a companion that was never created", () => {
+    const { entries } = buildMigrationManifest([row({ hasCompanion: false })]);
+    expect(entries.some(e => e.kind === "companion")).toBe(false);
   });
 
   // The column rename runs after its table's, so addressing it by the old name
   // would fail: by then the old name resolves to nothing.
   it("addresses the column by its post-rename table", () => {
-    const { entries } = buildMigrationManifest([row({ hasTypeColumn: true })]);
-    const column = entries.find(e => e.kind === "column");
-    const table = entries.findIndex(e => e.kind === "table");
+    const { entries } = buildMigrationManifest([row()]);
+    const tableAt = entries.findIndex(e => e.kind === "table");
     const columnAt = entries.findIndex(e => e.kind === "column");
-    expect(column?.table).toBe("fg_hero");
-    expect(columnAt).toBeGreaterThan(table);
-  });
-
-  // A custom-named table is not renamed, so its column keeps being addressed by
-  // the name it already has.
-  it("addresses a custom-named table's column by its unchanged name", () => {
-    const { entries } = buildMigrationManifest([
-      row({ tableName: "my_seo_block", hasTypeColumn: true }),
-    ]);
-    expect(entries).toContainEqual({
-      kind: "column",
-      from: STORAGE_FORMAT.columns.type,
-      to: MIGRATION_TARGET.columnType,
-      table: "my_seo_block",
-    });
-    expect(entries.some(e => e.kind === "table")).toBe(false);
+    expect(entries[columnAt]?.table).toBe("fg_hero");
+    expect(columnAt).toBeGreaterThan(tableAt);
   });
 
   // While the registry answers to its old name a resumed run can rebuild this
@@ -149,31 +146,33 @@ describe("field-group migration manifest", () => {
     expect(a).not.toBe(b);
   });
 
-  // A localized group with no translatable fields has no companion table, and
-  // the create path accepts exactly that. Naming one would make the step fail.
-  it("does not rename a companion that was never created", () => {
-    const { entries } = buildMigrationManifest([row({ hasCompanion: false })]);
-    expect(entries.some(e => e.kind === "companion")).toBe(false);
+  // Progress is not identity. Reconciliation marks applied entries elsewhere,
+  // and the plan must still be recognised by the hash the marker recorded.
+  it("hashes a plan the same whether or not steps have been applied", () => {
+    const plan: ManifestEntry[] = [
+      { kind: "table", from: "comp_a", to: "fg_a" },
+      {
+        kind: "registry",
+        from: "dynamic_components",
+        to: "dynamic_field_groups",
+      },
+    ];
+    const applied: ManifestEntry[] = [
+      { ...plan[0], satisfied: true } as ManifestEntry,
+      plan[1] as ManifestEntry,
+    ];
+    expect(hashManifest(applied)).toBe(hashManifest(plan));
   });
 
   // `table_name` is unique but unconstrained, so a generated `comp_hero` and an
-  // author-named `fg_hero` can both exist today. The second is left alone by
-  // design, so the first would rename onto an occupied name mid-run.
-  it("refuses when a target name is taken by a row it leaves alone", () => {
-    expect(() =>
+  // author-named `fg_hero` can both exist. The second is left alone by design,
+  // so the first would rename onto an occupied name mid-run.
+  it("refuses when a target is taken by a row it leaves alone", () => {
+    try {
       buildMigrationManifest([
         row({ tableName: "comp_hero" }),
         row({ slug: "other", tableName: "fg_hero" }),
-      ])
-    ).toThrowError(NextlyError);
-  });
-
-  it("refuses when a target name is taken by a table outside the registry", () => {
-    try {
-      buildMigrationManifest([row({ tableName: "comp_hero" })], {
-        // A complete catalog: the source, the squatter, and the registry.
-        existingTables: ["comp_hero", "fg_hero", "dynamic_components"],
-      });
+      ]);
       expect.fail("expected a refusal");
     } catch (error) {
       expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
@@ -181,95 +180,26 @@ describe("field-group migration manifest", () => {
     }
   });
 
-  // Renaming a table away frees its name, so a plan that moves comp_a to fg_a
-  // while something else vacates fg_a is not a collision.
-  it("allows a target whose occupant is itself being renamed away", () => {
-    expect(() =>
-      buildMigrationManifest([row({ tableName: "comp_hero" })], {
-        existingTables: ["comp_hero", "dynamic_components"],
-      })
-    ).not.toThrow();
-  });
-
-  // A run that crashed after a rename committed but before its marker write
-  // must rebuild the plan and find that step already satisfied, rather than
-  // reading its own finished work as a conflict.
-  it("marks a completed rename satisfied instead of removing it", () => {
-    const { entries } = buildMigrationManifest(
-      [row({ tableName: "comp_hero" })],
-      {
-        existingTables: ["fg_hero", "dynamic_field_groups"],
-      }
-    );
-    expect(entries).toEqual([
-      { kind: "table", from: "comp_hero", to: "fg_hero", satisfied: true },
-      {
-        kind: "registry",
-        from: "dynamic_components",
-        to: "dynamic_field_groups",
-        satisfied: true,
-      },
-    ]);
-  });
-
-  // The plan is positionally indexed and hash-identified, so progress must not
-  // change its identity: a resume would otherwise refuse the plan it resumes.
-  it("keeps the same hash once steps have been applied", () => {
-    const rows = [row({ tableName: "comp_a" }), row({ tableName: "comp_b" })];
-    const fresh = buildMigrationManifest(rows, {
-      existingTables: ["comp_a", "comp_b", "dynamic_components"],
-    });
-    const partlyDone = buildMigrationManifest(rows, {
-      existingTables: ["fg_a", "comp_b", "dynamic_components"],
-    });
-    expect(partlyDone.hash).toBe(fresh.hash);
-    expect(partlyDone.entries).toHaveLength(fresh.entries.length);
-    expect(partlyDone.entries[0]?.satisfied).toBe(true);
-    expect(partlyDone.entries[1]?.satisfied).toBeUndefined();
-  });
-
-  // The column names its post-rename table, which is legitimately absent from a
-  // pre-migration catalog. Dropping it would migrate the table and leave its
-  // discriminator behind.
-  it("keeps the column rename for a table this plan is about to create", () => {
-    const { entries } = buildMigrationManifest(
-      [row({ tableName: "comp_hero", hasTypeColumn: true })],
-      { existingTables: ["comp_hero", "dynamic_components"] }
-    );
-    const column = entries.find(e => e.kind === "column");
-    expect(column).toBeDefined();
-    expect(column?.satisfied).toBeUndefined();
-    expect(column?.table).toBe("fg_hero");
-  });
-
-  // Presence is matched exactly: on Postgres a quoted COMP_HERO is a different
-  // table, and folding would hide a genuinely missing source.
-  it("does not let a case-variant table mask a missing source", () => {
-    expect(() =>
-      buildMigrationManifest([row({ tableName: "comp_hero" })], {
-        existingTables: ["COMP_HERO", "dynamic_components"],
-      })
-    ).toThrowError(NextlyError);
-  });
-
-  // The registry names a table that is gone. Renaming it would fail after the
-  // marker had been written, so it is refused before the run starts.
-  it("refuses when the source table is missing entirely", () => {
-    expect(() =>
-      buildMigrationManifest([row({ tableName: "comp_hero" })], {
-        existingTables: ["dynamic_components"],
-      })
-    ).toThrowError(NextlyError);
-  });
-
   // SQLite matches table names case-insensitively, as does MySQL under the
-  // usual settings, so a case-different squatter is still a squatter.
-  it("catches a target collision that differs only in case", () => {
+  // usual settings, so a case-different name still occupies the target.
+  it("refuses a target conflict that differs only in case", () => {
     expect(() =>
-      buildMigrationManifest([row({ tableName: "comp_hero" })], {
-        existingTables: ["comp_hero", "FG_HERO", "dynamic_components"],
-      })
+      buildMigrationManifest([
+        row({ tableName: "comp_hero" }),
+        row({ slug: "other", tableName: "FG_HERO" }),
+      ])
     ).toThrowError(NextlyError);
+  });
+
+  // Renaming a table away frees its name, so two rows swapping prefixes is not
+  // a conflict.
+  it("allows a target whose occupant is itself renamed away", () => {
+    expect(() =>
+      buildMigrationManifest([
+        row({ tableName: "comp_a" }),
+        row({ slug: "b", tableName: "comp_b" }),
+      ])
+    ).not.toThrow();
   });
 
   // A rollback inverts what was applied. It is never derived from the prefix,
@@ -277,7 +207,7 @@ describe("field-group migration manifest", () => {
   // author chose before it existed.
   it("inverts an applied plan for rollback, in reverse order", () => {
     const up = buildMigrationManifest([
-      row({ tableName: "comp_hero", hasCompanion: true, hasTypeColumn: true }),
+      row({ tableName: "comp_hero", hasCompanion: true }),
     ]);
     const down = invertManifest(up.entries);
     expect(down.entries).toEqual([
@@ -299,21 +229,15 @@ describe("field-group migration manifest", () => {
   });
 
   // The case this protects: an author whose dbName was already `fg_hero` before
-  // any migration. Up leaves it alone, so nothing about it is in the plan, so a
-  // rollback cannot rename it either.
-  it("never touches a custom name the up plan left alone", () => {
+  // any migration. Up leaves the table alone, so a rollback cannot rename it.
+  it("never renames a custom table the up plan left alone", () => {
     const up = buildMigrationManifest([row({ tableName: "fg_hero" })]);
     const down = invertManifest(up.entries);
     expect(
-      down.entries.some(e => e.from === "fg_hero" || e.to === "fg_hero")
+      down.entries.some(
+        e => e.kind !== "column" && (e.from === "fg_hero" || e.to === "fg_hero")
+      )
     ).toBe(false);
-  });
-
-  // A plan rebuilt after a partial run must contain only outstanding work, so a
-  // row already carrying a migrated name contributes nothing.
-  it("produces no rename for a row already migrated", () => {
-    const { entries } = buildMigrationManifest([row({ tableName: "fg_hero" })]);
-    expect(entries.filter(e => e.kind !== "registry")).toEqual([]);
   });
 
   it("targets a prefix no longer than the one it replaces", () => {
