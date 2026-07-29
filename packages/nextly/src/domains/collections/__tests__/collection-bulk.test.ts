@@ -46,7 +46,7 @@ vi.mock("../../../database/index", () => ({
 }));
 
 vi.mock("../../../collections/fields/guards", () => ({
-  isComponentField: vi.fn().mockReturnValue(false),
+  isFieldGroupField: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("../../../lib/case-conversion", () => ({

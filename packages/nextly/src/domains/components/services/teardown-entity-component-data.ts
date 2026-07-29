@@ -19,8 +19,9 @@
  *   - A localized component keeps its translations in `comp_<slug>_locales`, keyed by the
  *     instance id, so those rows have to go with their instance.
  *
- * Component tables are discovered from the live catalog rather than the registry, so the
- * sweep still works when a component's registry row was already removed.
+ * Component tables are discovered from the live catalog UNION the registry: the catalog
+ * covers `comp_`-prefixed tables whose registry row was already removed, and the registry
+ * covers registered components whose table has not been materialized yet.
  *
  * @module domains/components/services/teardown-entity-component-data
  */
@@ -31,11 +32,15 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { q } from "../../i18n/migration/ddl-types";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
 
-/** Bound on how deep component nesting is followed; mirrors MAX_COMPONENT_NESTING_DEPTH. */
+/** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
 const DEFAULT_MAX_DEPTH = 10;
+
+/** Registry table holding one row per component, including its physical table name. */
+const REGISTRY_TABLE = STORAGE_FORMAT.registryTable;
 
 /**
  * Chunk size for `IN (...)` lists. Keeps a very large entity from exceeding a driver's
@@ -137,8 +142,11 @@ async function assertNoRowsForFrontier(
 
   const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
-  const parentTableColumn = q("_parent_table", adapter.dialect);
-  const parentIdColumn = q("_parent_id", adapter.dialect);
+  const parentTableColumn = q(
+    STORAGE_FORMAT.columns.parentTable,
+    adapter.dialect
+  );
+  const parentIdColumn = q(STORAGE_FORMAT.columns.parentId, adapter.dialect);
 
   const params: unknown[] = [parent.table];
   let where = `${parentTableColumn} = ${pg ? "$1" : "?"}`;
@@ -160,7 +168,7 @@ async function assertNoRowsForFrontier(
     // No `_parent_table` column means the table does not hold component instances at all,
     // despite the `comp_` prefix, so it cannot own rows for this entity. Any other failure
     // leaves the question unanswered and must not be read as "empty".
-    if (/_parent_table/.test(String(error))) return;
+    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return;
     throw error;
   }
 
@@ -186,22 +194,95 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
+ * Physical table names recorded in the component registry.
+ *
+ * Read through the registry rather than inferred from a prefix so a row still
+ * pointing at a non-derived table is visited too. Returns an empty list when the
+ * registry table is absent (a database that predates it, or a teardown running
+ * before system tables exist), leaving prefix discovery as the only source.
+ */
+async function listRegisteredComponentTables(
+  adapter: TeardownComponentDataAdapter,
+  discovered: string[]
+): Promise<string[]> {
+  if (!discovered.includes(REGISTRY_TABLE)) return [];
+
+  // Consulted only when the ORM can address it. An executor with no schema
+  // registered for the registry — a hand-built adapter carrying just its own
+  // tables — has no schema for any component table either, so it could not
+  // address a custom-named one even if this read returned it; prefix discovery
+  // stays complete for everything such an executor can reach. Probing rather
+  // than catching keeps genuine read failures propagating instead of being
+  // mistaken for "nothing registered".
+  if (!(await isResolvable(adapter, REGISTRY_TABLE))) return [];
+
+  const rows = await adapter.select<Record<string, unknown>>(
+    REGISTRY_TABLE,
+    {}
+  );
+
+  // Resolved exactly first, then case-insensitively. MySQL with
+  // `lower_case_table_names` reports a verbatim `SEO_META` as `seo_meta`, so an
+  // exact-only match would discard the registered table and orphan its rows.
+  // Folding unconditionally is equally wrong: PostgreSQL, and MySQL with
+  // `lower_case_table_names=0`, can hold `SEO_META` and `seo_meta` as distinct
+  // quoted tables, and collapsing them would sweep only one. Preferring the
+  // exact hit keeps those distinct, while the fallback still finds a folded
+  // catalog entry — and either way the resolved value is the name the catalog
+  // reported, which is what later statements must address.
+  const catalog = new Set(discovered);
+  const foldedCatalog = new Map<string, string>();
+  for (const name of discovered) {
+    const key = name.toLowerCase();
+    // First writer wins so an ambiguous fold cannot silently retarget a table.
+    if (!foldedCatalog.has(key)) foldedCatalog.set(key, name);
+  }
+  const resolveCatalogName = (name: string): string | undefined =>
+    catalog.has(name) ? name : foldedCatalog.get(name.toLowerCase());
+  return (
+    rows
+      .map(row => row.table_name ?? row.tableName)
+      .filter((name): name is string => typeof name === "string" && name !== "")
+      // A registry row can name a table that was never created — a component
+      // whose migration is pending or failed. Probing one raises a missing-table
+      // error, and because this sweep precedes every entity delete, a single
+      // unmaterialized component would block all of them.
+      .map(name => resolveCatalogName(name))
+      .filter((name): name is string => name !== undefined)
+  );
+}
+
+/**
  * Deletes every component instance owned by `parentTable`, following nesting, and the
  * matching `comp_<slug>_locales` rows.
  *
  * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
  * but running first keeps the entity intact if the sweep fails.
  */
+
 export async function teardownEntityComponentData(
   args: TeardownEntityComponentDataArgs
 ): Promise<TeardownEntityComponentDataResult> {
   const { adapter, parentTable, maxDepth = DEFAULT_MAX_DEPTH } = args;
 
-  // Component data tables only: `comp_` prefixed, excluding their `_locales` companions
-  // (those are reached through their owning instance, never scanned as parents).
-  const componentTables = (await adapter.listTables()).filter(
-    name => name.startsWith("comp_") && !isCompanionTable(name)
-  );
+  // Component data tables: `comp_` prefixed by convention, plus every table the
+  // registry has registered — a row written before names resolved canonically can
+  // point at a table carrying no prefix, so prefix discovery alone would leave its
+  // rows orphaned with `_parent_table` pointing at the deleted entity. Companions
+  // are excluded either way (they are reached through their owning instance, never
+  // scanned as parents).
+  const discovered = await adapter.listTables();
+  const registered = await listRegisteredComponentTables(adapter, discovered);
+  const componentTables = [
+    ...new Set([
+      ...discovered.filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix)),
+      ...registered,
+    ]),
+    // The registry itself is metadata, never component storage. A row pointing
+    // at it would otherwise be probed as an instance table, where a missing
+    // `_parent_table` column breaks the delete and a permissive adapter could
+    // damage the metadata.
+  ].filter(name => name !== REGISTRY_TABLE && !isCompanionTable(name));
 
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };
@@ -249,10 +330,20 @@ export async function teardownEntityComponentData(
 
           const where: WhereClause = {
             and: [
-              { column: "_parent_table", op: "=", value: parent.table },
+              {
+                column: STORAGE_FORMAT.columns.parentTable,
+                op: "=",
+                value: parent.table,
+              },
               ...(ids === null
                 ? []
-                : [{ column: "_parent_id", op: "IN" as const, value: ids }]),
+                : [
+                    {
+                      column: STORAGE_FORMAT.columns.parentId,
+                      op: "IN" as const,
+                      value: ids,
+                    },
+                  ]),
             ],
           };
 
@@ -274,7 +365,7 @@ export async function teardownEntityComponentData(
           tablesTouched.add(componentTable);
 
           // Localized components keep translations keyed by the instance id.
-          const companion = `${componentTable}_locales`;
+          const companion = `${componentTable}${STORAGE_FORMAT.companionSuffix}`;
           if (
             instanceIds.length > 0 &&
             (await adapter.tableExists(companion))

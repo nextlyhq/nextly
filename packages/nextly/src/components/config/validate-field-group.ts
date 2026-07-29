@@ -1,7 +1,7 @@
 /**
  * Component Configuration Validator
  *
- * Validates a {@link ComponentConfig} using shared base-validator helpers
+ * Validates a {@link FieldGroupConfig} using shared base-validator helpers
  * for slug/field-name/relationship/component rules. Components do not have
  * domain-specific access rules or index validation; cross-component
  * checks (circular references, nesting depth) run at `defineConfig()` time
@@ -11,14 +11,14 @@
  * This file now orchestrates those helpers and keeps
  * only Component-specific error types and reserved slug constants.
  *
- * @module components/config/validate-component
+ * @module components/config/validate-field-group
  * @since 1.0.0
  *
  * @example
  * ```typescript
- * import { validateComponentConfig } from 'nextly';
+ * import { validateFieldGroupConfig } from 'nextly';
  *
- * const result = validateComponentConfig(config);
+ * const result = validateFieldGroupConfig(config);
  * if (!result.valid) {
  *   console.error('Validation errors:', result.errors);
  * }
@@ -27,6 +27,7 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { NextlyError } from "../../errors";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -41,7 +42,7 @@ import {
   validateSlugShared,
 } from "../../shared/base-validator";
 
-import type { ComponentConfig } from "./types";
+import type { FieldGroupConfig } from "./types";
 
 // Re-export constants for external use
 export {
@@ -63,7 +64,7 @@ export {
  *
  * Enforced at `defineConfig()` time when all component definitions are available.
  */
-export const MAX_COMPONENT_NESTING_DEPTH = 3;
+export const MAX_FIELD_GROUP_NESTING_DEPTH = 3;
 
 // ============================================================
 // Validation Error Types
@@ -72,7 +73,7 @@ export const MAX_COMPONENT_NESTING_DEPTH = 3;
 /**
  * Error codes for Component validation failures.
  */
-export type ComponentValidationErrorCode =
+export type FieldGroupValidationErrorCode =
   // Slug errors
   | "SLUG_REQUIRED"
   | "SLUG_INVALID_TYPE"
@@ -114,7 +115,7 @@ export type ComponentValidationErrorCode =
 /**
  * A single validation error with path and context.
  */
-export interface ComponentValidationError {
+export interface FieldGroupValidationError {
   /**
    * Dot-notation path to the invalid property.
    * @example 'slug', 'fields.0.name', 'fields.seo.component'
@@ -125,18 +126,18 @@ export interface ComponentValidationError {
   message: string;
 
   /** Machine-readable error code for programmatic handling. */
-  code: ComponentValidationErrorCode;
+  code: FieldGroupValidationErrorCode;
 }
 
 /**
  * Result of Component config validation.
  */
-export interface ComponentValidationResult {
+export interface FieldGroupValidationResult {
   /** Whether the configuration is valid. */
   valid: boolean;
 
   /** Array of validation errors (empty if valid). */
-  errors: ComponentValidationError[];
+  errors: FieldGroupValidationError[];
 }
 
 // ============================================================
@@ -148,15 +149,16 @@ export interface ComponentValidationResult {
  *
  * Extends the base RESERVED_SLUGS with Component-specific reserved names.
  */
-export const RESERVED_COMPONENT_SLUGS = [
+export const RESERVED_FIELD_GROUP_SLUGS = [
   ...RESERVED_SLUGS,
-  // API namespace for Components
-  "components",
-  "component",
+  // API namespace. A slug matching a live route segment would make the two
+  // indistinguishable in a URL.
+  "field-groups",
+  "field-group",
 ] as const;
 
 const RESERVED_COMPONENT_SLUGS_SET: Set<string> = new Set<string>(
-  RESERVED_COMPONENT_SLUGS
+  RESERVED_FIELD_GROUP_SLUGS
 );
 
 // ============================================================
@@ -172,7 +174,7 @@ const RESERVED_COMPONENT_SLUGS_SET: Set<string> = new Set<string>(
 function validateField(
   field: unknown,
   path: string,
-  errors: ComponentValidationError[],
+  errors: FieldGroupValidationError[],
   seenNames: Set<string>
 ): void {
   if (!field || typeof field !== "object") {
@@ -264,7 +266,7 @@ function validateField(
 function validateFieldsArray(
   fields: unknown[],
   basePath: string,
-  errors: ComponentValidationError[]
+  errors: FieldGroupValidationError[]
 ): void {
   const seenNames = new Set<string>();
 
@@ -279,7 +281,7 @@ function validateFieldsArray(
  */
 function validateFields(
   fields: unknown,
-  errors: ComponentValidationError[]
+  errors: FieldGroupValidationError[]
 ): void {
   const path = "fields";
 
@@ -326,9 +328,9 @@ function validateFields(
  *
  * @example
  * ```typescript
- * import { validateComponentConfig } from 'nextly';
+ * import { validateFieldGroupConfig } from 'nextly';
  *
- * const result = validateComponentConfig(config);
+ * const result = validateFieldGroupConfig(config);
  * if (!result.valid) {
  *   result.errors.forEach(err => {
  *     console.error(`[${err.code}] ${err.path}: ${err.message}`);
@@ -336,10 +338,10 @@ function validateFields(
  * }
  * ```
  */
-export function validateComponentConfig(
-  config: ComponentConfig
-): ComponentValidationResult {
-  const errors: ComponentValidationError[] = [];
+export function validateFieldGroupConfig(
+  config: FieldGroupConfig
+): FieldGroupValidationResult {
+  const errors: FieldGroupValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
   validateSlugShared(config.slug, errsBase, {
@@ -359,18 +361,27 @@ export function validateComponentConfig(
 /**
  * Throws an error if the Component configuration is invalid.
  *
- * Convenience wrapper around {@link validateComponentConfig}.
+ * Convenience wrapper around {@link validateFieldGroupConfig}.
  */
-export function assertValidComponentConfig(config: ComponentConfig): void {
-  const result = validateComponentConfig(config);
+export function assertValidFieldGroupConfig(config: FieldGroupConfig): void {
+  const result = validateFieldGroupConfig(config);
 
   if (!result.valid) {
     const errorMessages = result.errors
       .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
       .join("\n");
 
-    throw new Error(
-      `Invalid Component config for '${config.slug || "unknown"}':\n${errorMessages}`
-    );
+    throw NextlyError.validation({
+      errors: result.errors.map(err => ({
+        path: err.path,
+        code: err.code,
+        message: err.message,
+      })),
+      logContext: {
+        reason: "component-config-invalid",
+        slug: config.slug,
+        details: errorMessages,
+      },
+    });
   }
 }

@@ -36,6 +36,7 @@
     "test:coverage": "turbo run test:coverage",
     "test:ui": "turbo run test:ui",
     "test:unit": "turbo run test",
+    "test:scripts": "vitest run --dir scripts",
     "test:integration": "turbo run test:integration",
     "test:integration:postgres15": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5434/nextly_test turbo run test:integration",
     "test:integration:postgres17": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5435/nextly_test turbo run test:integration",
@@ -67,6 +68,7 @@
     "release:preflight": "node scripts/release/preflight.mjs",
     "release:verify": "node scripts/release/verify.mjs",
     "release:manifest": "node scripts/release/manifest.mjs",
+    "release:notes": "node scripts/release/release-notes.mjs",
     "release:publish": "pnpm release:preflight && turbo build --filter='./packages/*' && changeset publish",
     "release:status": "changeset status",
     "release:dry-run": "changeset publish --dry-run"

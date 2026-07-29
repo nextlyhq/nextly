@@ -118,6 +118,8 @@ describe("reloadNextlyConfig", () => {
     const updateCollectionMigrationStatusSpy = vi
       .fn()
       .mockResolvedValue(undefined);
+    const setCodeFirstSinglesSpy = vi.fn();
+    const pruneCodeFirstSinglesSpy = vi.fn();
     const services: Record<string, unknown> = {
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       // The DI key is "adapter" (renamed from "databaseAdapter" — see the
@@ -144,6 +146,8 @@ describe("reloadNextlyConfig", () => {
       singleRegistryService: {
         syncCodeFirstSingles: vi.fn().mockResolvedValue({}),
         getAllSingles: vi.fn().mockResolvedValue(opts?.allSingles ?? []),
+        setCodeFirstSingles: setCodeFirstSinglesSpy,
+        pruneCodeFirstSingles: pruneCodeFirstSinglesSpy,
       },
       componentRegistryService: {
         syncCodeFirstComponents: syncCodeFirstComponentsSpy,
@@ -158,6 +162,8 @@ describe("reloadNextlyConfig", () => {
       syncCodeFirstComponentsSpy,
       registerDynamicSchemaSpy,
       updateCollectionMigrationStatusSpy,
+      setCodeFirstSinglesSpy,
+      pruneCodeFirstSinglesSpy,
     });
   }
 
@@ -411,7 +417,7 @@ describe("reloadNextlyConfig", () => {
   it("preserves UI-created components (registry-only) in the desired schema", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
-        components: [
+        fieldGroups: [
           { slug: "hero", fields: [{ name: "title", type: "text" }] },
         ],
       },
@@ -775,7 +781,7 @@ describe("reloadNextlyConfig", () => {
     it("includes component table names in the batched introspect call", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "title", type: "text" }] },
             {
               slug: "seo-meta",
@@ -805,7 +811,7 @@ describe("reloadNextlyConfig", () => {
     it("normalises slug to comp_<snake_case> table name (hyphens → underscores)", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "seo-meta", fields: [{ name: "title", type: "text" }] },
           ],
         },
@@ -827,7 +833,7 @@ describe("reloadNextlyConfig", () => {
     it("flows an additive component field change through to the pipeline", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "subtitle", type: "text" }] },
           ],
         },
@@ -856,7 +862,7 @@ describe("reloadNextlyConfig", () => {
       // makes every save of a document embedding the component fail with a 500.
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             {
               slug: "meta-data",
               fields: [{ name: "metaTitle", type: "text" }],
@@ -899,7 +905,7 @@ describe("reloadNextlyConfig", () => {
       // dispatcher prompts the user. HMR layer no longer pre-blocks.
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [] }, // removed `headline` field
           ],
         },
@@ -929,7 +935,7 @@ describe("reloadNextlyConfig", () => {
     it("calls syncCodeFirstComponents after a successful apply", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             {
               slug: "hero",
               label: { singular: "Hero" },
@@ -956,7 +962,7 @@ describe("reloadNextlyConfig", () => {
     it("calls registerDynamicSchema for the component table after a successful apply", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "subtitle", type: "text" }] },
           ],
         },
@@ -978,7 +984,7 @@ describe("reloadNextlyConfig", () => {
     it("does not call the pipeline when all component diffs are empty", async () => {
       loadConfigSpy.mockResolvedValue({
         config: {
-          components: [
+          fieldGroups: [
             { slug: "hero", fields: [{ name: "title", type: "text" }] },
           ],
         },
@@ -1023,7 +1029,8 @@ describe("reloadNextlyConfig", () => {
       });
 
       const { reloadNextlyConfig } = await import("../reload-config");
-      await reloadNextlyConfig({ resolver: buildResolver() });
+      const resolver = buildResolver();
+      await reloadNextlyConfig({ resolver });
 
       // The removed code-first entities revert to the default (record)...
       expect(isWebhookRecordingEnabled("collection", "leads")).toBe(true);
@@ -1032,6 +1039,9 @@ describe("reloadNextlyConfig", () => {
       expect(isWebhookRecordingEnabled("collection", "form-submissions")).toBe(
         false
       );
+      // The live default snapshot is pruned to the (now empty) present set so a
+      // removed single's function defaults can't run from a stale snapshot.
+      expect(resolver.pruneCodeFirstSinglesSpy).toHaveBeenCalledWith(new Set());
       resetWebhookRecordingPolicy();
     });
 

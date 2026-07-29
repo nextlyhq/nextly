@@ -544,14 +544,14 @@ await nextly.verifyEmail({ token: "verification-token" });
 
 ## Other namespaces
 
-The Direct API also exposes typed namespaces for users, media, forms, components, email providers + templates, RBAC, API keys, and access checks. They follow the same `find` / `findByID` / `create` / `update` / `delete` shape and use the canonical `ListResult<T>` and `MutationResult<T>` envelopes:
+The Direct API also exposes typed namespaces for users, media, forms, field groups, email providers + templates, RBAC, API keys, and access checks. They follow the same `find` / `findByID` / `create` / `update` / `delete` shape and use the canonical `ListResult<T>` and `MutationResult<T>` envelopes:
 
 | Namespace | Purpose | Key methods |
 |---|---|---|
 | `nextly.users` | User records | `find`, `findOne`, `findByID`, `create`, `update`, `delete` |
 | `nextly.media` | Media library | `upload`, `find`, `findByID`, `update`, `delete`, `bulkDelete`, `folders.list`, `folders.create` |
 | `nextly.forms` | Form-builder forms | `find`, `findBySlug`, `submit`, `submissions` |
-| `nextly.components` | Reusable component definitions | `find`, `findBySlug`, `create`, `update`, `delete` |
+| `nextly.fieldGroups` | Reusable field group definitions | `find`, `findBySlug`, `create`, `update`, `delete` |
 | `nextly.emailProviders` | Provider CRUD | `find`, `findByID`, `create`, `update`, `delete`, `setDefault`, `test` |
 | `nextly.emailTemplates` | Template CRUD + preview + layout | `find`, `findByID`, `findBySlug`, `create`, `update`, `delete`, `preview`, `getLayout`, `updateLayout` |
 | `nextly.userFields` | Custom user field definitions | `find`, `findByID`, `create`, `update`, `delete`, `reorder` |

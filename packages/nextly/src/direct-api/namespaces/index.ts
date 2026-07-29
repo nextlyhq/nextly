@@ -21,9 +21,9 @@ export {
 } from "./media";
 export { createFormsNamespace, type FormsNamespace } from "./forms";
 export {
-  createComponentsNamespace,
-  type ComponentsNamespace,
-} from "./components";
+  createFieldGroupsNamespace,
+  type FieldGroupsNamespace,
+} from "./field-groups";
 export {
   createEmailNamespace,
   createEmailProvidersNamespace,

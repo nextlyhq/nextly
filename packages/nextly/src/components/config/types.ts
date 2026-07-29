@@ -10,7 +10,7 @@
  * - Each instance is unique to its parent entry
  * - Support all field types available in Collections
  * - Separate database table per component type (comp_{slug})
- * - Dual creation: Code-First (defineComponent) and Schema Builder
+ * - Dual creation: Code-First (defineFieldGroup) and Schema Builder
  *
  * @module components/config/types
  * @since 1.0.0
@@ -30,12 +30,12 @@ import type { FieldConfig } from "../../collections/fields/types";
  *
  * @example
  * ```typescript
- * const label: ComponentLabel = {
+ * const label: FieldGroupLabel = {
  *   singular: 'SEO Metadata',
  * };
  * ```
  */
-export interface ComponentLabel {
+export interface FieldGroupLabel {
   /**
    * Singular display name for the Component.
    * Used in the Admin UI sidebar, component selector, breadcrumbs,
@@ -59,14 +59,14 @@ export interface ComponentLabel {
  *
  * @example
  * ```typescript
- * const admin: ComponentAdminOptions = {
+ * const admin: FieldGroupAdminOptions = {
  *   category: 'Shared',
  *   icon: 'Search',
  *   description: 'Search engine optimization metadata',
  * };
  * ```
  */
-export interface ComponentAdminOptions {
+export interface FieldGroupAdminOptions {
   /**
    * Category for organizing Components in the sidebar and selection UI.
    *
@@ -132,9 +132,9 @@ export interface ComponentAdminOptions {
  *
  * @example
  * ```typescript
- * import { defineComponent, text, upload } from 'nextly';
+ * import { defineFieldGroup, text, upload } from 'nextly';
  *
- * export default defineComponent({
+ * export default defineFieldGroup({
  *   slug: 'seo',
  *   label: { singular: 'SEO Metadata' },
  *   admin: {
@@ -153,9 +153,9 @@ export interface ComponentAdminOptions {
  *
  * @example Hero Section Component
  * ```typescript
- * import { defineComponent, text, upload, select } from 'nextly';
+ * import { defineFieldGroup, text, upload, select } from 'nextly';
  *
- * export default defineComponent({
+ * export default defineFieldGroup({
  *   slug: 'hero',
  *   label: { singular: 'Hero Section' },
  *   admin: {
@@ -183,7 +183,7 @@ export interface ComponentAdminOptions {
  * });
  * ```
  */
-export interface ComponentConfig {
+export interface FieldGroupConfig {
   /**
    * Unique identifier for the Component.
    *
@@ -225,24 +225,14 @@ export interface ComponentConfig {
    * label: { singular: 'SEO Metadata' }
    * ```
    */
-  label?: ComponentLabel;
+  label?: FieldGroupLabel;
 
   /**
    * Admin panel configuration options.
    * Controls how the Component appears in the Admin UI sidebar,
    * component selector, and builder page.
    */
-  admin?: ComponentAdminOptions;
-
-  /**
-   * Custom database table name.
-   *
-   * If not specified, the table name is generated from the slug
-   * with a `comp_` prefix (e.g., 'seo' -> 'comp_seo').
-   *
-   * @example 'comp_site_seo', 'component_hero'
-   */
-  dbName?: string;
+  admin?: FieldGroupAdminOptions;
 
   /**
    * Description of the Component.

@@ -22,6 +22,7 @@ import { z } from "zod";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
+import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
@@ -89,6 +90,10 @@ const createCollectionSchema = z.object({
   // nextly:* tags; false persists the disable config so this collection busts
   // nothing.
   revalidate: z.boolean().optional(),
+  // Webhook recording opt-out. Default on (absent): writes are recorded to the
+  // outbox and delivered to subscribed endpoints; false persists the opt-out so
+  // this collection's content never leaves the app.
+  webhooks: z.boolean().optional(),
   admin: z
     .object({
       group: z.string().optional(),
@@ -286,6 +291,9 @@ export const POST = withErrorHandler(async (request: Request) => {
     // Cache-revalidation opt-out, normalized to the resolved config the write
     // path reads (null = standard tags, { disable: true } = off).
     revalidate: resolveBuilderRevalidate(validated.revalidate),
+    // Persist the recording opt-out alongside the other policy columns so it
+    // survives a restart, not just this process.
+    webhooks: resolveBuilderWebhooks(validated.webhooks),
     schemaHash,
     hooks: validated.hooks,
   });

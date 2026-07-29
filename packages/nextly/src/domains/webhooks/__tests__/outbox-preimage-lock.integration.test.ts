@@ -142,7 +142,13 @@ for (const leg of LEGS) {
           resourceCollection?: string;
           payload: unknown;
         }>("nextly_events");
-        const updates = rows.filter(r => r.type === "entry.updated");
+        // Scope to THIS entry's events: `nextly_events` is a shared fixed-name
+        // system table, so counting every `entry.updated` in it is fragile once
+        // other suites (or other rows) also record — assert on the two updates to
+        // the row under test, not the whole ledger.
+        const updates = rows.filter(
+          r => r.type === "entry.updated" && envelopeOf(r).resource.id === id
+        );
         expect(updates).toHaveLength(2);
 
         const changed = updates.map(r => envelopeOf(r).changedFields ?? []);

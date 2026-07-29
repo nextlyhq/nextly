@@ -7,30 +7,30 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 Components are reusable field-group templates. Define a set of fields once as a component, then embed it in any number of collections or singles. Each usage creates a separate data instance — components are schemas, not shared documents.
 
-> **Source of truth:** the `ComponentConfig` interface lives in `packages/nextly/src/components/config/types.ts`. The `defineComponent()` helper is in `packages/nextly/src/components/config/define-component.ts`.
+> **Source of truth:** the `FieldGroupConfig` interface lives in `packages/nextly/src/components/config/types.ts`. The `defineFieldGroup()` helper is in `packages/nextly/src/components/config/define-field-group.ts`.
 
 Key characteristics:
 
 - **Templates, not documents** — components define a field structure; each embed creates its own data row.
-- **Own database table** — each component type gets a table prefixed with `comp_` (e.g. `comp_seo`).
+- **Own database table** — each component type gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
 - **Nesting** — a component's fields can include `component` fields referencing other components (max depth: 3 levels).
 - **Slug uniqueness** — component slugs must be unique across components, collections, **and** singles.
-- **Dual creation** — define in code with `defineComponent()` or visually in the Visual Schema Builder.
+- **Dual creation** — define in code with `defineFieldGroup()` or visually in the Visual Schema Builder.
 
 <Tabs items={["Code-first", "Visual Schema Builder"]}>
 <Tab value="Code-first">
 
-Use `defineComponent()` from `nextly` to create components in TypeScript:
+Use `defineFieldGroup()` from `nextly` to create components in TypeScript:
 
 ```typescript title="src/components/seo.ts"
 import {
-  defineComponent,
+  defineFieldGroup,
   text,
   textarea,
   upload,
 } from "nextly";
 
-export default defineComponent({
+export default defineFieldGroup({
   slug: "seo",
   label: { singular: "SEO Metadata" },
   admin: {
@@ -80,7 +80,6 @@ Only `slug` and `fields` are required.
 | `admin.description` | `string` | No | Help text in the component selector modal. |
 | `admin.hidden` | `boolean` | No | Hide from admin navigation. Still usable in code and via API. |
 | `admin.imageURL` | `string` | No | Preview image URL shown in the component selector. |
-| `dbName` | `string` | No | Custom database table name (overrides `comp_{slug}`). |
 | `description` | `string` | No | General description; falls back to `admin.description`. |
 | `custom` | `Record<string, unknown>` | No | Arbitrary metadata for plugins or custom code. Not persisted. |
 
@@ -95,14 +94,14 @@ Once defined, embed a component in any collection or single using the `component
 Embed exactly one instance of a specific component type:
 
 ```typescript title="src/collections/pages.ts"
-import { defineCollection, component, text, richText } from "nextly";
+import { defineCollection, fieldGroup, text, richText } from "nextly";
 
 export default defineCollection({
   slug: "pages",
   fields: [
     text({ name: "title", required: true }),
     richText({ name: "content" }),
-    component({ name: "seo", component: "seo" }),
+    fieldGroup({ name: "seo", component: "seo" }),
   ],
 });
 ```
@@ -112,13 +111,13 @@ export default defineCollection({
 Let editors choose from several component types — ideal for flexible page builders:
 
 ```typescript title="src/collections/pages.ts"
-import { defineCollection, component, text } from "nextly";
+import { defineCollection, fieldGroup, text } from "nextly";
 
 export default defineCollection({
   slug: "pages",
   fields: [
     text({ name: "title", required: true }),
-    component({
+    fieldGroup({
       name: "layout",
       components: ["hero", "cta", "content-block", "image-gallery"],
       repeatable: true,
@@ -132,13 +131,13 @@ export default defineCollection({
 An array of the same component type — for example, a list of feature cards:
 
 ```typescript title="src/collections/landing-pages.ts"
-import { defineCollection, component, text } from "nextly";
+import { defineCollection, fieldGroup, text } from "nextly";
 
 export default defineCollection({
   slug: "landing-pages",
   fields: [
     text({ name: "title", required: true }),
-    component({
+    fieldGroup({
       name: "features",
       component: "feature-card",
       repeatable: true,
@@ -155,14 +154,14 @@ The `component` field's full option reference lives in [Fields → Component](/d
 
 ```typescript title="src/components/hero.ts"
 import {
-  defineComponent,
+  defineFieldGroup,
   text,
   upload,
   select,
   option,
 } from "nextly";
 
-export default defineComponent({
+export default defineFieldGroup({
   slug: "hero",
   label: { singular: "Hero Section" },
   admin: {
@@ -195,15 +194,15 @@ export default defineComponent({
 Components can embed other components using the `component` field type, up to **3 levels deep**. `defineConfig()` rejects circular references and configurations that exceed the depth limit at startup.
 
 ```typescript title="src/components/faq-item.ts"
-import { defineComponent, text, component } from "nextly";
+import { defineFieldGroup, text, fieldGroup } from "nextly";
 
-export default defineComponent({
+export default defineFieldGroup({
   slug: "faq-item",
   label: { singular: "FAQ Item" },
   fields: [
     text({ name: "question", required: true }),
     text({ name: "answer", required: true }),
-    component({ name: "cta", component: "cta" }),
+    fieldGroup({ name: "cta", component: "cta" }),
   ],
 });
 ```

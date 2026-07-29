@@ -380,6 +380,29 @@ export class CollectionEntryService extends BaseService {
    * a no-op when no cache adapter is registered, and self-absorbing on error so
    * a revalidator fault never turns a committed write into a failure.
    */
+  /**
+   * Run the write-path maintenance the automatic paths run, for the
+   * `CollectionService.withTransaction` wrapper to call after a tx-API write
+   * commits. The wrappers return only the entry, so — like
+   * `flushRevalidationIntents` — these cannot be triggered from the wrapper's own
+   * result. Mirrors `afterWriteIfRecorded`: a committed write offers the
+   * opportunistic retention pass (the write path is the only prune trigger for an
+   * install with no drain, so tx-API writes must offer it too, or `nextly_events`
+   * grows unbounded), and a recorded event schedules the fast drain. No-ops when
+   * the respective runner/scheduler is unwired.
+   */
+  async offerPostCommitTxMaintenance(opts: {
+    committedWrite: boolean;
+    recordedEvent: boolean;
+  }): Promise<void> {
+    if (opts.committedWrite) {
+      await this.offerRetentionPass();
+    }
+    if (opts.recordedEvent) {
+      this.fastDrainScheduler?.offer();
+    }
+  }
+
   async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
     if (intents.length === 0) return;
     // Resolve at flush time so a Next cache adapter registered after this

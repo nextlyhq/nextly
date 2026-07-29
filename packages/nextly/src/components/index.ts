@@ -5,8 +5,8 @@
  * created independently and selected from within Collections and Singles.
  *
  * This module provides:
- * - `defineComponent()` — Create code-first Component configurations
- * - `ComponentConfig` — Type definitions for Component configurations
+ * - `defineFieldGroup()` — Create code-first Component configurations
+ * - `FieldGroupConfig` — Type definitions for Component configurations
  * - Validation functions for Component configurations
  *
  * @module components
@@ -14,9 +14,9 @@
  *
  * @example
  * ```typescript
- * import { defineComponent, text, upload } from 'nextly';
+ * import { defineFieldGroup, text, upload } from 'nextly';
  *
- * export default defineComponent({
+ * export default defineFieldGroup({
  *   slug: 'seo',
  *   label: { singular: 'SEO Metadata' },
  *   fields: [
@@ -29,21 +29,21 @@
 
 export {
   // Define helper
-  defineComponent,
+  defineFieldGroup,
   // Validation
-  validateComponentConfig,
-  assertValidComponentConfig,
-  RESERVED_COMPONENT_SLUGS,
-  MAX_COMPONENT_NESTING_DEPTH,
+  validateFieldGroupConfig,
+  assertValidFieldGroupConfig,
+  RESERVED_FIELD_GROUP_SLUGS,
+  MAX_FIELD_GROUP_NESTING_DEPTH,
 } from "./config";
 
 export type {
   // Configuration types
-  ComponentConfig,
-  ComponentLabel,
-  ComponentAdminOptions,
+  FieldGroupConfig,
+  FieldGroupLabel,
+  FieldGroupAdminOptions,
   // Validation types
-  ComponentValidationErrorCode,
-  ComponentValidationError,
-  ComponentValidationResult,
+  FieldGroupValidationErrorCode,
+  FieldGroupValidationError,
+  FieldGroupValidationResult,
 } from "./config";

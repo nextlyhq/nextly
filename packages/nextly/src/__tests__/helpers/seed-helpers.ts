@@ -394,7 +394,7 @@ export async function seedTestComponent(
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(" ");
 
-  await db.insert(schema.dynamicComponents).values({
+  await db.insert(schema.dynamicFieldGroups).values({
     id,
     slug: options.slug,
     label,

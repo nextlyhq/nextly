@@ -32,7 +32,10 @@ export const schemaFileApi = {
 
   /** Upsert a component in ui-schema.json. */
   writeComponent: (entity: ManifestEntity) =>
-    protectedApi.post<DevSchemaWriteResponse>("/_dev/schema/component", entity),
+    protectedApi.post<DevSchemaWriteResponse>(
+      "/_dev/schema/field-group",
+      entity
+    ),
 
   /** Remove a collection from ui-schema.json. */
   deleteCollection: (slug: string) =>
@@ -47,6 +50,6 @@ export const schemaFileApi = {
   /** Remove a component from ui-schema.json. */
   deleteComponent: (slug: string) =>
     protectedApi.delete<DevSchemaWriteResponse>(
-      `/_dev/schema/component/${slug}`
+      `/_dev/schema/field-group/${slug}`
     ),
 };

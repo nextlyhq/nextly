@@ -14,6 +14,11 @@ export const COLLECTION_BUILDER_CONFIG: BuilderConfig = {
     "i18n",
     "versions",
     "revalidate",
+    // Webhook recording. On by default; an explicit opt-out keeps this
+    // collection's writes out of the outbox and every delivery, which is what
+    // content holding personal data needs. Lives in Advanced next to the other
+    // per-entity policy switches.
+    "webhooks",
     "showSystemFields",
   ],
   toolbar: { previewSchemaChange: true },

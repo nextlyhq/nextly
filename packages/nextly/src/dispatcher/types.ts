@@ -17,7 +17,7 @@ export type ServiceType =
   | "collections"
   | "singles"
   | "forms"
-  | "components"
+  | "field-groups"
   | "userFields"
   | "emailProviders"
   | "emailTemplates"

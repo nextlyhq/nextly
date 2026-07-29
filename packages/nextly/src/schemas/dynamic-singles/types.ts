@@ -23,8 +23,17 @@ import type { FieldConfig } from "../../collections/fields/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { StoredAccessRule } from "../../services/access/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
+// Registry-facing webhook recording shape for the `webhooks` column. Declared
+// once alongside the collections registry types so both tables store the
+// identical shape and the recording policy has one thing to parse.
+import type { StoredWebhookRecording } from "../dynamic-collections/types";
 // Registry-facing resolved versioning config shape for the `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
+
+// Re-exported so the dialect schema files in this folder resolve the shape from
+// their sibling `./types` like every other column type, rather than reaching
+// across into the collections folder.
+export type { StoredWebhookRecording };
 
 // ============================================================
 // Single Source & Status Types
@@ -232,6 +241,14 @@ export interface DynamicSingleInsert {
    * back to honor `disable` and merge extra `tags`.
    */
   revalidate?: RevalidateConfig | null;
+
+  /**
+   * Webhook recording policy (`{ record: false }`), or null when the single
+   * uses the default of recording. Persisted on the `webhooks` column so a
+   * Builder-authored opt-out survives a restart; for `source: 'code'` singles
+   * the code-first `webhooks` option stays the source of truth.
+   */
+  webhooks?: StoredWebhookRecording | null;
 
   /**
    * Path to the config file (code-first Singles only).

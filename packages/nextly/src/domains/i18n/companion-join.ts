@@ -45,7 +45,9 @@ export function resolveLocalizedValue(
 
 /** A minimal Drizzle-select surface so this helper stays adapter/dialect agnostic. */
 interface SelectableDb {
-  select: () => {
+  // An optional column projection narrows the SELECT to specific columns; a
+  // bare call selects every column of the table object.
+  select: (projection?: Record<string, unknown>) => {
     from: (table: unknown) => {
       where: (cond: unknown) => Promise<Record<string, unknown>[]>;
     };
@@ -193,7 +195,9 @@ export async function populateCompanionFields(
 
 /** A Drizzle-select surface that also supports `.limit()` for a single-row read. */
 interface LimitableDb {
-  select: () => {
+  // An optional column projection narrows the SELECT; a bare call selects every
+  // column of the table object.
+  select: (projection?: Record<string, unknown>) => {
     from: (table: unknown) => {
       where: (cond: unknown) => {
         limit: (n: number) => Promise<Record<string, unknown>[]>;
@@ -242,6 +246,85 @@ export async function readCompanionLocaleStatus(
     if (isMissingCompanionTableError(err)) {
       return null;
     }
+    throw err;
+  }
+}
+
+/**
+ * Whether a companion `_locales` row exists for `(parentId, locale)`.
+ *
+ * Distinct from {@link readCompanionLocaleStatus}: a row can exist while every
+ * translatable value is blank/null, which a value read cannot tell apart from a
+ * missing row. Callers deciding whether a snapshot is locale-specific need the
+ * row's existence, not its contents. Projects only `_parent` so unrelated
+ * companion drift cannot fail the probe, and tolerates a missing companion table
+ * (no row) the same way the readers above do.
+ */
+export async function companionRowExists(
+  db: LimitableDb,
+  companionTable: unknown,
+  parentId: string | number,
+  locale: string
+): Promise<boolean> {
+  const table = companionTable as CompanionTable;
+  try {
+    const rows = await db
+      .select({ parent: table._parent })
+      .from(companionTable)
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale)
+        )
+      )
+      .limit(1);
+    return rows.length > 0;
+  } catch (err) {
+    if (isMissingCompanionTableError(err)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Read every locale's per-locale `_status` for one entry, keyed by locale.
+ *
+ * The all-locales companion of {@link readCompanionLocaleStatus}: one query over
+ * the Drizzle companion table returns every stored translation's status, so a
+ * publish-all can tell which locales actually transition from the single flip.
+ * Only locales that have a companion row appear. Goes through the typed query
+ * builder rather than raw SQL, and tolerates a missing companion table the same
+ * way the single-locale read and the populate helpers do.
+ */
+export async function readCompanionLocaleStatusAll(
+  db: SelectableDb,
+  companionTable: unknown,
+  parentId: string | number
+): Promise<Map<string, string | null>> {
+  const table = companionTable as CompanionTable;
+  const byLocale = new Map<string, string | null>();
+  try {
+    // Project ONLY the columns this scan needs. A bare `.select()` requests
+    // every column of the configured Drizzle table object, which throws a
+    // missing-column error when the companion table is behind its metadata (a
+    // localized field added but its column migration not yet applied) — blocking
+    // an otherwise valid publish. `_parent`/`_locale`/`_status` always exist.
+    const rows = await db
+      .select({ locale: table._locale, status: table._status })
+      .from(companionTable)
+      .where(eq(table._parent as never, parentId));
+    for (const row of rows) {
+      const locale = row.locale;
+      if (typeof locale !== "string") continue;
+      byLocale.set(
+        locale,
+        typeof row.status === "string" ? row.status : null
+      );
+    }
+    return byLocale;
+  } catch (err) {
+    // Tolerate ONLY a companion table that has not been migrated yet; any other
+    // failure propagates, since this drives which locales emit a transition.
+    if (isMissingCompanionTableError(err)) return byLocale;
     throw err;
   }
 }
@@ -506,6 +589,13 @@ export interface TranslationStatusArgs {
   /** Whether the companion carries a per-locale `_status` column (i18n M6). */
   hasStatus: boolean;
   idKey?: string;
+  /**
+   * Surface query failures rather than leaving the rows untouched. A caller
+   * judging an access rule on this overview cannot tell "no translations" from
+   * "the read failed", so it needs the failure. A missing companion table is
+   * still tolerated: that is a single before its migration, not a fault.
+   */
+  strict?: boolean;
   /** Row key to write the per-locale map under (default `_translations`). */
   outKey?: string;
   /**
@@ -558,7 +648,8 @@ export async function populateTranslationStatus(
           inArray(table._locale as never, locales)
         )
       );
-  } catch {
+  } catch (error) {
+    if (args.strict && !isMissingCompanionTableError(error)) throw error;
     return; // companion table not present yet — leave rows untouched
   }
 

@@ -36,6 +36,9 @@ export function collectionEntityFromSettings(
       // Cache revalidation, mirrored into ui-schema.json. Defaults on, so only
       // an explicit `false` opts the collection out; anything else stays on.
       revalidate: settings.revalidate !== false,
+      // Webhook recording, mirrored the same way: defaults on, only an explicit
+      // `false` keeps the collection's writes out of the outbox.
+      webhooks: settings.webhooks !== false,
     },
     fields,
   });
@@ -58,6 +61,9 @@ export function singleEntityFromSettings(
       // Cache revalidation (mirrors collectionEntityFromSettings): defaults on,
       // only an explicit `false` opts the single out.
       revalidate: settings.revalidate !== false,
+      // Webhook recording (mirrors collectionEntityFromSettings): defaults on,
+      // only an explicit `false` keeps the single's writes out of the outbox.
+      webhooks: settings.webhooks !== false,
     },
     fields,
   });

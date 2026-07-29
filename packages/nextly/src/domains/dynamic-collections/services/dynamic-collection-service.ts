@@ -20,6 +20,7 @@ import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
+import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
 import {
   DynamicCollectionRegistryService,
@@ -83,6 +84,11 @@ export interface CreateCollectionInput {
   versions?: boolean;
   /** Whether writes bust cache tags. Default on; false opts out entirely. */
   revalidate?: boolean;
+  /**
+   * Whether writes are recorded to the webhook outbox. Default on; false keeps
+   * this collection's content out of the outbox and every delivery.
+   */
+  webhooks?: boolean;
   fields: FieldDefinition[];
   hooks?: Record<string, unknown>[];
   createdBy?: string;
@@ -106,6 +112,8 @@ export interface UpdateCollectionInput {
   versions?: boolean;
   /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
   revalidate?: boolean;
+  /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
+  webhooks?: boolean;
   fields?: FieldDefinition[];
   hooks?: Record<string, unknown>[];
 }
@@ -290,6 +298,10 @@ export class DynamicCollectionService extends BaseService {
       // Persist the cache-revalidation opt-out from the create payload (null =
       // standard tags, { disable: true } = off) so the write path reads it back.
       revalidate: resolveBuilderRevalidate(data.revalidate),
+      // Persist the webhook recording opt-out from the create payload (null =
+      // record, { record: false } = off) so boot reads it back and the switch
+      // survives a restart rather than lasting only for this process.
+      webhooks: resolveBuilderWebhooks(data.webhooks),
       schemaHash,
       schemaVersion: 1,
       migrationStatus: "pending" as const,
@@ -521,6 +533,12 @@ export class DynamicCollectionService extends BaseService {
     // disable config, on writes null.
     if (updates.revalidate !== undefined) {
       metadataUpdates.revalidate = resolveBuilderRevalidate(updates.revalidate);
+    }
+    // Webhook recording toggle. The column holds the resolved policy boot reads
+    // back, so the boolean is normalized before storing; off writes the opt-out,
+    // on writes null.
+    if (updates.webhooks !== undefined) {
+      metadataUpdates.webhooks = resolveBuilderWebhooks(updates.webhooks);
     }
 
     let migrationSQL: string | null = null;

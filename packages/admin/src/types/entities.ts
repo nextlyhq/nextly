@@ -314,6 +314,14 @@ export interface ApiSingle {
    */
   revalidate?: { disable?: boolean; tags?: string[] } | null;
 
+  /**
+   * Resolved webhook recording policy, or null/absent when recording is on
+   * (the default). The server normalizes the Schema Builder's on/off into this
+   * shape (off → `{ record: false }`), so reads carry the object while writes
+   * send a boolean — see `UpdateSinglePayload`.
+   */
+  webhooks?: { record?: boolean } | null;
+
   /** Current migration status */
   migrationStatus?: SingleMigrationStatus;
 
@@ -327,16 +335,18 @@ export interface ApiSingle {
 /**
  * What a Single schema update may send.
  *
- * Most keys mirror the read shape, but `versions` and `revalidate` do not: the
+ * Most keys mirror the read shape, but `versions`, `revalidate` and `webhooks`
+ * do not: the
  * Schema Builder offers on/off and the server resolves each into the config
  * `ApiSingle` carries back.
  */
 export type UpdateSinglePayload = Omit<
   Partial<ApiSingle>,
-  "versions" | "revalidate"
+  "versions" | "revalidate" | "webhooks"
 > & {
   versions?: boolean;
   revalidate?: boolean;
+  webhooks?: boolean;
 };
 
 // ==================== COMPONENT TYPES ====================
@@ -344,12 +354,12 @@ export type UpdateSinglePayload = Omit<
 /**
  * Source of the Component definition.
  *
- * - `code`: Defined in code via `defineComponent()` in a config file
+ * - `code`: Defined in code via `defineFieldGroup()` in a config file
  * - `ui`: Created through the Visual Component Builder in Admin UI
  *
  * Note: Unlike Collections/Singles, Components do not have a "built-in" source.
  */
-export type ComponentSource = "code" | "ui";
+export type FieldGroupSource = "code" | "ui";
 
 /**
  * Migration status for a Component's schema.
@@ -360,7 +370,7 @@ export type ComponentSource = "code" | "ui";
  * - `applied`: Migration has been applied to the database
  * - `failed`: Migration failed to apply
  */
-export type ComponentMigrationStatus =
+export type FieldGroupMigrationStatus =
   | "synced"
   | "pending"
   | "generated"
@@ -370,7 +380,7 @@ export type ComponentMigrationStatus =
 /**
  * Admin options for displaying the Component in the Admin UI.
  */
-export interface ComponentAdminOptions {
+export interface FieldGroupAdminOptions {
   /** Category for organizing Components in the sidebar */
   category?: string;
   /** Icon identifier for the Component */
@@ -396,14 +406,14 @@ export interface ApiComponent {
   tableName: string;
   description?: string;
   fields: SchemaField[];
-  admin?: ComponentAdminOptions;
+  admin?: FieldGroupAdminOptions;
   createdBy?: string | null;
   createdAt: string;
   updatedAt: string;
 
   // Component metadata fields
   /** Where the Component was defined (code or ui) */
-  source?: ComponentSource;
+  source?: FieldGroupSource;
 
   /** Whether the Component is locked from UI edits (code-first Components) */
   locked?: boolean;
@@ -412,7 +422,7 @@ export interface ApiComponent {
   configPath?: string | null;
 
   /** Current migration status */
-  migrationStatus?: ComponentMigrationStatus;
+  migrationStatus?: FieldGroupMigrationStatus;
 
   /** Schema version number */
   schemaVersion?: number;

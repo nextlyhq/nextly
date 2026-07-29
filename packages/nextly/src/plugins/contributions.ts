@@ -5,7 +5,7 @@ import type {
   FieldTypeCategory,
 } from "../collections/fields/catalog";
 import type { FieldConfig } from "../collections/fields/types";
-import type { ComponentConfig } from "../components/config/types";
+import type { FieldGroupConfig } from "../components/config/types";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { EmailProviderAdapter } from "../domains/email/types";
 import type { SingleConfig } from "../singles/config/types";
@@ -116,8 +116,9 @@ export interface PluginEmailTemplate {
 /**
  * @experimental A plugin-contributed custom field type (C7/D16, M9a minimal
  * seam). The type persists as an existing `storage` primitive and renders via
- * the given admin `component`. Validation rides on the primitive + the field's
- * standard `validate` option. (Typed builders + Visual-Builder UI are full-M9.)
+ * the given admin `component`. Values are checked against that primitive's
+ * built-in rules, then the type's own `validate`, then the field's standard
+ * `validate` option. (Typed builders + Visual-Builder UI are full-M9.)
  */
 // Re-exported from the field catalog (its canonical home, beside the built-in
 // surface types) so plugin authors keep importing it from the plugin surface.
@@ -159,7 +160,110 @@ export interface PluginFieldType {
    * Generic — any plugin field type may opt in.
    */
   layout?: "takeover";
+  /**
+   * Server-side validation for values stored in this field type.
+   *
+   * Without this a custom type is only ever checked as its `storage`
+   * primitive — for `json` that means "is it JSON" and nothing more — so a
+   * type could state no rule about what it accepts. Declared here rather than
+   * per field because a type's rules are properties of the type: every
+   * instance gets them, instead of each schema author remembering to repeat a
+   * `validate` function.
+   *
+   * Runs after the built-in rules for the storage primitive and BEFORE the
+   * field's own `validate`, so a schema author's rule composes on top of this
+   * one rather than replacing it. An absent or empty value never reaches here
+   * — that is what `required` is for — and neither does one the storage
+   * primitive already refused, so a validator never has to re-check that it
+   * was handed the shape its type stores.
+   *
+   * Return `true` to accept. Return a string for a single problem, or an array
+   * when one value can be wrong in several places at once (a structured
+   * document, a list of rows); each issue may carry its own `path` so the
+   * writer is told where. Anything else is treated as a refusal, as is
+   * throwing, so a validator that forgets to return fails loudly rather than
+   * silently accepting everything.
+   *
+   * Runs on the entry, single, and component write paths. A type offered on
+   * the `users`, `forms`, or `blocks` surface does NOT run it yet: those
+   * surfaces validate through their own paths, which do not consult this
+   * registry.
+   */
+  validate?: (
+    value: unknown,
+    args: PluginFieldValidateArgs
+  ) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>;
 }
+
+/** What a plugin field type's `validate` is given. */
+export interface PluginFieldValidateArgs {
+  /**
+   * The write payload, for rules that span fields — the whole object on
+   * create, and on update the patch rather than the merged stored entry, so a
+   * field the writer did not send is absent here even when it has a stored
+   * value. Always the top-level payload: a field nested in a repeater row or
+   * group still sees the write, not the row.
+   */
+  data: Record<string, unknown>;
+  /**
+   * Request context; carries `user` when the write is authenticated. Empty
+   * for a field inside a component instance, whose write path does not
+   * forward the parent's request.
+   */
+  req: Record<string, unknown>;
+  /**
+   * The field instance, so a validator can read the options its own type
+   * declares (a `rating`'s `max`, a `blocks`' `allow`).
+   *
+   * A detached copy: records, arrays, dates, sets and maps are all rebuilt, so
+   * editing them changes nothing the next write sees. The exceptions are what
+   * cannot be copied without becoming something else — a function, and an
+   * instance of a class core has no constructor for — which stay shared. Treat
+   * the whole thing as read-only.
+   */
+  field: PluginFieldInstance;
+  /**
+   * Where this field sits in the write (`"stars"`, `"rows[2].stars"`).
+   * Returned issue paths are used as given, so prefix with this to point
+   * inside a value; a validator has no other way to know its own location.
+   */
+  path: string;
+  /** `create` requires absent values; `update` treats them as untouched. */
+  mode: "create" | "update";
+}
+
+/**
+ * A field as the validation pass sees it.
+ *
+ * Deliberately loose: one pass runs over both code-first field configs and
+ * stored runtime definitions, whose option shapes differ, so a validator reads
+ * its own options rather than being handed a narrowed type that would be a
+ * lie for one of the two.
+ */
+export interface PluginFieldInstance {
+  name?: string;
+  type: string;
+  label?: unknown;
+  required?: boolean;
+  readonly [option: string]: unknown;
+}
+
+/** One problem with a stored value. */
+export interface PluginFieldIssue {
+  /**
+   * Where the problem is, used exactly as given. Defaults to the field's own
+   * path; supply one to point inside a structured value, building it from
+   * `args.path` so it stays right for a nested instance
+   * (`` `${args.path}.nodes[2].props.level` ``).
+   */
+  path?: string;
+  /** Stable machine code for clients to branch on. Defaults to `"CUSTOM"`. */
+  code?: string;
+  /** A complete sentence. A trailing period is added when missing. */
+  message: string;
+}
+
+export type PluginFieldValidationResult = true | string | PluginFieldIssue[];
 
 /**
  * @public A permission identifier — the `${action}-${resource}` slug
@@ -187,8 +291,8 @@ export interface PluginContributions {
   collections?: CollectionConfig[];
   /** @public New plugin-owned singles. */
   singles?: SingleConfig[];
-  /** @public Plugin-owned components. */
-  components?: ComponentConfig[];
+  /** @public Plugin-owned field groups. */
+  fieldGroups?: FieldGroupConfig[];
   /** @public Add fields to existing entities by slug. */
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
   /** @public Custom permissions; CRUD is auto-seeded separately. */

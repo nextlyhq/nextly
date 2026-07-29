@@ -20,6 +20,7 @@ import type {
   UiSchemaEntity,
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { MinimalConfigEntity } from "../migrate-create/generate";
 
 export interface MergeUiEntitiesArgs {
@@ -39,7 +40,7 @@ export interface MergeUiEntitiesResult {
 
 function uiToMinimal(
   entity: UiSchemaEntity,
-  prefix: "dc_" | "single_" | "comp_"
+  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
 ): MinimalConfigEntity {
   return {
     slug: entity.slug,
@@ -62,7 +63,7 @@ function uiToMinimal(
 function mergeType(
   code: MinimalConfigEntity[],
   ui: UiSchemaEntity[],
-  prefix: "dc_" | "single_" | "comp_",
+  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix,
   dropped: string[]
 ): MinimalConfigEntity[] {
   const codeSlugs = new Set(code.map(c => c.slug));
@@ -149,7 +150,7 @@ export function mergeUiEntities(
     components: mergeType(
       args.codeComponents,
       args.manifest.components,
-      "comp_",
+      STORAGE_FORMAT.tablePrefix,
       droppedUiSlugs
     ),
     droppedUiSlugs,

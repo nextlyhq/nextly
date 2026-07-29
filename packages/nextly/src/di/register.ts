@@ -33,7 +33,7 @@ import type {
   SecurityConfig,
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
-import type { ComponentConfig } from "../components/config/types";
+import type { FieldGroupConfig } from "../components/config/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
@@ -49,6 +49,7 @@ import type { MetaService } from "../domains/meta";
 import {
   clearFieldTypes,
   registerFieldType,
+  withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
@@ -58,9 +59,11 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
   resetWebhookRecordingPolicy,
+  setStoredRecordingRefresher,
   setWebhookRecording,
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
@@ -68,10 +71,12 @@ import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-c
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
+import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
+import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
@@ -102,6 +107,7 @@ import type {
   CollectionSource,
   FieldDefinition,
 } from "../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type {
   CollectionRegistryService,
   CodeFirstCollectionConfig,
@@ -128,6 +134,7 @@ import type { Logger } from "../services/shared";
 import type { UserExtSchemaService } from "../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { registerFieldFunctions } from "../shared/lib/field-level-registry";
 import type { AdminConfig, AuthConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
@@ -228,8 +235,8 @@ export interface NextlyServiceConfig {
   /** Single (global document) configurations. */
   singles?: SingleConfig[];
 
-  /** Component (reusable field group) configurations. */
-  components?: ComponentConfig[];
+  /** Field Group (reusable field structure) configurations. */
+  fieldGroups?: FieldGroupConfig[];
 
   /** User model extension configuration. */
   users?: UserConfig;
@@ -361,6 +368,8 @@ export async function registerServices(
     );
   }
 
+  assertNoLegacyFieldGroupKey(config, "registerServices");
+
   // ----------------------------------------
   // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
@@ -418,7 +427,7 @@ export async function registerServices(
   clearFieldTypes();
   for (const fieldTypePlugin of resolvedPlugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
-      registerFieldType(fieldType);
+      registerFieldType(withoutDisabledBehavior(fieldType, fieldTypePlugin));
     }
   }
 
@@ -477,6 +486,26 @@ export async function registerServices(
   // `webhooks: false` collection (e.g. form submissions) would silently record
   // PII-bearing events despite the opt-out.
   publishWebhookRecordingPolicies(transformedConfig);
+
+  // Then layer in the registry-stored opt-outs. Builder-authored collections and
+  // singles have no code-first config to publish from, so without this read their
+  // switch would hold only for the process that set it and every restart would
+  // silently resume recording. Runs second and skips config-owned slugs, so live
+  // code always outranks a stored row.
+  const configOwnedSlugs = {
+    collections: collectSlugs(transformedConfig.collections),
+    singles: collectSlugs(transformedConfig.singles),
+  };
+  await publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs);
+
+  // Register how that read is repeated. The stored decisions are a snapshot, and
+  // a toggle applied on one instance only updates that instance's map; without a
+  // refresher a sibling in a multi-instance deployment would keep recording a
+  // collection someone opted out of elsewhere until it restarted. The gate
+  // schedules this out of band on a stale read, never inline on the write path.
+  setStoredRecordingRefresher(() =>
+    publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs)
+  );
 
   // Belt-and-suspenders: also register every code-first collection and
   // single from the supplied config directly into the resolver. The
@@ -815,6 +844,30 @@ export async function registerServices(
 
     registerActivityLogHooks(hookRegistry);
     resolvedLogger.info?.("Activity log hooks registered");
+
+    // Register hooks declared on code-first Singles so they run on the read and
+    // update paths for every consumer (Direct API, REST, tests), not only apps
+    // that use the scaffolded init helper. `registerServices` runs once per
+    // process, so a plain append never double-registers; it also leaves hooks a
+    // plugin registered under the same `single:<slug>` namespace untouched (a
+    // clear-then-register would wipe those).
+    if (transformedConfig.singles && transformedConfig.singles.length > 0) {
+      // A disabled plugin's contributions stay in `transformedConfig` so the
+      // schema is deterministic, but the plugin lifecycle's behavior-skip
+      // contract means its runtime hooks must NOT run. Skip singles a disabled
+      // plugin contributed; app and enabled-plugin singles register normally.
+      const disabledSingleSlugs = collectPluginContributedSlugs(
+        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        "singles"
+      );
+      const hookedSingles = transformedConfig.singles.filter(
+        single => !disabledSingleSlugs.has(single.slug)
+      );
+      const singleHooks = registerSingleHooks(hookedSingles, hookRegistry);
+      resolvedLogger.info?.(
+        `Registered ${singleHooks.totalHooks} hook(s) for ${singleHooks.singles.length} single(s)`
+      );
+    }
   }
 
   // now Payload-style: an auth-gated POST route in the project's app
@@ -1044,7 +1097,7 @@ async function initializeSchemaRegistry(
     // main comp_ table and registers/creates its companion `comp_<slug>_locales`.
     await loadDynamicTables(
       adapter,
-      "dynamic_components",
+      STORAGE_FORMAT.registryTable,
       async (tableName, fields, _hasStatus, localized) => {
         const { ComponentSchemaService } = await import(
           "../services/components/component-schema-service"
@@ -1104,6 +1157,21 @@ async function initializeSchemaRegistry(
  * registry fails to initialize, where `registerConfigTablesInResolver` never
  * runs.
  */
+/**
+ * The slugs a list of config entities declares, skipping any malformed entry
+ * without a slug. Used to tell the stored-policy publisher which slugs the
+ * code-first config owns.
+ */
+function collectSlugs(
+  entities: Array<{ slug?: string }> | undefined
+): Set<string> {
+  const slugs = new Set<string>();
+  for (const entity of entities ?? []) {
+    if (entity.slug) slugs.add(entity.slug);
+  }
+  return slugs;
+}
+
 function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
   // Provenance comes from the plugin contribution list, not the optional
   // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a
@@ -1350,6 +1418,10 @@ async function syncCodeFirstCollections(
       // dynamic_collections.revalidate; the write path reads it to honor
       // `disable` and merge extra `tags`.
       revalidate: collection.revalidate,
+      // Mirror the recording opt-out onto the registry row so a code-first
+      // `webhooks: false` is visible to anything reading the row, not only to
+      // the in-process policy the config publisher populates.
+      webhooks: storedWebhookRecording(collection.webhooks),
       // Forward the i18n master switch (mirrors status) so the boot sync persists
       // dynamic_collections.localized — the read path keys companion resolution off it.
       localized: collection.localized === true,
@@ -1659,8 +1731,8 @@ async function syncCodeFirstComponents(
   transformedConfig: NextlyServiceConfig
 ): Promise<void> {
   if (
-    !transformedConfig.components ||
-    transformedConfig.components.length === 0
+    !transformedConfig.fieldGroups ||
+    transformedConfig.fieldGroups.length === 0
   ) {
     return;
   }
@@ -1670,17 +1742,16 @@ async function syncCodeFirstComponents(
   );
 
   const codeFirstComponentConfigs: CodeFirstComponentConfig[] =
-    transformedConfig.components.map(comp => ({
+    transformedConfig.fieldGroups.map(comp => ({
       slug: comp.slug,
       label:
         comp.label?.singular ??
         comp.slug.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
       fields: comp.fields,
       description: comp.description,
-      tableName: comp.dbName,
       admin: comp.admin,
-      configPath: `components/${comp.slug}.ts`,
-      // i18n: forward the localized flag from defineComponent so the registry persists
+      configPath: `${STORAGE_FORMAT.configPathDir}/${comp.slug}.ts`,
+      // i18n: forward the localized flag from defineFieldGroup so the registry persists
       // it and the companion is provisioned for embedded per-language values.
       localized: (comp as { localized?: boolean }).localized === true,
     }));
@@ -1712,13 +1783,9 @@ async function syncCodeFirstComponents(
   );
 
   for (const slug of componentSyncResult.unchanged) {
-    // A component may declare a custom `dbName`, in which case its table is not
-    // named `comp_<slug>` at all. Probing the unresolved name would never find
-    // it and would queue a redundant sync on every boot.
-    const tableName = resolveComponentTableName(
-      slug,
-      transformedConfig.components.find(c => c.slug === slug)?.dbName
-    );
+    // The physical name normalizes the slug, so probing the raw slug would
+    // never find the table and would queue a redundant sync on every boot.
+    const tableName = resolveComponentTableName(slug);
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -1746,12 +1813,12 @@ async function syncCodeFirstComponents(
     const compSchemaService = new CompSchemaService(dialect);
 
     for (const slug of componentsNeedingTableSync) {
-      const compConfig = transformedConfig.components.find(
+      const compConfig = transformedConfig.fieldGroups.find(
         c => c.slug === slug
       );
       if (!compConfig) continue;
 
-      const tableName = resolveComponentTableName(slug, compConfig.dbName);
+      const tableName = resolveComponentTableName(slug);
 
       // i18n: a localized component omits its translatable columns from the main comp_
       // table and gets a companion `comp_<slug>_locales` (created below).
@@ -1912,6 +1979,9 @@ async function syncCodeFirstSingles(
       // dynamic_singles.revalidate; the write path reads it to honor `disable`
       // and merge extra `tags`.
       revalidate: single.revalidate,
+      // Mirror the recording opt-out onto the registry row (same reason as
+      // collections).
+      webhooks: storedWebhookRecording(single.webhooks),
     }));
 
   try {
@@ -1921,6 +1991,15 @@ async function syncCodeFirstSingles(
     logger.info?.(
       `Singles registered: ${singleSyncResult.created.length} created, ${singleSyncResult.updated.length} updated, ${singleSyncResult.unchanged.length} unchanged`
     );
+    // Expose the live code-first snapshot (for function/structured defaults)
+    // only for singles that synced: a failed slug's serialized metadata did not
+    // advance, so it is kept off the snapshot and falls back to those fields.
+    const failedSingleSlugs = new Set(
+      singleSyncResult.errors.map(entry => entry.slug)
+    );
+    singleRegistry.setCodeFirstSingles(transformedConfig.singles, {
+      keepPriorFor: failedSingleSlugs,
+    });
   } catch (error) {
     logger.warn?.(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
@@ -1956,7 +2035,14 @@ async function reconcileSingleTablesForBoot(
     const { DynamicCollectionSchemaService } = await import(
       "../domains/dynamic-collections/services/dynamic-collection-schema-service"
     );
-    const schemaService = new DynamicCollectionSchemaService();
+    // The dialect comes from the adapter that will run this DDL. Left to its
+    // own default the service reads DB_DIALECT, which is optional and falls
+    // back to "postgresql" — so an app configured with only a MySQL or SQLite
+    // DATABASE_URL would generate a single's table as PostgreSQL.
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      adapter.getCapabilities().dialect
+    );
     const singleRegistry = container.get<SingleRegistryService>(
       "singleRegistryService"
     );

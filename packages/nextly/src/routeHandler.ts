@@ -674,8 +674,8 @@ async function resolveAuthorization(
     ]);
   }
 
-  // --- Components → manage-settings ---
-  if (service === "components") {
+  // --- Field groups → manage-settings ---
+  if (service === "field-groups") {
     const action = getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "settings" },

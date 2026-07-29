@@ -8,8 +8,8 @@ import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import type { ComponentConfig } from "../../components/config/define-component";
-import { validateComponentConfig } from "../../components/config/validate-component";
+import type { FieldGroupConfig } from "../../components/config/define-field-group";
+import { validateFieldGroupConfig } from "../../components/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/define-single";
 import { validateSingleConfig } from "../../singles/config/validate-single";
 import { blocks, text } from "../fields/helpers";
@@ -34,11 +34,11 @@ function singleCodes(field: BlocksFieldConfig): string[] {
 }
 
 function componentCodes(field: BlocksFieldConfig): string[] {
-  const config: ComponentConfig = {
+  const config: FieldGroupConfig = {
     slug: "hero",
     fields: [text({ name: "title" }), field],
   };
-  return validateComponentConfig(config).errors.map(e => e.code);
+  return validateFieldGroupConfig(config).errors.map(e => e.code);
 }
 
 function node(type: string): BlockNode {

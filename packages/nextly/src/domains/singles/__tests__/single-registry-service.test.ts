@@ -800,4 +800,45 @@ describe("SingleRegistryService", () => {
       expect(tx.insert).not.toHaveBeenCalled();
     });
   });
+
+  describe("code-first default snapshot", () => {
+    // The live snapshot backs function/structured default resolution on
+    // auto-create; a removed single must be evicted so its stale defaults can't
+    // run against its still-readable registry row.
+    const single = (slug: string) =>
+      ({
+        slug,
+        fields: [{ name: "n", type: "text", defaultValue: () => slug }],
+      }) as unknown as Parameters<
+        typeof ctx.service.setCodeFirstSingles
+      >[0][number];
+
+    it("pruneCodeFirstSingles keeps present slugs and drops absent ones", () => {
+      ctx.service.setCodeFirstSingles([single("a"), single("b"), single("c")]);
+
+      ctx.service.pruneCodeFirstSingles(new Set(["a", "c"]));
+
+      expect(ctx.service.getCodeFirstFields("a")).toBeDefined();
+      expect(ctx.service.getCodeFirstFields("c")).toBeDefined();
+      // The removed single falls back to serialized metadata (undefined here).
+      expect(ctx.service.getCodeFirstFields("b")).toBeUndefined();
+    });
+
+    it("pruneCodeFirstSingles with an empty set clears the whole snapshot", () => {
+      ctx.service.setCodeFirstSingles([single("a")]);
+
+      ctx.service.pruneCodeFirstSingles(new Set());
+
+      expect(ctx.service.getCodeFirstFields("a")).toBeUndefined();
+    });
+
+    it("pruneCodeFirstSingles is a no-op when no snapshot was ever set", () => {
+      // No setCodeFirstSingles call — the snapshot is undefined; pruning must
+      // not throw or synthesize an empty snapshot.
+      expect(() =>
+        ctx.service.pruneCodeFirstSingles(new Set(["a"]))
+      ).not.toThrow();
+      expect(ctx.service.getCodeFirstFields("a")).toBeUndefined();
+    });
+  });
 });

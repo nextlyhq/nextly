@@ -63,6 +63,7 @@ import { resolveSingleTableName } from "../../domains/singles/services/resolve-s
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
+import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -516,6 +517,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             versions?: boolean;
             // Cache-revalidation opt-out; persists to dynamic_singles.revalidate.
             revalidate?: boolean;
+            // Webhook recording opt-out; persists to dynamic_singles.webhooks.
+            webhooks?: boolean;
           }
         | undefined;
 
@@ -551,7 +554,22 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // Pass hasStatus so the data table also gets a `status` column
       // when the user opted into Draft/Published — without it the
       // runtime schema would expect a column the DDL never created.
-      const schemaService = new DynamicCollectionSchemaService();
+      // The dialect comes from the adapter that will run this DDL, not from
+      // the service's own DB_DIALECT default — that variable is optional and
+      // falls back to "postgresql", so an app configured with only a MySQL or
+      // SQLite DATABASE_URL would create this table as PostgreSQL.
+      //
+      // Read the same optional way the execution below reads it: with no
+      // adapter registered the statements are generated and never run, so the
+      // service keeps its own default rather than this path demanding a
+      // connection it is not going to use.
+      const createDialect = container.has("adapter")
+        ? container.get<DrizzleAdapter>("adapter").getCapabilities().dialect
+        : undefined;
+      const schemaService = new DynamicCollectionSchemaService(
+        undefined,
+        createDialect
+      );
       const isLocalized = b.localized === true;
       const migrationSQL = schemaService.generateMigrationSQL(
         tableName,
@@ -676,6 +694,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Cache-revalidation opt-out from the create payload (null = standard
         // tags, { disable: true } = off), so the write path reads it back.
         revalidate: resolveBuilderRevalidate(b.revalidate),
+        // Webhook recording opt-out from the create payload (null = record,
+        // { record: false } = off), so boot reads it back after a restart.
+        webhooks: resolveBuilderWebhooks(b.webhooks),
         schemaHash,
         migrationStatus,
       });
@@ -971,6 +992,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Cache-revalidation toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.revalidate.
             revalidate?: boolean;
+            // Webhook recording toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.webhooks.
+            webhooks?: boolean;
           }
         | undefined;
 
@@ -1010,6 +1034,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (b.revalidate !== undefined) {
         updateData.revalidate = resolveBuilderRevalidate(b.revalidate);
       }
+      // Webhook recording toggle, normalized to the resolved policy boot reads;
+      // on writes null (record), off writes the stored opt-out.
+      if (b.webhooks !== undefined) {
+        updateData.webhooks = resolveBuilderWebhooks(b.webhooks);
+      }
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;
@@ -1023,8 +1052,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
 
-        // Generate and execute ALTER TABLE migration.
-        const schemaService = new DynamicCollectionSchemaService();
+        // Generate and execute ALTER TABLE migration. The dialect comes from
+        // the adapter that will run it, for the same reason as the create
+        // path above: the service's own default is "postgresql". Read
+        // optionally, matching how the execution below reads it.
+        const updateDialect = container.has("adapter")
+          ? container.get<DrizzleAdapter>("adapter").getCapabilities().dialect
+          : undefined;
+        const schemaService = new DynamicCollectionSchemaService(
+          undefined,
+          updateDialect
+        );
         const tableName = existing.tableName;
 
         // Normalize field lists for ALTER TABLE comparison. The physical

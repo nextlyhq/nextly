@@ -80,8 +80,8 @@ export const ProjectStatsGrid: React.FC = () => {
           href: ROUTES.BUILDER_COLLECTIONS,
         },
         {
-          title: "Plugins",
-          value: data.components,
+          title: "Field Groups",
+          value: data.fieldGroups,
           icon: <Puzzle className="h-5 w-5" />,
           href: ROUTES.BUILDER_COMPONENTS,
         },

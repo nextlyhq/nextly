@@ -53,6 +53,11 @@ export type BuilderSettingsValues = {
   // Cache revalidation. Undefined means on (the default): writes bust the
   // standard tags. False opts the entity out entirely.
   revalidate?: boolean;
+  // Webhook recording. Undefined means on (the default): writes are recorded to
+  // the outbox and delivered to every subscribed endpoint. False keeps this
+  // entity's writes out of the outbox entirely, for content that carries
+  // personal data.
+  webhooks?: boolean;
 };
 
 type Props = {
