@@ -37,9 +37,14 @@ describe("field group REST routes", () => {
   });
 
   it("no longer answers on the pre-rename segment", () => {
-    // The old segment was removed rather than aliased, so it must not resolve
-    // to the field-groups service by any path.
-    const parsed = parseRestRoute(["components"], "GET");
-    expect(parsed.service).not.toBe("field-groups");
+    // Removed rather than aliased, so it must resolve to nothing at all — not
+    // merely to something other than `field-groups`, which would still pass if
+    // the segment had been picked up by an unrelated service. Checked across
+    // the list, detail and schema shapes, since each is parsed separately.
+    expect(parseRestRoute(["components"], "GET")).toEqual({});
+    expect(parseRestRoute(["components", "seo"], "GET")).toEqual({});
+    expect(
+      parseRestRoute(["components", "schema", "seo", "preview"], "POST")
+    ).toEqual({});
   });
 });
