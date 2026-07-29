@@ -89,8 +89,10 @@ function collect(fields: FieldDiff[], out: ReferenceRequest[]): void {
       case "value": {
         const kind = refKindOf(node.type);
         if (!kind) break;
-        const cols =
-          kind === "upload" ? ["media"] : displayTargets(node.display);
+        // An upload names its target through the same `display.relationTo` a
+        // relationship uses; a plain upload names none and `toReferenceRequest`
+        // defaults it to the built-in `media` library.
+        const cols = displayTargets(node.display);
         const labelField = node.display?.labelField;
         for (const side of [node.before, node.after]) {
           for (const stored of storedRefsOf(side)) {
@@ -135,8 +137,7 @@ function annotate(
       case "value": {
         const kind = refKindOf(node.type);
         if (!kind) break;
-        const cols =
-          kind === "upload" ? ["media"] : displayTargets(node.display);
+        const cols = displayTargets(node.display);
         const labelField = node.display?.labelField;
         node.before = resolveValueSide(
           node.before,
@@ -188,7 +189,8 @@ function annotate(
 export async function hydrateDiffReferences(
   fields: FieldDiff[],
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  locale?: string | null
 ): Promise<void> {
   const requests: ReferenceRequest[] = [];
   collect(fields, requests);
@@ -197,7 +199,8 @@ export async function hydrateDiffReferences(
   const labels = await resolveReferenceLabels(
     requests,
     user,
-    authenticatedScope
+    authenticatedScope,
+    locale
   );
   annotate(fields, labels);
 }

@@ -499,11 +499,20 @@ export async function hydrateVersionSnapshot(
   scopeKind: VersionScopeKind,
   slug: string,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  // The version's locale, so a localized display column on a referenced target
+  // resolves in the language the snapshot was captured in.
+  locale?: string | null
 ): Promise<void> {
   const lookupKind = scopeKind === "single" ? "single" : "collection";
   const fields = await resolveEnrichedFields(lookupKind, slug);
-  await hydrateSnapshotReferences(snapshot, fields, user, authenticatedScope);
+  await hydrateSnapshotReferences(
+    snapshot,
+    fields,
+    user,
+    authenticatedScope,
+    locale
+  );
 }
 
 /**
@@ -588,8 +597,15 @@ export async function diffDocumentVersions(args: {
   // Resolve relationship and upload ids in the diff to display labels through
   // the same access-checked path a read uses: an unreadable target stays a bare
   // id. Labels attach beside the ids rather than replacing them, so the diff
-  // wire stays id-stable for any non-admin consumer of this surface.
-  await hydrateDiffReferences(body.fields, args.user, args.authenticatedScope);
+  // wire stays id-stable for any non-admin consumer of this surface. Both
+  // versions share a locale (asserted above), so the target reads resolve in
+  // that language.
+  await hydrateDiffReferences(
+    body.fields,
+    args.user,
+    args.authenticatedScope,
+    fromRow.locale
+  );
 
   return {
     from: args.from,

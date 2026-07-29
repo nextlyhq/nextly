@@ -221,7 +221,8 @@ export async function getVersionForDocument(
     args.scopeKind,
     args.slug,
     args.user,
-    args.authenticatedScope
+    args.authenticatedScope,
+    row.locale
   );
 
   return row;

@@ -108,7 +108,8 @@ export const GET = withErrorHandler(
       scopeKind,
       slug,
       user,
-      authenticatedScope
+      authenticatedScope,
+      row.locale
     );
 
     return respondDoc(row);

@@ -339,6 +339,8 @@ describe("resolveReferenceLabels — configured label + system entities", () => 
   });
 
   it("resolves a users target through the user service, not getEntry", async () => {
+    // A session caller falls through to the role-based user-read check.
+    checkAccessSpy.mockResolvedValue(true);
     listUsersByIdsSpy.mockResolvedValue([{ id: "u9", name: "Grace" }]);
 
     const req: ReferenceRequest = {
@@ -348,11 +350,35 @@ describe("resolveReferenceLabels — configured label + system entities", () => 
     };
     const labels = await resolveReferenceLabels([req], user);
 
+    expect(checkAccessSpy).toHaveBeenCalledWith({
+      userId: "u1",
+      operation: "read",
+      resource: "users",
+    });
     expect(listUsersByIdsSpy).toHaveBeenCalledWith(["u9"]);
     expect(getEntrySpy).not.toHaveBeenCalled();
     expect(labels.get(referenceLabelKey(req))).toEqual({
       id: "u9",
       label: "Grace",
+    });
+  });
+
+  it("withholds a user name when the session lacks user-read access", async () => {
+    checkAccessSpy.mockResolvedValue(false);
+    listUsersByIdsSpy.mockResolvedValue([{ id: "u9", name: "Grace" }]);
+
+    const req: ReferenceRequest = {
+      kind: "relationship",
+      collection: "users",
+      id: "u9",
+    };
+    const labels = await resolveReferenceLabels([req], user);
+
+    // The name is never fetched once the read check denies it.
+    expect(listUsersByIdsSpy).not.toHaveBeenCalled();
+    expect(labels.get(referenceLabelKey(req))).toEqual({
+      id: "u9",
+      label: null,
     });
   });
 });
@@ -434,5 +460,119 @@ describe("resolveReferenceLabels — API-key scope", () => {
     expect(checkAccessSpy).not.toHaveBeenCalled();
     expect(findByIdSpy).toHaveBeenCalledWith("m1", {});
     expect(labels.get(referenceLabelKey(req))?.label).toBe("pic.png");
+  });
+
+  it("withholds a user name for a key whose scope excludes user reads", async () => {
+    listUsersByIdsSpy.mockResolvedValue([{ id: "u9", name: "Grace" }]);
+    const req: ReferenceRequest = {
+      kind: "relationship",
+      collection: "users",
+      id: "u9",
+    };
+
+    const labels = await resolveReferenceLabels(
+      [req],
+      user,
+      apiKey(["read-posts"])
+    );
+
+    expect(listUsersByIdsSpy).not.toHaveBeenCalled();
+    expect(labels.get(referenceLabelKey(req))?.label).toBeNull();
+  });
+
+  it("resolves a user name for a key granted user reads, skipping the role check", async () => {
+    listUsersByIdsSpy.mockResolvedValue([{ id: "u9", name: "Grace" }]);
+    const req: ReferenceRequest = {
+      kind: "relationship",
+      collection: "users",
+      id: "u9",
+    };
+
+    const labels = await resolveReferenceLabels(
+      [req],
+      user,
+      apiKey(["read-users"])
+    );
+
+    expect(checkAccessSpy).not.toHaveBeenCalled();
+    expect(labels.get(referenceLabelKey(req))?.label).toBe("Grace");
+  });
+});
+
+describe("resolveReferenceLabels — upload target collection", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("reads a declared upload collection through the entry path, not the media service", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, data: { title: "Report" } });
+    const req: ReferenceRequest = {
+      kind: "upload",
+      collection: "documents",
+      id: "d1",
+    };
+
+    const labels = await resolveReferenceLabels([req], user);
+
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ collectionName: "documents", entryId: "d1" })
+    );
+    expect(findByIdSpy).not.toHaveBeenCalled();
+    expect(labels.get(referenceLabelKey(req))).toEqual({
+      id: "d1",
+      label: "Report",
+    });
+  });
+});
+
+describe("resolveReferenceLabels — configured-label identity", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("resolves the same target once per distinct label field", async () => {
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { headline: "Big News", codename: "Falcon" },
+    });
+    const byHeadline: ReferenceRequest = {
+      kind: "relationship",
+      collection: "posts",
+      id: "p1",
+      labelField: "headline",
+    };
+    const byCodename: ReferenceRequest = {
+      kind: "relationship",
+      collection: "posts",
+      id: "p1",
+      labelField: "codename",
+    };
+
+    const labels = await resolveReferenceLabels([byHeadline, byCodename], user);
+
+    // Two label fields for one id are distinct requests, so each field shows
+    // its own configured column rather than sharing the first one's result.
+    expect(getEntrySpy).toHaveBeenCalledTimes(2);
+    expect(labels.get(referenceLabelKey(byHeadline))?.label).toBe("Big News");
+    expect(labels.get(referenceLabelKey(byCodename))?.label).toBe("Falcon");
+  });
+});
+
+describe("resolveReferenceLabels — locale", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("reads the target in the version's locale", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, data: { title: "Titre" } });
+
+    await resolveReferenceLabels([rel("posts", "p1")], user, undefined, "fr");
+
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "fr" })
+    );
+  });
+
+  it("omits locale for a default-locale (null) version", async () => {
+    getEntrySpy.mockResolvedValue({ success: true, data: { title: "T" } });
+
+    await resolveReferenceLabels([rel("posts", "p1")], user, undefined, null);
+
+    const call = getEntrySpy.mock.calls[0][0];
+    expect("locale" in call).toBe(false);
   });
 });

@@ -88,6 +88,12 @@ function componentChildFieldsFor(
   return childFieldsOf(field);
 }
 
+/** Whether a field declares a read-access rule (a function or a serialized rule). */
+function hasReadAccessRule(field: FieldConfig): boolean {
+  const read = (field as { access?: { read?: unknown } }).access?.read;
+  return read !== undefined && read !== null;
+}
+
 /** The reference kind a field type resolves to, if any. */
 function refKindOf(type: string): ReferenceKind | null {
   if (type === "relationship") return "relationship";
@@ -136,11 +142,18 @@ function walk(
     value[name] = raw;
 
     // A component's children live in its enriched schema keyed by each
-    // instance's type, not in `fields`, so resolve them per instance.
+    // instance's type, not in `fields`, so resolve them per instance. A child
+    // declaring an `access.read` rule is skipped: redaction cannot evaluate
+    // component-child callbacks (the diff engine omits them for the same
+    // reason), so hydrating one would surface a label for a value the caller
+    // may not be allowed to read.
     if (field.type === "component") {
       const instances = Array.isArray(raw) ? raw : [raw];
       for (const instance of instances) {
-        walk(instance, componentChildFieldsFor(field, instance), visit);
+        const children = componentChildFieldsFor(field, instance).filter(
+          child => !hasReadAccessRule(child)
+        );
+        walk(instance, children, visit);
       }
       continue;
     }
@@ -171,7 +184,11 @@ function requestsForValue(
 ): ReferenceRequest[] {
   const kind = refKindOf(field.type);
   if (!kind) return [];
-  const cols = kind === "upload" ? ["media"] : fieldTargets(field);
+  // An upload names its target collection the same way a relationship does; a
+  // plain `upload()` declares none, and `toReferenceRequest` then defaults it to
+  // the built-in `media` library. Hardcoding `media` here would ignore an
+  // upload bound to a custom collection and leave it unresolved.
+  const cols = fieldTargets(field);
   const labelField = fieldLabelField(field);
   const out: ReferenceRequest[] = [];
   for (const stored of storedRefsOf(value)) {
@@ -190,7 +207,8 @@ export async function hydrateSnapshotReferences(
   snapshot: unknown,
   fields: FieldConfig[],
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  locale?: string | null
 ): Promise<void> {
   if (!isPlainObject(snapshot) || fields.length === 0) return;
 
@@ -201,18 +219,20 @@ export async function hydrateSnapshotReferences(
   });
   if (requests.length === 0) return;
 
-  // Pass 2: resolve each distinct reference once, access-checked.
+  // Pass 2: resolve each distinct reference once, access-checked, in the
+  // version's own locale.
   const labels = await resolveReferenceLabels(
     requests,
     user,
-    authenticatedScope
+    authenticatedScope,
+    locale
   );
 
   // Pass 3: rewrite each value to its display shape, preserving cardinality.
   walk(snapshot, fields, (field, holder, name) => {
     const kind = refKindOf(field.type);
     if (!kind) return;
-    const cols = kind === "upload" ? ["media"] : fieldTargets(field);
+    const cols = fieldTargets(field);
     const labelField = fieldLabelField(field);
     const current = holder[name];
 

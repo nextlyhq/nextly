@@ -85,13 +85,19 @@ export interface ReferenceRequest {
   labelField?: string;
 }
 
-/** Stable map key for a reference, distinguishing kind and target collection. */
+/**
+ * Stable map key for a reference. The configured `labelField` is part of the
+ * identity: two fields may reference the same target id yet want different
+ * display columns, so a key without it would let one field's resolved label
+ * satisfy the other and show the wrong text.
+ */
 export function referenceLabelKey(ref: {
   kind: ReferenceKind;
   collection: string;
   id: string;
+  labelField?: string;
 }): string {
-  return `${ref.kind}:${ref.collection}:${ref.id}`;
+  return `${ref.kind}:${ref.collection}:${ref.id}:${ref.labelField ?? ""}`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -205,14 +211,32 @@ function isSystemUserCollection(collection: string): boolean {
  * Resolve a `users` system-entity target to its display name.
  *
  * `users` is not a dynamic collection `collectionsHandler.getEntry` can load, so
- * it is read through the same name lookup the version-author projection uses. A
- * user's display name is the same low-sensitivity datum history already shows
- * for the author of a change, so it is resolved without an added per-caller gate.
+ * it is read through the same name lookup the version-author projection uses.
+ * Unlike that projection, this resolves an arbitrary `users` relationship field
+ * rather than the change's own author, so it is gated on the caller's own
+ * `read-users` grant: a scoped API key is judged on its scope, and a session or
+ * system caller (`null`) falls through to the role-based user-read check. A
+ * caller without user-read access keeps the bare id rather than learning the
+ * referenced account's name.
  */
 async function resolveSystemUser(
-  ref: ReferenceRequest
+  ref: ReferenceRequest,
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<ResolvedReference> {
   try {
+    const scopeAllows = apiKeyScopeAllows(authenticatedScope, "read", "users");
+    if (scopeAllows === false) return { id: ref.id, label: null };
+    if (scopeAllows === null) {
+      const rbac = getService("rbacAccessControlService");
+      const allowed = await rbac.checkAccess({
+        userId: String(user.id),
+        operation: "read",
+        resource: "users",
+      });
+      if (!allowed) return { id: ref.id, label: null };
+    }
+
     const users = getService("userService");
     const [found] = await users.listUsersByIds([ref.id]);
     return { id: ref.id, label: found?.name ?? null };
@@ -237,7 +261,8 @@ async function resolveSystemUser(
 async function resolveRelationship(
   ref: ReferenceRequest,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  locale?: string | null
 ): Promise<ResolvedReference> {
   try {
     const collections = getService("collectionsHandler");
@@ -249,6 +274,10 @@ async function resolveRelationship(
       overrideAccess: false,
       routeAuthorized: false,
       status: "all",
+      // Read the target in the version's own locale, so a localized display
+      // column resolves in the same language the snapshot was captured in
+      // rather than defaulting to the configured default locale.
+      ...(locale ? { locale } : {}),
       ...(authenticatedScope ? { authenticatedScope } : {}),
     });
     if (!result.success || !isPlainObject(result.data)) {
@@ -330,7 +359,8 @@ async function resolveUpload(
 export async function resolveReferenceLabels(
   refs: ReferenceRequest[],
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  locale?: string | null
 ): Promise<Map<string, ResolvedReference>> {
   const distinct = new Map<string, ReferenceRequest>();
   for (const ref of refs) {
@@ -344,7 +374,10 @@ export async function resolveReferenceLabels(
   const resolved = new Map<string, ResolvedReference>();
   await Promise.all(
     [...distinct].map(async ([key, ref]) => {
-      resolved.set(key, await resolveOne(ref, user, authenticatedScope));
+      resolved.set(
+        key,
+        await resolveOne(ref, user, authenticatedScope, locale)
+      );
     })
   );
   return resolved;
@@ -359,13 +392,16 @@ export async function resolveReferenceLabels(
 async function resolveOne(
   ref: ReferenceRequest,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  locale?: string | null
 ): Promise<ResolvedReference> {
-  if (isSystemUserCollection(ref.collection)) return resolveSystemUser(ref);
+  if (isSystemUserCollection(ref.collection)) {
+    return resolveSystemUser(ref, user, authenticatedScope);
+  }
   if (ref.collection === "media") {
     return resolveUpload(ref, user, authenticatedScope);
   }
-  return resolveRelationship(ref, user, authenticatedScope);
+  return resolveRelationship(ref, user, authenticatedScope, locale);
 }
 
 /**

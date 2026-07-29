@@ -195,6 +195,42 @@ describe("hydrateSnapshotReferences", () => {
     });
   });
 
+  it("leaves a protected component child as a bare id", async () => {
+    const snapshot: Record<string, unknown> = {
+      blocks: [{ _componentType: "quote", secret: "a1" }],
+    };
+
+    await hydrateSnapshotReferences(
+      snapshot,
+      fields({
+        name: "blocks",
+        type: "component",
+        componentSchemas: {
+          quote: {
+            fields: [
+              {
+                name: "secret",
+                type: "relationship",
+                relationTo: "authors",
+                // Redaction cannot evaluate a component child's read rule, so
+                // hydration must not add a label the caller may not be allowed
+                // to see.
+                access: { read: () => false },
+              },
+            ],
+          },
+        },
+      }),
+      user
+    );
+
+    expect(getEntrySpy).not.toHaveBeenCalled();
+    expect((snapshot.blocks as unknown[])[0]).toEqual({
+      _componentType: "quote",
+      secret: "a1",
+    });
+  });
+
   it("descends a nameless presentational group", async () => {
     const snapshot: Record<string, unknown> = { owner: "o1" };
 
