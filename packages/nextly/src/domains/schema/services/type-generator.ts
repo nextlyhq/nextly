@@ -1351,7 +1351,9 @@ ${properties}
    * An import sharing one of these conflicts with the local declaration
    * (TS2440), so the import scan is given them to refuse the clash before the
    * file is written. `User` and `Config` are emitted unconditionally; the rest
-   * are one interface per entity.
+   * are one interface per entity, plus the input aliases when those are being
+   * generated — a collection declares `<Name>CreateInput` and `<Name>UpdateInput`,
+   * a single declares `<Name>UpdateInput`.
    */
   private declaredInterfaceNames(
     collections: DynamicCollectionRecord[],
@@ -1359,10 +1361,21 @@ ${properties}
     components: DynamicFieldGroupRecord[]
   ): Set<string> {
     const names = new Set<string>(["User", "Config", "GeneratedTypes"]);
+
     for (const collection of collections) {
-      names.add(this.toPascalCase(collection.slug));
+      const name = this.toPascalCase(collection.slug);
+      names.add(name);
+      if (this.generateInputTypes) {
+        names.add(`${name}CreateInput`);
+        names.add(`${name}UpdateInput`);
+      }
     }
-    for (const single of singles) names.add(this.toPascalCase(single.slug));
+    for (const single of singles) {
+      const name = this.toPascalCase(single.slug);
+      names.add(name);
+      // Singles are update-only; there is no create input for them.
+      if (this.generateInputTypes) names.add(`${name}UpdateInput`);
+    }
     for (const component of components) {
       names.add(this.toComponentInterfaceName(component.slug));
     }

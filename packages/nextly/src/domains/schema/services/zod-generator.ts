@@ -233,7 +233,7 @@ export class ZodGenerator {
     const pluginImports = pluginCodegenImports(
       [collection],
       this.declaredNames(collection),
-      "zodSchema"
+      "zodImports"
     );
     return [`import { z } from "zod";`, ...pluginImports].join("\n");
   }

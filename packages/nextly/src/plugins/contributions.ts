@@ -296,23 +296,27 @@ export interface PluginFieldCodegenImport {
 /** How a plugin field type is rendered by the code generators. */
 export interface PluginFieldCodegen {
   /**
-   * Type-only imports both expressions may rely on. Emitted once per generated
-   * file when any field of this type is present, and merged with every other
-   * type's, so two types importing the same name from the same module produce
-   * one import.
-   */
-  imports?: readonly PluginFieldCodegenImport[];
-  /**
    * The TypeScript type of a stored value, e.g. `"BlockDocument"` or
    * `'"draft" | "live"'`. Omitted falls back to the storage primitive's type.
    */
   tsType?: (field: PluginFieldInstance) => string;
+  /**
+   * Type-only imports `tsType` relies on.
+   *
+   * Declared per expression rather than once for both, because the two are
+   * emitted into different files. A name listed here appears only in the
+   * TypeScript output, so an app compiled with `noUnusedLocals` does not fail on
+   * an import the other file never uses.
+   */
+  tsImports?: readonly PluginFieldCodegenImport[];
   /**
    * A Zod expression validating a stored value, e.g.
    * `"z.object({ kind: z.enum([\"page\"]) })"`. Omitted falls back to the
    * storage primitive's schema.
    */
   zodSchema?: (field: PluginFieldInstance) => string;
+  /** Type-only imports `zodSchema` relies on, e.g. for `z.custom<Rating>()`. */
+  zodImports?: readonly PluginFieldCodegenImport[];
 }
 
 /** What a plugin field type's `validate` is given. */

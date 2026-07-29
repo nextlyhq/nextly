@@ -139,8 +139,8 @@ function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
  * The `import type` lines a generated file needs for the plugin types it uses.
  *
  * Collected from the fields actually emitted, so a registered type nobody
- * declares adds nothing, and scoped to the callback the file is generated from,
- * so a name only the other one needs is not emitted here unused. Names are
+ * declares adds nothing, and read from the list belonging to this file's own
+ * expression, so a name only the other one needs is never emitted here. Names are
  * merged per module and sorted, so the file is byte-identical between runs — it
  * is committed, and an unstable import block would read as a change on every
  * build.
@@ -148,7 +148,7 @@ function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
 export function pluginCodegenImports(
   entities: ReadonlyArray<{ fields?: unknown }>,
   declaredNames: ReadonlySet<string> = new Set(),
-  usedBy: "tsType" | "zodSchema" = "tsType"
+  usedBy: "tsImports" | "zodImports" = "tsImports"
 ): string[] {
   const byModule = new Map<string, Set<string>>();
   // Which module first claimed each local name. Two modules exporting the same
@@ -212,13 +212,12 @@ export function pluginCodegenImports(
   for (const entity of entities) {
     if (!Array.isArray(entity?.fields)) continue;
     for (const field of walkFields(entity.fields)) {
-      const codegen = codegenFor(field);
-      // Only when the callback this file is generated from exists. A name a
-      // type needs for its TypeScript expression is not needed in the Zod file,
-      // and emitting it there is an unused import — which fails a consuming app
-      // compiled with `noUnusedLocals`.
-      if (!codegen?.imports || codegen[usedBy] === undefined) continue;
-      record(codegen.imports);
+      // Each expression names its own imports, so a file gets exactly the ones
+      // its own output can reference. Sharing one list meant the other file
+      // carried an unused import, which fails a consuming app compiled with
+      // `noUnusedLocals`.
+      const imports = codegenFor(field)?.[usedBy];
+      if (imports) record(imports);
     }
   }
 
