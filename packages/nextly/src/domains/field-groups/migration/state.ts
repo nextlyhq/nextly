@@ -118,6 +118,15 @@ export interface MigratingState {
   migrationId: string;
   step: number;
   plan: MigrationPlanIdentity;
+  /**
+   * The plan being applied, carried for the whole run.
+   *
+   * A `down` run reverses what an earlier `up` recorded, so the record has to
+   * survive the transition out of `settled` and every step after it. Writing it
+   * only at settlement would lose it the moment a rollback started, leaving a
+   * crashed run with a step position and no plan to index into.
+   */
+  appliedManifest?: ManifestEntry[];
 }
 
 export type MigrationState = SettledState | MigratingState;
@@ -226,6 +235,9 @@ export async function readMigrationState(
       migrationId,
       step,
       plan: { manifestHash, planHash },
+      ...(marker.appliedManifest === undefined
+        ? {}
+        : { appliedManifest: parseAppliedManifest(marker.appliedManifest) }),
     };
   }
 
@@ -245,6 +257,8 @@ export async function beginMigration(
     direction: MigrationDirection;
     migrationId: string;
     plan: MigrationPlanIdentity;
+    /** Required for `down`, which reverses a recorded plan rather than deriving one. */
+    appliedManifest?: readonly ManifestEntry[];
   }
 ): Promise<void> {
   // The writer holds itself to the reader's invariants. Persisting a marker the
@@ -262,6 +276,11 @@ export async function beginMigration(
     step: 0,
     manifestHash: args.plan.manifestHash,
     planHash: args.plan.planHash,
+    // Carried from the settled marker rather than dropped: a rollback has no
+    // other source for the plan it is reversing.
+    ...(args.appliedManifest === undefined
+      ? {}
+      : { appliedManifest: [...args.appliedManifest] }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
@@ -336,6 +355,11 @@ export async function advanceStep(
     step: args.step,
     manifestHash: current.plan.manifestHash,
     planHash: current.plan.planHash,
+    // Preserved on every step. Losing it mid-run would leave a crash with a
+    // step position and no plan to index into.
+    ...(current.appliedManifest === undefined
+      ? {}
+      : { appliedManifest: current.appliedManifest }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
@@ -444,7 +468,14 @@ function parseAppliedManifest(value: unknown): ManifestEntry[] {
     if (typeof to !== "string" || to.length === 0) {
       throw markerCorrupt("recorded plan entry has no target name");
     }
-    if (table !== undefined && typeof table !== "string") {
+    // A column rename is addressed through its table, so an entry without one
+    // cannot be executed or reversed. Accepting it would hand a rollback a plan
+    // that reverts some objects and silently skips others.
+    if (kind === "column") {
+      if (typeof table !== "string" || table.length === 0) {
+        throw markerCorrupt("recorded column entry names no table");
+      }
+    } else if (table !== undefined && typeof table !== "string") {
       throw markerCorrupt("recorded plan entry has an invalid table");
     }
     return {

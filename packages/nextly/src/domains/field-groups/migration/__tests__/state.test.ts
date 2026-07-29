@@ -203,6 +203,52 @@ describe("field-group migration marker", () => {
     });
   });
 
+  // The plan must survive the transition out of `settled` and every step after
+  // it. Writing it only at settlement loses it the moment a rollback starts.
+  it("carries the applied plan through a run and its steps", async () => {
+    const { meta } = createMeta();
+    const applied = [
+      { kind: "table" as const, from: "fg_hero", to: "comp_hero" },
+      {
+        kind: "column" as const,
+        from: "_field_group_type",
+        to: "_component_type",
+        table: "fg_hero",
+      },
+    ];
+    await beginMigration(meta, {
+      direction: "down",
+      migrationId: "run-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      appliedManifest: applied,
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      status: "migrating",
+      appliedManifest: applied,
+    });
+
+    await advanceStep(meta, { migrationId: "run-1", step: 1 });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      status: "migrating",
+      step: 1,
+      appliedManifest: applied,
+    });
+  });
+
+  // A column rename is addressed through its table, so an entry without one
+  // cannot be executed or reversed.
+  it("refuses a recorded column entry that names no table", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: [
+        { kind: "column", from: "_component_type", to: "_field_group_type" },
+      ],
+    });
+    await expect(readMigrationState(meta)).rejects.toThrowError(NextlyError);
+  });
+
   // A rollback reverses a persisted plan, so the plan has to survive
   // settlement. Deriving the reverse is impossible: nothing in the database
   // says which `fg_*` names this migration created.
