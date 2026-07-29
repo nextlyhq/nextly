@@ -5,10 +5,14 @@
  * template for end-user projects — see templates/blog for that.
  *
  * Collections Posts, Categories, Tags (defined here) plus Media and
- * Users (core, registered automatically), and two singles (Homepage,
- * LandingPage). Dev-harness plugins — page builder, form builder, and a
- * styling fixture — exercise the plugin surfaces; the playground otherwise
- * stays minimal so a broken change is easy to spot.
+ * Users (core, registered automatically), three singles (Homepage,
+ * LandingPage, SiteSettings) and the Seo field group. SiteSettings and Seo
+ * are registered as a pair on purpose: SiteSettings embeds Seo through a
+ * field-group field, so together they exercise the embed path a field group
+ * registered on its own would never reach. Dev-harness plugins — page
+ * builder, form builder, and a styling fixture — exercise the plugin
+ * surfaces; the playground otherwise stays minimal so a broken change is
+ * easy to spot.
  *
  * Storage falls through to the local-disk default when no cloud env
  * vars are set (handled by packages/nextly/src/storage/env-config.ts).
