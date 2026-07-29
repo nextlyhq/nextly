@@ -95,6 +95,13 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # Release tooling under `scripts/` sits in no workspace package, so
+      # `turbo run test` never reaches it. Its own suite runs here: a defect in
+      # the release-notes builder only surfaces during a real publish, after the
+      # packages are already on npm. Needs no build, runs in milliseconds.
+      - name: Release script tests
+        run: pnpm test:scripts
+
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
       # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.

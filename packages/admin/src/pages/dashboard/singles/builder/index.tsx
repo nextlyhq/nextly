@@ -68,6 +68,9 @@ export default function SingleBuilderPage(): React.ReactElement | null {
         // Cache revalidation is on by default, so only forward an explicit
         // opt-out; omitting the key leaves the server default (on).
         ...(values.revalidate === false ? { revalidate: false } : {}),
+        // Webhook recording is on by default, so only forward an explicit
+        // opt-out; omitting the key leaves the server default (on).
+        ...(values.webhooks === false ? { webhooks: false } : {}),
         // Empty user-fields list — system columns are auto-injected by
         // the server; user adds custom fields on the next page.
         fields: [],
@@ -91,6 +94,8 @@ export default function SingleBuilderPage(): React.ReactElement | null {
                     versions: values.versions === true,
                     // and cache revalidation (on unless explicitly off).
                     revalidate: values.revalidate !== false,
+                    // and webhook recording (on unless explicitly off).
+                    webhooks: values.webhooks !== false,
                   },
                   fields: [],
                 })

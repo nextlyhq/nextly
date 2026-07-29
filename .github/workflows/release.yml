@@ -135,39 +135,16 @@ jobs:
           # first entry's version is the canonical monorepo version.
           VERSION=$(echo "$MANIFEST" | jq -r '.[0].version')
           TAG="v${VERSION}"
-          PKG_COUNT=$(echo "$MANIFEST" | jq -r 'length')
 
-          # Build the release notes by extracting each package's CHANGELOG
-          # section for this version and concatenating them under one
-          # "What's changed" heading.
+          # Build the release notes from the same manifest. Every package in
+          # the train shares a version, so each changeset is written verbatim
+          # into all of their changelogs; the builder prints each entry once,
+          # drops the generated "Updated dependencies" blocks, and caps the
+          # body below GitHub's 125,000-character release limit. Concatenating
+          # the raw sections instead produced a 349k body that the API rejected
+          # with a 422 after the packages were already live on npm.
           NOTES_FILE=$(mktemp)
-          {
-            echo "Released ${PKG_COUNT} packages at \`${VERSION}\` in lockstep."
-            echo
-            echo "## What's changed"
-            echo
-            for pkg in $(echo "$MANIFEST" | jq -r '.[].name'); do
-              pkg_dir="packages/${pkg#@nextlyhq/}"
-              CHANGELOG="${pkg_dir}/CHANGELOG.md"
-              if [[ -f "$CHANGELOG" ]]; then
-                # Extract everything between "## $VERSION" and the next "## "
-                section=$(awk -v ver="## ${VERSION}" '
-                  $0 == ver { found = 1; next }
-                  found && /^## / { exit }
-                  found { print }
-                ' "$CHANGELOG")
-                # Skip packages whose CHANGELOG didn't actually change for
-                # this version (can happen for purely internal-dependency
-                # bumps where changesets writes only "Patch Changes" with
-                # no human-authored entry, still worth listing).
-                if [[ -n "$section" ]]; then
-                  echo "### ${pkg}"
-                  echo
-                  echo "$section"
-                fi
-              fi
-            done
-          } > "$NOTES_FILE"
+          node scripts/release/release-notes.mjs > "$NOTES_FILE"
 
           # Configure git for the bot so we can push the unified tag
           git config user.name "github-actions[bot]"

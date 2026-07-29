@@ -272,10 +272,10 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       items: (plugin.singles ?? []).map(slug => ({ primary: slug })),
     },
     {
-      key: "components",
-      label: "Components",
+      key: "fieldGroups",
+      label: "Field Groups",
       icon: Package,
-      items: (plugin.components ?? []).map(slug => ({ primary: slug })),
+      items: (plugin.fieldGroups ?? []).map(slug => ({ primary: slug })),
     },
     {
       key: "menu",

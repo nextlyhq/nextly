@@ -60,6 +60,7 @@ import type {
   SingleSource,
   SingleMigrationStatus,
   SingleAccessRules,
+  StoredWebhookRecording,
 } from "./types";
 
 // ============================================================
@@ -200,6 +201,13 @@ export const dynamicSinglesPg = pgTable(
      * the single sets no `revalidate` config.
      */
     revalidate: jsonb("revalidate").$type<RevalidateConfig>(),
+
+    /**
+     * Webhook recording opt-out (`{ record: false }`). Nullable, and null means
+     * record — so a database predating this column keeps recording exactly as
+     * before and only an explicit opt-out suppresses the outbox.
+     */
+    webhooks: jsonb("webhooks").$type<StoredWebhookRecording>(),
 
     /**
      * Path to the config file (code-first Singles only).

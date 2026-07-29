@@ -25,6 +25,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types/index";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
 
 // Convert camelCase / PascalCase identifiers to snake_case column names.
@@ -49,7 +50,7 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
 
   // Component fields store their data in a separate comp_{slug} table and are
   // stripped from the parent row on write, so they get no parent column.
-  if (field.type === "component") {
+  if (field.type === STORAGE_FORMAT.fieldType) {
     return null;
   }
 

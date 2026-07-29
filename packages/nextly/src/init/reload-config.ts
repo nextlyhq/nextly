@@ -49,16 +49,20 @@ import { mergeRegisteredCollectionsSafely } from "../domains/schema/pipeline/reg
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
-  DesiredComponent,
+  DesiredFieldGroup,
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
-import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
+import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { setWebhookAuditEnabled } from "../domains/webhooks/recording-activation";
 import {
   pruneRemovedCodeFirstRecording,
@@ -161,6 +165,18 @@ interface CollectionRegistrySurface {
 }
 interface SingleRegistrySurface {
   syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
+  // Refresh the live code-first config snapshot the default resolver reads, so
+  // an HMR-added single or changed function default is honoured. `keepPriorFor`
+  // holds the slugs whose sync failed, so their prior snapshot is retained.
+  // Optional for partial resolver fakes.
+  setCodeFirstSingles?(
+    singles: unknown[],
+    options?: { keepPriorFor?: ReadonlySet<string> }
+  ): void;
+  // Drop removed singles from the live default snapshot BEFORE any reload path
+  // can abort, so a removed-but-readable single can't auto-create from stale
+  // function defaults. Optional for partial resolver fakes.
+  pruneCodeFirstSingles?(presentSlugs: ReadonlySet<string>): void;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created singles. Optional for partial resolver fakes.
@@ -173,6 +189,50 @@ interface SingleRegistrySurface {
     }>
   >;
 }
+/**
+ * The slugs whose single sync failed. `syncCodeFirstSingles` resolves with an
+ * `errors[]` (per-single failures) rather than rejecting, so a partial failure
+ * is read from there; those slugs keep their prior default snapshot.
+ */
+function failedSingleSlugs(syncResult: unknown): Set<string> {
+  const errs = (syncResult as { errors?: Array<{ slug?: string }> } | undefined)
+    ?.errors;
+  const slugs = new Set<string>();
+  if (Array.isArray(errs)) {
+    for (const entry of errs) if (entry?.slug) slugs.add(entry.slug);
+  }
+  return slugs;
+}
+
+/**
+ * Evict removed singles from the live default snapshot, keyed on the slugs the
+ * new config still declares. Runs EARLY on every reload — before the empty-
+ * target return, the metadata-only branch, the DDL apply, and every abort path
+ * (introspection failure, deferred/failed schema apply) — so a removed single's
+ * registry row (which stays readable) can never auto-create from stale function
+ * defaults even when a later `setCodeFirstSingles` never runs. Remove-only, so
+ * it never pairs a surviving single's new fields with stale serialized metadata.
+ * Non-fatal: a missing registry just leaves the snapshot for the next reload.
+ */
+async function pruneRemovedSingleDefaults(
+  resolve: ServiceResolver,
+  presentSingles: SingleDef[]
+): Promise<void> {
+  try {
+    const singleReg = (await resolve(
+      "singleRegistryService"
+    )) as SingleRegistrySurface;
+    const presentSlugs = new Set(
+      presentSingles
+        .map(single => single.slug)
+        .filter((slug): slug is string => typeof slug === "string")
+    );
+    singleReg.pruneCodeFirstSingles?.(presentSlugs);
+  } catch {
+    // DI not initialised or the registry is absent — nothing to prune.
+  }
+}
+
 interface ComponentRegistrySurface {
   syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
@@ -238,6 +298,11 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
       // Forward the cache-revalidation config verbatim (no resolver — the
       // authored `{ tags?, disable? }` shape is persisted as-is).
       revalidate: c.revalidate,
+      // Mirror the recording opt-out onto the registry row. The live policy is
+      // published separately from config, but without this the row stays null
+      // and the read-only Builder shows recording enabled for a collection
+      // whose writes are actually suppressed.
+      webhooks: storedWebhookRecording(c.webhooks),
     }));
 }
 
@@ -266,6 +331,9 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
         versions: resolveVersionsConfig(s.versions, s.status),
         // Forward the cache-revalidation config verbatim (no resolver).
         revalidate: s.revalidate,
+        // Mirror the recording opt-out onto the registry row (same reason as
+        // collections above).
+        webhooks: storedWebhookRecording(s.webhooks),
       };
     });
 }
@@ -313,7 +381,7 @@ async function syncCodeFirstMetadataOnly(
   newConfig: {
     collections?: CollectionDef[];
     singles?: SingleDef[];
-    components?: ComponentDef[];
+    fieldGroups?: ComponentDef[];
   },
   logger?: LoggerLike
 ): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
@@ -339,7 +407,18 @@ async function syncCodeFirstMetadataOnly(
       "singleRegistryService"
     )) as SingleRegistrySurface;
     const payload = buildSingleSyncPayload(newConfig.singles ?? []);
-    if (payload.length > 0) await singleReg.syncCodeFirstSingles(payload);
+    let failedSlugs = new Set<string>();
+    if (payload.length > 0) {
+      failedSlugs = failedSingleSlugs(
+        await singleReg.syncCodeFirstSingles(payload)
+      );
+    }
+    // Refresh the live default source after the sync: successful singles adopt
+    // the new config; a single whose sync failed keeps its prior snapshot so its
+    // new fields never pair with stale serialized metadata.
+    singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
+      keepPriorFor: failedSlugs,
+    });
   } catch (err) {
     singles = false;
     logger?.warn(
@@ -355,7 +434,7 @@ async function syncCodeFirstMetadataOnly(
     const compReg = (await resolve(
       "componentRegistryService"
     )) as ComponentRegistrySurface;
-    const payload = buildComponentSyncPayload(newConfig.components ?? []);
+    const payload = buildComponentSyncPayload(newConfig.fieldGroups ?? []);
     if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
   } catch (err) {
     components = false;
@@ -494,7 +573,7 @@ export async function reloadNextlyConfig(opts?: {
     | {
         collections?: CollectionDef[];
         singles?: SingleDef[];
-        components?: ComponentDef[];
+        fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
       }
     | undefined;
@@ -509,7 +588,7 @@ export async function reloadNextlyConfig(opts?: {
         config?: {
           collections?: CollectionDef[];
           singles?: SingleDef[];
-          components?: ComponentDef[];
+          fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
         };
       }
@@ -584,6 +663,13 @@ export async function reloadNextlyConfig(opts?: {
   }
   if (!adapter) return;
 
+  // Evict removed singles from the live default snapshot up front, before any
+  // return/abort below, so a single dropped from the config can never
+  // auto-create from its stale function defaults even if this reload later
+  // aborts (introspection failure, deferred/failed apply) before the
+  // metadata-sync `setCodeFirstSingles` runs.
+  await pruneRemovedSingleDefaults(resolve, newConfig.singles ?? []);
+
   // dialect is an abstract readonly property on DrizzleAdapter, not a
   // method (a previous iteration mistakenly called .getDialect() which
   // would crash at runtime).
@@ -638,21 +724,19 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  // Normalize components. Table name is always comp_<slug_with_underscores>.
+  // Normalize components. Every name resolves canonically to
+  // comp_<slug_with_underscores>.
   const componentTargets: Array<{
     slug: string;
     tableName: string;
     fields: MinimalField[];
     localized?: boolean;
   }> = [];
-  for (const c of newConfig.components ?? []) {
+  for (const c of newConfig.fieldGroups ?? []) {
     if (!c.slug) continue;
     componentTargets.push({
       slug: c.slug,
-      tableName: `comp_${c.slug
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")}`,
+      tableName: resolveComponentTableName(c.slug),
       fields: (c.fields ?? []) as MinimalField[],
       // i18n: carry `localized` so the HMR diff omits translatable columns from the
       // component's main table and registers its companion.
@@ -674,6 +758,8 @@ export async function reloadNextlyConfig(opts?: {
     // plugin decisions are preserved). No metadata to sync here, so this is the
     // only reconciliation the empty-target path needs.
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
+    // The live default snapshot was already pruned to the (now empty) present
+    // set above, so a removed single's stale defaults are gone by here.
     return;
   }
 
@@ -850,12 +936,12 @@ export async function reloadNextlyConfig(opts?: {
   }
 
   // Per-component diff + safety classification — mirrors the singles loop.
-  const desiredComponents: Record<string, DesiredComponent> = {};
+  const desiredComponents: Record<string, DesiredFieldGroup> = {};
   for (const target of componentTargets) {
-    const entry: DesiredComponent = {
+    const entry: DesiredFieldGroup = {
       slug: target.slug,
       tableName: target.tableName,
-      fields: target.fields as DesiredComponent["fields"],
+      fields: target.fields as DesiredFieldGroup["fields"],
       localized: target.localized === true,
     };
     try {
@@ -1005,7 +1091,7 @@ export async function reloadNextlyConfig(opts?: {
         desiredComponents[c.slug] = {
           slug: c.slug,
           tableName: c.tableName,
-          fields: (c.fields ?? []) as DesiredComponent["fields"],
+          fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
         };
       }
     }
@@ -1129,8 +1215,14 @@ export async function reloadNextlyConfig(opts?: {
       const codeFirstSingleConfigs = buildSingleSyncPayload(
         newConfig.singles ?? []
       );
+      let failedSlugs = new Set<string>();
       if (codeFirstSingleConfigs.length > 0) {
-        await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs);
+        // syncCodeFirstSingles resolves with an errors[] rather than rejecting;
+        // a per-single failure means its serialized metadata is stale, so that
+        // slug keeps its prior default snapshot below rather than the new fields.
+        failedSlugs = failedSingleSlugs(
+          await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs)
+        );
 
         // registerSingle defaults migration_status to 'pending'. The
         // pipeline above just created any missing physical tables, so
@@ -1147,6 +1239,12 @@ export async function reloadNextlyConfig(opts?: {
           }
         }
       }
+      // Refresh the live default source after the sync: successful singles adopt
+      // the new config; a single whose sync failed keeps its prior snapshot so
+      // its new fields never pair with stale serialized metadata.
+      singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
+        keepPriorFor: failedSlugs,
+      });
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above.
       singleSynced = false;
@@ -1159,7 +1257,7 @@ export async function reloadNextlyConfig(opts?: {
         "componentRegistryService"
       )) as ComponentRegistrySurface;
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        newConfig.components ?? []
+        newConfig.fieldGroups ?? []
       );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);

@@ -27,7 +27,7 @@ function fbPlugin(overrides: Record<string, unknown> = {}): PluginDefinition {
     contributes: {
       collections: [{ slug: "forms" }, { slug: "form-submissions" }],
       singles: [{ slug: "form-settings" }],
-      components: [{ slug: "field-group" }],
+      fieldGroups: [{ slug: "field-group" }],
       permissions: [
         {
           action: "export",
@@ -72,7 +72,7 @@ describe("collectPluginInfo", () => {
     expect(fb.dependsOn).toEqual(["@acme/base"]);
     expect(fb.collections).toEqual(["forms", "form-submissions"]);
     expect(fb.singles).toEqual(["form-settings"]);
-    expect(fb.components).toEqual(["field-group"]);
+    expect(fb.fieldGroups).toEqual(["field-group"]);
     expect(fb.permissions).toEqual(["export-submissions"]);
     expect(fb.events).toEqual(["form-builder.submitted"]);
     expect(fb.routeCount).toBe(1);

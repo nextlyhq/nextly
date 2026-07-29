@@ -161,6 +161,17 @@ const addsRevalidateColumn = (stmt: string): boolean =>
     stmt.trim()
   );
 
+// The `webhooks` recording-policy column is additive (nullable) on the
+// pre-existing dynamic_collections / dynamic_singles registry tables, exactly
+// like `revalidate` above, so a v1 upgrade of a schema captured before it emits
+// one additive `ADD COLUMN webhooks` per table. Accept it rather than mistaking
+// it for a phantom diff. Scoped to the two registry tables (webhooks is added
+// nowhere else). Tolerant of pg/MySQL quoting and the optional COLUMN keyword.
+const addsWebhooksColumn = (stmt: string): boolean =>
+  /^ALTER TABLE [`"]?(dynamic_collections|dynamic_singles)[`"]? ADD (COLUMN )?[`"]?webhooks[`"]?\b/i.test(
+    stmt.trim()
+  );
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -266,7 +277,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
             isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
               addsVersionsColumn(s) ||
-              addsRevalidateColumn(s),
+              addsRevalidateColumn(s) ||
+              addsWebhooksColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
         }
@@ -340,7 +352,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
               addsVersionsColumn(s) ||
-              addsRevalidateColumn(s),
+              addsRevalidateColumn(s) ||
+              addsWebhooksColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }

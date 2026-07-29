@@ -141,8 +141,8 @@ export async function ensureServicesInitialized(): Promise<void> {
       // — their runtime schema, and their webhook recording opt-out, silently
       // fall back to defaults (a `webhooks: false` Single would record PII).
       if (nextlyConfig.singles) serviceConfig.singles = nextlyConfig.singles;
-      if (nextlyConfig.components)
-        serviceConfig.components = nextlyConfig.components;
+      if (nextlyConfig.fieldGroups)
+        serviceConfig.fieldGroups = nextlyConfig.fieldGroups;
       if (nextlyConfig.storage)
         serviceConfig.storagePlugins = nextlyConfig.storage;
       if (nextlyConfig.email) serviceConfig.email = nextlyConfig.email;

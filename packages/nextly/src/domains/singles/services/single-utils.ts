@@ -150,6 +150,38 @@ export function assertValidBlocksDefault(
 }
 
 /**
+ * Reject a `defaultValue` declared on a password field.
+ *
+ * A single's defaults are inserted straight onto the auto-created row, bypassing
+ * the write path that runs `hashPasswordFieldValues`. A resolved password
+ * default would therefore be persisted in PLAINTEXT, so it is refused here
+ * rather than silently stored. (A fixed/seeded default password is itself a
+ * security anti-pattern; a password must be set explicitly through the write
+ * path so it is hashed.) Checked on the same direct-insert path as
+ * {@link assertValidBlocksDefault}.
+ */
+export function assertNoPasswordDefault(
+  field: { name?: string; type?: string },
+  singleSlug: string
+): void {
+  if (field.type !== "password") return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: field.name ?? "",
+        code: "PASSWORD_DEFAULT_UNSUPPORTED",
+        message: `A password field cannot declare a defaultValue; set "${field.name ?? "password"}" explicitly so it is hashed.`,
+      },
+    ],
+    logContext: {
+      single: singleSlug,
+      field: field.name,
+      reason: "password-default",
+    },
+  });
+}
+
+/**
  * Get a type-appropriate default value for a field type.
  * Used when a required field has no explicit defaultValue.
  */

@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
+import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -622,6 +623,23 @@ export interface Nextly {
       args: FormSubmissionsArgs
     ) => Promise<ListResult<Record<string, unknown>>>;
   };
+
+  /**
+   * Field groups namespace - reusable field structures shared by collections
+   * and singles.
+   *
+   * Typed as the namespace the Direct API actually builds, so this surface
+   * cannot drift from the implementation the instance delegates to.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly(config);
+   *
+   * const fieldGroups = await nextly.fieldGroups.find();
+   * const seo = await nextly.fieldGroups.findBySlug({ slug: 'seo' });
+   * ```
+   */
+  fieldGroups: FieldGroupsNamespace;
 
   /**
    * Media service - direct access to MediaService for advanced operations.

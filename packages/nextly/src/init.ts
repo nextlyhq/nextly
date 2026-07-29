@@ -41,6 +41,7 @@ import {
   registerServices,
   shutdownServices,
 } from "./di/register";
+import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { getNextly as getDirectAPI } from "./direct-api/nextly";
 import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import { NextlyError } from "./errors/nextly-error";
@@ -314,6 +315,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // Forms API namespace (Direct API style)
         forms: directAPI.forms,
 
+        // Field groups namespace (Direct API style)
+        fieldGroups: directAPI.fieldGroups,
+
         // Email & User Field namespaces
         emailProviders: directAPI.emailProviders,
         emailTemplates: directAPI.emailTemplates,
@@ -342,6 +346,12 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
           console.log("Nextly shutdown complete");
         },
       };
+
+      // This instance is a plain object rather than a `Nextly`, so it does not
+      // inherit the class guard: without this, reaching for the pre-rename
+      // namespace here would produce the bare TypeError the guard exists to
+      // replace, on the very entry point the docs recommend.
+      installLegacyFieldGroupsNamespaceGuard(instance);
 
       globalForInit.__nextly_cachedInstance = instance;
 
@@ -425,6 +435,7 @@ export async function getCachedNextly(): Promise<Nextly> {
       users: directAPI.users,
       media: directAPI.media,
       forms: directAPI.forms,
+      fieldGroups: directAPI.fieldGroups,
       emailProviders: directAPI.emailProviders,
       emailTemplates: directAPI.emailTemplates,
       userFields: directAPI.userFields,
@@ -443,6 +454,7 @@ export async function getCachedNextly(): Promise<Nextly> {
         globalForInit.__nextly_cachedInstance = null;
       },
     };
+    installLegacyFieldGroupsNamespaceGuard(instance);
     globalForInit.__nextly_cachedInstance = instance;
     return instance;
   }

@@ -7,14 +7,15 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
+import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import { toDbError } from "../../../database/errors";
 // PR 4 migration: ServiceError throws replaced with NextlyError. The legacy
 // `ServiceError.fromDatabaseError` boundary maps to `NextlyError.fromDatabaseError`,
 // and the `instanceof ServiceError` rethrow guards become `NextlyError.is(...)`
 // so any error type travelling through the shim is preserved.
 import { NextlyError } from "../../../errors";
-import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-components/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
@@ -70,8 +71,8 @@ export interface DeleteComponentDataParams {
   fields: FieldConfig[];
 }
 
-function isComponentField(field: FieldConfig): field is ComponentFieldConfig {
-  return field.type === "component";
+function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
+  return field.type === STORAGE_FORMAT.fieldType;
 }
 
 export class ComponentMutationService extends BaseService {
@@ -97,7 +98,7 @@ export class ComponentMutationService extends BaseService {
    * the companion via {@link upsertLocalizedComponent}.
    */
   private splitLocalizedComponent(
-    meta: DynamicComponentRecord,
+    meta: DynamicFieldGroupRecord,
     data: Record<string, unknown>
   ): {
     schema: ReturnType<typeof buildCompanionSchema>;
@@ -208,7 +209,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields, data, locale } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       const fieldName = field.name;
       const fieldData = data[fieldName];
@@ -266,7 +267,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields, data, locale } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       const fieldName = field.name;
       const fieldData = data[fieldName];
@@ -324,7 +325,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       await this.deleteFieldComponentData(
         parentId,
@@ -342,7 +343,7 @@ export class ComponentMutationService extends BaseService {
     const { parentId, parentTable, fields } = params;
 
     for (const field of fields) {
-      if (!isComponentField(field)) continue;
+      if (!isFieldGroupField(field)) continue;
 
       await this.deleteFieldComponentDataInTx(
         tx,
@@ -596,7 +597,7 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
+          updateData[STORAGE_FORMAT.columns.order] = i;
           updateData.updated_at = this.formatDateForDb();
 
           await this.adapter.update(
@@ -710,7 +711,7 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && existingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
+          updateData[STORAGE_FORMAT.columns.order] = i;
           updateData.updated_at = this.formatDateForDb();
 
           await tx.update(
@@ -774,7 +775,7 @@ export class ComponentMutationService extends BaseService {
     parentId: string;
     parentTable: string;
     fieldName: string;
-    field: ComponentFieldConfig;
+    field: FieldGroupFieldConfig;
     data: unknown;
     locale?: string;
   }): Promise<void> {
@@ -792,7 +793,7 @@ export class ComponentMutationService extends BaseService {
 
     try {
       const existingByTable = new Map<string, ComponentRow[]>();
-      const metaCache = new Map<string, DynamicComponentRecord>();
+      const metaCache = new Map<string, DynamicFieldGroupRecord>();
 
       for (const slug of allowedSlugs) {
         try {
@@ -834,7 +835,7 @@ export class ComponentMutationService extends BaseService {
 
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
-        const componentType = instance._componentType;
+        const componentType = instance[STORAGE_FORMAT.wireTypeKey];
 
         if (!componentType) {
           this.logger.warn("Multi-component instance missing _componentType", {
@@ -877,8 +878,8 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
-          updateData._component_type = componentType;
+          updateData[STORAGE_FORMAT.columns.order] = i;
+          updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
           const existingEntry = globalExistingMap.get(instanceId)!;
@@ -945,7 +946,7 @@ export class ComponentMutationService extends BaseService {
       parentId: string;
       parentTable: string;
       fieldName: string;
-      field: ComponentFieldConfig;
+      field: FieldGroupFieldConfig;
       data: unknown;
       locale?: string;
     }
@@ -964,7 +965,7 @@ export class ComponentMutationService extends BaseService {
 
     try {
       const existingByTable = new Map<string, ComponentRow[]>();
-      const metaCache = new Map<string, DynamicComponentRecord>();
+      const metaCache = new Map<string, DynamicFieldGroupRecord>();
 
       for (const slug of allowedSlugs) {
         try {
@@ -1006,7 +1007,7 @@ export class ComponentMutationService extends BaseService {
 
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
-        const componentType = instance._componentType;
+        const componentType = instance[STORAGE_FORMAT.wireTypeKey];
 
         if (!componentType || !allowedSlugs.includes(componentType)) continue;
 
@@ -1031,8 +1032,8 @@ export class ComponentMutationService extends BaseService {
         if (instanceId && globalExistingMap.has(instanceId)) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
-          updateData._order = i;
-          updateData._component_type = componentType;
+          updateData[STORAGE_FORMAT.columns.order] = i;
+          updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
           const existingEntry = globalExistingMap.get(instanceId)!;
@@ -1093,7 +1094,7 @@ export class ComponentMutationService extends BaseService {
     parentId: string,
     parentTable: string,
     fieldName: string,
-    field: ComponentFieldConfig
+    field: FieldGroupFieldConfig
   ): Promise<void> {
     const slugs = this.getComponentSlugs(field);
 
@@ -1103,9 +1104,9 @@ export class ComponentMutationService extends BaseService {
         await this.adapter.delete(
           meta.tableName,
           this.whereAnd({
-            _parent_id: parentId,
-            _parent_table: parentTable,
-            _parent_field: fieldName,
+            [STORAGE_FORMAT.columns.parentId]: parentId,
+            [STORAGE_FORMAT.columns.parentTable]: parentTable,
+            [STORAGE_FORMAT.columns.parentField]: fieldName,
           })
         );
       } catch (error) {
@@ -1123,7 +1124,7 @@ export class ComponentMutationService extends BaseService {
     parentId: string,
     parentTable: string,
     fieldName: string,
-    field: ComponentFieldConfig
+    field: FieldGroupFieldConfig
   ): Promise<void> {
     const slugs = this.getComponentSlugs(field);
 
@@ -1139,9 +1140,9 @@ export class ComponentMutationService extends BaseService {
         await tx.delete(
           meta.tableName,
           this.whereAnd({
-            _parent_id: parentId,
-            _parent_table: parentTable,
-            _parent_field: fieldName,
+            [STORAGE_FORMAT.columns.parentId]: parentId,
+            [STORAGE_FORMAT.columns.parentTable]: parentTable,
+            [STORAGE_FORMAT.columns.parentField]: fieldName,
           })
         );
       } catch (error) {
@@ -1163,11 +1164,11 @@ export class ComponentMutationService extends BaseService {
     try {
       return await this.adapter.select<ComponentRow>(tableName, {
         where: this.whereAnd({
-          _parent_id: parentId,
-          _parent_table: parentTable,
-          _parent_field: fieldName,
+          [STORAGE_FORMAT.columns.parentId]: parentId,
+          [STORAGE_FORMAT.columns.parentTable]: parentTable,
+          [STORAGE_FORMAT.columns.parentField]: fieldName,
         }),
-        orderBy: [{ column: "_order", direction: "asc" }],
+        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
       });
     } catch (error) {
       this.logger.debug("Could not query component table", {
@@ -1188,11 +1189,11 @@ export class ComponentMutationService extends BaseService {
     try {
       return await tx.select<ComponentRow>(tableName, {
         where: this.whereAnd({
-          _parent_id: parentId,
-          _parent_table: parentTable,
-          _parent_field: fieldName,
+          [STORAGE_FORMAT.columns.parentId]: parentId,
+          [STORAGE_FORMAT.columns.parentTable]: parentTable,
+          [STORAGE_FORMAT.columns.parentField]: fieldName,
         }),
-        orderBy: [{ column: "_order", direction: "asc" }],
+        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
       });
     } catch (error) {
       this.logger.debug("Could not query component table in tx", {
@@ -1227,11 +1228,11 @@ export class ComponentMutationService extends BaseService {
 
     return {
       id: crypto.randomUUID(),
-      _parent_id: parentId,
-      _parent_table: parentTable,
-      _parent_field: fieldName,
-      _order: order,
-      _component_type: componentType,
+      [STORAGE_FORMAT.columns.parentId]: parentId,
+      [STORAGE_FORMAT.columns.parentTable]: parentTable,
+      [STORAGE_FORMAT.columns.parentField]: fieldName,
+      [STORAGE_FORMAT.columns.order]: order,
+      [STORAGE_FORMAT.columns.type]: componentType,
       ...serializedFields,
       created_at: now,
       updated_at: now,
@@ -1357,7 +1358,7 @@ export class ComponentMutationService extends BaseService {
     }
   }
 
-  private getComponentSlugs(field: ComponentFieldConfig): string[] {
+  private getComponentSlugs(field: FieldGroupFieldConfig): string[] {
     if (field.components && field.components.length > 0) {
       return field.components;
     }

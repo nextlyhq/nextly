@@ -9,8 +9,9 @@
  * @since v0.0.3-alpha (Plan D1)
  */
 import type { UiSchemaManifest } from "../../schemas/_zod/ui-schema";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
-const SCHEMA_URL = "https://nextlyhq.com/schemas/ui-schema.v1.json";
+const SCHEMA_URL = STORAGE_FORMAT.manifest.schemaUrl;
 
 /** Field key order: name/type first, then a human reading order. */
 const FIELD_KEY_ORDER = [

@@ -75,6 +75,7 @@ import {
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { createContext, type CommandContext } from "../program";
 import {
   getDialectDisplayName,
@@ -235,8 +236,8 @@ export async function runMigrateCreate(
     resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
   );
   const codeComponents = toMinimalEntities(
-    configResult.config.components ?? [],
-    e => resolveComponentTableName(e.slug, e.dbName)
+    configResult.config.fieldGroups ?? [],
+    e => resolveComponentTableName(e.slug)
   );
 
   // Load + merge UI-built entities (code-first wins on slug collision).
@@ -275,8 +276,10 @@ export async function runMigrateCreate(
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
   // survived the merge (code-first wins → shadowed UI slugs are skipped).
   const dropped = new Set(merged.droppedUiSlugs);
-  const tn = (slug: string, prefix: "dc_" | "single_" | "comp_") =>
-    `${prefix}${slug.replace(/-/g, "_")}`;
+  const tn = (
+    slug: string,
+    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
+  ) => `${prefix}${slug.replace(/-/g, "_")}`;
   const metadataUpserts: { tableName: string; sql: string }[] = [];
   for (const c of manifest.collections) {
     if (dropped.has(c.slug)) continue;
@@ -295,7 +298,7 @@ export async function runMigrateCreate(
   for (const cp of manifest.components) {
     if (dropped.has(cp.slug)) continue;
     metadataUpserts.push({
-      tableName: tn(cp.slug, "comp_"),
+      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
       sql: buildComponentMetadataUpsert(cp, dialect),
     });
   }

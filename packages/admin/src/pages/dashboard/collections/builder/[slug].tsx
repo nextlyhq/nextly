@@ -210,6 +210,9 @@ export default function CollectionBuilderEditPage({
       // Cache revalidation is on unless the stored config disables it, so the
       // switch reflects on for both null (default) and an absent-disable config.
       revalidate: collection.revalidate?.disable !== true,
+      // Webhook recording is on unless the stored policy opts out, so the
+      // switch reflects on for both null (default) and an absent record flag.
+      webhooks: collection.webhooks?.record !== false,
     };
     setSettings(loadedSettings);
     // Pin a copy as the dirty baseline so settings-only edits enable Save.
@@ -331,6 +334,9 @@ export default function CollectionBuilderEditPage({
                   // Cache revalidation: on unless explicitly turned off; the
                   // server normalizes the boolean into the stored config.
                   revalidate: settings.revalidate !== false,
+                  // Webhook recording: on unless explicitly turned off; the
+                  // server normalizes the boolean into the stored policy.
+                  webhooks: settings.webhooks !== false,
                 },
               },
               {
@@ -418,6 +424,8 @@ export default function CollectionBuilderEditPage({
             versions: settings.versions === true,
             // Cache revalidation: on unless explicitly turned off.
             revalidate: settings.revalidate !== false,
+            // Webhook recording: on unless explicitly turned off.
+            webhooks: settings.webhooks !== false,
             // Why: useAsTitle + timestamps were removed from the modal in
             // PR B (system title is always the display; timestamps always
             // emitted). Backend defaults take over -- code-first config can

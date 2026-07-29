@@ -253,13 +253,13 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 | `PATCH` | `/api/singles/{slug}/schema` | Update single schema (Schema Builder). | `manage-settings` |
 | `POST` | `/api/singles/schema/{slug}/preview` | Dry-run single schema diff. | `manage-settings` |
 | `POST` | `/api/singles/schema/{slug}/apply` | Apply single schema changes. | `manage-settings` |
-| `GET` | `/api/components` | List component definitions. | Public |
-| `POST` | `/api/components` | Create component. | `manage-settings` |
-| `GET` | `/api/components/{slug}` | Get component. | Authenticated |
-| `PATCH` | `/api/components/{slug}` | Update component. | `manage-settings` |
-| `DELETE` | `/api/components/{slug}` | Delete component. | `manage-settings` |
-| `POST` | `/api/components/schema/{slug}/preview` | Dry-run component schema diff. | `manage-settings` |
-| `POST` | `/api/components/schema/{slug}/apply` | Apply component schema changes. | `manage-settings` |
+| `GET` | `/api/field-groups` | List field group definitions. | Authenticated |
+| `POST` | `/api/field-groups` | Create field group. | `manage-settings` |
+| `GET` | `/api/field-groups/{slug}` | Get field group. | Authenticated |
+| `PATCH` | `/api/field-groups/{slug}` | Update field group. | `manage-settings` |
+| `DELETE` | `/api/field-groups/{slug}` | Delete field group. | `manage-settings` |
+| `POST` | `/api/field-groups/schema/{slug}/preview` | Dry-run field group schema diff. | `manage-settings` |
+| `POST` | `/api/field-groups/schema/{slug}/apply` | Apply field group schema changes. | `manage-settings` |
 | `GET` | `/api/forms` | List published forms. | Public |
 | `GET` | `/api/forms/{slug}` | Get form by slug. | Public |
 | `POST` | `/api/forms/{slug}/submit` | Submit a form. | Public |

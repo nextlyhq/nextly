@@ -101,6 +101,19 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
         />
       )}
 
+      {fields.includes("webhooks") && (
+        // Recording defaults ON, so the switch is checked unless the value is
+        // explicitly false; turning it off keeps this entity's writes out of
+        // the webhook outbox and therefore out of every delivery.
+        <SwitchRow
+          ariaLabel="Webhook recording"
+          label="Webhook recording"
+          help="Send this entity's changes to subscribed webhook endpoints. On by default; turn it off for content that holds personal data, such as form submissions, so payloads never leave your app."
+          checked={values.webhooks ?? true}
+          onChange={v => set("webhooks", v)}
+        />
+      )}
+
       {fields.includes("showSystemFields") && <ShowSystemFieldsSwitch />}
     </div>
   );

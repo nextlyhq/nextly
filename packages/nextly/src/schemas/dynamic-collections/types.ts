@@ -17,6 +17,18 @@ import type { CollectionAccessRules } from "../../services/access/types";
 import type { ResolvedVersionsConfig } from "../versions/types";
 
 /**
+ * Registry-facing webhook recording policy for the `webhooks` column.
+ *
+ * Only the opt-out is ever stored. Recording is the default, so `null` on the
+ * column means "record" — which is also what a database predating the column
+ * yields, making the column purely additive.
+ */
+export interface StoredWebhookRecording {
+  /** Whether writes to this entity are recorded to the webhook outbox. */
+  record: boolean;
+}
+
+/**
  * Source of the collection definition.
  *
  * - `code`: Defined in code via `defineCollection()` in a config file
@@ -395,6 +407,14 @@ export interface DynamicCollectionInsert {
    * path reads it back to honor `disable` and merge extra `tags`.
    */
   revalidate?: RevalidateConfig | null;
+
+  /**
+   * Webhook recording policy (`{ record: false }`), or null/undefined when the
+   * collection uses the default of recording. Persisted on the `webhooks`
+   * column so a Builder-authored opt-out survives a restart; for `source: 'code'`
+   * collections the code-first `webhooks` option stays the source of truth.
+   */
+  webhooks?: StoredWebhookRecording | null;
 
   /** Collection-level i18n master switch. Default: false. */
   localized?: boolean;
