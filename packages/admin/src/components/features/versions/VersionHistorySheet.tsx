@@ -329,6 +329,36 @@ export function VersionHistorySheet({
           </SheetDescription>
         </SheetHeader>
 
+        {/* A head revalidation (on open or window focus) can fail after history
+            has already loaded. The rows stay on screen but may be stale, so the
+            freshness gate hides "Compare with current" and disables "Load more"
+            until a refetch succeeds — which, without this, only a reopen or
+            another window focus could trigger. This keeps the gate but gives the
+            recovery a visible control. Suppressed in compare mode (the pair is
+            already chosen, so head staleness no longer affects what is shown) and
+            when there are no rows (the full-panel load error covers that). */}
+        {isRefetchError && comparing === null && versions.length > 0 ? (
+          <div className="px-4 pt-4">
+            <Alert variant="warning" role="status">
+              <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
+                <AlertDescription>
+                  Couldn&apos;t refresh this history. It may be out of date.
+                </AlertDescription>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  // Disabled while a retry is in flight; the same refetch also
+                  // fires from window focus, so this reflects either trigger.
+                  disabled={isRefetching}
+                  onClick={() => void list.refetch()}
+                >
+                  {isRefetching ? "Retrying…" : "Try again"}
+                </Button>
+              </div>
+            </Alert>
+          </div>
+        ) : null}
+
         <div className="flex-1 overflow-y-auto">
           {comparing !== null ? (
             // Keyed by the pair so a different comparison always mounts fresh,
