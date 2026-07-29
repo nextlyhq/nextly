@@ -502,8 +502,17 @@ describe("resolveReferenceLabels — API-key scope", () => {
 describe("resolveReferenceLabels — upload target collection", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("reads a declared upload collection through the entry path, not the media service", async () => {
-    getEntrySpy.mockResolvedValue({ success: true, data: { title: "Report" } });
+  it("reads a declared upload collection through the entry path, projecting a renderable file shape", async () => {
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: {
+        originalFilename: "report.pdf",
+        filename: "abc.pdf",
+        url: "/u",
+        thumbnailUrl: "/t",
+        mimeType: "application/pdf",
+      },
+    });
     const req: ReferenceRequest = {
       kind: "upload",
       collection: "documents",
@@ -512,13 +521,46 @@ describe("resolveReferenceLabels — upload target collection", () => {
 
     const labels = await resolveReferenceLabels([req], user);
 
+    // The custom upload reads through the access-checked entry path (not the
+    // media service) and returns the value kit's file shape, so it renders a
+    // name and thumbnail rather than a bare id.
     expect(getEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({ collectionName: "documents", entryId: "d1" })
     );
     expect(findByIdSpy).not.toHaveBeenCalled();
     expect(labels.get(referenceLabelKey(req))).toEqual({
       id: "d1",
-      label: "Report",
+      label: "report.pdf",
+      media: {
+        originalFilename: "report.pdf",
+        filename: "abc.pdf",
+        url: "/u",
+        thumbnailUrl: "/t",
+        mimeType: "application/pdf",
+      },
+    });
+  });
+
+  it("keeps a denied custom upload as a bare id with nulled file detail", async () => {
+    getEntrySpy.mockResolvedValue({ success: false });
+    const req: ReferenceRequest = {
+      kind: "upload",
+      collection: "documents",
+      id: "d1",
+    };
+
+    const labels = await resolveReferenceLabels([req], user);
+
+    expect(labels.get(referenceLabelKey(req))).toEqual({
+      id: "d1",
+      label: null,
+      media: {
+        originalFilename: null,
+        filename: null,
+        url: null,
+        thumbnailUrl: null,
+        mimeType: null,
+      },
     });
   });
 });

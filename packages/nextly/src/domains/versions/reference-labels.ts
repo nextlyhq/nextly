@@ -246,18 +246,41 @@ async function resolveSystemUser(
 }
 
 /**
- * Read one relationship target through the access-checked read path.
+ * Read one target row through the access-checked read path, or null when it is
+ * denied, missing, or not an object.
  *
  * `overrideAccess: false` with `routeAuthorized: false` runs the RBAC check
  * against THIS target: the caller was authorized for the parent document, never
  * for what it links to. A scoped API key is judged on its OWN read grant via
  * `authenticatedScope`, so a super-admin-owned but narrowly scoped key cannot
  * read a target its scope excludes. `status: "all"` resolves a historical link
- * that now points at an unpublished row. A denied or missing target yields a
- * null label rather than throwing, because dropping the reference would
- * misrepresent the historical value as empty and surfacing the error would
- * confirm the target exists.
+ * that now points at an unpublished row, and `locale` reads the target in the
+ * version's own language. A denied or missing target yields null rather than
+ * throwing, because dropping the reference would misrepresent the historical
+ * value as empty and surfacing the error would confirm the target exists.
  */
+async function readTargetRow(
+  ref: ReferenceRequest,
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope,
+  locale?: string | null
+): Promise<Record<string, unknown> | null> {
+  const collections = getService("collectionsHandler");
+  const result = await collections.getEntry({
+    collectionName: ref.collection,
+    entryId: ref.id,
+    user,
+    depth: 0,
+    overrideAccess: false,
+    routeAuthorized: false,
+    status: "all",
+    ...(locale ? { locale } : {}),
+    ...(authenticatedScope ? { authenticatedScope } : {}),
+  });
+  return result.success && isPlainObject(result.data) ? result.data : null;
+}
+
+/** Read one relationship target to its display label through the access gate. */
 async function resolveRelationship(
   ref: ReferenceRequest,
   user: UserContext,
@@ -265,32 +288,82 @@ async function resolveRelationship(
   locale?: string | null
 ): Promise<ResolvedReference> {
   try {
-    const collections = getService("collectionsHandler");
-    const result = await collections.getEntry({
-      collectionName: ref.collection,
-      entryId: ref.id,
-      user,
-      depth: 0,
-      overrideAccess: false,
-      routeAuthorized: false,
-      status: "all",
-      // Read the target in the version's own locale, so a localized display
-      // column resolves in the same language the snapshot was captured in
-      // rather than defaulting to the configured default locale.
-      ...(locale ? { locale } : {}),
-      ...(authenticatedScope ? { authenticatedScope } : {}),
-    });
-    if (!result.success || !isPlainObject(result.data)) {
-      return { id: ref.id, label: null };
-    }
-    return { id: ref.id, label: labelForRow(result.data, ref.labelField) };
+    const row = await readTargetRow(ref, user, authenticatedScope, locale);
+    return {
+      id: ref.id,
+      label: row ? labelForRow(row, ref.labelField) : null,
+    };
   } catch {
     return { id: ref.id, label: null };
   }
 }
 
+/** The nulled file detail returned when an upload cannot be resolved. */
+const EMPTY_MEDIA: ResolvedMedia = {
+  originalFilename: null,
+  filename: null,
+  url: null,
+  thumbnailUrl: null,
+  mimeType: null,
+};
+
 /**
- * Read one upload, projecting only what a history view renders.
+ * Project an upload row (from the media service or an upload-enabled
+ * collection) into the value kit's upload shape, keeping only the file detail a
+ * history view renders. The label mirrors what every other admin surface shows:
+ * the user-facing name, then the internal filename.
+ */
+function toResolvedMedia(
+  id: string,
+  source: Record<string, unknown>
+): ResolvedReference {
+  const text = (value: unknown): string | null =>
+    typeof value === "string" && value.length > 0 ? value : null;
+  const originalFilename = text(source.originalFilename);
+  const filename = text(source.filename);
+  return {
+    id,
+    label: originalFilename ?? filename,
+    media: {
+      originalFilename,
+      filename,
+      url: text(source.url),
+      thumbnailUrl: text(source.thumbnailUrl),
+      mimeType: text(source.mimeType),
+    },
+  };
+}
+
+/**
+ * Read one upload stored in a content collection (a custom upload target rather
+ * than the built-in `media` library) through the access-checked entry path, and
+ * project the same file detail the media service would. The collection's own
+ * read rules gate the row, so no extra scope check is needed here (unlike the
+ * unauthenticated media service). A renderable upload shape is returned so a
+ * custom upload shows a filename and thumbnail rather than a bare id.
+ */
+async function resolveUploadEntry(
+  ref: ReferenceRequest,
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope,
+  locale?: string | null
+): Promise<ResolvedReference> {
+  const unresolved: ResolvedReference = {
+    id: ref.id,
+    label: null,
+    media: { ...EMPTY_MEDIA },
+  };
+  try {
+    const row = await readTargetRow(ref, user, authenticatedScope, locale);
+    return row ? toResolvedMedia(ref.id, row) : unresolved;
+  } catch {
+    return unresolved;
+  }
+}
+
+/**
+ * Read one upload from the built-in `media` library, projecting only what a
+ * history view renders.
  *
  * `MediaService.findById` ignores its context argument and performs no
  * authorization of its own, so the caller's permission to read media is checked
@@ -305,13 +378,7 @@ async function resolveUpload(
   const unresolved: ResolvedReference = {
     id: ref.id,
     label: null,
-    media: {
-      originalFilename: null,
-      filename: null,
-      url: null,
-      thumbnailUrl: null,
-      mimeType: null,
-    },
+    media: { ...EMPTY_MEDIA },
   };
 
   try {
@@ -384,10 +451,11 @@ export async function resolveReferenceLabels(
 }
 
 /**
- * Resolve one reference by its target: a `users` system entity through the user
- * reader, anything in the system `media` library through the media service, and
- * everything else (a normal relationship, or a polymorphic upload naming a
- * content collection) through the access-checked entry read.
+ * Resolve one reference by its kind and target. An upload projects a file shape:
+ * from the media service for the built-in `media` library, or through the
+ * access-checked entry read for a custom upload collection. A relationship
+ * resolves to a label: a `users` system entity through the user reader,
+ * everything else through the entry read.
  */
 async function resolveOne(
   ref: ReferenceRequest,
@@ -395,11 +463,13 @@ async function resolveOne(
   authenticatedScope?: AuthenticatedScope,
   locale?: string | null
 ): Promise<ResolvedReference> {
+  if (ref.kind === "upload") {
+    return ref.collection === "media"
+      ? resolveUpload(ref, user, authenticatedScope)
+      : resolveUploadEntry(ref, user, authenticatedScope, locale);
+  }
   if (isSystemUserCollection(ref.collection)) {
     return resolveSystemUser(ref, user, authenticatedScope);
-  }
-  if (ref.collection === "media") {
-    return resolveUpload(ref, user, authenticatedScope);
   }
   return resolveRelationship(ref, user, authenticatedScope, locale);
 }

@@ -231,6 +231,48 @@ describe("hydrateSnapshotReferences", () => {
     });
   });
 
+  it("leaves a protected reference nested in a group inside a component as a bare id", async () => {
+    const snapshot: Record<string, unknown> = {
+      blocks: [{ _componentType: "quote", meta: { owner: "a1", tag: "t1" } }],
+    };
+
+    await hydrateSnapshotReferences(
+      snapshot,
+      fields({
+        name: "blocks",
+        type: "component",
+        componentSchemas: {
+          quote: {
+            fields: [
+              {
+                name: "meta",
+                type: "group",
+                fields: [
+                  {
+                    name: "owner",
+                    type: "relationship",
+                    relationTo: "authors",
+                    // Protected below a group inside a component: still not
+                    // evaluable by redaction, so it must not be hydrated.
+                    access: { read: () => false },
+                  },
+                  { name: "tag", type: "relationship", relationTo: "tags" },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+      user
+    );
+
+    // The unprotected sibling still resolves; only the protected one stays bare.
+    expect((snapshot.blocks as unknown[])[0]).toEqual({
+      _componentType: "quote",
+      meta: { owner: "a1", tag: { id: "t1", label: "T-t1" } },
+    });
+  });
+
   it("descends a nameless presentational group", async () => {
     const snapshot: Record<string, unknown> = { owner: "o1" };
 

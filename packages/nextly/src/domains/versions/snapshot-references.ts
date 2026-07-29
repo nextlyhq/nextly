@@ -105,6 +105,13 @@ function refKindOf(type: string): ReferenceKind | null {
  * Walk a value against its field list, invoking `visit` for every relationship
  * or upload leaf and descending containers so nested references are found too.
  * The container form is normalized in place as it goes.
+ *
+ * `inComponent` is carried through every recursion once a component is entered.
+ * Redaction cannot evaluate the read rule of any field nested inside a component
+ * (the diff engine omits them for the same reason), so while inside one, a field
+ * declaring `access.read` is skipped at ANY depth — a protected relationship or
+ * upload sitting under a group or repeater within a component must not be
+ * hydrated into a readable label either.
  */
 function walk(
   value: unknown,
@@ -113,19 +120,24 @@ function walk(
     field: FieldConfig,
     holder: Record<string, unknown>,
     name: string
-  ) => void
+  ) => void,
+  inComponent = false
 ): void {
   if (!isPlainObject(value)) return;
 
   for (const field of fields) {
     const name = field.name;
 
+    // Inside a component, a field the caller may not read was not stripped by
+    // redaction, so it is skipped here rather than resolved to a label.
+    if (inComponent && hasReadAccessRule(field)) continue;
+
     // A nameless presentational group stores its children on THIS object, so
     // recurse its fields against the same holder rather than skipping it.
     if (typeof name !== "string" || name.length === 0) {
       if (field.type === "group") {
         const inline = childFieldsOf(field);
-        if (inline.length > 0) walk(value, inline, visit);
+        if (inline.length > 0) walk(value, inline, visit, inComponent);
       }
       continue;
     }
@@ -142,18 +154,13 @@ function walk(
     value[name] = raw;
 
     // A component's children live in its enriched schema keyed by each
-    // instance's type, not in `fields`, so resolve them per instance. A child
-    // declaring an `access.read` rule is skipped: redaction cannot evaluate
-    // component-child callbacks (the diff engine omits them for the same
-    // reason), so hydrating one would surface a label for a value the caller
-    // may not be allowed to read.
+    // instance's type, not in `fields`, so resolve them per instance. Everything
+    // below a component is walked with `inComponent`, so the read-rule skip
+    // above applies to its whole subtree.
     if (field.type === "component") {
       const instances = Array.isArray(raw) ? raw : [raw];
       for (const instance of instances) {
-        const children = componentChildFieldsFor(field, instance).filter(
-          child => !hasReadAccessRule(child)
-        );
-        walk(instance, children, visit);
+        walk(instance, componentChildFieldsFor(field, instance), visit, true);
       }
       continue;
     }
@@ -161,9 +168,9 @@ function walk(
     const children = childFieldsOf(field);
     if (children.length === 0) continue;
     if (Array.isArray(raw)) {
-      for (const row of raw) walk(row, children, visit);
+      for (const row of raw) walk(row, children, visit, inComponent);
     } else {
-      walk(raw, children, visit);
+      walk(raw, children, visit, inComponent);
     }
   }
 }
