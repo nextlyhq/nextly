@@ -109,6 +109,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   setVersionLabelForDocument,
@@ -390,6 +391,23 @@ export const SINGLE_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  getSingleVersionDiff: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const entryId = await requireLiveSingleId(slug);
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from: Number(p.from),
+        to: Number(p.to),
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
     },
   },
   setSingleVersionLabel: {
