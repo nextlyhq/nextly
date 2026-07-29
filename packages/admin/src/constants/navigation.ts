@@ -27,7 +27,7 @@ import { ROUTES } from "./routes";
  * - `users`: User management section (Users, Roles, Custom Fields)
  * - `plugins`: Plugin entries (dynamic — DynamicPluginNav)
  * - `settings`: Configuration pages (grouped sub-sections: system, email)
- * - `builder`: Developer tools (Collections, Singles, Components) — untouched
+ * - `builder`: Developer tools (Collections, Singles, Field Groups) — untouched
  */
 export type NavigationCategory =
   | "main"
@@ -92,7 +92,7 @@ export type SidebarNavigation = NavigationItem[];
  * - media: Media Library (NIS)
  * - users: Users, Roles, Custom Fields (IS)
  * - settings: General, API Keys, Email Providers, Email Templates (IS with sub-groups)
- * - builder: Collections, Singles, Components (IS)
+ * - builder: Collections, Singles, Field Groups (IS)
  *
  * Dynamic items (collections, singles, plugins) are rendered by their
  * respective DynamicNav components and are not listed here.
@@ -197,8 +197,8 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     category: "builder",
   },
   {
-    title: "Components",
-    href: ROUTES.BUILDER_COMPONENTS,
+    title: "Field Groups",
+    href: ROUTES.BUILDER_FIELD_GROUPS,
     icon: Puzzle,
     category: "builder",
   },

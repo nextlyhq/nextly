@@ -93,7 +93,7 @@ export function renderPluginInfo(
 
   list("collections", info.collections);
   list("singles", info.singles);
-  list("components", info.components);
+  list("field groups", info.fieldGroups);
   list("permissions", info.permissions);
   list("events", info.events);
 

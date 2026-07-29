@@ -124,7 +124,7 @@ Only `slug` and `fields` are required.
 | **Type** | `string` |
 | **Required** | Yes |
 
-Unique identifier across all singles **and** collections **and** components. Used as the API endpoint path and database table name (with the `single_` prefix unless `dbName` is set). Must be lowercase and URL-friendly.
+Unique identifier across all singles **and** collections **and** field groups. Used as the API endpoint path and database table name (with the `single_` prefix unless `dbName` is set). Must be lowercase and URL-friendly.
 
 ### `fields`
 
@@ -295,5 +295,5 @@ export default defineSingle({
 
 - [Collections](/docs/configuration/collections) — content types with multiple entries
 - [Fields](/docs/configuration/fields) — every field type and validation option
-- [Components](/docs/configuration/components) — reusable field groups for collections and singles
+- [Field Groups](/docs/configuration/field-groups) — reusable field groups for collections and singles
 - [Visual Schema Builder](/docs/admin/builder) — create singles visually with drag-and-drop

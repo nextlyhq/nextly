@@ -1,7 +1,7 @@
 /**
- * ComponentsEmptyState Component
+ * FieldGroupsEmptyState Component
  *
- * Empty state component for Components page.
+ * Empty state component for Field Groups page.
  * Shows contextual message and CTA based on whether user is searching or viewing empty list.
  *
  * ## Design Specifications
@@ -19,10 +19,10 @@
  * @example
  * ```tsx
  * // No data state (show CTA)
- * <ComponentsEmptyState isSearching={false} />
+ * <FieldGroupsEmptyState isSearching={false} />
  *
  * // No search results (no CTA)
- * <ComponentsEmptyState isSearching={true} />
+ * <FieldGroupsEmptyState isSearching={true} />
  * ```
  */
 
@@ -33,7 +33,7 @@ import type React from "react";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 
-export interface ComponentsEmptyStateProps {
+export interface FieldGroupsEmptyStateProps {
   /**
    * Whether the user is currently searching (affects message and CTA visibility)
    */
@@ -41,11 +41,11 @@ export interface ComponentsEmptyStateProps {
 }
 
 /**
- * ComponentsEmptyState Component
+ * FieldGroupsEmptyState Component
  *
- * Displays an empty state for the Components table with contextual messaging.
+ * Displays an empty state for the Field Groups table with contextual messaging.
  */
-export const ComponentsEmptyState: React.FC<ComponentsEmptyStateProps> = ({
+export const FieldGroupsEmptyState: React.FC<FieldGroupsEmptyStateProps> = ({
   isSearching = false,
 }) => {
   return (
@@ -69,10 +69,10 @@ export const ComponentsEmptyState: React.FC<ComponentsEmptyStateProps> = ({
 
       {/* CTA (only show when not searching/filtering) */}
       {!isSearching && (
-        <Link href={ROUTES.BUILDER_COMPONENTS_NEW}>
+        <Link href={ROUTES.BUILDER_FIELD_GROUPS_NEW}>
           <Button size="md">
             <Plus className="h-4 w-4" />
-            Create Component
+            Create Field Group
           </Button>
         </Link>
       )}
@@ -80,4 +80,4 @@ export const ComponentsEmptyState: React.FC<ComponentsEmptyStateProps> = ({
   );
 };
 
-ComponentsEmptyState.displayName = "ComponentsEmptyState";
+FieldGroupsEmptyState.displayName = "FieldGroupsEmptyState";

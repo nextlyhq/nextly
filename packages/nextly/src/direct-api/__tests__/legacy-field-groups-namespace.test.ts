@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+
+import { NextlyError } from "../../errors/nextly-error";
+import { installLegacyFieldGroupsNamespaceGuard } from "../legacy-field-groups-namespace";
+import { Nextly, nextly } from "../nextly";
+
+// The namespace was renamed rather than aliased, so an untyped caller upgrading
+// from `nextly.components` must be told what to rename instead of hitting a
+// TypeError on an undefined property. Both entry points are covered because a
+// caller can reach field groups through either one.
+describe("the pre-rename field groups namespace", () => {
+  it("rejects instance access with the rename instruction", () => {
+    const instance = new Nextly();
+
+    expect(
+      () => (instance as unknown as { components: unknown }).components
+    ).toThrowError(NextlyError);
+    expect(
+      () => (instance as unknown as { components: unknown }).components
+    ).toThrowError(/'nextly\.components' is now 'nextly\.fieldGroups'/);
+  });
+
+  // Built through the canonical factory, so the status comes from the shared
+  // code mapping rather than an inline number that could drift from it.
+  it("reports the canonical invalid-input code and status", () => {
+    const instance = new Nextly();
+    let caught: unknown;
+    try {
+      void (instance as unknown as { components: unknown }).components;
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as NextlyError).code).toBe("INVALID_INPUT");
+    expect((caught as NextlyError).statusCode).toBe(400);
+  });
+
+  it("rejects facade access with the rename instruction", () => {
+    expect(
+      () => (nextly as unknown as { components: unknown }).components
+    ).toThrowError(/'nextly\.components' is now 'nextly\.fieldGroups'/);
+  });
+
+  it("serves field groups under the current name", () => {
+    const instance = new Nextly();
+
+    expect(typeof instance.fieldGroups.find).toBe("function");
+    expect(typeof nextly.fieldGroups.find).toBe("function");
+  });
+
+  // `getNextly()` from `init.ts` returns a plain object literal rather than a
+  // `Nextly`, so it is guarded by direct installation instead of inheriting the
+  // prototype accessor. That target shape is exercised here: an own accessor on
+  // a plain object behaves differently under spread than a prototype one.
+  it("guards a plain object without making it uncopyable", () => {
+    const instance: Record<string, unknown> = { fieldGroups: { find() {} } };
+    installLegacyFieldGroupsNamespaceGuard(instance);
+
+    expect(() => instance.components).toThrowError(
+      /'nextly\.components' is now 'nextly\.fieldGroups'/
+    );
+    expect(Object.keys(instance)).not.toContain("components");
+    expect(() => ({ ...instance })).not.toThrow();
+    expect(() => JSON.stringify(instance)).not.toThrow();
+    expect(instance.fieldGroups).toBeDefined();
+  });
+
+  // The accessor is non-enumerable so that merely copying either surface does
+  // not trigger it; a throwing enumerable property would break every spread.
+  it("stays invisible to enumeration and copying", () => {
+    const instance = new Nextly();
+
+    expect(Object.keys(nextly)).not.toContain("components");
+    expect(() => ({ ...nextly })).not.toThrow();
+    expect(() => ({ ...instance })).not.toThrow();
+    expect(() => JSON.stringify(nextly)).not.toThrow();
+  });
+});

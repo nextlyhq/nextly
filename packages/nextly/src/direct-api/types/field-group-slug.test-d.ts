@@ -3,7 +3,7 @@ import type {
   DataFromFieldGroupSlugFrom,
   FieldGroupSlug,
   FieldGroupSlugFrom,
-} from "./components";
+} from "./field-groups";
 
 // Compile-time half of the generated-Config contract. These assertions live in
 // a `.test-d.ts` rather than a `.test.ts` because tsconfig excludes the latter:

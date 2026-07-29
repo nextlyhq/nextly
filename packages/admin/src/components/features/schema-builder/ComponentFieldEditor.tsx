@@ -32,7 +32,7 @@ import { useCallback, useMemo, useRef } from "react";
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import { useComponents } from "@admin/hooks/queries";
+import { useFieldGroups } from "@admin/hooks/queries";
 
 import { EditorAlert } from "./EditorAlert";
 import type { ComponentFieldEditorProps, ComponentFieldMode } from "./types";
@@ -60,7 +60,7 @@ export function ComponentFieldEditor({
   const multiSelectionCacheRef = useRef<string[] | undefined>(undefined);
 
   // Fetch available components
-  const { data: componentsData, isLoading } = useComponents({
+  const { data: componentsData, isLoading } = useFieldGroups({
     pagination: { page: 0, pageSize: 100 },
     sorting: [{ field: "label", direction: "asc" }],
     filters: {},
@@ -201,7 +201,7 @@ export function ComponentFieldEditor({
               field type.
             </p>
             <Link
-              href={ROUTES.BUILDER_COMPONENTS_NEW}
+              href={ROUTES.BUILDER_FIELD_GROUPS_NEW}
               className="inline-flex items-center gap-1 text-foreground hover:underline"
             >
               <Icons.Plus className="h-3 w-3" />
