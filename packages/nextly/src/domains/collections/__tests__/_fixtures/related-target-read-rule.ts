@@ -14,7 +14,7 @@ export default function relatedTargetReadRule({
   req,
   id,
 }: {
-  req: { user?: { id?: string; blockedId?: string } };
+  req: { user?: { id?: string; blockedId?: string; tenant?: string } };
   id?: string;
 }): unknown {
   switch (req.user?.id) {
@@ -25,6 +25,10 @@ export default function relatedTargetReadRule({
     // "allowed" and hands back the one row it exists to withhold.
     case "blocked-one":
       return id !== req.user?.blockedId;
+    // Answers with a PREDICATE rather than a verdict: the caller may read the
+    // collection, but only the rows matching their tenant.
+    case "tenant-scoped":
+      return { tenant: { equals: req.user?.tenant } };
     default:
       return true;
   }

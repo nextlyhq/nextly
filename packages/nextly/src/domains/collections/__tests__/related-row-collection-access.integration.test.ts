@@ -511,3 +511,91 @@ describe("related-row collection access — policy resolution (integration)", ()
     }
   });
 });
+
+describe("related-row collection access — query predicates (integration)", () => {
+  async function bootTenantScoped(): Promise<{
+    handler: CollectionsHandler;
+    mineRefId: string;
+    theirsRefId: string;
+  }> {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          fields: [text({ name: "title" }), text({ name: "tenant" })],
+        }),
+        defineCollection({
+          slug: "refs",
+          fields: [
+            text({ name: "name" }),
+            relationship({ name: "target", relationTo: "pages" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const mine = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "My page", tenant: "acme" }
+    );
+    const theirs = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "Their page", tenant: "other" }
+    );
+    const mineRef = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      { name: "mine", target: (mine.data as { id: string }).id }
+    );
+    const theirsRef = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      { name: "theirs", target: (theirs.data as { id: string }).id }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: { read: { type: "custom", functionPath: ID_RULE_PATH } },
+      },
+      { and: [{ column: "slug", op: "=", value: "pages" }] }
+    );
+    return {
+      handler,
+      mineRefId: (mineRef.data as { id: string }).id,
+      theirsRefId: (theirsRef.data as { id: string }).id,
+    };
+  }
+
+  const scopedCaller = { id: "tenant-scoped", tenant: "acme" };
+
+  // A rule may answer with a predicate rather than a verdict. Treating that as
+  // a denial hides rows the rule admits; treating it as an allow hands back
+  // rows it excludes. The predicate has to actually narrow.
+  it("populates a row the predicate admits", async () => {
+    const { handler, mineRefId } = await bootTenantScoped();
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: mineRefId,
+      depth: 1,
+      user: scopedCaller,
+      routeAuthorized: true,
+    });
+
+    expect(JSON.stringify(result.data)).toContain("My page");
+  });
+
+  it("withholds a row the same predicate excludes", async () => {
+    const { handler, theirsRefId } = await bootTenantScoped();
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: theirsRefId,
+      depth: 1,
+      user: scopedCaller,
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.data)).not.toContain("Their page");
+  });
+});

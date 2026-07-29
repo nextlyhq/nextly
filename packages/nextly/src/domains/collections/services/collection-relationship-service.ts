@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -16,7 +16,16 @@ import {
   DEFAULT_OWNER_FIELD,
 } from "../../../services/access";
 import type { CollectionAccessRules } from "../../../services/access";
+import {
+  describeUntranslatableConstraint,
+  stripNoOpConstraintMembers,
+} from "../../../services/access/constraint-shape";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
+import { buildDrizzleCondition } from "../../../services/collections/drizzle-condition";
+import {
+  buildWhereClause,
+  type WhereFilter,
+} from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
@@ -89,6 +98,12 @@ interface RelatedRowAccess {
 export interface TargetReadPolicy {
   rules: CollectionAccessRules | undefined;
   ownerConstraint: { field: string; value: unknown } | null;
+  /**
+   * The predicate a stored rule answered with, when it answered with one
+   * rather than a verdict. Applied to the target table rather than compared in
+   * memory, so it binds exactly as it does on a direct read.
+   */
+  queryConstraint: Record<string, unknown> | null;
 }
 
 /**
@@ -991,7 +1006,14 @@ export class CollectionRelationshipService extends BaseService {
         this.rowPassesTargetPolicy(row, policy, accessService, user)
       )
     );
-    return rows.filter((_, index) => verdicts[index]);
+    const admitted = rows.filter((_, index) => verdicts[index]);
+
+    if (!policy.queryConstraint || admitted.length === 0) return admitted;
+    return this.narrowByTargetPredicate(
+      targetCollection,
+      admitted,
+      policy.queryConstraint
+    );
   }
 
   /**
@@ -1033,10 +1055,88 @@ export class CollectionRelationshipService extends BaseService {
           false,
           access.authenticatedScope
         ),
+        queryConstraint: await accessService.getAccessQueryConstraint(
+          targetCollection,
+          access.user as UserContext | undefined,
+          false,
+          access.authenticatedScope
+        ),
       };
     })();
     access.targetPolicies?.set(targetCollection, pending);
     return pending;
+  }
+
+  /**
+   * Keep only the rows the target's own read predicate admits.
+   *
+   * Asked of the database rather than compared in memory: the predicate is a
+   * full filter, and a second evaluator interpreting its operators is free to
+   * disagree with the one the direct read compiles — a filter that binds less
+   * than the rule states is how a read widens unnoticed. The same translation
+   * the read path uses is applied here, over exactly the ids already fetched,
+   * so this costs one query per target collection rather than one per row.
+   *
+   * A predicate that cannot be translated withholds every row. It is the same
+   * refusal a direct read makes, expressed as absence, because an unreadable
+   * relationship must not turn into an error on the document that points at it.
+   */
+  private async narrowByTargetPredicate(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    constraint: Record<string, unknown>
+  ): Promise<Record<string, unknown>[]> {
+    try {
+      const schema = isSystemEntity(targetCollection)
+        ? getSystemEntityTable(targetCollection)
+        : await this.fileManager.loadDynamicSchema(targetCollection);
+      if (!schema) return [];
+
+      const untranslatable = describeUntranslatableConstraint(
+        constraint,
+        name => Object.prototype.hasOwnProperty.call(schema, name),
+        // No companion support on this path, so a filter on a localized field
+        // is reported untranslatable here rather than quietly dropped.
+        () => false
+      );
+      if (untranslatable !== null) {
+        this.logger.warn(
+          "Withholding related rows behind an untranslatable access constraint",
+          { collection: targetCollection, reason: untranslatable }
+        );
+        return [];
+      }
+
+      // Members that cannot narrow anything are dropped first, so "translated
+      // to nothing" below judges only what was meant to restrict.
+      const restricting = stripNoOpConstraintMembers(constraint);
+      if (Object.keys(restricting).length === 0) return rows;
+
+      const condition = buildDrizzleCondition(
+        buildWhereClause(restricting as WhereFilter),
+        schema,
+        this.adapter.dialect ?? "postgresql"
+      );
+      // A constraint that restricts on paper and compiles to nothing would
+      // admit every row. Withhold instead: the rule asked to narrow.
+      if (!condition) return [];
+
+      const ids = rows.map(row => row.id as string);
+      const admitted = await this.db
+        .select({ id: schema.id })
+        .from(schema)
+        .where(and(inArray(schema.id, ids), condition));
+      const allowed = new Set(
+        (admitted as { id: string }[]).map(row => row.id)
+      );
+      return rows.filter(row => allowed.has(row.id as string));
+    } catch (error) {
+      this.logger.warn("Could not apply a target collection's read predicate", {
+        collection: targetCollection,
+        error,
+      });
+      return [];
+    }
   }
 
   /** Whether one fetched row survives the target collection's read policy. */
@@ -1067,11 +1167,9 @@ export class CollectionRelationshipService extends BaseService {
       DEFAULT_OWNER_FIELD
     );
 
-    // A rule answering with a predicate rather than a verdict narrows WHICH
-    // rows are readable. Anything beyond the owner predicate handled above is
-    // not applied to these fetches yet, so the row is withheld rather than
-    // returned unnarrowed.
-    if (result.query) return false;
+    // A predicate is not a verdict: it narrows which rows are readable, and
+    // the narrowing is applied to the target table afterwards. Answering
+    // "denied" here would hide rows the rule admits.
     return result.allowed;
   }
 
