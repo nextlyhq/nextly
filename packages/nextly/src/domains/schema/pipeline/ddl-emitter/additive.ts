@@ -23,6 +23,7 @@
 // (SQLite needs a table rebuild, MySQL needs a full MODIFY definition) and
 // route the apply to drizzle-kit.
 
+import { NextlyError } from "../../../../errors";
 import type { IndexSpec, Operation, TableSpec } from "../diff/types";
 
 import { quoteIdent, quoteIdentMysql } from "./identifiers";
@@ -162,15 +163,23 @@ export function emitAdditiveDdl(
     case "change_column_default":
       // Not emittable on SQLite (table rebuild) / MySQL (full MODIFY
       // definition) — canEmitWithoutDrizzleKit routes these to drizzle-kit.
-      throw new Error(
-        `emitAdditiveDdl: op "${op.type}" is not additive-emittable on ${dialect}`
-      );
+      throw NextlyError.internal({
+        logContext: {
+          reason: "op-not-additive-emittable",
+          op: op.type,
+          dialect,
+        },
+      });
 
     default: {
       const exhaustive: never = op;
-      throw new Error(
-        `emitAdditiveDdl: unknown op ${JSON.stringify(exhaustive)}`
-      );
+      throw NextlyError.internal({
+        logContext: {
+          reason: "unknown-emitter-op",
+          op: JSON.stringify(exhaustive),
+          dialect,
+        },
+      });
     }
   }
 }

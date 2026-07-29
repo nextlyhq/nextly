@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 
+import { NextlyError } from "../../../../../errors";
+
 import type { Operation } from "../../diff/types";
 import { emitAdditiveDdl } from "../additive";
 
@@ -138,7 +140,7 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
     expect(emitAdditiveDdl(dropCol, "mysql")).toEqual([]);
   });
 
-  it("throws on change_* ops (kit owns rebuilds on these dialects)", () => {
+  it("throws a typed internal error on change_* ops (kit owns rebuilds here)", () => {
     const changeType: Operation = {
       type: "change_column_type",
       tableName: "dc_authors",
@@ -146,8 +148,18 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
       fromType: "text",
       toType: "integer",
     };
-    expect(() => emitAdditiveDdl(changeType, "sqlite")).toThrow(
-      /not additive-emittable/
-    );
+    // NextlyError's public message is generic by design; the routing-bug
+    // detail lives in logContext.
+    let thrown: unknown;
+    try {
+      emitAdditiveDdl(changeType, "sqlite");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(NextlyError);
+    expect((thrown as NextlyError).logContext).toMatchObject({
+      op: "change_column_type",
+      dialect: "sqlite",
+    });
   });
 });
