@@ -312,7 +312,11 @@ export function VersionHistorySheet({
 
         <div className="flex-1 overflow-y-auto">
           {comparing !== null ? (
+            // Keyed by the pair so a different comparison always mounts fresh,
+            // and `keepPreviousData` can never carry one pair's fields into
+            // another while the new diff loads.
             <VersionDiffView
+              key={`${comparing.from}-${comparing.to}`}
               scope={scope}
               from={comparing.from}
               to={comparing.to}
