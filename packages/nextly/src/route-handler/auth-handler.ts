@@ -94,6 +94,26 @@ export const _localizationBlockChangedForTest = localizationBlockChanged;
  * consumes no request body, so a handler that parses its own body still can.
  */
 export async function ensureServicesInitialized(): Promise<void> {
+  // Single-flight: concurrent requests share one recovery+registration pass
+  // instead of interleaving. Without this, two dev requests could both
+  // detect a stale localization block and overlap shutdownServices() — the
+  // later teardown destroying the services the earlier request had just
+  // re-registered — and the same latch keeps a cold boot from being
+  // double-registered by simultaneous first requests.
+  while (_initInFlight) {
+    await _initInFlight;
+  }
+  const run = initializeServicesOnce().finally(() => {
+    if (_initInFlight === run) _initInFlight = null;
+  });
+  _initInFlight = run;
+  await run;
+}
+
+// The in-flight recovery/registration pass concurrent callers await.
+let _initInFlight: Promise<void> | null = null;
+
+async function initializeServicesOnce(): Promise<void> {
   // Dev-only staleness recovery: services register ONCE per process, but
   // editing nextly.config.ts re-evaluates the route module, which stores the
   // NEW config here without re-registering anything. For most blocks that is
@@ -114,6 +134,11 @@ export async function ensureServicesInitialized(): Promise<void> {
       "[Nextly] `localization` config changed — re-registering services to apply it..."
     );
     await shutdownServices();
+    // The cached dispatcher wraps a ServiceContainer built on the adapter
+    // that shutdown just disconnected, and its ensureInitialized() keeps an
+    // existing adapter. Drop it so the next getDispatcherInstance() builds
+    // one against the freshly registered services.
+    _dispatcher = null;
   }
 
   if (!isServicesRegistered()) {
