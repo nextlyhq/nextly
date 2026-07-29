@@ -112,6 +112,29 @@ describe("the plugin options container", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("accepts a container option named after a prototype member", () => {
+    // `z.record` refuses an object carrying an own `constructor` key outright,
+    // which would make this container unsavable for a name it is supposed to
+    // accept — core never reads what is inside it.
+    const parsed = uiSchemaFieldSchema.safeParse(
+      JSON.parse(
+        '{"name":"score","type":"star-rating","pluginOptions":{"constructor":{"shape":"star"}}}'
+      )
+    );
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("refuses a container that is not an object", () => {
+    const parsed = uiSchemaFieldSchema.safeParse({
+      name: "score",
+      type: "star-rating",
+      pluginOptions: "nope",
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
   it("cannot displace the guaranteed identity of the field", () => {
     const instance = detachedField({
       name: "score",

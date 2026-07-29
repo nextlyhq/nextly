@@ -35,7 +35,9 @@ export const RESERVED_PLUGIN_OPTION_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether a value is a `{}` literal that could hold options. */
-function isOptionRecord(value: unknown): value is Record<string, unknown> {
+export function isPluginOptionContainer(
+  value: unknown
+): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
@@ -48,5 +50,5 @@ export function pluginOptionContainer(
   field: object
 ): Record<string, unknown> | undefined {
   const held = (field as Record<string, unknown>)[PLUGIN_OPTIONS_KEY];
-  return isOptionRecord(held) ? held : undefined;
+  return isPluginOptionContainer(held) ? held : undefined;
 }

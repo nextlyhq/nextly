@@ -237,9 +237,12 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // because the shape above is applied to every field whatever its type,
       // so an option sharing a name with one of these keys would be judged as
       // that key instead. Core never looks inside, which is what lets any name
-      // be used here — including the ones declared alongside it.
+      // be used here — including the ones declared alongside it. A loose object
+      // rather than `z.record`, which refuses one carrying an own `constructor`
+      // key — another name this container has to accept — and unlike a custom
+      // check it still converts to the JSON Schema the editor integration reads.
       pluginOptions: z
-        .record(z.string(), z.unknown())
+        .looseObject({})
         .refine(
           held =>
             !Object.keys(held).some(key =>

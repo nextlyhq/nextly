@@ -1360,7 +1360,10 @@ ${properties}
     singles: DynamicSingleRecord[],
     components: DynamicFieldGroupRecord[]
   ): Set<string> {
-    const names = new Set<string>(["User", "Config", "GeneratedTypes"]);
+    // `GeneratedTypes` is deliberately absent: it is only ever declared inside
+    // `declare module`, which creates no top-level binding, so an import of
+    // that name coexists with it.
+    const names = new Set<string>(["User", "Config"]);
 
     for (const collection of collections) {
       const name = this.toPascalCase(collection.slug);

@@ -173,11 +173,12 @@ export function pluginCodegenImports(
     for (const entry of imports) {
       const names = byModule.get(entry.from) ?? new Set<string>();
       for (const name of entry.names) {
-        // Reserved regardless of where the plugin imports it from. The
-        // generator emits its own import of these when the file needs them, and
-        // a second import of the same binding does not compile even when both
-        // name the same module.
-        if (GENERATOR_OWNED_IMPORTS.has(name)) {
+        // Reserved regardless of where the plugin imports it from, but only
+        // for the output that emits them: `TypeGenerator` imports these itself,
+        // and a second import of the same binding does not compile even naming
+        // one module. The Zod file emits none of them, so the same name is free
+        // there.
+        if (usedBy === "tsImports" && GENERATOR_OWNED_IMPORTS.has(name)) {
           refuse(
             `'${name}' is imported by the type generator itself, so a plugin ` +
               `field type cannot also supply it to code generation. Export it ` +

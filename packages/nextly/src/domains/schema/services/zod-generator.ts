@@ -248,15 +248,20 @@ export class ZodGenerator {
    */
   private declaredNames(collection: DynamicCollectionRecord): Set<string> {
     const schemaName = this.getSchemaName(collection.slug);
-    return new Set([
+    const names = new Set([
       "z",
-      schemaName,
       `${schemaName}Schema`,
-      `${schemaName}CreateInput`,
       `${schemaName}CreateInputSchema`,
-      `${schemaName}UpdateInput`,
       `${schemaName}UpdateInputSchema`,
     ]);
+    // The inferred aliases exist only when type exports are generated, so in
+    // the no-types mode a plugin may legitimately import a type of that name.
+    if (this.generateTypes) {
+      names.add(schemaName);
+      names.add(`${schemaName}CreateInput`);
+      names.add(`${schemaName}UpdateInput`);
+    }
+    return names;
   }
 
   // ============================================================

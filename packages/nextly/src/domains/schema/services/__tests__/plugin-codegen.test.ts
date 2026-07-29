@@ -337,6 +337,26 @@ describe("codegen import collisions", () => {
     expect(file.code).toContain('from "@acme/i"');
   });
 
+  it("allows an import named GeneratedTypes", () => {
+    registerFieldType({
+      type: "gt-ish",
+      storage: "json",
+      component: "@acme/gt/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["GeneratedTypes"], from: "@acme/gt" }],
+        tsType: () => "GeneratedTypes",
+      },
+    });
+
+    // Only ever declared inside `declare module`, which creates no top-level
+    // binding, so an import of that name coexists with it.
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "g", type: "gt-ish" }]),
+    ]);
+
+    expect(file.code).toContain('from "@acme/gt"');
+  });
+
   it("refuses a plugin claiming a name the generator emits itself", () => {
     registerFieldType({
       type: "doc-thing",
@@ -415,6 +435,44 @@ describe("plugin field types in the Zod generator", () => {
     expect(schema.code).toContain(
       'import type { Rating } from "@acme/ratings";'
     );
+  });
+
+  it("allows a Zod import named after a type only the TS file imports", () => {
+    registerFieldType({
+      type: "doc-zod",
+      storage: "json",
+      component: "@acme/dz/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["BlockDocument"], from: "@acme/dz" }],
+        zodSchema: () => "z.custom<BlockDocument>()",
+      },
+    });
+
+    // `ZodGenerator` never emits its own `BlockDocument`, so reserving it here
+    // would refuse a valid schema.
+    const schema = new ZodGenerator().generateSchema(
+      collection([{ name: "d", type: "doc-zod" }])
+    );
+
+    expect(schema.code).toContain('from "@acme/dz"');
+  });
+
+  it("allows an inferred-type name when type exports are off", () => {
+    registerFieldType({
+      type: "posts-zod",
+      storage: "json",
+      component: "@acme/pz/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Posts"], from: "@acme/pz" }],
+        zodSchema: () => "z.custom<Posts>()",
+      },
+    });
+
+    const schema = new ZodGenerator({ generateTypes: false }).generateSchema(
+      collection([{ name: "p", type: "posts-zod" }])
+    );
+
+    expect(schema.code).toContain('from "@acme/pz"');
   });
 
   it("emits only the import list belonging to this file's expression", () => {
