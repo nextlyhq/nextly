@@ -798,8 +798,8 @@ export async function ensureLocalizedCompanions(
   );
   // Each entity kind resolves its physical table differently, and a custom
   // `dbName` is where they diverge: collections and singles force their `dc_` /
-  // `single_` prefix onto it (and singles normalize the identifier), while
-  // components honour it verbatim. A single shared "prefix + slug" rule would
+  // `single_` prefix onto it (and singles normalize the identifier), while field
+  // groups take no override at all. A single shared "prefix + slug" rule would
   // point at a table the runtime never created — `dbName: "forms"` on a
   // collection lives at `dc_forms`, so the companion would be built as
   // `forms_locales` with a foreign key to a table that does not exist.
@@ -828,7 +828,9 @@ export async function ensureLocalizedCompanions(
     ],
     [
       (config.fieldGroups ?? []) as LocalizableEntity[],
-      e => resolveComponentTableName(e.slug!, e.dbName),
+      // Field groups derive their table from the slug alone — unlike collections
+      // and singles they carry no `dbName` override.
+      e => resolveComponentTableName(e.slug!),
     ],
   ];
 

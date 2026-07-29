@@ -1082,12 +1082,21 @@ export class SingleMutationService extends BaseService {
             // row, not the main table. `companion` and `writeLocale` were resolved
             // above (before validation); the split reuses them. Done inside the
             // closure so a retry re-splits the freshly-timestamped payload.
-            const { main: mainPayload, companion: companionData } = companion
-              ? splitLocalizedWrite(updatePayload, companion.localizedFields)
-              : {
-                  main: updatePayload,
-                  companion: {} as Record<string, unknown>,
-                };
+            // Only split when the companion physically exists. Splitting first and
+            // then skipping the companion upsert (which is gated on the same flag
+            // below) would drop the translatable values on the floor: they leave
+            // `mainPayload` and are never written anywhere, so the write reports
+            // success having saved nothing. While the table is absent those values
+            // belong on the main table, which is the same pre-migration fallback
+            // collections use — and by then the write locale is guaranteed to be
+            // the default one, because the guard above refuses any other.
+            const { main: mainPayload, companion: companionData } =
+              companion && companionPhysicallyExists
+                ? splitLocalizedWrite(updatePayload, companion.localizedFields)
+                : {
+                    main: updatePayload,
+                    companion: {} as Record<string, unknown>,
+                  };
 
             // per-locale status. The status the companion row carries —
             // from `updatePayload` (not `mainPayload`, which may have `status`

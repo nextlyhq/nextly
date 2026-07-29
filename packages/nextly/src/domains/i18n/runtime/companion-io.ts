@@ -286,19 +286,33 @@ export async function ensureCompanionTable(
       resolveLocalizedFieldNames(args.fields, true)
     );
     const localizedFields = args.fields.filter(f => localizedNames.has(f.name));
-    if (!alreadyExists) {
-      const statements = buildCompanionReconcileStatements({
-        slug: args.slug,
-        tableName: args.tableName,
-        oldLocalized: [],
-        newLocalized: localizedFields,
-        dialect: args.dialect,
-        status: args.status === true,
-        companionExists: false,
-      });
-      for (const stmt of statements) {
-        await adapter.executeQuery(stmt);
-      }
+    // An EXISTING companion still has to be reconciled. The schema push pipeline
+    // deliberately skips companion tables, so marking another field localized (or
+    // turning on Draft/Published) adds a column the companion never gets: reads and
+    // writes then address a shape the physical table does not have, and the seed
+    // below would reference a column that is not there. Passing the columns the
+    // companion actually has as `oldLocalized` makes this an ADD of exactly what is
+    // missing. Dropping columns is left out on purpose — a column that disappeared
+    // from the config still holds content, and removing it is the pipeline's gated,
+    // confirmable job rather than something an unattended boot should decide.
+    const oldLocalized = alreadyExists
+      ? await presentCompanionFields(
+          adapter,
+          companionTableName,
+          localizedFields
+        )
+      : [];
+    const statements = buildCompanionReconcileStatements({
+      slug: args.slug,
+      tableName: args.tableName,
+      oldLocalized,
+      newLocalized: localizedFields,
+      dialect: args.dialect,
+      status: args.status === true,
+      companionExists: alreadyExists,
+    });
+    for (const stmt of statements) {
+      await adapter.executeQuery(stmt);
     }
     await seedCompanionFromMain(adapter, {
       slug: args.slug,
@@ -333,10 +347,18 @@ export async function ensureCompanionTable(
  *
  * Deliberately narrow, because this runs unattended on every boot and sync:
  *
- *  - only for main rows that have NO default-locale companion row yet, so it never overwrites a
+ *  - only while the companion holds NO row in a non-default language. That is what separates a
+ *    transition still in progress from an entity that has been localized for a while, and the
+ *    two need opposite treatment. Mid-transition the main columns are the default language and
+ *    backfilling them is the whole point. Once real translations exist, the main columns are
+ *    frozen leftovers that stopped being updated when writes moved to the companion — seeding
+ *    from them would be fabrication. Changing `localization.defaultLocale` afterwards is the
+ *    sharp case: switching `en` to `fr` would otherwise invent French rows holding stale English
+ *    text and suppress the fallback that would have shown the real value.
+ *  - only for main rows that have NO row in the default language yet, so it never overwrites a
  *    translation and is safe to re-run. Row-level rather than table-level: a companion that
- *    already holds one row (someone edited a single entry) must not stop every other row from
- *    being backfilled, or those stay unreadable forever.
+ *    already holds one such row (someone edited a single entry mid-transition) must not stop
+ *    every other row from being backfilled, or those stay unreadable forever.
  *  - only for localized columns that are STILL on the main table, probed one by one. After the
  *    columns are dropped there is nothing to copy, and the probe is the only portable way to ask.
  *  - it does NOT drop those columns afterwards. That is the destructive half of the transition
@@ -371,6 +393,10 @@ async function seedCompanionFromMain(
   });
   if (!spec) return;
 
+  // The transition test. See the note above: once any other language has a row,
+  // the main columns are stale leftovers rather than the default language.
+  if (await companionHasTranslations(adapter, args)) return;
+
   const columnsOnMain: string[] = [];
   for (const column of spec.columns) {
     if (await mainHasColumn(adapter, args.tableName, column.name)) {
@@ -389,6 +415,47 @@ async function seedCompanionFromMain(
   if (seed) await adapter.executeQuery(seed);
 }
 
+/**
+ * The subset of `fields` whose physical column the companion already has. Feeding this back as
+ * `oldLocalized` turns the reconcile into "add what is missing", with no dependency on knowing
+ * the entity's previous config.
+ */
+async function presentCompanionFields(
+  adapter: CompanionWriteAdapter,
+  companionTableName: string,
+  fields: CompanionFieldLike[]
+): Promise<CompanionFieldLike[]> {
+  const present: CompanionFieldLike[] = [];
+  for (const field of fields) {
+    if (
+      await mainHasColumn(adapter, companionTableName, toColumn(field.name))
+    ) {
+      present.push(field);
+    }
+  }
+  return present;
+}
+
+/**
+ * Whether the companion already holds a row in some language other than the default — the signal
+ * that this entity is past its transition and its main columns are no longer the default language.
+ */
+async function companionHasTranslations(
+  adapter: CompanionWriteAdapter,
+  args: { companionTableName: string; defaultLocale?: string }
+): Promise<boolean> {
+  const isMysql = adapter.dialect === "mysql";
+  const table = isMysql
+    ? `\`${args.companionTableName}\``
+    : `"${args.companionTableName}"`;
+  const locale = isMysql ? "`_locale`" : `"_locale"`;
+  const rows = await adapter.executeQuery(
+    `SELECT 1 FROM ${table} WHERE ${locale} <> ${adapter.dialect === "postgresql" ? "$1" : "?"} LIMIT 1`,
+    [args.defaultLocale]
+  );
+  return rows.length > 0;
+}
+
 /** Whether a physical column is still present on the main table. */
 async function mainHasColumn(
   adapter: CompanionWriteAdapter,
@@ -401,13 +468,38 @@ async function mainHasColumn(
   try {
     await adapter.executeQuery(`SELECT ${column} FROM ${table} LIMIT 0`);
     return true;
-  } catch {
-    // Catching everything is safe HERE, unlike a probe a write gates on. Treating
-    // any answer but "yes" as "do not copy from this column" only ever narrows the
-    // seed; it can never write the wrong value. And a failure that is not a
-    // missing column — an unreachable database — does not get swallowed overall,
-    // because the seed statement that follows runs on the same connection and
-    // propagates to the caller's reporter.
-    return false;
+  } catch (error) {
+    // Only a verified "no such column" answers this question with `false`. Swallowing
+    // everything would turn an unreachable database or a missing SELECT grant into
+    // "none of these columns exist", and the caller then finds nothing to copy and
+    // returns BEFORE running the seed — so no statement would fail, no reporter would
+    // fire, and `ensureCompanionTable` would report success over a companion that is
+    // still empty and content that still reads as null. Anything else propagates.
+    if (isMissingColumnError(error)) return false;
+    throw error;
   }
+}
+
+// The dialect's own wording for a column that is not there: Postgres
+// `column "x" does not exist`, SQLite `no such column: x`, MySQL
+// `Unknown column 'x' in 'field list'`. Column-specific on purpose — a bare
+// `does not exist` also matches a missing table or database, which must
+// propagate rather than be read as an absent column.
+function isMissingColumnError(error: unknown): boolean {
+  // Drizzle reports `Failed query: ...` and keeps the driver's own wording on
+  // `cause`, so both levels have to be read or a real missing column would be
+  // misread as an unrelated failure and thrown.
+  const message = [
+    error instanceof Error ? error.message : String(error),
+    error instanceof Error && error.cause instanceof Error
+      ? error.cause.message
+      : "",
+  ]
+    .join(" ")
+    .toLowerCase();
+  return (
+    /column .* does not exist/.test(message) ||
+    message.includes("no such column") ||
+    /unknown column/.test(message)
+  );
 }

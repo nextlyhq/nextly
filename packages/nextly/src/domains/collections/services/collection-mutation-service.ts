@@ -944,19 +944,26 @@ export class CollectionMutationService extends BaseService {
     // `migrate`, the dev auto-sync leaves localized columns on the MAIN table (Option B), so
     // writes must go there — return null and let the localized values flow to main as today.
     if (!(await this.companionTableExists(companion.companionTableName))) {
-      // CREATE is unaffected: a new entry has no other language's values to lose,
-      // so its translatable values legitimately sit on the main table until the
-      // companion exists — the documented pre-migration fallback.
+      // The main table carries no language of its own, so anything written there
+      // while the companion is missing is later read as the DEFAULT language —
+      // that is the assumption the companion seed makes when it copies those
+      // columns across. A write in another language therefore has nowhere honest
+      // to go, and both ways of letting it through lose content:
       //
-      // UPDATE is where content dies. The row already holds the default
-      // language's values on main, so letting a NON-default locale fall through
-      // overwrites them with the translation and regenerates the slug from it,
-      // silently and with a success response. The window is real: `db:sync`
-      // flips the registry's `localized` flag in its own process while the
-      // running server has yet to create the companion. Refuse rather than
-      // destroy.
+      //   UPDATE overwrites. The row already holds the default language on main,
+      //   so a non-default write replaces it and regenerates the slug from the
+      //   translation, silently and with a success response.
+      //
+      //   CREATE mis-files. The values land on main, and the seed then copies
+      //   them into the default language's row — so Spanish text is served as
+      //   English, and Spanish itself has no translation at all.
+      //
+      // The window is real: `db:sync` flips the registry's `localized` flag in
+      // its own process while the running server has yet to create the companion.
+      // Refuse either way; the default language still writes to main, which is
+      // the documented pre-migration fallback.
       const requested = resolveRequestedLocale(this.localization, locale);
-      if (!isCreate && requested !== this.localization.defaultLocale) {
+      if (requested !== this.localization.defaultLocale) {
         throw NextlyError.conflict({
           reason: "state",
           message:

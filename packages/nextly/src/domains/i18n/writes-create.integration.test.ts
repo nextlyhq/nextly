@@ -132,7 +132,7 @@ describe("createEntry — localized write routing (M5a)", () => {
     expect(rows).toEqual([{ _locale: "en", heading: "Hello" }]);
   });
 
-  it("dev (no companion table): localized value stays on the main table, write succeeds", async () => {
+  it("dev (no companion table): the DEFAULT language stays on the main table, write succeeds", async () => {
     const t = await boot();
     const handler = handlerOf(t);
     const adapter = t.adapter as unknown as {
@@ -147,12 +147,37 @@ describe("createEntry — localized write routing (M5a)", () => {
       'ALTER TABLE "dc_pages" ADD COLUMN "heading" text'
     );
     const res = await handler.createEntry(
-      { collectionName: "pages", locale: "de", overrideAccess: true },
-      { title: "T", heading: "Hallo" }
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "Hello" }
     );
     expect(res.success).toBe(true);
     const rows = await adapter.executeQuery('SELECT "heading" FROM "dc_pages"');
-    expect(rows).toEqual([{ heading: "Hallo" }]);
+    expect(rows).toEqual([{ heading: "Hello" }]);
+  });
+
+  it("dev (no companion table): a NON-default language is refused", async () => {
+    const t = await boot();
+    const handler = handlerOf(t);
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
+    };
+    await adapter.executeQuery('DROP TABLE IF EXISTS "dc_pages_locales"');
+    await adapter.executeQuery(
+      'ALTER TABLE "dc_pages" ADD COLUMN "heading" text'
+    );
+    // The main table has no language of its own: whatever sits there is read as the
+    // DEFAULT language, and that is what the companion seed copies across when the
+    // table appears. Letting `de` land on main would publish German text as English
+    // and leave German itself with no translation, so the write is refused instead.
+    const res = await handler.createEntry(
+      { collectionName: "pages", locale: "de", overrideAccess: true },
+      { title: "T", heading: "Hallo" }
+    );
+    expect(res.success).toBe(false);
+    expect(res.statusCode).toBe(409);
+    expect(res.message).toMatch(/Translations are not ready/);
+    const rows = await adapter.executeQuery('SELECT "heading" FROM "dc_pages"');
+    expect(rows).toEqual([]);
   });
 });
 

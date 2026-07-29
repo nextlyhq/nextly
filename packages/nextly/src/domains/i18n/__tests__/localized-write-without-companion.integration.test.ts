@@ -62,7 +62,10 @@ const posts = (localized: boolean) =>
     fields: [text({ name: "title", localized: true })],
   });
 
-async function boot(localized: boolean): Promise<TestNextly> {
+async function boot(
+  localized: boolean,
+  defaultLocale = localization.defaultLocale
+): Promise<TestNextly> {
   process.env.DB_DIALECT = "sqlite";
   const adapter = await createAdapter({
     type: "sqlite",
@@ -71,7 +74,7 @@ async function boot(localized: boolean): Promise<TestNextly> {
   return createTestNextly({
     adapter,
     collections: [posts(localized)],
-    localization,
+    localization: { ...localization, defaultLocale },
   });
 }
 
@@ -250,6 +253,66 @@ describe("enabling localization on existing content (integration)", () => {
       });
       expect((read.data as { title?: unknown }).title).toBe(title);
     }
+  });
+
+  it("does not fabricate rows from stale columns after the default language changes", async () => {
+    // The main columns are only the default language DURING the transition. Once
+    // real translations exist, writes go to the companion and those columns stop
+    // being updated — so re-pointing `defaultLocale` at another language must not
+    // seed it from them, or the new default serves stale text from the old one and
+    // suppresses the fallback that would have shown the real value.
+    current = await boot(false);
+    const handler = () =>
+      current!.getService<CollectionsHandler>("collectionsHandler");
+    const ids: string[] = [];
+    for (const title of ["Translated later", "Never translated"]) {
+      const created = await handler().createEntry(
+        { collectionName: "i18nwin_posts", overrideAccess: true },
+        { title }
+      );
+      ids.push((created.data as { id: string }).id);
+    }
+
+    await current.destroy();
+    current = await boot(true);
+    await current.destroy();
+    current = await boot(true);
+
+    // One real translation, which is what marks the transition as finished. The
+    // OTHER entry is the exposed one: it has no Spanish row, so a seed keyed on
+    // the new default would invent one from its stale English column.
+    const translated = await handler().updateEntry(
+      {
+        collectionName: "i18nwin_posts",
+        entryId: ids[0],
+        overrideAccess: true,
+        locale: "es",
+      },
+      { title: "Texto en español" }
+    );
+    expect(translated.success).toBe(true);
+
+    // Now Spanish becomes the default. Main still holds the English text.
+    await current.destroy();
+    current = await boot(true, "es");
+
+    const untranslated = await handler().getEntry({
+      collectionName: "i18nwin_posts",
+      entryId: ids[1],
+      overrideAccess: true,
+      locale: "es",
+    });
+    // Without the guard this reads "Never translated" — English served as Spanish.
+    expect((untranslated.data as { title?: unknown }).title).not.toBe(
+      "Never translated"
+    );
+
+    // Only the two English rows and the one real Spanish translation exist; no
+    // Spanish row was fabricated for the untranslated entry.
+    const rows = await current.adapter.executeQuery<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM dc_i18nwin_posts_locales WHERE _locale = 'es'"
+    );
+    expect(Number(rows[0]?.n)).toBe(1);
   });
 
   it("seeds once and does not duplicate rows on later boots", async () => {
