@@ -840,8 +840,6 @@ export async function ensureLocalizedCompanions(
     ],
   ];
 
-  const defaultLocale = config.localization?.defaultLocale;
-
   for (const [group, resolveTableName] of groups) {
     for (const entity of group) {
       if (!entity.slug || entity.localized !== true) continue;
@@ -861,10 +859,6 @@ export async function ensureLocalizedCompanions(
           fields: entity.fields ?? [],
           dialect,
           status: entity.status === true,
-          defaultLocale,
-          // These two callers already refuse to run in production and are gated on
-          // auto-sync, so they are the ones allowed to ALTER an existing companion.
-          reconcileExisting: true,
         },
         error => {
           logger.warn(

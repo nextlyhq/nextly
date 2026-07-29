@@ -610,7 +610,6 @@ async function ensureLocalizedCompanionsForReload(
     ],
   ];
 
-  const defaultLocale = config.localization?.defaultLocale;
   for (const [entities, resolveTableName] of groups) {
     for (const entity of entities) {
       if (!entity.slug || entity.localized !== true) continue;
@@ -622,10 +621,6 @@ async function ensureLocalizedCompanionsForReload(
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
           status: entity.status === true,
-          defaultLocale,
-          // These two callers already refuse to run in production and are gated on
-          // auto-sync, so they are the ones allowed to ALTER an existing companion.
-          reconcileExisting: true,
         },
         error => {
           console.warn(
@@ -1200,17 +1195,6 @@ async function runReload(opts?: {
   // not surface as a schema diff — so run the idempotent metadata sync before
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
-  // Provision the `_locales` companion of every localized entity BEFORE anything
-  // touches the schema. Two orderings matter here and both are load-bearing:
-  //
-  //  - before the apply, because enabling localization asks the pipeline to DROP
-  //    the translatable columns from the main table, and the seed copies out of
-  //    those columns. Running afterwards would find them already gone.
-  //  - before the `!hasChanges` return, because that drop is classified unsafe and
-  //    deferred, which leaves `hasChanges` false — so the exact transition this
-  //    exists to support would return early and never provision anything.
-  await ensureLocalizedCompanionsForReload(adapter, newConfig);
-
   if (!hasChanges) {
     // Only sync when the schema is genuinely in step (every entity had a zero-op
     // diff). If a real schema change was deferred (unsafe/needs review) or a diff
@@ -1390,14 +1374,13 @@ async function runReload(opts?: {
   });
 
   if (applyResult.success) {
-    // Provision again, now that the apply has created any brand-new main tables.
-    // The pre-apply call above cannot help an entity that did not exist yet: its
-    // companion carries a foreign key to a main table the pipeline had not created,
-    // so the CREATE failed and was swallowed, while the metadata and runtime schema
-    // were still published as localized — leaving non-default writes refused until
-    // another reload. Both calls are needed and both are idempotent: the earlier one
-    // seeds transitions while the main columns still exist, this one creates
-    // companions for entities that are new in this reload.
+    // Create the `_locales` companion of every localized entity, now that the apply
+    // has produced their main tables. `next dev` routes config edits here rather
+    // than through the CLI watcher, so without this an entity turned localized under
+    // ordinary HMR had its companion registered in the runtime registry while the
+    // database had no such table — non-default writes were then refused until a
+    // restart. Runs after the apply because the companion carries a foreign key to
+    // its main table, which a brand-new entity does not have before it.
     await ensureLocalizedCompanionsForReload(adapter, newConfig);
 
     // Publish each scope's recording policy only AFTER its field-tree metadata

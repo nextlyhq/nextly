@@ -180,48 +180,6 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(await tableExists("dbsync_notes_locales")).toBe(false);
   });
 
-  it("carries a newly localized field's shared value onto an existing companion", async () => {
-    // A field that was SHARED lives on the main table and applies to every language.
-    // Marking it localized adds a companion column, and that column starts empty — so
-    // without a backfill the value stops being returned the moment the field becomes
-    // translatable, even though it is still on the main table.
-    //
-    // Driven through `db:sync` rather than app boot on purpose: reconciling an
-    // EXISTING companion is opt-in, and boot deliberately does not opt in, because it
-    // would otherwise run ALTER TABLE in production off a metadata change.
-    const withTagline = (taglineLocalized: boolean) =>
-      defineConfig({
-        localization: { locales: ["en", "es"], defaultLocale: "en" },
-        collections: [
-          defineCollection({
-            slug: "dbsync_notes2",
-            localized: true,
-            fields: [
-              text({ name: "title", localized: true }),
-              text({ name: "tagline", localized: taglineLocalized }),
-            ],
-          }),
-        ],
-      });
-
-    await runSync(withTagline(false));
-    // A row with the shared value on main and a default-locale companion row, which
-    // is what makes the `onlyMissing` seed skip it.
-    await adapter!.executeQuery(
-      `INSERT INTO "dc_dbsync_notes2" ("id", "title", "slug", "tagline") VALUES ('n1', 'T', 't', 'Shared tagline')`
-    );
-    await adapter!.executeQuery(
-      `INSERT INTO "dc_dbsync_notes2_locales" ("_parent", "_locale", "title") VALUES ('n1', 'en', 'T')`
-    );
-
-    await runSync(withTagline(true));
-
-    const rows = await adapter!.executeQuery<{ tagline: string | null }>(
-      `SELECT "tagline" FROM "dc_dbsync_notes2_locales" WHERE "_locale" = 'en'`
-    );
-    expect(rows[0]?.tagline).toBe("Shared tagline");
-  });
-
   it("leaves a non-localized collection with no companion", async () => {
     await runSync(
       defineConfig({

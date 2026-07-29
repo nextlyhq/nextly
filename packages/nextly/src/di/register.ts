@@ -489,14 +489,7 @@ export async function registerServices(
 
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
 
-  // `transformedConfig`, not `config`: plugin config transformers run before this
-  // and may supply or override `localization`, and every other companion call
-  // site reads the transformed value. Taking the raw config here would create
-  // unseeded companions on the registry path while the code-first paths seed.
-  const schemaRegistry = await initializeSchemaRegistry(
-    adapter,
-    transformedConfig.localization?.defaultLocale
-  );
+  const schemaRegistry = await initializeSchemaRegistry(adapter);
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
   // schema registry. `registerConfigTablesInResolver` (below) only runs when the
@@ -979,13 +972,7 @@ async function resolveAdapter(
  * and `dynamic_components` DB tables and are generated at runtime.
  */
 async function initializeSchemaRegistry(
-  adapter: DrizzleAdapter,
-  /**
-   * The language existing main-table values belong to. Passed down so a companion
-   * created here for an entity that already has content is seeded from that
-   * content instead of appearing empty, which would read as null everywhere.
-   */
-  defaultLocale?: string
+  adapter: DrizzleAdapter
 ): Promise<SchemaRegistry | undefined> {
   try {
     const { SchemaRegistry } = await import("../database/schema-registry");
@@ -1056,7 +1043,6 @@ async function initializeSchemaRegistry(
             fields: fields as { name: string; type: string }[],
             dialect,
             status: hasStatus === true,
-            defaultLocale,
           });
           const { buildCompanionRuntimeTable } = await import(
             "../domains/i18n/runtime/companion-registration"
@@ -1108,7 +1094,6 @@ async function initializeSchemaRegistry(
             fields: fields as { name: string; type: string }[],
             dialect,
             status: hasStatus === true,
-            defaultLocale,
           });
           const { buildCompanionRuntimeTable } = await import(
             "../domains/i18n/runtime/companion-registration"
@@ -1158,7 +1143,6 @@ async function initializeSchemaRegistry(
             fields: fields as { name: string; type: string }[],
             dialect,
             status: false,
-            defaultLocale,
           });
           const { buildCompanionRuntimeTable } = await import(
             "../domains/i18n/runtime/companion-registration"
@@ -1728,7 +1712,6 @@ async function syncCodeFirstCollections(
                   fields,
                   dialect: syncDialect,
                   status: desired.status === true,
-                  defaultLocale: transformedConfig.localization?.defaultLocale,
                 });
                 const { buildCompanionRuntimeTable } = await import(
                   "../domains/i18n/runtime/companion-registration"
@@ -1928,7 +1911,6 @@ async function syncCodeFirstComponents(
                   fields: compConfig.fields as { name: string; type: string }[],
                   dialect,
                   status: false,
-                  defaultLocale: transformedConfig.localization?.defaultLocale,
                 });
                 const { buildCompanionRuntimeTable } = await import(
                   "../domains/i18n/runtime/companion-registration"
@@ -2195,7 +2177,6 @@ async function reconcileSingleTablesForBoot(
                   fields: fields,
                   dialect,
                   status: hasStatus,
-                  defaultLocale: transformedConfig.localization?.defaultLocale,
                 });
                 const { buildCompanionRuntimeTable } = await import(
                   "../domains/i18n/runtime/companion-registration"

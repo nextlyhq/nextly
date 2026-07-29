@@ -68,87 +68,44 @@ export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
 export function buildLocalizationUpStatements(
   spec: CompanionMigrationSpec
 ): string[] {
-  const { dialect, mainTable } = spec;
+  const { dialect, mainTable, companionTable, defaultLocale, columns } = spec;
 
   const create = buildCompanionCreateStatement(spec);
 
-  const seedStatement = buildCompanionSeedStatement(spec);
-  const seed = seedStatement ? [seedStatement] : [];
+  // Only columns already on the main table can be seeded from or dropped. A field added and
+  // localized in the same save is in `columns` (so the companion gets it) but not on main, so
+  // it is excluded from the SELECT and the DROP. Undefined `columnsOnMain` means "all" — the
+  // file-migration path, where every localized column pre-exists on main.
+  const onMainSet = spec.columnsOnMain && new Set(spec.columnsOnMain);
+  const onMain = onMainSet
+    ? columns.filter(c => onMainSet.has(c.name))
+    : columns;
+  // A leading ", <col>" per column, so an empty set contributes nothing to the column lists.
+  const onMainCols = onMain.map(c => `, ${q(c.name, dialect)}`).join("");
 
-  const drops = columnsStillOnMain(spec).map(
+  // When the collection has Draft/Published, the seeded default-locale rows carry the existing
+  // main row's `status` into the companion `_status` so enabling localization doesn't silently
+  // un-publish live content.
+  const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
+  const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
+
+  // Skip the seed entirely when there is nothing on main to copy — no pre-existing translatable
+  // columns and no status. An INSERT with an empty value list would be invalid SQL, and there
+  // is no existing content to preserve.
+  const seed =
+    onMain.length > 0 || spec.status
+      ? [
+          `INSERT INTO ${q(companionTable, dialect)} ` +
+            `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
+            `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}${onMainCols} ` +
+            `FROM ${q(mainTable, dialect)}`,
+        ]
+      : [];
+
+  const drops = onMain.map(
     c =>
       `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
   );
 
   return [create, ...seed, ...drops];
-}
-
-/**
- * The subset of `spec.columns` that physically exists on the main table, and so can be seeded
- * from or dropped. A field added and localized in the same save is in `columns` (the companion
- * needs it) but not here — there is nothing on main to copy or remove. Undefined `columnsOnMain`
- * means "all", which is the file-migration path where every localized column pre-exists.
- */
-function columnsStillOnMain(
-  spec: CompanionMigrationSpec
-): CompanionMigrationSpec["columns"] {
-  const onMainSet = spec.columnsOnMain && new Set(spec.columnsOnMain);
-  return onMainSet
-    ? spec.columns.filter(c => onMainSet.has(c.name))
-    : spec.columns;
-}
-
-/**
- * The `INSERT ... SELECT` that copies the main table's existing values into the companion as
- * default-locale rows, or null when there is nothing to copy.
- *
- * Split out from {@link buildLocalizationUpStatements} because seeding and dropping are not
- * always wanted together. Creating the companion without this INSERT is what made existing
- * content vanish: reads resolve a localized field through the companion once the table is
- * there, find no row for the default locale, and overlay null — the values are still on the
- * main table, but nothing returns them.
- *
- * Dropping the main columns is a separate, destructive step that the schema pipeline gates
- * behind an explicit confirmation, so a caller that only needs the content to stay visible
- * (dev boot, `db:sync`) takes this statement alone and leaves the columns in place.
- */
-export function buildCompanionSeedStatement(
-  spec: CompanionMigrationSpec,
-  options?: {
-    /**
-     * Skip main rows that already have a default-locale companion row, making the
-     * statement safe to re-run and safe on a PARTIALLY seeded companion. Gating the
-     * whole seed on an empty companion instead would strand every other row the
-     * moment one row got a companion entry — one edited entry, and the rest keep
-     * reading null forever.
-     */
-    onlyMissing?: boolean;
-  }
-): string | null {
-  const { dialect, mainTable, companionTable, defaultLocale } = spec;
-  const onMain = columnsStillOnMain(spec);
-  // An INSERT with an empty value list is invalid SQL, and with no pre-existing translatable
-  // columns and no status there is no content to preserve either.
-  if (onMain.length === 0 && !spec.status) return null;
-
-  // A leading ", <col>" per column, so an empty set contributes nothing to the column lists.
-  const onMainCols = onMain.map(c => `, ${q(c.name, dialect)}`).join("");
-  // When the entity has Draft/Published, the seeded default-locale rows carry the existing main
-  // row's `status` into the companion `_status` so enabling localization does not silently
-  // un-publish live content.
-  const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
-  const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
-
-  const where = options?.onlyMissing
-    ? ` WHERE NOT EXISTS (SELECT 1 FROM ${q(companionTable, dialect)} ` +
-      `WHERE ${q(companionTable, dialect)}.${q("_parent", dialect)} = ${q(mainTable, dialect)}.${q("id", dialect)} ` +
-      `AND ${q(companionTable, dialect)}.${q("_locale", dialect)} = ${lit(defaultLocale)})`
-    : "";
-
-  return (
-    `INSERT INTO ${q(companionTable, dialect)} ` +
-    `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
-    `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}${onMainCols} ` +
-    `FROM ${q(mainTable, dialect)}${where}`
-  );
 }
