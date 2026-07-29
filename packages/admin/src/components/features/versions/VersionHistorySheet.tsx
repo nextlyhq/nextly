@@ -114,6 +114,24 @@ export function VersionHistorySheet({
     }
   }, [open]);
 
+  // Identity of the document this sheet is bound to, as a stable string so a
+  // re-created `scope` object with the same target does not read as a change.
+  const scopeId =
+    scope.kind === "single"
+      ? `single:${scope.slug}:${scope.documentId ?? ""}`
+      : `collection:${scope.slug}:${scope.entryId ?? ""}`;
+
+  // Reset every mode when the document changes under a still-open sheet: the
+  // custom admin router can navigate between entries without unmounting, and a
+  // surviving `selected`/`comparing` would request the new document's versions
+  // and (via keepPreviousData) briefly show the previous document's diff.
+  useEffect(() => {
+    setSelected(null);
+    setComparing(null);
+    setConfirmingRestore(false);
+    setRenaming(null);
+  }, [scopeId]);
+
   const list = useVersions({ scope, enabled: open });
   // Destructured so the boundary-fetch effect can depend on the paging members
   // by identity rather than on the whole query object, which changes each render.
@@ -210,6 +228,11 @@ export function VersionHistorySheet({
   });
   useEffect(() => {
     if (selected === null || canComparePrevious) return;
+    // Wait out a head revalidation before paging: `fetchNextPage` defaults to
+    // `cancelRefetch: true`, so firing it mid-revalidation would silently cancel
+    // the refetch and leave a stale head that "Compare with current" would then
+    // trust.
+    if (isRefetching) return;
     const search = previousSearchRef.current;
     if (search.selected !== selected) {
       search.selected = selected;
@@ -227,6 +250,7 @@ export function VersionHistorySheet({
   }, [
     selected,
     canComparePrevious,
+    isRefetching,
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,

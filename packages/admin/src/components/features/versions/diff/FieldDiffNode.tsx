@@ -305,25 +305,15 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "unknown": {
-      // A field no longer in the schema: its type is unknown, so render the raw
-      // stored values plainly rather than guessing a typed display. The
-      // before/after labelling is shared with live values so a screen reader can
-      // tell the two sides apart.
+      // A field gone from the current schema has no findable access rule, so its
+      // historical value cannot be proven readable and the engine withholds it.
+      // Only the field's name and that it changed are shown.
       return (
         <FieldRow label={node.name} status={node.status}>
-          <p className="text-xs text-muted-foreground mb-1">
-            This field is no longer in the schema.
+          <p className="text-xs text-muted-foreground">
+            This field is no longer in the schema; its value is hidden because
+            its access rules can no longer be verified.
           </p>
-          <BeforeAfter
-            status={node.status}
-            before={node.before}
-            after={node.after}
-            renderValue={value => (
-              <code className="block text-sm break-words">
-                {formatUnknown(value)}
-              </code>
-            )}
-          />
         </FieldRow>
       );
     }
@@ -331,11 +321,24 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
 }
 
 function ListItemRow({ item }: { item: ListItemDiff }) {
-  const heading = item.componentType ?? "Item";
+  // A row that kept its id but swapped component type shows the transition;
+  // otherwise its single component slug, or a neutral label when untagged.
+  const swapped =
+    item.componentTypeBefore !== undefined ||
+    item.componentTypeAfter !== undefined;
   return (
     <div className="rounded-md border border-border p-2">
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-xs font-medium text-foreground">{heading}</span>
+        <span className="text-xs font-medium text-foreground">
+          {swapped ? (
+            <>
+              {item.componentTypeBefore ?? "none"} &rarr;{" "}
+              {item.componentTypeAfter ?? "none"}
+            </>
+          ) : (
+            (item.componentType ?? "Item")
+          )}
+        </span>
         <StatusBadge status={item.status} />
         {item.hasMoved && item.fromIndex != null && item.toIndex != null ? (
           <Badge variant="outline">

@@ -292,34 +292,54 @@ describe("FieldDiffNode", () => {
     expect(screen.getByText("new body")).toBeInTheDocument();
   });
 
-  it("marks a field no longer in the schema", () => {
+  it("marks a field no longer in the schema without exposing its value", () => {
     const node: FieldDiff = {
       kind: "unknown",
       name: "legacyKeyword",
       status: "removed",
-      before: "seo term",
-      after: null,
     };
     render(<FieldDiffNode node={node} />);
 
     expect(screen.getByText(/no longer in the schema/)).toBeInTheDocument();
-    expect(screen.getByText("seo term")).toBeInTheDocument();
+    expect(screen.getByText(/value is hidden/)).toBeInTheDocument();
   });
 
-  it("labels before and after for a changed dropped field", () => {
+  it("shows the component type transition on a swapped list item", () => {
     const node: FieldDiff = {
-      kind: "unknown",
-      name: "legacyKeyword",
+      kind: "list",
+      name: "blocks",
+      label: "Blocks",
+      type: "component",
       status: "changed",
-      before: "old term",
-      after: "new term",
+      items: [
+        {
+          id: "1",
+          componentType: "cta",
+          componentTypeBefore: "hero",
+          componentTypeAfter: "cta",
+          status: "changed",
+          fields: [],
+        },
+      ],
     };
     render(<FieldDiffNode node={node} />);
 
-    expect(screen.getByText(/^Before/)).toBeInTheDocument();
-    expect(screen.getByText(/^After/)).toBeInTheDocument();
-    expect(screen.getByText("old term")).toBeInTheDocument();
-    expect(screen.getByText("new term")).toBeInTheDocument();
+    expect(screen.getByText(/hero/)).toBeInTheDocument();
+    expect(screen.getByText(/cta/)).toBeInTheDocument();
+  });
+
+  it("hides the value of a dropped field", () => {
+    // A field gone from the schema has no verifiable access rule, so its value
+    // is withheld; only that it changed is shown.
+    const node: FieldDiff = {
+      kind: "unknown",
+      name: "salary",
+      status: "changed",
+    };
+    render(<FieldDiffNode node={node} />);
+
+    expect(screen.getByText(/value is hidden/)).toBeInTheDocument();
+    expect(screen.getByText("Changed")).toBeInTheDocument();
   });
 
   it("renders a stored JSON null rather than treating it as empty", () => {
