@@ -256,13 +256,18 @@ function isExpandedRow(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
+  // Tested before the wrapper shape, not after: a row carries an id and a
+  // wrapper never does, while a row from a collection that happens to define
+  // fields called `relationTo` and `value` looks exactly like one. Unwrapping
+  // such a row would judge one of its own field values instead of the row.
+  if ("id" in value) return true;
   // A reference that names its own collection keeps that shape when it is
   // populated, with the row under `value` — so the row is what has to be
   // judged. Unpopulated, `value` is still the bare id and fails the same test.
   if ("relationTo" in value && "value" in value) {
     return isExpandedRow((value as Record<string, unknown>).value);
   }
-  return "id" in value;
+  return false;
 }
 
 /**

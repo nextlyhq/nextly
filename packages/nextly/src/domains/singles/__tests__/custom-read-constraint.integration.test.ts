@@ -987,6 +987,76 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     });
   });
 
+  // Neither `relationTo` nor `value` is a reserved field name, so a target
+  // collection may define both. A populated row from one then looks exactly
+  // like the wrapper a populated reference is served in, and reading it as one
+  // judges a field value in place of the row — refusing a read that is fine.
+  it("judges a populated row that defines relationTo and value as fields", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            text({ name: "relationTo" }),
+            text({ name: "value" }),
+          ],
+        }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", relationTo: "not a reference", value: "just a string" }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        author: {
+          relationTo: "authors",
+          value: (author.data as { id: string }).id,
+        },
+      },
+      { overrideAccess: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    // The row's own fields survived, rather than one of them being read as the
+    // reference it is named after.
+    expect(result.data!.author).toMatchObject({
+      relationTo: "authors",
+      value: {
+        name: "A",
+        relationTo: "not a reference",
+        value: "just a string",
+      },
+    });
+  });
+
   // Population can fail — a deleted target, a transient error — and the value
   // then stays the reference it was stored as. A rule reading into it would
   // decide on evidence that never arrived, and an absence-tolerant rule reads
