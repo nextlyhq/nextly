@@ -3,6 +3,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import {
@@ -13,8 +14,8 @@ import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import {
   AccessControlService,
   DEFAULT_OWNER_FIELD,
-  isSuperAdminContext,
 } from "../../../services/access";
+import type { CollectionAccessRules } from "../../../services/access";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -70,6 +71,24 @@ interface RelatedRowAccess {
   enforceFieldAccess?: boolean;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
+  /**
+   * The caller's authenticated scope. A scoped API key is judged on its OWN
+   * stamped grant, never on its owner's roles, so the super-admin bypass and
+   * the owner predicate both have to know about one.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /**
+   * Target read policies already resolved during this expansion, so a
+   * relationship holding many references reads its collection's metadata once
+   * instead of once per value.
+   */
+  targetPolicies?: Map<string, TargetReadPolicy>;
+}
+
+/** A target collection's read policy, as one expansion needs it. */
+interface TargetReadPolicy {
+  rules: CollectionAccessRules | undefined;
+  ownerConstraint: { field: string; value: unknown } | null;
 }
 
 /**
@@ -116,6 +135,15 @@ export interface RelationshipExpansionOptions {
    * read paths that forward a real caller; see {@link RelatedRowAccess}.
    */
   enforceFieldAccess?: boolean;
+
+  /**
+   * The caller's authenticated scope, when one applies.
+   *
+   * A scoped API key is judged on its OWN stamped grant rather than its
+   * owner's roles, so a super-admin-owned key must not inherit the bypass its
+   * owner's session would get.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 /**
@@ -868,83 +896,157 @@ export class CollectionRelationshipService extends BaseService {
     super(adapter, logger);
   }
 
-  private resolveAccessService(): CollectionAccessService | null {
-    if (this.accessService) return this.accessService;
-    if (!container.has("rbacAccessControlService")) return null;
-    this.accessService = new CollectionAccessService(
-      this.adapter,
-      this.logger,
-      this.collectionService,
-      new AccessControlService(),
-      container.get<RBACAccessControlService>("rbacAccessControlService")
-    );
+  private resolveAccessService(): CollectionAccessService {
+    if (!this.accessService) {
+      this.accessService = new CollectionAccessService(
+        this.adapter,
+        this.logger,
+        this.collectionService,
+        this.accessControl,
+        // Optional, and nothing used here needs it: reading a collection's
+        // stored rules and building a request context are independent of RBAC.
+        // Requiring it would make every target rule fail open in a boot that
+        // legitimately omits the service.
+        container.has("rbacAccessControlService")
+          ? container.get<RBACAccessControlService>("rbacAccessControlService")
+          : undefined
+      );
+    }
     return this.accessService;
   }
 
   /**
-   * Whether the target collection's own stored read rules admit this caller.
+   * Drop the rows of a target collection this caller may not read.
    *
-   * Populating a relationship hands back a row from another collection, and
-   * that collection's rules decide whether this caller may see it — the same
-   * decision a direct read of it makes. Without this, a caller refused the
-   * collection outright still obtains its rows by populating a relationship
-   * that points at them.
+   * A related row belongs to another collection and carries that collection's
+   * own read rules. Without this, a caller refused the collection outright
+   * still obtains its rows by populating a relationship that points at them.
+   *
+   * Judged on the fetched ROW, not on the collection alone: a rule may be
+   * keyed on the document id, and one evaluated with `undefined` there both
+   * hides rows a rule permits and admits rows it forbids — `id !== blocked`
+   * reads as true when the id never arrives.
    *
    * Only the STORED rules are evaluated, not the RBAC permission gate. The
-   * route authorized this caller for the PARENT collection, and a permission
-   * check for a collection they never asked for by name would refuse
-   * population for every caller whose grants do not happen to name it —
-   * turning a fix into an outage. Whether expansion should also require a
-   * read permission on the target is a separate question, recorded on the
-   * task rather than decided here.
+   * route authorized this caller for the PARENT collection, and requiring a
+   * permission naming a collection they never asked for by name would refuse
+   * population for every caller whose grants do not list it. Whether expansion
+   * should also require a read permission on the target is left open.
    *
    * Opt-in for the same reason field-level enforcement is: an entry point that
    * has not been given the caller yet would judge everyone anonymous and hide
    * rows from entitled callers.
    */
-  private async targetCollectionReadable(
+  private async filterRowsByCollectionAccess(
     targetCollection: string,
+    rows: Record<string, unknown>[],
     access: RelatedRowAccess
-  ): Promise<boolean> {
-    if (!access.enforceFieldAccess) return true;
-    if (access.overrideAccess) return true;
+  ): Promise<Record<string, unknown>[]> {
+    if (!access.enforceFieldAccess) return rows;
+    if (access.overrideAccess) return rows;
+    if (rows.length === 0) return rows;
     // System entities carry no stored collection rules; their secrets are
     // stripped by name during redaction instead.
-    if (isSystemEntity(targetCollection)) return true;
+    if (isSystemEntity(targetCollection)) return rows;
 
     const accessService = this.resolveAccessService();
-    if (!accessService) return true;
 
     const user = access.user as UserContext | undefined;
-    // Super-admins bypass stored rules on every other transport; expansion is
-    // not the one place that differs.
-    if (isSuperAdminContext(user)) return true;
+    // Super-admins bypass stored rules on every other transport. A scoped API
+    // key is authoritative on its OWN grant and never on its owner's roles, so
+    // the bypass does not extend to one — the same carve-out the direct read
+    // paths make.
+    const isScopedApiKey = access.authenticatedScope?.actorType === "apiKey";
+    if (!isScopedApiKey && accessService.isSuperAdmin(user)) return rows;
 
+    let policy: TargetReadPolicy;
     try {
-      const collection =
-        await this.collectionService.getCollection(targetCollection);
-      const rules = accessService.getAccessRules(
-        collection as Record<string, unknown>
+      policy = await this.resolveTargetReadPolicy(
+        targetCollection,
+        accessService,
+        access
       );
-      const result = await this.accessControl.evaluateAccess(
-        rules,
-        "read",
-        accessService.buildRequestContext(user),
-        undefined,
-        undefined,
-        // Collections stamp the owner into the `created_by` system column.
-        DEFAULT_OWNER_FIELD
-      );
-      // A rule answering with a CONSTRAINT rather than a boolean narrows which
-      // rows are readable, and narrowing is not yet applied to these fetches —
-      // so the row is withheld rather than returned unfiltered.
-      if (result.query) return false;
-      return result.allowed;
     } catch {
       // A target whose rules cannot be read is not a target whose rules are
       // satisfied.
-      return false;
+      return [];
     }
+
+    const kept: Record<string, unknown>[] = [];
+    for (const row of rows) {
+      if (await this.rowPassesTargetPolicy(row, policy, accessService, user)) {
+        kept.push(row);
+      }
+    }
+    return kept;
+  }
+
+  /**
+   * The target collection's read policy, resolved once per expansion.
+   *
+   * Reading it costs a collection-metadata query, and a `hasMany` relationship
+   * fetches one row at a time — so resolving per row turns a relationship with
+   * hundreds of values into hundreds of metadata reads against the same pool
+   * the row fetches need.
+   */
+  private async resolveTargetReadPolicy(
+    targetCollection: string,
+    accessService: CollectionAccessService,
+    access: RelatedRowAccess
+  ): Promise<TargetReadPolicy> {
+    const cached = access.targetPolicies?.get(targetCollection);
+    if (cached) return cached;
+
+    const collection =
+      await this.collectionService.getCollection(targetCollection);
+    const policy: TargetReadPolicy = {
+      rules: accessService.getAccessRules(
+        collection as Record<string, unknown>
+      ),
+      // Owner-only reads answer with a predicate rather than a verdict, so the
+      // owner column and the caller's id are what decide. Resolved through the
+      // helper the direct read path uses, so both compare the same column.
+      ownerConstraint: await accessService.getOwnerConstraint(
+        targetCollection,
+        "read",
+        access.user as UserContext | undefined,
+        false,
+        access.authenticatedScope
+      ),
+    };
+    access.targetPolicies?.set(targetCollection, policy);
+    return policy;
+  }
+
+  /** Whether one fetched row survives the target collection's read policy. */
+  private async rowPassesTargetPolicy(
+    row: Record<string, unknown>,
+    policy: TargetReadPolicy,
+    accessService: CollectionAccessService,
+    user: UserContext | undefined
+  ): Promise<boolean> {
+    if (policy.ownerConstraint) {
+      // An exact comparison against the same column the direct read filters on,
+      // so no predicate is being re-interpreted here.
+      return row[policy.ownerConstraint.field] === policy.ownerConstraint.value;
+    }
+
+    const result = await this.accessControl.evaluateAccess(
+      policy.rules,
+      "read",
+      accessService.buildRequestContext(user),
+      row.id as string | undefined,
+      row,
+      // Collections stamp the owner into the `created_by` system column.
+      DEFAULT_OWNER_FIELD
+    );
+
+    // A rule answering with a predicate rather than a verdict narrows WHICH
+    // rows are readable. Anything beyond the owner predicate handled above is
+    // not applied to these fetches yet, so the row is withheld rather than
+    // returned unnarrowed.
+    if (result.query) return false;
+    return result.allowed;
   }
 
   /**
@@ -1143,6 +1245,11 @@ export class CollectionRelationshipService extends BaseService {
       enforceFieldAccess: options.enforceFieldAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      authenticatedScope: options.authenticatedScope,
+      // One per expansion, so a relationship holding many references reads its
+      // target's rules once rather than once per value. Scoped to this call
+      // because a collection's rules can change between requests.
+      targetPolicies: new Map(),
     };
 
     // Clamp depth to valid range
@@ -1506,12 +1613,6 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<Map<string, Record<string, unknown>>> {
     const resultMap = new Map<string, Record<string, unknown>>();
 
-    // Judged once for the whole batch: the decision is about the collection,
-    // not about any one row, so it does not need repeating per id.
-    if (!(await this.targetCollectionReadable(targetCollection, access))) {
-      return resultMap;
-    }
-
     if (relatedIds.length === 0) return resultMap;
 
     try {
@@ -1543,8 +1644,13 @@ export class CollectionRelationshipService extends BaseService {
         const rows = entries.map((entry: Record<string, unknown>) =>
           convertTimestampsToCamelCase({ ...entry })
         );
-        await this.redactRelatedRows(targetCollection, rows, access);
-        for (const row of rows) {
+        const readable = await this.filterRowsByCollectionAccess(
+          targetCollection,
+          rows,
+          access
+        );
+        await this.redactRelatedRows(targetCollection, readable, access);
+        for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
             label: row[labelField] || row.id,
@@ -1572,8 +1678,13 @@ export class CollectionRelationshipService extends BaseService {
         const rows = entries.map((entry: Record<string, unknown>) =>
           convertTimestampsToCamelCase({ ...entry })
         );
-        await this.redactRelatedRows(targetCollection, rows, access);
-        for (const row of rows) {
+        const readable = await this.filterRowsByCollectionAccess(
+          targetCollection,
+          rows,
+          access
+        );
+        await this.redactRelatedRows(targetCollection, readable, access);
+        for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
             // Falls back to the id when the label's source field did not
@@ -1704,11 +1815,20 @@ export class CollectionRelationshipService extends BaseService {
       const targetRows = targetEntries.map((entry: Record<string, unknown>) =>
         convertTimestampsToCamelCase({ ...entry })
       );
-      await this.redactRelatedRows(targetCollectionName, targetRows, access);
+      const readableTargetRows = await this.filterRowsByCollectionAccess(
+        targetCollectionName,
+        targetRows,
+        access
+      );
+      await this.redactRelatedRows(
+        targetCollectionName,
+        readableTargetRows,
+        access
+      );
 
       // Build target entry map
       const targetEntryMap = new Map(
-        targetRows.map((row: Record<string, unknown>) => {
+        readableTargetRows.map((row: Record<string, unknown>) => {
           // Falls back to the id when the label's source field did not survive
           // redaction.
           const label = row[labelField] || row.id;
@@ -1771,6 +1891,11 @@ export class CollectionRelationshipService extends BaseService {
       enforceFieldAccess: options.enforceFieldAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      authenticatedScope: options.authenticatedScope,
+      // One per expansion, so a relationship holding many references reads its
+      // target's rules once rather than once per value. Scoped to this call
+      // because a collection's rules can change between requests.
+      targetPolicies: new Map(),
     };
 
     // Clamp depth to valid range
@@ -2327,12 +2452,6 @@ export class CollectionRelationshipService extends BaseService {
     entryId: string,
     access: RelatedRowAccess = {}
   ): Promise<Record<string, unknown> | null> {
-    // Reads as absent rather than as an error: one unreadable reference must
-    // not refuse the whole parent read, and a caller learns no more than they
-    // would from a reference that points at nothing.
-    if (!(await this.targetCollectionReadable(collectionName, access))) {
-      return null;
-    }
     try {
       // Check if this is a system entity (like "users")
       if (isSystemEntity(collectionName)) {
@@ -2349,8 +2468,17 @@ export class CollectionRelationshipService extends BaseService {
 
         if (!entry) return null;
         const normalized = convertTimestampsToCamelCase({ ...entry });
-        await this.redactRelatedRows(collectionName, [normalized], access);
-        return normalized;
+        const [readable] = await this.filterRowsByCollectionAccess(
+          collectionName,
+          [normalized],
+          access
+        );
+        // Reads as absent rather than as an error: one unreadable reference
+        // must not refuse the whole parent read, and the caller learns no more
+        // than a reference pointing at nothing would tell them.
+        if (!readable) return null;
+        await this.redactRelatedRows(collectionName, [readable], access);
+        return readable;
       } else {
         // Handle dynamic collections
         const schema = await this.fileManager.loadDynamicSchema(collectionName);
@@ -2362,8 +2490,17 @@ export class CollectionRelationshipService extends BaseService {
 
         if (!entry) return null;
         const normalized = convertTimestampsToCamelCase({ ...entry });
-        await this.redactRelatedRows(collectionName, [normalized], access);
-        return normalized;
+        const [readable] = await this.filterRowsByCollectionAccess(
+          collectionName,
+          [normalized],
+          access
+        );
+        // Reads as absent rather than as an error: one unreadable reference
+        // must not refuse the whole parent read, and the caller learns no more
+        // than a reference pointing at nothing would tell them.
+        if (!readable) return null;
+        await this.redactRelatedRows(collectionName, [readable], access);
+        return readable;
       }
     } catch {
       return null;
@@ -2495,9 +2632,14 @@ export class CollectionRelationshipService extends BaseService {
       const normalized = (entries || []).map((entry: Record<string, unknown>) =>
         convertTimestampsToCamelCase({ ...entry })
       );
+      const readable = await this.filterRowsByCollectionAccess(
+        targetCollectionName,
+        normalized,
+        access
+      );
       // Strip related-row secrets before rows are spread into responses.
-      await this.redactRelatedRows(targetCollectionName, normalized, access);
-      return normalized;
+      await this.redactRelatedRows(targetCollectionName, readable, access);
+      return readable;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];

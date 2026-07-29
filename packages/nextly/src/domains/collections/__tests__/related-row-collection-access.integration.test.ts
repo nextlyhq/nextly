@@ -5,8 +5,8 @@
  * A related row belongs to another collection and carries that collection's own
  * read rules. Expansion selected it straight from its table and applied only
  * field-level redaction, so a caller refused the collection outright still
- * obtained its rows by populating a relationship that pointed at them — the
- * write-up and the probe are in tasks/left-tasks/081.
+ * obtained its rows by populating a relationship that pointed at them: the
+ * same row a direct read of the target answered with 403.
  *
  * The refusal reads as an ABSENT relationship rather than an error: one
  * unreadable reference must not refuse the whole parent read, and the caller
@@ -15,12 +15,27 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
+
 import { defineCollection, relationship, text } from "../../../config";
+import { clearServices } from "../../../di/register";
+import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { CollectionRelationshipService } from "../services/collection-relationship-service";
+
+/**
+ * The Builder's many-to-many shape: the target lives on `options.target`, not
+ * on `relationTo`, and the typed helper cannot express it.
+ */
+const M2M_FIELD = {
+  name: "tags",
+  type: "relationship",
+  options: { relationType: "manyToMany", target: "tags" },
+} as unknown as FieldDefinition;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -153,5 +168,265 @@ describe("related-row collection access (integration)", () => {
     const data = result.data as Record<string, unknown>;
     expect(JSON.stringify(data.target)).toContain("Restricted page");
     expect(JSON.stringify(data.plain)).toContain("Restricted page");
+  });
+});
+
+const ID_RULE_PATH = new URL(
+  "./_fixtures/related-target-read-rule.ts",
+  import.meta.url
+).pathname;
+
+/** The id the id-keyed rule withholds. */
+const BLOCKED_ID = "11111111-1111-4111-8111-111111111111";
+
+describe("related-row collection access — many-to-many (integration)", () => {
+  /**
+   * A many-to-many field reaches its targets through a junction table, which
+   * only the Schema-Builder shape produces — a code-first `hasMany: true`
+   * stores a JSON array on the parent row and never touches that path. Seeded
+   * the way the Builder stores it so the junction fetches are the ones under
+   * test.
+   */
+  async function seedM2M(): Promise<{
+    rel: CollectionRelationshipService;
+    postId: string;
+  }> {
+    current = await createTestNextly({});
+    const adapter = current.adapter;
+
+    await seedBuilderCollection(adapter, {
+      slug: "tags",
+      fields: [{ name: "name", type: "text" }],
+    });
+    await seedBuilderCollection(adapter, {
+      slug: "posts",
+      fields: [
+        { name: "title", type: "text" },
+        {
+          name: "tags",
+          type: "relationship",
+          options: { relationType: "manyToMany", target: "tags" },
+        },
+      ],
+    });
+
+    clearServices();
+    current = await createTestNextly({ adapter });
+    current.getService("collectionService");
+    const rel = current.getService<CollectionRelationshipService>(
+      "relationshipService"
+    );
+
+    const nowEpoch = 1785330000;
+    await adapter.executeQuery(
+      `INSERT INTO dc_tags (id, title, slug, name, created_at, updated_at) VALUES ('tag-1', 'Restricted tag', 'restricted-tag', 'restricted', ${nowEpoch}, ${nowEpoch})`
+    );
+    await adapter.executeQuery(
+      `INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('post-1', 'Hello', 'hello', ${nowEpoch}, ${nowEpoch})`
+    );
+    await rel.insertManyToManyRelations("posts", "post-1", M2M_FIELD, [
+      "tag-1",
+    ]);
+
+    await adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: { read: { type: "custom", functionPath: ID_RULE_PATH } },
+      },
+      { and: [{ column: "slug", op: "=", value: "tags" }] }
+    );
+
+    return { rel, postId: "post-1" };
+  }
+
+  it("does not populate many-to-many targets the caller may not read", async () => {
+    const { rel, postId } = await seedM2M();
+
+    // The single-entry junction fetch.
+    const expanded = await rel.expandRelationships(
+      { id: postId, title: "Hello", slug: "hello" },
+      "posts",
+      [M2M_FIELD],
+      { depth: 1, enforceFieldAccess: true, user: { id: "denied" } }
+    );
+    expect(JSON.stringify(expanded.tags ?? [])).not.toContain("Restricted tag");
+
+    // The batched junction fetch the list path uses.
+    const batched = await rel.batchFetchManyToManyRelations(
+      "posts",
+      [postId],
+      M2M_FIELD,
+      { enforceFieldAccess: true, user: { id: "denied" } }
+    );
+    expect(JSON.stringify(batched.get(postId) ?? [])).not.toContain(
+      "Restricted tag"
+    );
+  });
+
+  it("still populates them for a caller the rule admits", async () => {
+    const { rel, postId } = await seedM2M();
+
+    const expanded = await rel.expandRelationships(
+      { id: postId, title: "Hello", slug: "hello" },
+      "posts",
+      [M2M_FIELD],
+      { depth: 1, enforceFieldAccess: true, user: { id: "permitted" } }
+    );
+    expect(JSON.stringify(expanded.tags)).toContain("Restricted tag");
+
+    const batched = await rel.batchFetchManyToManyRelations(
+      "posts",
+      [postId],
+      M2M_FIELD,
+      { enforceFieldAccess: true, user: { id: "permitted" } }
+    );
+    expect(JSON.stringify(batched.get(postId))).toContain("Restricted tag");
+  });
+});
+
+describe("related-row collection access — per-document rules (integration)", () => {
+  async function bootIdRule(): Promise<{
+    handler: CollectionsHandler;
+    refId: string;
+    pageId: string;
+  }> {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "pages", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "refs",
+          fields: [
+            text({ name: "name" }),
+            relationship({ name: "target", relationTo: "pages" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const page = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "Blocked page" }
+    );
+    const pageId = (page.data as { id: string }).id;
+    const ref = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      { name: "r", target: pageId }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: { read: { type: "custom", functionPath: ID_RULE_PATH } },
+      },
+      { and: [{ column: "slug", op: "=", value: "pages" }] }
+    );
+    return { handler, refId: (ref.data as { id: string }).id, pageId };
+  }
+
+  // A rule reading the id decides nothing useful when the id never arrives,
+  // and an exclusion inverts: `undefined !== blocked` admits the row the rule
+  // exists to withhold.
+  it("gives an id-keyed rule the related document's id", async () => {
+    const { handler, refId, pageId } = await bootIdRule();
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: refId,
+      depth: 1,
+      user: { id: "blocked-one", blockedId: pageId },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.data)).not.toContain("Blocked page");
+  });
+
+  // The mirror: the same rule and the same caller, blocking a DIFFERENT id.
+  // Without it the case above would pass just as well if the row were hidden
+  // for any other reason, including the relationship never populating.
+  it("populates a row the same rule does not block", async () => {
+    const { handler, refId } = await bootIdRule();
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: refId,
+      depth: 1,
+      user: { id: "blocked-one", blockedId: "some-other-id" },
+      routeAuthorized: true,
+    });
+
+    expect(JSON.stringify(result.data)).toContain("Blocked page");
+  });
+});
+
+describe("related-row collection access — owner-only targets (integration)", () => {
+  async function bootOwnerOnly(): Promise<{
+    handler: CollectionsHandler;
+    refId: string;
+  }> {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "notes", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "refs",
+          fields: [
+            text({ name: "name" }),
+            relationship({ name: "target", relationTo: "notes" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const note = await handler.createEntry(
+      {
+        collectionName: "notes",
+        user: { id: "owner-1" },
+        routeAuthorized: true,
+      },
+      { title: "Owned note" }
+    );
+    const ref = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      { name: "r", target: (note.data as { id: string }).id }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      { access_rules: { read: { type: "owner-only" } } },
+      { and: [{ column: "slug", op: "=", value: "notes" }] }
+    );
+    return { handler, refId: (ref.data as { id: string }).id };
+  }
+
+  // An owner-only rule answers with a predicate rather than a verdict. Treating
+  // every such target as denied would stop an owner populating their OWN row,
+  // which is a rule they satisfy.
+  it("populates an owner-only target for its owner", async () => {
+    const { handler, refId } = await bootOwnerOnly();
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: refId,
+      depth: 1,
+      user: { id: "owner-1" },
+      routeAuthorized: true,
+    });
+
+    expect(JSON.stringify(result.data)).toContain("Owned note");
+  });
+
+  it("withholds it from anyone else", async () => {
+    const { handler, refId } = await bootOwnerOnly();
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: refId,
+      depth: 1,
+      user: { id: "someone-else" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.data)).not.toContain("Owned note");
   });
 });
