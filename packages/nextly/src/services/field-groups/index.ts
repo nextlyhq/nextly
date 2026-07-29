@@ -1,3 +1,5 @@
+// Entry point for the field group services. Callers outside the domain import
+// from here so the domain layout stays free to move behind it.
 export { FieldGroupRegistryService } from "./field-group-registry-service";
 export type {
   ComponentReference,

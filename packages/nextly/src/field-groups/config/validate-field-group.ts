@@ -304,9 +304,9 @@ function validateFields(
   }
 
   // An empty fields list is valid for both code-first defines and the
-  // modal-driven create flow. System columns are auto-injected at runtime, so a
-  // fieldless field group still has id, title and slug, which lets an author
-  // scaffold first and add fields incrementally.
+  // modal-driven create flow. A field group's table still gets its id and the
+  // system columns that bind a row to its parent entry, so a fieldless group is
+  // a usable table and an author can scaffold first and add fields later.
   validateFieldsArray(fields, path, errors);
 }
 
