@@ -77,7 +77,11 @@ export function createDebouncedSync(
       // watcher as often as through `db:sync`. The companion table is not part of
       // the push pipeline, and creating it here rather than at the next boot is
       // what keeps a running server from advertising localization it cannot store.
-      await ensureLocalizedCompanions(configToSync.config, adapter, context);
+      // Suppressed under `--no-auto-sync` for the same reason the rest of the
+      // push is: it issues DDL and can copy rows.
+      if (options.autoSync !== false) {
+        await ensureLocalizedCompanions(configToSync.config, adapter, context);
+      }
 
       // Sync user_ext table (always — handles both code and UI fields)
       await syncUserFields(configToSync, adapter, options, context);

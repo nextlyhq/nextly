@@ -308,7 +308,13 @@ export async function runDbSync(
     // companion references its main table. Without this, `db:sync` left the
     // registry saying "localized" with no table to hold translations until the
     // app next booted, and writes in that window overwrote the default language.
-    await ensureLocalizedCompanions(configResult.config, adapter, context);
+    //
+    // Gated on the same flag as the rest of the schema push: this issues DDL and
+    // can copy rows, so `--no-auto-sync` — chosen precisely to keep physical
+    // schema changes in migration files — must suppress it too.
+    if (options.autoSync !== false) {
+      await ensureLocalizedCompanions(configResult.config, adapter, context);
+    }
 
     if (collectionCount === 0) {
       logger.warn("No collections defined in config");

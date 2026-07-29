@@ -12,7 +12,7 @@
  * Before this guard, a write in a NON-default locale fell through to the main
  * table in that window, overwriting the default language's values and
  * regenerating the slug from the translation, while reporting success.
- * Reproduced on published alpha.43 during the task 006 walk.
+ * Reproduced on published 0.0.2-alpha.43.
  *
  * The default locale legitimately writes to the main table until the companion
  * exists ("Option B"), so that path must keep working unchanged.
@@ -57,7 +57,7 @@ const localization = { locales: ["en", "es"], defaultLocale: "en" };
 /** Same collection, with localization off (columns on main) or on (companion). */
 const posts = (localized: boolean) =>
   defineCollection({
-    slug: "posts",
+    slug: "i18nwin_posts",
     localized,
     fields: [text({ name: "title", localized: true })],
   });
@@ -83,7 +83,7 @@ async function boot(localized: boolean): Promise<TestNextly> {
  */
 async function physicalTitle(handle: TestNextly): Promise<string | undefined> {
   const rows = await handle.adapter.executeQuery<{ title: string }>(
-    "SELECT title FROM dc_posts LIMIT 1"
+    "SELECT title FROM dc_i18nwin_posts LIMIT 1"
   );
   return rows[0]?.title;
 }
@@ -93,7 +93,9 @@ async function enterWindow(): Promise<TestNextly> {
   await current?.destroy();
   current = undefined;
   const handle = await boot(true);
-  await handle.adapter.executeQuery("DROP TABLE IF EXISTS dc_posts_locales");
+  await handle.adapter.executeQuery(
+    "DROP TABLE IF EXISTS dc_i18nwin_posts_locales"
+  );
   return handle;
 }
 
@@ -104,7 +106,7 @@ describe("localized write without a companion table (integration)", () => {
     const created = await current
       .getService<CollectionsHandler>("collectionsHandler")
       .createEntry(
-        { collectionName: "posts", overrideAccess: true },
+        { collectionName: "i18nwin_posts", overrideAccess: true },
         { title: "How to Build a Blog" }
       );
     expect(created.success).toBe(true);
@@ -116,7 +118,7 @@ describe("localized write without a companion table (integration)", () => {
       .getService<CollectionsHandler>("collectionsHandler")
       .updateEntry(
         {
-          collectionName: "posts",
+          collectionName: "i18nwin_posts",
           entryId: id,
           overrideAccess: true,
           locale: "es",
@@ -143,7 +145,7 @@ describe("localized write without a companion table (integration)", () => {
     const created = await current
       .getService<CollectionsHandler>("collectionsHandler")
       .createEntry(
-        { collectionName: "posts", overrideAccess: true },
+        { collectionName: "i18nwin_posts", overrideAccess: true },
         { title: "First" }
       );
     const id = (created.data as { id: string }).id;
@@ -154,7 +156,7 @@ describe("localized write without a companion table (integration)", () => {
       .getService<CollectionsHandler>("collectionsHandler")
       .updateEntry(
         {
-          collectionName: "posts",
+          collectionName: "i18nwin_posts",
           entryId: id,
           overrideAccess: true,
           locale: "en",
@@ -178,7 +180,7 @@ describe("enabling localization on existing content (integration)", () => {
     const created = await current
       .getService<CollectionsHandler>("collectionsHandler")
       .createEntry(
-        { collectionName: "posts", overrideAccess: true },
+        { collectionName: "i18nwin_posts", overrideAccess: true },
         { title: "Original" }
       );
     const id = (created.data as { id: string }).id;
@@ -195,7 +197,11 @@ describe("enabling localization on existing content (integration)", () => {
 
     const read = await current
       .getService<CollectionsHandler>("collectionsHandler")
-      .getEntry({ collectionName: "posts", entryId: id, overrideAccess: true });
+      .getEntry({
+        collectionName: "i18nwin_posts",
+        entryId: id,
+        overrideAccess: true,
+      });
 
     // Without the seed this is `null`: the companion exists and is empty.
     expect((read.data as { title?: unknown }).title).toBe("Original");
@@ -203,6 +209,47 @@ describe("enabling localization on existing content (integration)", () => {
     // Dropping those columns is the destructive half of the transition and stays
     // behind the schema pipeline's confirmation.
     expect(await physicalTitle(current)).toBe("Original");
+  });
+
+  it("backfills entries the companion is missing, not just an empty one", async () => {
+    // The seed is per-row, not per-table. A companion that already holds a row for
+    // ONE entry — someone edited a single entry in the default language — must not
+    // stop every other entry from being backfilled; gating on "the companion is
+    // empty" would leave the rest reading null permanently.
+    current = await boot(false);
+    const handler = () =>
+      current!.getService<CollectionsHandler>("collectionsHandler");
+    const ids: string[] = [];
+    for (const title of ["First", "Second", "Third"]) {
+      const created = await handler().createEntry(
+        { collectionName: "i18nwin_posts", overrideAccess: true },
+        { title }
+      );
+      ids.push((created.data as { id: string }).id);
+    }
+
+    await current.destroy();
+    current = await boot(true);
+    await current.destroy();
+    current = await boot(true);
+
+    // Put the companion into the partial state: keep one row, drop the others, so
+    // the table is non-empty but two entries have no default-locale row.
+    await current.adapter.executeQuery(
+      `DELETE FROM dc_i18nwin_posts_locales WHERE _parent <> '${ids[0]}'`
+    );
+
+    await current.destroy();
+    current = await boot(true);
+
+    for (const [index, title] of ["First", "Second", "Third"].entries()) {
+      const read = await handler().getEntry({
+        collectionName: "i18nwin_posts",
+        entryId: ids[index],
+        overrideAccess: true,
+      });
+      expect((read.data as { title?: unknown }).title).toBe(title);
+    }
   });
 
   it("seeds once and does not duplicate rows on later boots", async () => {
@@ -213,7 +260,7 @@ describe("enabling localization on existing content (integration)", () => {
     const created = await current
       .getService<CollectionsHandler>("collectionsHandler")
       .createEntry(
-        { collectionName: "posts", overrideAccess: true },
+        { collectionName: "i18nwin_posts", overrideAccess: true },
         { title: "Original" }
       );
     const id = (created.data as { id: string }).id;
@@ -226,7 +273,7 @@ describe("enabling localization on existing content (integration)", () => {
       .getService<CollectionsHandler>("collectionsHandler")
       .updateEntry(
         {
-          collectionName: "posts",
+          collectionName: "i18nwin_posts",
           entryId: id,
           overrideAccess: true,
           locale: "en",
@@ -238,13 +285,17 @@ describe("enabling localization on existing content (integration)", () => {
 
     const read = await current
       .getService<CollectionsHandler>("collectionsHandler")
-      .getEntry({ collectionName: "posts", entryId: id, overrideAccess: true });
+      .getEntry({
+        collectionName: "i18nwin_posts",
+        entryId: id,
+        overrideAccess: true,
+      });
     expect((read.data as { title?: unknown }).title).toBe(
       "Edited in the companion"
     );
 
     const rows = await current.adapter.executeQuery<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM dc_posts_locales"
+      "SELECT COUNT(*) AS n FROM dc_i18nwin_posts_locales"
     );
     expect(Number(rows[0]?.n)).toBe(1);
   });
@@ -280,21 +331,25 @@ describe.each(getConfiguredTestDialects())(
       const created = await current
         .getService<CollectionsHandler>("collectionsHandler")
         .createEntry(
-          { collectionName: "posts", overrideAccess: true, locale: "en" },
+          {
+            collectionName: "i18nwin_posts",
+            overrideAccess: true,
+            locale: "en",
+          },
           { title: "Original" }
         );
       expect(created.success).toBe(true);
       const id = (created.data as { id: string }).id;
 
       await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_posts_locales`" : '"dc_posts_locales"'}`
+        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_posts_locales`" : '"dc_i18nwin_posts_locales"'}`
       );
 
       const translated = await current
         .getService<CollectionsHandler>("collectionsHandler")
         .updateEntry(
           {
-            collectionName: "posts",
+            collectionName: "i18nwin_posts",
             entryId: id,
             overrideAccess: true,
             locale: "es",

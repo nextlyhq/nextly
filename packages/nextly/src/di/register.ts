@@ -489,9 +489,13 @@ export async function registerServices(
 
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
 
+  // `transformedConfig`, not `config`: plugin config transformers run before this
+  // and may supply or override `localization`, and every other companion call
+  // site reads the transformed value. Taking the raw config here would create
+  // unseeded companions on the registry path while the code-first paths seed.
   const schemaRegistry = await initializeSchemaRegistry(
     adapter,
-    config.localization?.defaultLocale
+    transformedConfig.localization?.defaultLocale
   );
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the

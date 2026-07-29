@@ -333,8 +333,10 @@ export async function ensureCompanionTable(
  *
  * Deliberately narrow, because this runs unattended on every boot and sync:
  *
- *  - only when the companion is EMPTY. A companion with rows has been through a real transition
- *    (or holds translations), and re-seeding it would resurrect main-table values over them.
+ *  - only for main rows that have NO default-locale companion row yet, so it never overwrites a
+ *    translation and is safe to re-run. Row-level rather than table-level: a companion that
+ *    already holds one row (someone edited a single entry) must not stop every other row from
+ *    being backfilled, or those stay unreadable forever.
  *  - only for localized columns that are STILL on the main table, probed one by one. After the
  *    columns are dropped there is nothing to copy, and the probe is the only portable way to ask.
  *  - it does NOT drop those columns afterwards. That is the destructive half of the transition
@@ -369,8 +371,6 @@ async function seedCompanionFromMain(
   });
   if (!spec) return;
 
-  if (!(await companionIsEmpty(adapter, args.companionTableName))) return;
-
   const columnsOnMain: string[] = [];
   for (const column of spec.columns) {
     if (await mainHasColumn(adapter, args.tableName, column.name)) {
@@ -382,21 +382,11 @@ async function seedCompanionFromMain(
   const { buildCompanionSeedStatement } = await import(
     "../migration/generate-up"
   );
-  const seed = buildCompanionSeedStatement({ ...spec, columnsOnMain });
+  const seed = buildCompanionSeedStatement(
+    { ...spec, columnsOnMain },
+    { onlyMissing: true }
+  );
   if (seed) await adapter.executeQuery(seed);
-}
-
-/** Whether the companion holds no rows, i.e. nothing a seed could overwrite. */
-async function companionIsEmpty(
-  adapter: CompanionWriteAdapter,
-  companionTableName: string
-): Promise<boolean> {
-  const table =
-    adapter.dialect === "mysql"
-      ? `\`${companionTableName}\``
-      : `"${companionTableName}"`;
-  const rows = await adapter.executeQuery(`SELECT 1 FROM ${table} LIMIT 1`);
-  return rows.length === 0;
 }
 
 /** Whether a physical column is still present on the main table. */
@@ -412,12 +402,12 @@ async function mainHasColumn(
     await adapter.executeQuery(`SELECT ${column} FROM ${table} LIMIT 0`);
     return true;
   } catch {
-    // Catching everything is safe HERE, unlike a probe a write gates on: the
-    // caller has already run a query against this connection (the emptiness
-    // check, which does not catch), so an unreachable database has surfaced
-    // before this point. What remains is a question about one column of one
-    // table, and treating any answer but "yes" as "do not seed from it" only
-    // ever narrows the copy — never writes the wrong thing.
+    // Catching everything is safe HERE, unlike a probe a write gates on. Treating
+    // any answer but "yes" as "do not copy from this column" only ever narrows the
+    // seed; it can never write the wrong value. And a failure that is not a
+    // missing column — an unreachable database — does not get swallowed overall,
+    // because the seed statement that follows runs on the same connection and
+    // propagates to the caller's reporter.
     return false;
   }
 }

@@ -113,7 +113,17 @@ function columnsStillOnMain(
  * (dev boot, `db:sync`) takes this statement alone and leaves the columns in place.
  */
 export function buildCompanionSeedStatement(
-  spec: CompanionMigrationSpec
+  spec: CompanionMigrationSpec,
+  options?: {
+    /**
+     * Skip main rows that already have a default-locale companion row, making the
+     * statement safe to re-run and safe on a PARTIALLY seeded companion. Gating the
+     * whole seed on an empty companion instead would strand every other row the
+     * moment one row got a companion entry — one edited entry, and the rest keep
+     * reading null forever.
+     */
+    onlyMissing?: boolean;
+  }
 ): string | null {
   const { dialect, mainTable, companionTable, defaultLocale } = spec;
   const onMain = columnsStillOnMain(spec);
@@ -129,10 +139,16 @@ export function buildCompanionSeedStatement(
   const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
   const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
 
+  const where = options?.onlyMissing
+    ? ` WHERE NOT EXISTS (SELECT 1 FROM ${q(companionTable, dialect)} ` +
+      `WHERE ${q(companionTable, dialect)}.${q("_parent", dialect)} = ${q(mainTable, dialect)}.${q("id", dialect)} ` +
+      `AND ${q(companionTable, dialect)}.${q("_locale", dialect)} = ${lit(defaultLocale)})`
+    : "";
+
   return (
     `INSERT INTO ${q(companionTable, dialect)} ` +
     `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
     `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}${onMainCols} ` +
-    `FROM ${q(mainTable, dialect)}`
+    `FROM ${q(mainTable, dialect)}${where}`
   );
 }

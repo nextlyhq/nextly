@@ -119,7 +119,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
         localization: { locales: ["en", "es"], defaultLocale: "en" },
         collections: [
           defineCollection({
-            slug: "posts",
+            slug: "dbsync_posts",
             localized: true,
             fields: [text({ name: "title", localized: true })],
           }),
@@ -127,10 +127,10 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       })
     );
 
-    expect(await tableExists("dc_posts")).toBe(true);
+    expect(await tableExists("dc_dbsync_posts")).toBe(true);
     // The assertion that fails without the fix: the push pipeline creates the
     // main table and nothing in this process creates the companion.
-    expect(await tableExists("dc_posts_locales")).toBe(true);
+    expect(await tableExists("dc_dbsync_posts_locales")).toBe(true);
   });
 
   it("creates a localized single's companion, which needs singles synced first", async () => {
@@ -139,7 +139,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
         localization: { locales: ["en", "es"], defaultLocale: "en" },
         singles: [
           defineSingle({
-            slug: "homepage",
+            slug: "dbsync_homepage",
             localized: true,
             fields: [text({ name: "headline", localized: true })],
           }),
@@ -147,27 +147,27 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       })
     );
 
-    // Singles use the `single_` prefix (`resolve-entity-table.GROUPS`). Asserting
-    // the main table too means a prefix change cannot make the companion check
-    // vacuously pass against a name nothing ever creates.
-    expect(await tableExists("single_homepage")).toBe(true);
-    expect(await tableExists("single_homepage_locales")).toBe(true);
+    // Singles are force-prefixed with `single_` by `resolveSingleTableName`.
+    // Asserting the main table too means a prefix change cannot make the companion
+    // check vacuously pass against a name nothing ever creates.
+    expect(await tableExists("single_dbsync_homepage")).toBe(true);
+    expect(await tableExists("single_dbsync_homepage_locales")).toBe(true);
   });
 
   it("resolves a custom dbName the way the runtime does", async () => {
     // A collection's `dbName` is force-prefixed with `dc_` by the canonical
-    // resolver, so `dbName: "notes"` lives at `dc_notes`. Deriving the table name
-    // by pasting a prefix onto the slug, or by taking `dbName` verbatim, produces
-    // `notes_locales` with a foreign key to a `notes` table that does not exist —
-    // the create fails, the warning is swallowed, and the entity is left marked
-    // localized with nowhere to put translations.
+    // resolver, so `dbName: "dbsync_notes"` lives at `dc_dbsync_notes`. Taking
+    // `dbName` verbatim instead builds `dbsync_notes_locales` with a foreign key to
+    // a `dbsync_notes` table that does not exist — the create fails, the warning is
+    // swallowed, and the entity is left marked localized with nowhere to put
+    // translations.
     await runSync(
       defineConfig({
         localization: { locales: ["en", "es"], defaultLocale: "en" },
         collections: [
           defineCollection({
-            slug: "field-notes",
-            dbName: "notes",
+            slug: "dbsync_field_notes",
+            dbName: "dbsync_notes",
             localized: true,
             fields: [text({ name: "title", localized: true })],
           }),
@@ -175,9 +175,9 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       })
     );
 
-    expect(await tableExists("dc_notes")).toBe(true);
-    expect(await tableExists("dc_notes_locales")).toBe(true);
-    expect(await tableExists("notes_locales")).toBe(false);
+    expect(await tableExists("dc_dbsync_notes")).toBe(true);
+    expect(await tableExists("dc_dbsync_notes_locales")).toBe(true);
+    expect(await tableExists("dbsync_notes_locales")).toBe(false);
   });
 
   it("leaves a non-localized collection with no companion", async () => {
@@ -185,16 +185,16 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       defineConfig({
         collections: [
           defineCollection({
-            slug: "logs",
+            slug: "dbsync_logs",
             fields: [text({ name: "title" })],
           }),
         ],
       })
     );
 
-    expect(await tableExists("dc_logs")).toBe(true);
+    expect(await tableExists("dc_dbsync_logs")).toBe(true);
     // Creating companions unconditionally would strand a dead table in every
     // project that does not use localization.
-    expect(await tableExists("dc_logs_locales")).toBe(false);
+    expect(await tableExists("dc_dbsync_logs_locales")).toBe(false);
   });
 });

@@ -301,6 +301,12 @@ export async function syncComponents(
       fields: component.fields,
       description: component.description,
       admin: component.admin,
+      // Persist i18n through db:sync, as the singles mapping above already does.
+      // Runtime field-group writes gate on the stored flag, so leaving it unset
+      // made `db:sync` record a localized field group as non-localized:
+      // translatable values kept being treated as shared main-table fields, and a
+      // save in a non-default locale overwrote the default one.
+      localized: component.localized === true,
       configPath: `${STORAGE_FORMAT.configPathDir}/${component.slug}.ts`,
     })
   );
@@ -821,7 +827,7 @@ export async function ensureLocalizedCompanions(
       e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
     ],
     [
-      (config.components ?? []) as LocalizableEntity[],
+      (config.fieldGroups ?? []) as LocalizableEntity[],
       e => resolveComponentTableName(e.slug!, e.dbName),
     ],
   ];
