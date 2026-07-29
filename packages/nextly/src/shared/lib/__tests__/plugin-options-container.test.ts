@@ -15,6 +15,7 @@ import {
   clearFieldTypes,
   registerFieldType,
 } from "../../../domains/schema/field-types/field-type-registry";
+import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
 import { detachedField } from "../detached-field";
 import { pluginFieldOptionIssues } from "../plugin-field-options";
 
@@ -86,6 +87,29 @@ describe("the plugin options container", () => {
     // One flat view: a type that had to check both places would be back where
     // it started.
     expect(captured.seen).not.toHaveProperty("pluginOptions");
+  });
+
+  it("refuses a manifest field whose container uses a reserved name", () => {
+    // The identity restatement would shadow these, so an option under either
+    // name could never reach the type that declared it. Refused at the write
+    // rather than silently dropped.
+    const parsed = uiSchemaFieldSchema.safeParse({
+      name: "score",
+      type: "star-rating",
+      pluginOptions: { type: "hijack" },
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts a container using any other name", () => {
+    const parsed = uiSchemaFieldSchema.safeParse({
+      name: "score",
+      type: "star-rating",
+      pluginOptions: { options: { presets: ["a"] }, ratingScale: { max: 5 } },
+    });
+
+    expect(parsed.success).toBe(true);
   });
 
   it("cannot displace the guaranteed identity of the field", () => {

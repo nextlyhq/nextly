@@ -362,7 +362,8 @@ export { SYSTEM_CONTEXT, consoleLogger } from "./services/shared";
 export {
   validateFieldValues,
   type ValidateFieldValuesOptions,
-  type ValidatableField,
+  type FieldValueDeclaration,
+  type FieldValueDeclarationInput,
   type ValidationIssue,
 } from "./plugins/validate-field-values";
 

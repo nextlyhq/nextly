@@ -119,12 +119,11 @@ export function pluginZodSchema(field: CodegenField): string | undefined {
  * Local names the generators import on their own behalf, and where from.
  *
  * A blocks field is typed as the engine's document, emitted by `TypeGenerator`
- * whenever one is present. A plugin importing that name from anywhere else
- * would produce two declarations of it.
+ * whenever one is present. A plugin supplying that name produces a second
+ * import of the same binding, which does not compile even when both name the
+ * same module — so the name is reserved rather than merged.
  */
-const GENERATOR_OWNED_IMPORTS: ReadonlyArray<readonly [string, string]> = [
-  ["BlockDocument", "nextly"],
-];
+const GENERATOR_OWNED_IMPORTS: ReadonlySet<string> = new Set(["BlockDocument"]);
 
 /** Every field in a tree, container children included. */
 function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
@@ -145,35 +144,60 @@ function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
  * would read as a change on every build.
  */
 export function pluginCodegenImports(
-  entities: ReadonlyArray<{ fields?: unknown }>
+  entities: ReadonlyArray<{ fields?: unknown }>,
+  declaredNames: ReadonlySet<string> = new Set()
 ): string[] {
   const byModule = new Map<string, Set<string>>();
-  // Names the generators emit themselves, reserved so a plugin claiming one
-  // collides here rather than in the generated file.
-  const claimedBy = new Map<string, string>(GENERATOR_OWNED_IMPORTS);
   // Which module first claimed each local name. Two modules exporting the same
   // name would each emit a declaration of it and the generated file would not
   // compile, so the clash is refused here with something the plugin author can
   // act on rather than written out as broken source.
+  const claimedBy = new Map<string, string>();
+
+  const refuse = (message: string): never => {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "contributes.fieldTypes",
+          code: "GENERATED_IMPORT_NAME_COLLISION",
+          message,
+        },
+      ],
+    });
+  };
 
   const record = (imports: readonly PluginFieldCodegenImport[]): void => {
     for (const entry of imports) {
       const names = byModule.get(entry.from) ?? new Set<string>();
       for (const name of entry.names) {
+        // Reserved regardless of where the plugin imports it from. The
+        // generator emits its own import of these when the file needs them, and
+        // a second import of the same binding does not compile even when both
+        // name the same module.
+        if (GENERATOR_OWNED_IMPORTS.has(name)) {
+          refuse(
+            `'${name}' is imported by the type generator itself, so a plugin ` +
+              `field type cannot also supply it to code generation. Export it ` +
+              `under a different name.`
+          );
+        }
+        // A generated file declares an interface per collection, single and
+        // field group, plus `User` and `Config`. An import sharing one of those
+        // names conflicts with the local declaration (TS2440).
+        if (declaredNames.has(name)) {
+          refuse(
+            `'${name}' is declared by the generated file itself, so an import ` +
+              `of that name would conflict with it. Export it under a ` +
+              `different name.`
+          );
+        }
         const owner = claimedBy.get(name);
         if (owner !== undefined && owner !== entry.from) {
-          throw NextlyError.validation({
-            errors: [
-              {
-                path: "contributes.fieldTypes",
-                code: "GENERATED_IMPORT_NAME_COLLISION",
-                message:
-                  `'${owner}' and '${entry.from}' both supply '${name}' to ` +
-                  `code generation. A generated file declares each name once, ` +
-                  `so one of them must be exported under a different name.`,
-              },
-            ],
-          });
+          refuse(
+            `'${owner}' and '${entry.from}' both supply '${name}' to code ` +
+              `generation. A generated file declares each name once, so one ` +
+              `of them must be exported under a different name.`
+          );
         }
         claimedBy.set(name, entry.from);
         names.add(name);

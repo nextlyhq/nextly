@@ -20,6 +20,20 @@
 /** The field key holding options core does not interpret. */
 export const PLUGIN_OPTIONS_KEY = "pluginOptions";
 
+/**
+ * The two names the container cannot carry.
+ *
+ * A field type is handed its options folded onto an instance that also states
+ * which field it is. `type` and `name` are that identity, restated after the
+ * fold so a container entry cannot impersonate another field type — which means
+ * an option under either name would be shadowed and never reach the callbacks
+ * that read it. Refusing them is the honest half of "any name is legal here".
+ */
+export const RESERVED_PLUGIN_OPTION_KEYS: ReadonlySet<string> = new Set([
+  "type",
+  "name",
+]);
+
 /** Whether a value is a `{}` literal that could hold options. */
 function isOptionRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

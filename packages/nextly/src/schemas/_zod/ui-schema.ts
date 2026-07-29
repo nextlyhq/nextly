@@ -17,6 +17,7 @@ import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
+import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 /**
@@ -237,7 +238,21 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // so an option sharing a name with one of these keys would be judged as
       // that key instead. Core never looks inside, which is what lets any name
       // be used here — including the ones declared alongside it.
-      pluginOptions: z.record(z.string(), z.unknown()).optional(),
+      pluginOptions: z
+        .record(z.string(), z.unknown())
+        .refine(
+          held =>
+            !Object.keys(held).some(key =>
+              RESERVED_PLUGIN_OPTION_KEYS.has(key)
+            ),
+          {
+            message:
+              "pluginOptions cannot hold 'type' or 'name': those state which " +
+              "field the type is looking at, so an option under either name " +
+              "would never reach it",
+          }
+        )
+        .optional(),
       required: z.boolean().optional(),
       unique: z.boolean().optional(),
       index: z.boolean().optional(),

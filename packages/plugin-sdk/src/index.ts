@@ -72,7 +72,8 @@ export type { FieldConfig } from "nextly";
 export { validateFieldValues } from "nextly";
 export type {
   ValidateFieldValuesOptions,
-  ValidatableField,
+  FieldValueDeclaration,
+  FieldValueDeclarationInput,
   ValidationIssue,
 } from "nextly";
 

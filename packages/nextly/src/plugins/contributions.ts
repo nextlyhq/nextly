@@ -243,7 +243,9 @@ export interface PluginFieldType {
    * built-in field surface): the manifest applies that shape to every field
    * regardless of type, so a colliding name is judged against the core meaning
    * and refused before this runs. The container is where such a name can mean
-   * something else, because core never looks inside it.
+   * something else, because core never looks inside it — except for `type` and
+   * `name`, which the instance restates as its own identity and so cannot carry
+   * an option; a manifest write using either inside the container is refused.
    *
    * Paths here are RELATIVE, where `validate`'s are absolute. The difference is
    * deliberate: a value validator may address a position deep inside a stored

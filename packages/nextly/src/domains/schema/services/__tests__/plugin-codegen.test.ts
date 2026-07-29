@@ -229,6 +229,70 @@ describe("codegen import collisions", () => {
     expect(messages.join(" ")).toContain("'Rating'");
   });
 
+  it("refuses a generator-owned name even from the same module", () => {
+    // Merging would be wrong here: the generator emits its own import of this
+    // binding, and two imports of it do not compile even naming one module.
+    registerFieldType({
+      type: "same-module-doc",
+      storage: "json",
+      component: "@acme/docs/admin#Input",
+      codegen: {
+        imports: [{ names: ["BlockDocument"], from: "nextly" }],
+        tsType: () => "BlockDocument",
+      },
+    });
+
+    const messages = refusalMessages(() =>
+      new TypeGenerator().generateTypesFile([
+        collection([{ name: "body", type: "same-module-doc" }]),
+      ])
+    );
+
+    expect(messages.join(" ")).toContain("BlockDocument");
+  });
+
+  it("refuses an import that collides with a generated declaration", () => {
+    registerFieldType({
+      type: "user-ish",
+      storage: "json",
+      component: "@acme/u/admin#Input",
+      codegen: {
+        imports: [{ names: ["User"], from: "@acme/u" }],
+        tsType: () => "User",
+      },
+    });
+
+    // The file always declares `User`, so importing that name would be
+    // TS2440 in the consuming app.
+    const messages = refusalMessages(() =>
+      new TypeGenerator().generateTypesFile([
+        collection([{ name: "who", type: "user-ish" }]),
+      ])
+    );
+
+    expect(messages.join(" ")).toContain("'User'");
+  });
+
+  it("refuses an import named after a generated entity interface", () => {
+    registerFieldType({
+      type: "posts-ish",
+      storage: "json",
+      component: "@acme/p/admin#Input",
+      codegen: {
+        imports: [{ names: ["Posts"], from: "@acme/p" }],
+        tsType: () => "Posts",
+      },
+    });
+
+    const messages = refusalMessages(() =>
+      new TypeGenerator().generateTypesFile([
+        collection([{ name: "p", type: "posts-ish" }]),
+      ])
+    );
+
+    expect(messages.join(" ")).toContain("'Posts'");
+  });
+
   it("refuses a plugin claiming a name the generator emits itself", () => {
     registerFieldType({
       type: "doc-thing",

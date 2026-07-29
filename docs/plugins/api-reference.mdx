@@ -306,6 +306,12 @@ it was stored. The container wins when the same name appears in both. Writes
 from the Schema Builder go to the container, so a field stored the older way
 moves there the next time it is saved; nothing you read changes when it does.
 
+Two names are reserved inside the container: **`type` and `name`**. The instance
+you are handed states which field it is under those keys, restated after your
+options are folded in, so an option using either would be shadowed and never
+reach you. A manifest write declaring one is refused rather than silently
+losing it.
+
 Fields nested in a `repeater` or `group` are covered. A type offered only on the
 `users`, `forms`, or `blocks` surface is **not**: those surfaces have their own
 config validators, which do not consult this registry.

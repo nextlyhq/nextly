@@ -269,12 +269,10 @@ export class TypeGenerator {
     // User fields are a flat list rather than an entity, so they are wrapped
     // to be scanned alongside the rest: a plugin type used only there still
     // names types the generated `User` interface has to import.
-    const pluginImports = pluginCodegenImports([
-      ...collections,
-      ...singles,
-      ...components,
-      { fields: userFields },
-    ]);
+    const pluginImports = pluginCodegenImports(
+      [...collections, ...singles, ...components, { fields: userFields }],
+      this.declaredInterfaceNames(collections, singles, components)
+    );
     if (pluginImports.length > 0) {
       lines.push(...pluginImports);
       lines.push("");
@@ -1347,6 +1345,30 @@ ${properties}
    * acquire the other's required fields and the generated API would type calls
    * against a shape no row ever has.
    */
+  /**
+   * Every top-level name this run will declare.
+   *
+   * An import sharing one of these conflicts with the local declaration
+   * (TS2440), so the import scan is given them to refuse the clash before the
+   * file is written. `User` and `Config` are emitted unconditionally; the rest
+   * are one interface per entity.
+   */
+  private declaredInterfaceNames(
+    collections: DynamicCollectionRecord[],
+    singles: DynamicSingleRecord[],
+    components: DynamicFieldGroupRecord[]
+  ): Set<string> {
+    const names = new Set<string>(["User", "Config", "GeneratedTypes"]);
+    for (const collection of collections) {
+      names.add(this.toPascalCase(collection.slug));
+    }
+    for (const single of singles) names.add(this.toPascalCase(single.slug));
+    for (const component of components) {
+      names.add(this.toComponentInterfaceName(component.slug));
+    }
+    return names;
+  }
+
   private assertNoInterfaceNameCollisions(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[],
