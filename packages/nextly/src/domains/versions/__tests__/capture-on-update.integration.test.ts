@@ -249,6 +249,58 @@ describe("version capture on update (integration)", () => {
     expect(latest.locale).toBe("de");
   });
 
+  it("records the write locale's own status on a shared-field snapshot that carries a translation", async () => {
+    // A published main row with a draft German translation. A shared-field write
+    // at German folds in that translation and tags the snapshot German — its
+    // status must be the German draft, not the published main-row status, or
+    // restoring this snapshot would publish the translation.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          status: true,
+          fields: [
+            text({ name: "siteName", localized: false }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // Default locale published; then a draft German translation.
+    await singles.update(
+      "preferences",
+      { siteName: "Acme", status: "published" },
+      { overrideAccess: true, locale: "en" }
+    );
+    await singles.update(
+      "preferences",
+      { tagline: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+    // Shared-field write at German: no status, but folds in the translation.
+    await singles.update(
+      "preferences",
+      { siteName: "Acme 2" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const latest = rows[rows.length - 1];
+    const snapshot = latest.snapshot as { status?: string; tagline?: string };
+    expect(latest.locale).toBe("de");
+    // Both the version's recorded status and the snapshot's own status field are
+    // the German draft, not the published main row's.
+    expect(latest.status).toBe("draft");
+    expect(snapshot.status).toBe("draft");
+    expect(snapshot.tagline).toBe("hallo");
+  });
+
   it("tags v1 with the default locale when a shared-only first update seeds localized defaults", async () => {
     // The first update touches only a SHARED field, so no localized field is
     // written and `companionData` is empty. Without forcing the tag, the capture

@@ -3046,7 +3046,11 @@ export class CollectionMutationService extends BaseService {
                 tx,
                 params.collectionName,
                 params.entryId,
-                locale
+                locale,
+                // These values feed a durable locale-tagged event; a real
+                // companion read failure must abort rather than commit a publish
+                // event missing this locale's translated fields.
+                true
               ),
               fields
             );
@@ -3060,6 +3064,14 @@ export class CollectionMutationService extends BaseService {
               ...localeValues,
               status: priorLocaleStatus,
             };
+            // Re-strip password fields from the merged documents: a localized
+            // group/repeater can carry a nested password hash that the overlay
+            // reintroduces after `publishedDocument` was already redacted. The
+            // durable outbox re-strips while building its envelope, but the
+            // in-process `transitionStatus` replay below receives `localeData`
+            // unchanged, so strip here to protect both paths.
+            stripPasswordFieldValues(localeData, fields);
+            stripPasswordFieldValues(localePrevious, fields);
             const localeRecorded = await this.recordStatusEvents(tx, {
               collection: params.collectionName,
               id: params.entryId,

@@ -45,7 +45,9 @@ export function resolveLocalizedValue(
 
 /** A minimal Drizzle-select surface so this helper stays adapter/dialect agnostic. */
 interface SelectableDb {
-  select: () => {
+  // An optional column projection narrows the SELECT to specific columns; a
+  // bare call selects every column of the table object.
+  select: (projection?: Record<string, unknown>) => {
     from: (table: unknown) => {
       where: (cond: unknown) => Promise<Record<string, unknown>[]>;
     };
@@ -264,16 +266,21 @@ export async function readCompanionLocaleStatusAll(
   const table = companionTable as CompanionTable;
   const byLocale = new Map<string, string | null>();
   try {
+    // Project ONLY the columns this scan needs. A bare `.select()` requests
+    // every column of the configured Drizzle table object, which throws a
+    // missing-column error when the companion table is behind its metadata (a
+    // localized field added but its column migration not yet applied) — blocking
+    // an otherwise valid publish. `_parent`/`_locale`/`_status` always exist.
     const rows = await db
-      .select()
+      .select({ locale: table._locale, status: table._status })
       .from(companionTable)
       .where(eq(table._parent as never, parentId));
     for (const row of rows) {
-      const locale = row._locale;
+      const locale = row.locale;
       if (typeof locale !== "string") continue;
       byLocale.set(
         locale,
-        typeof row._status === "string" ? row._status : null
+        typeof row.status === "string" ? row.status : null
       );
     }
     return byLocale;
