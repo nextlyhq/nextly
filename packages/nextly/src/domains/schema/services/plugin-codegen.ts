@@ -115,16 +115,6 @@ export function pluginZodSchema(field: CodegenField): string | undefined {
   return emit?.(optionView(field));
 }
 
-/**
- * Local names the generators import on their own behalf, and where from.
- *
- * A blocks field is typed as the engine's document, emitted by `TypeGenerator`
- * whenever one is present. A plugin supplying that name produces a second
- * import of the same binding, which does not compile even when both name the
- * same module — so the name is reserved rather than merged.
- */
-const GENERATOR_OWNED_IMPORTS: ReadonlySet<string> = new Set(["BlockDocument"]);
-
 /** Every field in a tree, container children included. */
 function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
   for (const entry of fields) {
@@ -148,7 +138,8 @@ function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
 export function pluginCodegenImports(
   entities: ReadonlyArray<{ fields?: unknown }>,
   declaredNames: ReadonlySet<string> = new Set(),
-  usedBy: "tsImports" | "zodImports" = "tsImports"
+  usedBy: "tsImports" | "zodImports" = "tsImports",
+  emitted?: string
 ): string[] {
   const byModule = new Map<string, Set<string>>();
   // Which module first claimed each local name. Two modules exporting the same
@@ -169,30 +160,32 @@ export function pluginCodegenImports(
     });
   };
 
+  // Whether the output this file ended up with actually names the import.
+  // A declared list is per field TYPE, but a callback may use an import only
+  // for some option values — so a collection where it never did would carry an
+  // import nothing references, which fails a consuming app compiled with
+  // `noUnusedLocals`. Checked against what was emitted rather than inferred
+  // from the callback, so a conditional use is judged on its result.
+  const used = (name: string): boolean => {
+    if (emitted === undefined) return true;
+    return new RegExp(
+      `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
+    ).test(emitted);
+  };
+
   const record = (imports: readonly PluginFieldCodegenImport[]): void => {
     for (const entry of imports) {
       const names = byModule.get(entry.from) ?? new Set<string>();
       for (const name of entry.names) {
-        // Reserved regardless of where the plugin imports it from, but only
-        // for the output that emits them: `TypeGenerator` imports these itself,
-        // and a second import of the same binding does not compile even naming
-        // one module. The Zod file emits none of them, so the same name is free
-        // there.
-        if (usedBy === "tsImports" && GENERATOR_OWNED_IMPORTS.has(name)) {
-          refuse(
-            `'${name}' is imported by the type generator itself, so a plugin ` +
-              `field type cannot also supply it to code generation. Export it ` +
-              `under a different name.`
-          );
-        }
-        // A generated file declares an interface per collection, single and
-        // field group, plus `User` and `Config`. An import sharing one of those
-        // names conflicts with the local declaration (TS2440).
+        // Whatever this particular run declares or imports for itself — the
+        // caller knows, because it is the thing emitting them. An import
+        // sharing one of those names conflicts with the local declaration
+        // (TS2440) or duplicates a binding.
         if (declaredNames.has(name)) {
           refuse(
-            `'${name}' is declared by the generated file itself, so an import ` +
-              `of that name would conflict with it. Export it under a ` +
-              `different name.`
+            `'${name}' is already declared or imported by the generated file ` +
+              `itself, so an import of that name would conflict with it. ` +
+              `Export it under a different name.`
           );
         }
         const owner = claimedBy.get(name);
@@ -223,9 +216,11 @@ export function pluginCodegenImports(
   }
 
   return [...byModule.entries()]
+    .map(([from, names]) => [from, [...names].filter(used)] as const)
+    .filter(([, names]) => names.length > 0)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(
       ([from, names]) =>
-        `import type { ${[...names].sort().join(", ")} } from "${from}";`
+        `import type { ${names.sort().join(", ")} } from "${from}";`
     );
 }

@@ -155,11 +155,17 @@ export class ZodGenerator {
    * @returns Generated schema with code, filename, and metadata
    */
   generateSchema(collection: DynamicCollectionRecord): GeneratedZodSchema {
-    const imports = this.generateImports(collection);
     const schemas = this.generateSchemaDefinitions(collection);
     const types = this.generateTypes
       ? this.generateTypeExports(collection)
       : "";
+
+    // Built after the body, so a plugin import is emitted only when the output
+    // actually references it.
+    const imports = this.generateImports(
+      collection,
+      [schemas, types].filter(Boolean).join("\n")
+    );
 
     const code = [imports, "", schemas, types].filter(Boolean).join("\n");
 
@@ -229,11 +235,15 @@ export class ZodGenerator {
    * registration adds nothing, and the file would otherwise reference an
    * identifier it never imported and break the consuming app's build.
    */
-  private generateImports(collection: DynamicCollectionRecord): string {
+  private generateImports(
+    collection: DynamicCollectionRecord,
+    emitted: string
+  ): string {
     const pluginImports = pluginCodegenImports(
       [collection],
       this.declaredNames(collection),
-      "zodImports"
+      "zodImports",
+      emitted
     );
     return [`import { z } from "zod";`, ...pluginImports].join("\n");
   }

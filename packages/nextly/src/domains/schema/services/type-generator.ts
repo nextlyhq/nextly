@@ -254,29 +254,15 @@ export class TypeGenerator {
     lines.push(" */");
     lines.push("");
 
-    // A blocks field is typed as the engine's document. The import is emitted
-    // only when one is present, and from `nextly` rather than the engine
-    // package directly, so the generated file resolves against the dependency
-    // every app already has.
-    if (this.usesBlocksField(collections, singles, components)) {
-      lines.push('import type { BlockDocument } from "nextly";');
-      lines.push("");
-    }
+    // Imports are decided after the body exists, so they can be filtered to
+    // the names it actually references; they are spliced in here.
+    const importSlot = lines.length;
 
-    // Whatever the plugin types present here need for the expressions they
-    // emit. Collected from the declared fields rather than from the registry,
-    // so a registered type nobody uses adds no import.
-    // User fields are a flat list rather than an entity, so they are wrapped
-    // to be scanned alongside the rest: a plugin type used only there still
-    // names types the generated `User` interface has to import.
-    const pluginImports = pluginCodegenImports(
-      [...collections, ...singles, ...components, { fields: userFields }],
-      this.declaredInterfaceNames(collections, singles, components)
+    const emitsBlockDocument = this.usesBlocksField(
+      collections,
+      singles,
+      components
     );
-    if (pluginImports.length > 0) {
-      lines.push(...pluginImports);
-      lines.push("");
-    }
 
     this.assertNoInterfaceNameCollisions(collections, singles, components);
 
@@ -350,6 +336,37 @@ export class TypeGenerator {
       lines.push(augmentation);
       lines.push("");
     }
+
+    // Only what this run declares or imports for itself is reserved, so a
+    // plugin naming something a different configuration would have emitted is
+    // not refused for a collision that cannot happen here.
+    const reserved = this.declaredInterfaceNames(
+      collections,
+      singles,
+      components
+    );
+    if (emitsBlockDocument) reserved.add("BlockDocument");
+
+    const body = lines.slice(importSlot).join("\n");
+    const imports: string[] = [];
+    // A blocks field is typed as the engine's document, imported from `nextly`
+    // rather than the engine package so the generated file resolves against the
+    // dependency every app already has.
+    if (emitsBlockDocument) {
+      imports.push('import type { BlockDocument } from "nextly";');
+    }
+    // User fields are a flat list rather than an entity, so they are wrapped to
+    // be scanned alongside the rest: a plugin type used only there still names
+    // types the generated `User` interface has to import.
+    imports.push(
+      ...pluginCodegenImports(
+        [...collections, ...singles, ...components, { fields: userFields }],
+        reserved,
+        "tsImports",
+        body
+      )
+    );
+    if (imports.length > 0) lines.splice(importSlot, 0, ...imports, "");
 
     return {
       code: lines.join("\n"),
@@ -1362,8 +1379,10 @@ ${properties}
   ): Set<string> {
     // `GeneratedTypes` is deliberately absent: it is only ever declared inside
     // `declare module`, which creates no top-level binding, so an import of
-    // that name coexists with it.
-    const names = new Set<string>(["User", "Config"]);
+    // that name coexists with it. `Config` is declared only when the config
+    // interface is generated.
+    const names = new Set<string>(["User"]);
+    if (this.generateConfig) names.add("Config");
 
     for (const collection of collections) {
       const name = this.toPascalCase(collection.slug);

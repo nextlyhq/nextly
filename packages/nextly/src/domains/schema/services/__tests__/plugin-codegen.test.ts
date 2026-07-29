@@ -18,6 +18,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../../field-types/field-type-registry";
+import { convertToUserFieldRecords } from "../../../../cli/commands/generate-types";
 import { TypeGenerator } from "../type-generator";
 import { ZodGenerator } from "../zod-generator";
 
@@ -28,7 +29,6 @@ const RATING: PluginFieldType = {
   component: "@acme/ratings/admin#StarRating",
   codegen: {
     tsImports: [{ names: ["Rating"], from: "@acme/ratings" }],
-    zodImports: [{ names: ["Rating"], from: "@acme/ratings" }],
     tsType: field => {
       const max = (field as { ratingScale?: { max?: number } }).ratingScale
         ?.max;
@@ -80,6 +80,24 @@ describe("plugin field types in the TypeScript generator", () => {
 
     expect(file.code).toContain("score?: Rating<5>;");
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
+  });
+
+  it("gives a user field its declared option under the declared name", () => {
+    registerFieldType({
+      type: "scaled",
+      storage: "number",
+      component: "@acme/s/admin#Input",
+      codegen: { tsType: f => `Scaled<${(f as { min?: number }).min ?? 0}>` },
+    });
+
+    // The user-field record renames `min` to `minValue`, so a callback reading
+    // it by the declared name would find nothing.
+    const records = convertToUserFieldRecords([
+      { name: "score", type: "scaled", min: 3 },
+    ] as unknown as Parameters<typeof convertToUserFieldRecords>[0]);
+    const file = new TypeGenerator().generateTypesFile([], [], [], records);
+
+    expect(file.code).toContain("Scaled<3>");
   });
 
   it("falls back to what the type stores when it renders nothing", () => {
@@ -246,7 +264,10 @@ describe("codegen import collisions", () => {
 
     const messages = refusalMessages(() =>
       new TypeGenerator().generateTypesFile([
-        collection([{ name: "body", type: "same-module-doc" }]),
+        collection([
+          { name: "page", type: "blocks" },
+          { name: "body", type: "same-module-doc" },
+        ]),
       ])
     );
 
@@ -357,6 +378,67 @@ describe("codegen import collisions", () => {
     expect(file.code).toContain('from "@acme/gt"');
   });
 
+  it("allows BlockDocument when no blocks field makes core import it", () => {
+    registerFieldType({
+      type: "doc-free",
+      storage: "json",
+      component: "@acme/df/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["BlockDocument"], from: "@acme/df" }],
+        tsType: () => "BlockDocument",
+      },
+    });
+
+    // Core emits its own import only when a blocks field is present, so with
+    // none there is nothing for this to collide with.
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "d", type: "doc-free" }]),
+    ]);
+
+    expect(file.code).toContain('from "@acme/df"');
+  });
+
+  it("allows an import named Config when no config interface is generated", () => {
+    registerFieldType({
+      type: "config-ish",
+      storage: "json",
+      component: "@acme/c/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Config"], from: "@acme/c" }],
+        tsType: () => "Config",
+      },
+    });
+
+    const file = new TypeGenerator({
+      generateConfig: false,
+    }).generateTypesFile([collection([{ name: "c", type: "config-ish" }])]);
+
+    expect(file.code).toContain('from "@acme/c"');
+  });
+
+  it("omits an import no emitted expression ended up naming", () => {
+    registerFieldType({
+      type: "conditional",
+      storage: "number",
+      component: "@acme/cond/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Scaled"], from: "@acme/cond" }],
+        // Uses the import only for a field that declares no scale; this
+        // collection has one, so nothing references it.
+        tsType: field =>
+          (field as { scale?: unknown }).scale === undefined
+            ? "Scaled"
+            : "number",
+      },
+    });
+
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "n", type: "conditional", scale: 5 }]),
+    ]);
+
+    expect(file.code).not.toContain("@acme/cond");
+  });
+
   it("refuses a plugin claiming a name the generator emits itself", () => {
     registerFieldType({
       type: "doc-thing",
@@ -370,7 +452,10 @@ describe("codegen import collisions", () => {
 
     const messages = refusalMessages(() =>
       new TypeGenerator().generateTypesFile([
-        collection([{ name: "body", type: "doc-thing" }]),
+        collection([
+          { name: "page", type: "blocks" },
+          { name: "body", type: "doc-thing" },
+        ]),
       ])
     );
 
@@ -423,15 +508,22 @@ describe("plugin field types in the Zod generator", () => {
   });
 
   it("emits the imports its expression relies on", () => {
-    registerFieldType(RATING);
+    registerFieldType({
+      type: "opaque-rating",
+      storage: "json",
+      component: "@acme/ratings/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Rating"], from: "@acme/ratings" }],
+        zodSchema: () => "z.custom<Rating>()",
+      },
+    });
+
     const schema = new ZodGenerator().generateSchema(
-      collection([
-        { name: "score", type: "star-rating", ratingScale: { max: 5 } },
-      ])
+      collection([{ name: "score", type: "opaque-rating" }])
     );
 
-    // The expression may name a type — `z.custom<Rating>()` — and the file
-    // would otherwise reference an identifier it never imported.
+    // The expression names a type, and the file would otherwise reference an
+    // identifier it never imported.
     expect(schema.code).toContain(
       'import type { Rating } from "@acme/ratings";'
     );

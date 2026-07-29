@@ -443,10 +443,26 @@ const MODELLED_USER_FIELD_KEYS: ReadonlySet<string> = new Set([
   "pluginOptions",
 ]);
 
+/**
+ * Modelled keys the record does not expose verbatim under the same name.
+ *
+ * Everything else in `MODELLED_USER_FIELD_KEYS` reaches the record unchanged,
+ * so reading it off the record is reading what was declared.
+ */
+const NORMALIZED_USER_FIELD_KEYS: readonly string[] = [
+  "min",
+  "max",
+  "defaultValue",
+  "options",
+];
+
 /** The declared options a user field carries beyond the modelled set. */
 function carriedUserFieldOptions(
   field: UserFieldConfig
 ): Record<string, unknown> | null {
+  // Read positionally rather than through the union's per-type members, since
+  // which of these a given field declares depends on its type.
+  const declared = field as unknown as Record<string, unknown>;
   const carried: Record<string, unknown> = {};
   const collect = (key: string, value: unknown): void => {
     if (value === undefined) return;
@@ -463,6 +479,15 @@ function carriedUserFieldOptions(
   for (const [key, value] of Object.entries(field)) {
     if (MODELLED_USER_FIELD_KEYS.has(key)) continue;
     collect(key, value);
+  }
+
+  // The record renames or normalizes a few of the modelled keys — `min`/`max`
+  // become `minValue`/`maxValue`, `defaultValue` is stringified, `options` is
+  // rewritten to `{label, value}` pairs — so a field type reading them by their
+  // declared names would find the wrong thing or nothing. Their originals are
+  // carried so the callbacks see the field as it was written.
+  for (const key of NORMALIZED_USER_FIELD_KEYS) {
+    collect(key, declared[key]);
   }
 
   const container = (field as { pluginOptions?: unknown }).pluginOptions;
