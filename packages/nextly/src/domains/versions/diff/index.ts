@@ -6,3 +6,5 @@
  */
 
 export * from "./types";
+export { computeVersionDiff } from "./compute-diff";
+export type { ComputeDiffOptions, VersionDiffBody } from "./compute-diff";
