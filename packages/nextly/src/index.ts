@@ -132,8 +132,10 @@ export type {
   GeneratedTypes,
   CollectionSlug,
   SingleSlug,
+  FieldGroupSlug,
   DataFromCollectionSlug,
   DataFromSingleSlug,
+  DataFromFieldGroupSlug,
 } from "./direct-api/types";
 
 // Direct API types - core operation argument types
