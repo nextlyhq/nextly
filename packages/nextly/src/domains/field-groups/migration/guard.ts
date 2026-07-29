@@ -112,6 +112,17 @@ export function resolveStorageVerdict(args: {
         { generation: state.generation, probe }
       );
     }
+    if (probe.legacyRegistryPresent) {
+      // A completed migration renames the legacy registry; it does not leave a
+      // copy behind. Both being present means something reintroduced the old
+      // one, so there are two tables claiming to be the registry and no way to
+      // tell which the runtime should believe. It also strands rollback, whose
+      // rename would collide with the table already sitting at the legacy name.
+      throw refuse(
+        "both the legacy and migrated registries are present after a completed migration",
+        { generation: state.generation, probe }
+      );
+    }
     // The registry existing proves only that the registry exists. The objects
     // it points at are what content is actually read from, and the read path
     // treats a missing data table as an empty result rather than an error, so

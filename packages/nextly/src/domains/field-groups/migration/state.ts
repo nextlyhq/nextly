@@ -150,7 +150,11 @@ export async function readMigrationState(
     if (typeof migrationId !== "string" || migrationId.length === 0) {
       throw markerCorrupt("in-flight marker carries no migration id");
     }
-    if (typeof step !== "number" || !Number.isInteger(step) || step < 0) {
+    // Safe rather than merely integral: at 2^53 and above `step + 1 === step`,
+    // so a resume would compute the same position forever instead of advancing.
+    // A marker holding a number that cannot be incremented is corrupt, not
+    // resumable.
+    if (typeof step !== "number" || !Number.isSafeInteger(step) || step < 0) {
       throw markerCorrupt("in-flight marker carries no valid step");
     }
     if (typeof manifestHash !== "string" || manifestHash.length === 0) {

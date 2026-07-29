@@ -206,6 +206,21 @@ describe("field-group migration marker", () => {
       },
     ],
     [
+      // At 2^53 `step + 1 === step`, so a resume would recompute the same
+      // position forever. A number that cannot be incremented is not a
+      // position, whatever `Number.isInteger` says about it.
+      "in-flight with a step beyond the safe integer range",
+      {
+        version: 1,
+        status: "migrating",
+        direction: "up",
+        migrationId: "r",
+        step: Number.MAX_SAFE_INTEGER + 1,
+        manifestHash: "h",
+        planHash: "p",
+      },
+    ],
+    [
       "in-flight without a plan hash",
       {
         version: 1,

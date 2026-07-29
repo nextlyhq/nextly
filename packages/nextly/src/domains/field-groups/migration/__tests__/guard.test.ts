@@ -70,6 +70,19 @@ describe("field-group storage verdict", () => {
     expect(verdict).toEqual({ action: "use-field-groups-v2" });
   });
 
+  // A completed migration renames the legacy registry rather than copying it,
+  // so finding both is a state the pair cannot explain: two tables claim to be
+  // the registry, and a later rollback would rename onto an occupied name.
+  it("refuses when both registries are present after a completed migration", () => {
+    const refusal = captureRefusal(() =>
+      resolveStorageVerdict({
+        state: MIGRATED,
+        probe: verifiedProbe({ legacyRegistryPresent: true }),
+      })
+    );
+    expect(refusal.logContext?.reason).toMatch(/both the legacy and migrated/);
+  });
+
   // The registry existing proves only that the registry exists. Serving on that
   // alone would read content out of data tables nobody checked for.
   it("refuses migrated storage that was never structurally verified", () => {
