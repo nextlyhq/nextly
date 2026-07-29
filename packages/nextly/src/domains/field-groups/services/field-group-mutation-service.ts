@@ -80,6 +80,26 @@ function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
 }
 
 /**
+ * The component instances a dynamic-zone payload actually contains.
+ *
+ * A repeatable zone sends an array; a non-repeatable one — the supported default — sends a
+ * single object. The pre-transaction check and the write itself both need this answer, and
+ * mirroring the normalisation by hand in each is what let them drift: the check read a
+ * non-repeatable object as "no instances", so that slug never reached the presence map, and the
+ * write then went looking for a companion table from inside the transaction. That is precisely
+ * the failure the check exists to prevent.
+ *
+ * Deriving it once means the two cannot disagree about what a payload holds.
+ */
+function resolveZoneInstances(
+  field: FieldGroupFieldConfig,
+  value: unknown
+): ComponentInstanceData[] {
+  const raw = field.repeatable ? value : [value];
+  return Array.isArray(raw) ? (raw as ComponentInstanceData[]) : [];
+}
+
+/**
  * Whether each localized field group's companion table physically exists, keyed by slug and
  * resolved BEFORE the write transaction opens.
  *
@@ -170,15 +190,40 @@ export class FieldGroupMutationService extends BaseService {
     //
     // Inside a transaction the answer is READ, never probed. A probe against a missing
     // relation aborts the entire transaction on PostgreSQL — the error is caught here but
-    // the connection is already poisoned, so the fallback write that follows would die
-    // with `current transaction is aborted`. `?? true` is unreachable in practice, since
-    // the pre-transaction pass walks exactly the slugs this write touches; assuming
-    // "provisioned" is the safe way to be wrong, because it fails loudly and atomically
-    // instead of quietly writing translatable values to the wrong table.
+    // the connection is already poisoned, so the fallback write that follows would die with
+    // `current transaction is aborted`.
+    //
+    // `resolveZoneInstances` makes the map complete by construction, so a miss means the two
+    // paths have drifted again. It defaults to "absent" rather than "provisioned" because the
+    // two are not equally safe to guess wrong: "absent" takes the fallback, which writes to the
+    // main table and fails loudly there if the columns are gone, whereas "provisioned" splits
+    // the values out and upserts into a table that may not exist — reintroducing the very abort
+    // this parameter was added to prevent.
     const companionExists = tx
-      ? (tx.presence.get(meta.slug) ?? true)
+      ? (tx.presence.get(meta.slug) ?? false)
       : await companionTableExists(this.adapter, schema.companionTableName);
     if (!companionExists) {
+      // A payload carrying nothing companion-owned has no stake in the missing table: no
+      // translatable value to strand, none to overwrite. A shared-only edit is therefore safe
+      // and must not be refused. Note this is evaluated on the REAL payload, so the
+      // pre-transaction pass — which calls with `{}` purely to reach the existence decision —
+      // is unaffected and still records presence for every slug the write touches.
+      const { companion: localizedInPayload } = splitLocalizedWrite(
+        data,
+        schema.localizedFields
+      );
+      if (
+        Object.keys(data).length > 0 &&
+        Object.keys(localizedInPayload).length === 0
+      ) {
+        return {
+          schema: null,
+          main: data,
+          companion: {},
+          companionExists: false,
+        };
+      }
+
       const writeLocale = resolveRequestedLocale(this.localization, locale);
       if (writeLocale !== this.localization.defaultLocale) {
         throw NextlyError.conflict({
@@ -400,7 +445,7 @@ export class FieldGroupMutationService extends BaseService {
       // companion. Deduplicated, because a zone commonly repeats one type.
       const slugs = new Set<string>();
       if (field.components && field.components.length > 0) {
-        for (const instance of Array.isArray(value) ? value : []) {
+        for (const instance of resolveZoneInstances(field, value)) {
           const type = (instance as Record<string, unknown> | null)?.[
             STORAGE_FORMAT.wireTypeKey
           ];
@@ -988,11 +1033,11 @@ export class FieldGroupMutationService extends BaseService {
     const { parentId, parentTable, fieldName, field, data, locale } = params;
     const allowedSlugs = field.components ?? [];
 
-    const instances = field.repeatable
-      ? (data as ComponentInstanceData[])
-      : [data as ComponentInstanceData];
+    // Shared with the pre-transaction check, so the two cannot disagree about which
+    // instances this payload holds.
+    const instances = resolveZoneInstances(field, data);
 
-    if (!Array.isArray(instances)) {
+    if (instances.length === 0 && data !== null && data !== undefined) {
       this.logger.warn("Multi-component data is not an array", { fieldName });
       return;
     }
@@ -1163,11 +1208,11 @@ export class FieldGroupMutationService extends BaseService {
       params;
     const allowedSlugs = field.components ?? [];
 
-    const instances = field.repeatable
-      ? (data as ComponentInstanceData[])
-      : [data as ComponentInstanceData];
+    // Shared with the pre-transaction check, so the two cannot disagree about which
+    // instances this payload holds.
+    const instances = resolveZoneInstances(field, data);
 
-    if (!Array.isArray(instances)) {
+    if (instances.length === 0 && data !== null && data !== undefined) {
       this.logger.warn("Multi-component data is not an array", { fieldName });
       return;
     }

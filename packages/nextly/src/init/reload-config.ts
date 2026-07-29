@@ -591,7 +591,7 @@ async function ensureLocalizedCompanionsForReload(
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
   if (process.env.NODE_ENV === "production") return;
 
-  const { ensureCompanionTable } = await import(
+  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
     "../domains/i18n/runtime/companion-io"
   );
   const { resolveCollectionTableName, resolveComponentTableName } =
@@ -644,6 +644,32 @@ async function ensureLocalizedCompanionsForReload(
           console.warn(
             `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
               `Writes in a non-default locale will be refused until it exists: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+      // Creating the table is not enough on its own: `ensureCompanionTable` returns
+      // immediately when one already exists, so marking a FURTHER field localized on an
+      // already-localized entity takes the no-DDL path, syncs its metadata, and leaves the
+      // companion a column short — the write then splits that value into a column that is not
+      // there. The CLI sync reconciles for the same reason; the HMR path needs it too.
+      //
+      // Safe here despite issuing DDL, because the production guard at the top of this
+      // function has already returned: this runs only under `next dev`. The reconcile is
+      // additive, so it never removes a column even when a field stops being localized.
+      await reconcileCompanionColumns(
+        adapter,
+        {
+          slug: entity.slug,
+          tableName: resolveTableName(entity),
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          status: entity.status === true,
+        },
+        error => {
+          console.warn(
+            `[nextly] Could not update the translations table for "${entity.slug}". ` +
+              `Newly translatable fields may fail to save until it is in step: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
         }

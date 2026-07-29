@@ -186,30 +186,6 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
 }
 
 /**
- * Whether the main table still physically carries `columnName`.
- *
- * This answers one question for every entity type: **can the pre-companion fallback actually
- * persist anything?** While the companion is missing, a write in the default language is meant
- * to stay on the main table — but that is only true for an entity whose columns are still
- * there. An entity localized from creation (or one whose migration has run) keeps them only on
- * the companion, and its registered runtime table omits them, so the write carries keys the
- * table has no columns for. Measured on all three dialects, that surfaces as a driver error
- * and a 500 rather than a wrong value — the write does not quietly commit. Answering the
- * question up front turns that opaque failure into a refusal the caller can act on.
- *
- * Goes through the same introspection the schema pipeline uses rather than a `SELECT ... LIMIT 0`
- * probe. That matters beyond convention: a probe cannot tell "this column does not exist" from
- * "the database is unreachable", so a transient failure would read as a missing column and
- * produce a misleading "translations are not ready" refusal instead of the real error.
- * Introspection fails loudly, and this deliberately does not catch.
- *
- * MUST be called before the caller opens its transaction. It borrows a connection from the pool,
- * so running it inside one waits for a connection that cannot be released until that transaction
- * finishes — starvation on a small pool. Resolving it first also keeps a refusal exactly as
- * raised: errors leaving a transaction callback pass through the adapter's error classification,
- * which rewraps anything that is not already a `DatabaseError`.
- */
-/**
  * Add localized columns an EXISTING companion is missing. No-op when the companion is absent —
  * creating it is {@link ensureCompanionTable}'s job.
  *
@@ -260,9 +236,20 @@ export async function reconcileCompanionColumns(
         .find(t => t.name === companionTableName)
         ?.columns.map(c => c.name) ?? []
     );
+    // `_status` is tracked alongside the translatable columns: switching Draft/Published on
+    // AFTER the companion was created leaves it without the column, and later per-locale
+    // status writes then target something that is not there.
+    const hasStatus = present.has("_status");
+    const wantStatus = args.status === true;
+
     // Nothing missing — the overwhelmingly common case, and worth leaving before the
-    // statement builder runs.
-    if (desired.every(f => present.has(toColumn(f.name)))) return;
+    // statement builder runs. `_status` only counts as missing when it is wanted and absent;
+    // wanted-and-present and unwanted are both already in step.
+    if (
+      desired.every(f => present.has(toColumn(f.name))) &&
+      !(wantStatus && !hasStatus)
+    )
+      return;
 
     // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
     // emits is exactly the difference. `old` is a subset of `new` by construction here, which
@@ -276,7 +263,13 @@ export async function reconcileCompanionColumns(
       oldLocalized: desired.filter(f => present.has(toColumn(f.name))),
       newLocalized: desired,
       dialect: args.dialect,
-      status: args.status === true,
+      // Report status as wanted whenever the column is already there, so the builder can ADD a
+      // missing `_status` but never DROP an existing one. Draft/Published being switched OFF
+      // must not delete per-locale status from an unattended sync: `db:sync` persists registry
+      // metadata BEFORE its destructive prompt, so the drop would run even for an operator who
+      // went on to decline it. Removing it stays the gated pipeline's job.
+      status: wantStatus || hasStatus,
+      companionHasStatus: hasStatus,
       companionExists: true,
     });
     for (const stmt of statements) {
@@ -287,6 +280,30 @@ export async function reconcileCompanionColumns(
   }
 }
 
+/**
+ * Whether the main table still physically carries `columnName`.
+ *
+ * This answers one question for every entity type: **can the pre-companion fallback actually
+ * persist anything?** While the companion is missing, a write in the default language is meant
+ * to stay on the main table — but that is only true for an entity whose columns are still
+ * there. An entity localized from creation (or one whose migration has run) keeps them only on
+ * the companion, and its registered runtime table omits them, so the write carries keys the
+ * table has no columns for. Measured on all three dialects, that surfaces as a driver error
+ * and a 500 rather than a wrong value — the write does not quietly commit. Answering the
+ * question up front turns that opaque failure into a refusal the caller can act on.
+ *
+ * Goes through the same introspection the schema pipeline uses rather than a `SELECT ... LIMIT 0`
+ * probe. That matters beyond convention: a probe cannot tell "this column does not exist" from
+ * "the database is unreachable", so a transient failure would read as a missing column and
+ * produce a misleading "translations are not ready" refusal instead of the real error.
+ * Introspection fails loudly, and this deliberately does not catch.
+ *
+ * MUST be called before the caller opens its transaction. It borrows a connection from the pool,
+ * so running it inside one waits for a connection that cannot be released until that transaction
+ * finishes — starvation on a small pool. Resolving it first also keeps a refusal exactly as
+ * raised: errors leaving a transaction callback pass through the adapter's error classification,
+ * which rewraps anything that is not already a `DatabaseError`.
+ */
 export async function mainTableHasColumn(
   adapter: CompanionIntrospectAdapter,
   tableName: string,

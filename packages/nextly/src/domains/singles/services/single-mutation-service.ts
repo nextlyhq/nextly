@@ -885,7 +885,22 @@ export class SingleMutationService extends BaseService {
       // exactly as raised: errors leaving a transaction callback pass through the
       // adapter's error classification, which rewraps anything that is not already a
       // `DatabaseError`.
-      if (companion && !companionPhysicallyExists && this.localization) {
+      // A payload carrying nothing companion-owned has no stake in the missing table: no
+      // translatable value to strand, none to overwrite. Refusing a shared-only edit would
+      // block a write that is entirely safe, so it is allowed through to the main table.
+      // Membership goes through the canonical split, which accepts either the camelCase field
+      // name or the snake_case companion column.
+      const payloadTouchesCompanion =
+        companion !== null &&
+        Object.keys(
+          splitLocalizedWrite(data, companion.localizedFields).companion
+        ).length > 0;
+      if (
+        companion &&
+        !companionPhysicallyExists &&
+        this.localization &&
+        payloadTouchesCompanion
+      ) {
         // Captured so the closure below keeps the narrowed type.
         const defaultLocale = this.localization.defaultLocale;
         const refuse = (): never => {
