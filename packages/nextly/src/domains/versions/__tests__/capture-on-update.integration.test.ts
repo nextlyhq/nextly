@@ -158,6 +158,149 @@ describe("version capture on update (integration)", () => {
     expect(v1.locale).toBe("en");
   });
 
+  it("preserves an untouched translation of the write locale in a partial single update snapshot", async () => {
+    // A partial update to a non-default locale that touches only one
+    // translatable field must still snapshot the locale's OTHER, untouched
+    // translation — otherwise the version drops content that is still persisted
+    // and restoring it would blank the field.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({ name: "siteName", localized: true }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // Establish both German translations.
+    await singles.update(
+      "preferences",
+      { siteName: "Meine Seite", tagline: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+    // Partial German edit: touch only `siteName`, leaving `tagline` untouched.
+    await singles.update(
+      "preferences",
+      { siteName: "Meine Seite 2" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const latest = rows[rows.length - 1];
+    const snapshot = latest.snapshot as {
+      siteName?: string;
+      tagline?: string;
+    };
+    expect(latest.locale).toBe("de");
+    expect(snapshot.siteName).toBe("Meine Seite 2");
+    // The untouched German translation survives into the latest snapshot.
+    expect(snapshot.tagline).toBe("hallo");
+  });
+
+  it("tags the snapshot with its locale when a shared-field write carries prior translations", async () => {
+    // A shared-field-only write after a translation exists now folds that prior
+    // translation into the snapshot. The snapshot is therefore locale-specific
+    // and must be tagged so — otherwise `restoreVersion` treats a null-locale
+    // snapshot as shared-only and drops exactly the translation it preserved.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          fields: [
+            text({ name: "siteName", localized: false }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // Establish a German translation.
+    await singles.update(
+      "preferences",
+      { tagline: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+    // Shared-field-only write at the same locale: touches no translatable field.
+    await singles.update(
+      "preferences",
+      { siteName: "Acme" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const latest = rows[rows.length - 1];
+    const snapshot = latest.snapshot as { siteName?: string; tagline?: string };
+    // The snapshot folds in the German translation...
+    expect(snapshot.tagline).toBe("hallo");
+    // ...and is tagged German so a restore recovers it rather than dropping it.
+    expect(latest.locale).toBe("de");
+  });
+
+  it("records the write locale's own status on a shared-field snapshot that carries a translation", async () => {
+    // A published main row with a draft German translation. A shared-field write
+    // at German folds in that translation and tags the snapshot German — its
+    // status must be the German draft, not the published main-row status, or
+    // restoring this snapshot would publish the translation.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "preferences",
+          versions: true,
+          localized: true,
+          status: true,
+          fields: [
+            text({ name: "siteName", localized: false }),
+            text({ name: "tagline", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+
+    // Default locale published; then a draft German translation.
+    await singles.update(
+      "preferences",
+      { siteName: "Acme", status: "published" },
+      { overrideAccess: true, locale: "en" }
+    );
+    await singles.update(
+      "preferences",
+      { tagline: "hallo" },
+      { overrideAccess: true, locale: "de" }
+    );
+    // Shared-field write at German: no status, but folds in the translation.
+    await singles.update(
+      "preferences",
+      { siteName: "Acme 2" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const rows = await versions(current, "preferences");
+    const latest = rows[rows.length - 1];
+    const snapshot = latest.snapshot as { status?: string; tagline?: string };
+    expect(latest.locale).toBe("de");
+    // Both the version's recorded status and the snapshot's own status field are
+    // the German draft, not the published main row's.
+    expect(latest.status).toBe("draft");
+    expect(snapshot.status).toBe("draft");
+    expect(snapshot.tagline).toBe("hallo");
+  });
+
   it("tags v1 with the default locale when a shared-only first update seeds localized defaults", async () => {
     // The first update touches only a SHARED field, so no localized field is
     // written and `companionData` is empty. Without forcing the tag, the capture
@@ -234,11 +377,14 @@ describe("version capture on update (integration)", () => {
 
     const rows = await versions(current, "preferences");
     const v1 = rows[0];
-    const snapshot = v1.snapshot as { siteName?: string; tagline?: string };
+    const snapshot = v1.snapshot as { siteName?: string | null; tagline?: string };
     // The written non-default translation is captured...
     expect(snapshot.tagline).toBe("hallo");
-    // ...but the default-locale seed is NOT leaked into the "de" snapshot.
-    expect(snapshot.siteName).toBeUndefined();
+    // ...and the untranslated `siteName` is recorded as the empty state it is at
+    // "de" (null), NOT the default-locale seed "My Site": the snapshot holds the
+    // locale's real state so a restore resets the field, without leaking the
+    // default-locale value into the wrong language.
+    expect(snapshot.siteName ?? null).toBeNull();
     expect(v1.locale).toBe("de");
   });
 
