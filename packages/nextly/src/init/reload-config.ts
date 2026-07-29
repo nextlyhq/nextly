@@ -623,6 +623,9 @@ async function ensureLocalizedCompanionsForReload(
           dialect: adapter.dialect,
           status: entity.status === true,
           defaultLocale,
+          // These two callers already refuse to run in production and are gated on
+          // auto-sync, so they are the ones allowed to ALTER an existing companion.
+          reconcileExisting: true,
         },
         error => {
           console.warn(

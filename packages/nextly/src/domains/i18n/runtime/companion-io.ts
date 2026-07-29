@@ -301,6 +301,19 @@ export async function ensureCompanionTable(
      * correct for an entity that never held content on main.
      */
     defaultLocale?: string;
+    /**
+     * Allow ALTERing a companion that already exists — adding a newly localized column, or
+     * `_status` when Draft/Published is turned on — and backfilling those columns.
+     *
+     * Off by default, and that default is load-bearing. Plain app boot calls this
+     * unconditionally, with none of the auto-sync or production gating the CLI and reload paths
+     * apply, so reconciling here would let a production deployment run `ALTER TABLE` off a
+     * metadata change instead of waiting for `nextly migrate` — and a runtime role without DDL
+     * rights would fail silently, then register a schema describing columns that do not exist.
+     * Creating a MISSING companion stays unconditional: that is the pre-existing boot contract,
+     * and it adds a table rather than altering one.
+     */
+    reconcileExisting?: boolean;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -338,6 +351,11 @@ export async function ensureCompanionTable(
       companionTableName,
     ]);
     const companionColumns = physical.get(companionTableName) ?? new Set();
+    // Reconciling an EXISTING companion is opt-in (see `reconcileExisting`). When it
+    // is off, treat the current columns as the desired ones so the reconcile emits
+    // nothing for a table that is already there — boot then only ever CREATEs.
+    const reconcileExisting = args.reconcileExisting === true;
+    if (alreadyExists && !reconcileExisting) return;
     const oldLocalized = alreadyExists
       ? localizedFields.filter(f => companionColumns.has(toColumn(f.name)))
       : [];
@@ -355,9 +373,21 @@ export async function ensureCompanionTable(
       // was built with `hasStatus: true`, so the next per-locale status read or
       // write hit a missing column. Undefined while the table does not exist yet,
       // where the CREATE already includes it.
-      companionHasStatus: alreadyExists
-        ? companionColumns.has("_status")
-        : undefined,
+      // Supplied only when it can ADD. Passing the physical state while `status`
+      // is off makes the reconcile emit an unconditional `DROP COLUMN _status`,
+      // which would discard every locale's publication state — and `db:sync`
+      // persists the new metadata BEFORE its destructive prompt, so that drop
+      // would happen even when the operator declined the prompt. Additive only,
+      // matching how localized columns are treated a few lines above: removing
+      // one is the confirmed transition's job, not an unattended sync's.
+      companionHasStatus:
+        alreadyExists && args.status === true
+          ? companionColumns.has("_status")
+          : undefined,
+      // Needed for the `_status` ADD to carry each default-locale row's real status
+      // across from the main table. Without it the column lands on its `draft`
+      // default, quietly unpublishing content that was live.
+      defaultLocale: args.defaultLocale,
     });
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
