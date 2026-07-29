@@ -87,6 +87,32 @@ describe("ensureSingleRuntimeTable", () => {
     expect(registered.length).toBe(2);
   });
 
+  it("re-registers when a storage-affecting field OPTION changes (same type)", () => {
+    // The column generator branches on more than name/type — a relationship
+    // flipping to hasMany stores JSON instead of an FK column — so the
+    // signature must move when any field property does.
+    const relMeta = {
+      ...localizedMeta,
+      localized: false,
+      fields: [{ name: "author", type: "relationship", relationTo: "users" }],
+    };
+    const { adapter, registered } = makeAdapter();
+    ensureSingleRuntimeTable(adapter, relMeta);
+    const afterFirst = registered.length;
+    ensureSingleRuntimeTable(adapter, {
+      ...relMeta,
+      fields: [
+        {
+          name: "author",
+          type: "relationship",
+          relationTo: "users",
+          hasMany: true,
+        },
+      ],
+    });
+    expect(registered.length).toBeGreaterThan(afterFirst);
+  });
+
   it("re-registers when the row's shape changes (localization toggled)", () => {
     const { adapter, registered, tables } = makeAdapter();
     ensureSingleRuntimeTable(adapter, { ...localizedMeta, localized: false });

@@ -39,7 +39,15 @@ import { generateRuntimeSchema } from "../../schema/services/runtime-schema-gene
  */
 const registeredShapes = new WeakMap<object, Map<string, string>>();
 
-/** Everything about the row that changes the generated table's columns. */
+/**
+ * Everything about the row that can change the generated table's columns.
+ * The FULL field objects are serialized rather than a name/type projection:
+ * the column descriptor also branches on options a projection would miss
+ * (`hasMany`/array `relationTo` turn a relationship into a JSON column,
+ * `dbType`/`options.format` change number storage, ...), and listing them
+ * here would drift as field types evolve. Over-sensitivity is safe — a
+ * changed-but-equivalent row just re-derives an identical registration.
+ */
 function shapeSignature(
   meta: SingleRuntimeTableMeta,
   fields: { name: string; type: string; localized?: boolean }[]
@@ -47,7 +55,7 @@ function shapeSignature(
   return JSON.stringify([
     meta.localized === true,
     meta.status === true,
-    fields.map(f => [f.name, f.type, f.localized ?? null]),
+    fields,
   ]);
 }
 
