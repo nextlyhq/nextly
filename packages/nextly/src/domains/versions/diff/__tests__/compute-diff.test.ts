@@ -628,6 +628,39 @@ describe("computeVersionDiff — round-4 hardening", () => {
   });
 });
 
+describe("computeVersionDiff — round-5 hardening", () => {
+  it("surfaces stored values for a list item whose component type is gone", () => {
+    // The item was saved under a component type no longer in the schema, so its
+    // child schema cannot be resolved; its values must still surface (opaquely)
+    // rather than be silently dropped.
+    const layout = field({
+      name: "layout",
+      type: "component",
+      components: ["current"],
+      repeatable: true,
+      componentSchemas: {
+        current: { fields: [field({ name: "x", type: "text" })] },
+      },
+    });
+    const diff = computeVersionDiff(
+      { layout: [] },
+      {
+        layout: [
+          { id: "1", _componentType: "legacy", heading: "Hi", body: "Yo" },
+        ],
+      },
+      [layout]
+    );
+    const list = diff.fields[0];
+    if (list.kind === "list") {
+      const item = list.items[0];
+      expect(item.status).toBe("added");
+      expect(item.fields.some(n => n.name === "heading")).toBe(true);
+      expect(item.fields.some(n => n.name === "body")).toBe(true);
+    }
+  });
+});
+
 describe("computeVersionDiff — modifiedOnly", () => {
   it("drops unchanged nodes when asked", () => {
     const fields = [

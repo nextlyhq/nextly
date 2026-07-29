@@ -445,6 +445,9 @@ function itemDiff(
   // previously-untagged (older or imported) item counts too. Diff against BOTH
   // schemas so a protected field from either side is still recognised.
   const typeChanged = match.presence === "both" && beforeType !== afterType;
+  // Resolved child schema, or [] when the item's component type is gone from the
+  // current schema. `collectNodes` still runs in that case: its unknown-key pass
+  // surfaces the item's stored values as opaque nodes rather than dropping them.
   const childFields = itemChildFields(field, componentType);
 
   if (match.presence === "added") {
@@ -453,10 +456,7 @@ function itemDiff(
       componentType,
       status: "added",
       toIndex: match.toIndex,
-      fields:
-        childFields.length > 0
-          ? collectNodes(childFields, {}, match.afterItem, ctx)
-          : [],
+      fields: collectNodes(childFields, {}, match.afterItem, ctx),
     };
   }
   if (match.presence === "removed") {
@@ -465,10 +465,7 @@ function itemDiff(
       componentType,
       status: "removed",
       fromIndex: match.fromIndex,
-      fields:
-        childFields.length > 0
-          ? collectNodes(childFields, match.beforeItem, {}, ctx)
-          : [],
+      fields: collectNodes(childFields, match.beforeItem, {}, ctx),
     };
   }
   const fields = typeChanged
@@ -480,14 +477,9 @@ function itemDiff(
         match.afterItem,
         ctx
       )
-    : childFields.length > 0
-      ? collectNodes(childFields, match.beforeItem, match.afterItem, ctx)
-      : [];
+    : collectNodes(childFields, match.beforeItem, match.afterItem, ctx);
   const contentChanged =
-    typeChanged ||
-    (childFields.length > 0
-      ? fields.some(n => n.status !== "unchanged")
-      : !dequal(match.beforeItem, match.afterItem));
+    typeChanged || fields.some(n => n.status !== "unchanged");
   const hasMoved = match.fromIndex !== match.toIndex;
   return {
     id: match.id,
