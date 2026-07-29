@@ -1,8 +1,8 @@
 /**
- * Direct API Components Type Definitions
+ * Direct API Field Groups Type Definitions
  *
- * Type-safe component slug resolution and argument types for the
- * `nextly.components.*` namespace.
+ * Type-safe field group slug resolution and argument types for the
+ * `nextly.fieldGroups.*` namespace.
  *
  * @packageDocumentation
  */
@@ -52,17 +52,17 @@ export type DataFromFieldGroupSlug<TSlug extends string> =
   DataFromFieldGroupSlugFrom<GeneratedTypes, TSlug>;
 
 /**
- * Component definition data returned by the Direct API.
+ * Field group definition data returned by the Direct API.
  *
- * This is the metadata about a component definition, not the instance data.
+ * This is the metadata about a field group definition, not the instance data.
  * Instance data is automatically populated when reading collection/single entries
- * that have component fields.
+ * that have field group fields.
  */
-export interface ComponentDefinition {
+export interface FieldGroupDefinition {
   /** Unique identifier */
   id: string;
 
-  /** Component slug */
+  /** Field group slug */
   slug: string;
 
   /** Display label */
@@ -79,7 +79,7 @@ export interface ComponentDefinition {
 
   /** Admin UI configuration */
   admin?: {
-    /** Category for organizing components */
+    /** Category for organizing field groups */
     category?: string;
     /** Icon identifier */
     icon?: string;
@@ -91,10 +91,10 @@ export interface ComponentDefinition {
     imageURL?: string;
   };
 
-  /** Source of the component definition */
+  /** Source of the field group definition */
   source: "code" | "ui";
 
-  /** Whether the component is locked (code-first components are locked) */
+  /** Whether the field group is locked (code-first field groups are locked) */
   locked: boolean;
 
   /** Path to config file (code-first only) */
@@ -112,7 +112,7 @@ export interface ComponentDefinition {
   /** Last applied migration ID */
   lastMigrationId?: string;
 
-  /** ID of user who created this component */
+  /** ID of user who created this field group */
   createdBy?: string;
 
   /** Creation timestamp */
@@ -123,29 +123,29 @@ export interface ComponentDefinition {
 }
 
 /**
- * Arguments for finding component definitions.
+ * Arguments for finding field group definitions.
  *
  * @example
  * ```typescript
- * // List all components
- * const components = await nextly.components.find();
+ * // List all field groups
+ * const fieldGroups = await nextly.fieldGroups.find();
  *
  * // List with filters
- * const uiComponents = await nextly.components.find({
+ * const uiFieldGroups = await nextly.fieldGroups.find({
  *   source: 'ui',
  *   search: 'hero',
  *   limit: 10,
  * });
  * ```
  */
-export interface FindComponentsArgs extends DirectAPIConfig {
+export interface FindFieldGroupsArgs extends DirectAPIConfig {
   /** Filter by source type */
   source?: "code" | "ui";
 
   /** Filter by migration status */
   migrationStatus?: "synced" | "pending" | "generated" | "applied" | "failed";
 
-  /** Include only locked or unlocked components */
+  /** Include only locked or unlocked field groups */
   locked?: boolean;
 
   /** Search query for filtering by slug or label */
@@ -159,31 +159,31 @@ export interface FindComponentsArgs extends DirectAPIConfig {
 }
 
 /**
- * Arguments for finding a component definition by slug.
+ * Arguments for finding a field group definition by slug.
  *
  * @example
  * ```typescript
- * const component = await nextly.components.findBySlug({ slug: 'seo' });
- * if (component) {
- *   console.log('Fields:', component.fields);
+ * const fieldGroup = await nextly.fieldGroups.findBySlug({ slug: 'seo' });
+ * if (fieldGroup) {
+ *   console.log('Fields:', fieldGroup.fields);
  * }
  * ```
  */
-export interface FindComponentBySlugArgs extends DirectAPIConfig {
-  /** Component slug (required) */
+export interface FindFieldGroupBySlugArgs extends DirectAPIConfig {
+  /** Field group slug (required) */
   slug: string;
 }
 
 /**
- * Arguments for creating a component definition.
+ * Arguments for creating a field group definition.
  *
- * Only UI-created components can be created via the Direct API.
- * Code-first components are synced automatically (HMR listener or
+ * Only UI-created field groups can be created via the Direct API.
+ * Code-first field groups are synced automatically (HMR listener or
  * `nextly db:sync`).
  *
  * @example
  * ```typescript
- * const component = await nextly.components.create({
+ * const fieldGroup = await nextly.fieldGroups.create({
  *   slug: 'testimonial',
  *   label: 'Testimonial',
  *   fields: [
@@ -198,8 +198,8 @@ export interface FindComponentBySlugArgs extends DirectAPIConfig {
  * });
  * ```
  */
-export interface CreateComponentArgs extends DirectAPIConfig {
-  /** Component slug (required) */
+export interface CreateFieldGroupArgs extends DirectAPIConfig {
+  /** Field group slug (required) */
   slug: string;
 
   /** Display label (required) */
@@ -213,7 +213,7 @@ export interface CreateComponentArgs extends DirectAPIConfig {
 
   /** Admin UI configuration */
   admin?: {
-    /** Category for organizing components */
+    /** Category for organizing field groups */
     category?: string;
     /** Icon identifier */
     icon?: string;
@@ -227,13 +227,13 @@ export interface CreateComponentArgs extends DirectAPIConfig {
 }
 
 /**
- * Arguments for updating a component definition.
+ * Arguments for updating a field group definition.
  *
- * Code-first (locked) components cannot be updated via the Direct API.
+ * Code-first (locked) field groups cannot be updated via the Direct API.
  *
  * @example
  * ```typescript
- * const updated = await nextly.components.update({
+ * const updated = await nextly.fieldGroups.update({
  *   slug: 'testimonial',
  *   data: {
  *     label: 'Customer Testimonial',
@@ -242,8 +242,8 @@ export interface CreateComponentArgs extends DirectAPIConfig {
  * });
  * ```
  */
-export interface UpdateComponentArgs extends DirectAPIConfig {
-  /** Component slug (required) */
+export interface UpdateFieldGroupArgs extends DirectAPIConfig {
+  /** Field group slug (required) */
   slug: string;
 
   /** Update data */
@@ -269,35 +269,35 @@ export interface UpdateComponentArgs extends DirectAPIConfig {
 }
 
 /**
- * Arguments for deleting a component definition.
+ * Arguments for deleting a field group definition.
  *
  * Deletion will fail if:
- * - The component is locked (code-first)
- * - Any collection, single, or other component references this component
+ * - The field group is locked (code-first)
+ * - Any collection, single, or other field group references this field group
  *
  * @example
  * ```typescript
- * const result = await nextly.components.delete({ slug: 'testimonial' });
- * console.log(result.message);    // e.g. "Component deleted successfully"
+ * const result = await nextly.fieldGroups.delete({ slug: 'testimonial' });
+ * console.log(result.message);    // e.g. "Field group deleted."
  * console.log(result.item.slug);  // "testimonial"
  * ```
  */
-export interface DeleteComponentArgs extends DirectAPIConfig {
-  /** Component slug (required) */
+export interface DeleteFieldGroupArgs extends DirectAPIConfig {
+  /** Field group slug (required) */
   slug: string;
 }
 
 /**
- * Result of listing component definitions.
+ * Result of listing field group definitions.
  *
- * `ListResult<ComponentDefinition>` (`{ items, meta }`). This legacy
+ * `ListResult<FieldGroupDefinition>` (`{ items, meta }`). This legacy
  * shape is retained only for transitional consumer code and is removed
  */
-export interface ComponentListResult {
-  /** Component definitions */
-  docs: ComponentDefinition[];
+export interface FieldGroupListResult {
+  /** Field group definitions */
+  docs: FieldGroupDefinition[];
 
-  /** Total count of matching components */
+  /** Total count of matching field groups */
   totalDocs: number;
 
   /** Number of results returned */

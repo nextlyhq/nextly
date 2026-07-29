@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createComponentsNamespace } from "../namespaces/components";
+import { createFieldGroupsNamespace } from "../namespaces/field-groups";
 
-// components.create() derives the physical table name through the canonical
+// fieldGroups.create() derives the physical table name through the canonical
 // resolver: the slug is normalized (dashes and other separators become
 // underscores) before the comp_ prefix. An unnormalized name here would
 // diverge from the table the schema layer actually creates.
-describe("components.create derives its table name", () => {
+describe("fieldGroups.create derives its table name", () => {
   function createCtx() {
     const registerComponent = vi.fn().mockResolvedValue({
       id: "comp-1",
@@ -26,8 +26,8 @@ describe("components.create derives its table name", () => {
 
   it("normalizes the slug into the derived table name", async () => {
     const { ctx, registerComponent } = createCtx();
-    const namespace = createComponentsNamespace(
-      ctx as unknown as Parameters<typeof createComponentsNamespace>[0]
+    const namespace = createFieldGroupsNamespace(
+      ctx as unknown as Parameters<typeof createFieldGroupsNamespace>[0]
     );
 
     await namespace.create({

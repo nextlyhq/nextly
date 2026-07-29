@@ -1,8 +1,8 @@
 /**
- * Direct API Components Namespace
+ * Direct API Field Groups Namespace
  *
- * Factory for the `nextly.components.*` sub-namespace. Manages component
- * *definitions* (metadata + field schemas). Component *instance* data is
+ * Factory for the `nextly.fieldGroups.*` sub-namespace. Manages field group
+ * *definitions* (metadata + field schemas). Field group *instance* data is
  * automatically populated when reading collection/single entries.
  *
  * @packageDocumentation
@@ -13,48 +13,48 @@ import { assertValidFieldGroupConfig } from "../../components/config/validate-fi
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
-  ComponentDefinition,
-  CreateComponentArgs,
-  DeleteComponentArgs,
-  FindComponentBySlugArgs,
-  FindComponentsArgs,
+  FieldGroupDefinition,
+  CreateFieldGroupArgs,
+  DeleteFieldGroupArgs,
+  FindFieldGroupBySlugArgs,
+  FindFieldGroupsArgs,
   ListResult,
   MutationResult,
-  UpdateComponentArgs,
+  UpdateFieldGroupArgs,
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { isNotFoundError, mapComponentRecord, mergeConfig } from "./helpers";
+import { isNotFoundError, mapFieldGroupRecord, mergeConfig } from "./helpers";
 
 /**
- * Components namespace API, bound to a Nextly context.
+ * Field groups namespace API, bound to a Nextly context.
  *
  * (`ListResult<T>`, `MutationResult<T>`).
  */
-export interface ComponentsNamespace {
-  find(args?: FindComponentsArgs): Promise<ListResult<ComponentDefinition>>;
+export interface FieldGroupsNamespace {
+  find(args?: FindFieldGroupsArgs): Promise<ListResult<FieldGroupDefinition>>;
   findBySlug(
-    args: FindComponentBySlugArgs
-  ): Promise<ComponentDefinition | null>;
+    args: FindFieldGroupBySlugArgs
+  ): Promise<FieldGroupDefinition | null>;
   create(
-    args: CreateComponentArgs
-  ): Promise<MutationResult<ComponentDefinition>>;
+    args: CreateFieldGroupArgs
+  ): Promise<MutationResult<FieldGroupDefinition>>;
   update(
-    args: UpdateComponentArgs
-  ): Promise<MutationResult<ComponentDefinition>>;
-  delete(args: DeleteComponentArgs): Promise<MutationResult<{ slug: string }>>;
+    args: UpdateFieldGroupArgs
+  ): Promise<MutationResult<FieldGroupDefinition>>;
+  delete(args: DeleteFieldGroupArgs): Promise<MutationResult<{ slug: string }>>;
 }
 
 /**
- * Build the `components` namespace for a `Nextly` instance.
+ * Build the `fieldGroups` namespace for a `Nextly` instance.
  */
-export function createComponentsNamespace(
+export function createFieldGroupsNamespace(
   ctx: NextlyContext
-): ComponentsNamespace {
+): FieldGroupsNamespace {
   return {
     async find(
-      args: FindComponentsArgs = {}
-    ): Promise<ListResult<ComponentDefinition>> {
+      args: FindFieldGroupsArgs = {}
+    ): Promise<ListResult<FieldGroupDefinition>> {
       const result = await ctx.componentRegistryService.listComponents({
         source: args.source,
         migrationStatus: args.migrationStatus,
@@ -74,7 +74,7 @@ export function createComponentsNamespace(
       const totalPages = Math.max(1, Math.ceil(total / effectiveLimit));
       const page = Math.floor(offset / effectiveLimit) + 1;
       return {
-        items: result.data.map(mapComponentRecord),
+        items: result.data.map(mapFieldGroupRecord),
         meta: {
           total,
           page,
@@ -87,14 +87,14 @@ export function createComponentsNamespace(
     },
 
     async findBySlug(
-      args: FindComponentBySlugArgs
-    ): Promise<ComponentDefinition | null> {
+      args: FindFieldGroupBySlugArgs
+    ): Promise<FieldGroupDefinition | null> {
       const config = mergeConfig(ctx.defaultConfig, args);
 
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'slug' is required for components.findBySlug()",
+          publicMessage: "'slug' is required for fieldGroups.findBySlug()",
           statusCode: 400,
         });
       }
@@ -113,7 +113,7 @@ export function createComponentsNamespace(
           });
         }
 
-        return mapComponentRecord(component);
+        return mapFieldGroupRecord(component);
       } catch (error) {
         if (error instanceof NextlyError) {
           throw error;
@@ -126,12 +126,12 @@ export function createComponentsNamespace(
     },
 
     async create(
-      args: CreateComponentArgs
-    ): Promise<MutationResult<ComponentDefinition>> {
+      args: CreateFieldGroupArgs
+    ): Promise<MutationResult<FieldGroupDefinition>> {
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'slug' is required for components.create()",
+          publicMessage: "'slug' is required for fieldGroups.create()",
           statusCode: 400,
         });
       }
@@ -139,7 +139,7 @@ export function createComponentsNamespace(
       if (!args.label) {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'label' is required for components.create()",
+          publicMessage: "'label' is required for fieldGroups.create()",
           statusCode: 400,
         });
       }
@@ -147,7 +147,7 @@ export function createComponentsNamespace(
       if (!args.fields || !Array.isArray(args.fields)) {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'fields' array is required for components.create()",
+          publicMessage: "'fields' array is required for fieldGroups.create()",
           statusCode: 400,
         });
       }
@@ -189,18 +189,18 @@ export function createComponentsNamespace(
       });
 
       return {
-        message: "Component created.",
-        item: mapComponentRecord(component),
+        message: "Field group created.",
+        item: mapFieldGroupRecord(component),
       };
     },
 
     async update(
-      args: UpdateComponentArgs
-    ): Promise<MutationResult<ComponentDefinition>> {
+      args: UpdateFieldGroupArgs
+    ): Promise<MutationResult<FieldGroupDefinition>> {
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'slug' is required for components.update()",
+          publicMessage: "'slug' is required for fieldGroups.update()",
           statusCode: 400,
         });
       }
@@ -208,7 +208,7 @@ export function createComponentsNamespace(
       if (!args.data || typeof args.data !== "object") {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'data' object is required for components.update()",
+          publicMessage: "'data' object is required for fieldGroups.update()",
           statusCode: 400,
         });
       }
@@ -243,18 +243,18 @@ export function createComponentsNamespace(
       );
 
       return {
-        message: "Component updated.",
-        item: mapComponentRecord(component),
+        message: "Field group updated.",
+        item: mapFieldGroupRecord(component),
       };
     },
 
     async delete(
-      args: DeleteComponentArgs
+      args: DeleteFieldGroupArgs
     ): Promise<MutationResult<{ slug: string }>> {
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'slug' is required for components.delete()",
+          publicMessage: "'slug' is required for fieldGroups.delete()",
           statusCode: 400,
         });
       }
@@ -263,7 +263,7 @@ export function createComponentsNamespace(
       // the deleted slug rather than `id` because components are addressed
       // by slug throughout this namespace.
       return {
-        message: "Component deleted.",
+        message: "Field group deleted.",
         item: { slug: args.slug },
       };
     },

@@ -149,7 +149,7 @@ export const GET = withErrorHandler(async (request: Request) => {
  * - admin: Optional admin UI configuration (category, icon, hidden, description, imageURL)
  *
  * Response Codes:
- * - 201 Created: Component created successfully
+ * - 201 Created: Field group created successfully
  * - 400 Bad Request: Invalid input
  * - 401 Unauthorized: Authentication required
  * - 409 Conflict: Component with slug already exists
@@ -208,5 +208,5 @@ export const POST = withErrorHandler(async (request: Request) => {
     schemaHash,
   });
 
-  return respondMutation("Component created.", component, { status: 201 });
+  return respondMutation("Field group created.", component, { status: 201 });
 });
