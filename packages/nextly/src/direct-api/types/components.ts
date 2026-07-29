@@ -18,24 +18,38 @@ import type { DirectAPIConfig, GeneratedTypes } from "./shared";
  *
  * The key here MUST match the one `TypeGenerator` emits into `Config`. If the
  * two drift, this conditional silently takes the fallback branch and every slug
- * widens to `string` — no compile error anywhere, just lost type safety. Pinned
- * by `__tests__/generated-config-contract.test.ts`.
+ * widens to `string` — no compile error anywhere, just lost type safety.
+ *
+ * The conditional is factored into `FieldGroupSlugFrom` so a test can apply it
+ * to a stand-in for the generated types. Asserting against a locally re-declared
+ * copy of the same conditional would pass even if THIS alias read the wrong key,
+ * which is the failure being guarded. Pinned by
+ * `__tests__/generated-config-contract.test.ts`.
  */
-export type FieldGroupSlug = GeneratedTypes extends { fieldGroups: infer C }
+export type FieldGroupSlugFrom<TGenerated> = TGenerated extends {
+  fieldGroups: infer C;
+}
   ? keyof C & string
   : string;
+
+export type FieldGroupSlug = FieldGroupSlugFrom<GeneratedTypes>;
 
 /**
  * Resolves the field group type for a given field group slug.
  *
  * @typeParam TSlug - The field group slug string literal
  */
+export type DataFromFieldGroupSlugFrom<
+  TGenerated,
+  TSlug extends string,
+> = TGenerated extends { fieldGroups: infer C }
+  ? TSlug extends keyof C
+    ? C[TSlug]
+    : Record<string, unknown>
+  : Record<string, unknown>;
+
 export type DataFromFieldGroupSlug<TSlug extends string> =
-  GeneratedTypes extends { fieldGroups: infer C }
-    ? TSlug extends keyof C
-      ? C[TSlug]
-      : Record<string, unknown>
-    : Record<string, unknown>;
+  DataFromFieldGroupSlugFrom<GeneratedTypes, TSlug>;
 
 /**
  * Component definition data returned by the Direct API.

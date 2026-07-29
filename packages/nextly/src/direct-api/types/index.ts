@@ -100,6 +100,10 @@ export type {
 } from "./forms";
 
 export type {
+  // Slug and data types resolve against the `Config.fieldGroups` map that
+  // `TypeGenerator` emits, so callers narrow to the same field-group slugs the
+  // generated file declares. The remaining names below still carry the older
+  // vocabulary and move with the Direct API namespace.
   FieldGroupSlug,
   DataFromFieldGroupSlug,
   ComponentDefinition,
