@@ -400,9 +400,11 @@ function groupNode(
   after: unknown,
   ctx: WalkContext
 ): FieldDiff {
-  // With no resolvable child schema, fall back to an opaque value comparison
-  // rather than reporting a group with no fields.
-  if (childFields.length === 0) return valueNode(meta, before, after);
+  // No resolvable child schema (its children were deleted): the stored object
+  // may hold a since-removed child whose access rule can no longer be found, so
+  // it is treated exactly like a dropped field and its value is withheld rather
+  // than dumped opaquely.
+  if (childFields.length === 0) return unknownNode(meta.name, before, after);
   const fields = collectNodes(childFields, before, after, ctx);
   const changed = fields.some(n => n.status !== "unchanged");
   return {

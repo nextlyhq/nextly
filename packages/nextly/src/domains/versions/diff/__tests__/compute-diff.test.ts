@@ -351,6 +351,22 @@ describe("computeVersionDiff — never leaks a password", () => {
     expect(node).not.toHaveProperty("before");
     expect(node).not.toHaveProperty("after");
   });
+
+  it("withholds the value of a container whose children left the schema", () => {
+    // A group/component that remains in the schema but has no child fields (all
+    // deleted) cannot prove access to its stored children, so its value is
+    // withheld exactly like a dropped field rather than dumped opaquely.
+    const emptyGroup = field({ name: "meta", type: "group", fields: [] });
+    const diff = computeVersionDiff(
+      { meta: { removedChild: "secret-old" } },
+      { meta: { removedChild: "secret-new" } },
+      [emptyGroup]
+    );
+    const node = diff.fields.find(n => n.name === "meta");
+    expect(node?.kind).toBe("unknown");
+    expect(node).not.toHaveProperty("before");
+    expect(node).not.toHaveProperty("after");
+  });
 });
 
 describe("computeVersionDiff — read-denied fields", () => {
