@@ -28,6 +28,7 @@ import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  companionTableExists,
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
@@ -183,6 +184,27 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     if (Object.keys(companionData).length === 0) return;
     const writeLocale = resolveRequestedLocale(this.localization!, locale);
+    // Refuse rather than fail opaquely when the companion is not there yet. By this
+    // point the translatable values have already been split OUT of the main payload,
+    // so there is nowhere else for them to go: the upsert below would hit a missing
+    // table and surface a raw database error, and because the component path is not
+    // transactional the shared fields may already have been committed. A localized
+    // field group embedded under a NON-localized parent reaches here even when the
+    // collection and single guards pass, since those only check their own companion.
+    if (
+      !(await companionTableExists(writeAdapter, schema.companionTableName))
+    ) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+        logContext: {
+          cause: "localized-write-without-companion",
+          fieldGroupTable: schema.companionTableName,
+          locale: writeLocale,
+        },
+      });
+    }
     await upsertCompanionRow(
       writeAdapter,
       schema.companionTableName,
