@@ -513,12 +513,17 @@ export function requiresTransformation(fieldType: string): boolean {
 }
 
 /**
- * Normalize relationship field values on write input.
+ * Normalize relationship field values on write input, at any nesting depth.
  *
  * A read at depth serves a relationship as the populated row, and a
- * multi-target one as `{ relationTo, value: row }`. Both come back on save,
- * and stored as they arrive they put a whole row snapshot in the column: later
- * reads then serve that stale copy instead of reloading the target.
+ * multi-target one as `{ relationTo, value: row }`. Both come back on save, and
+ * stored as they arrive they put a whole row snapshot in the column: later
+ * reads then serve that stale copy instead of reloading the target, so an edit
+ * to the target never appears.
+ *
+ * Groups and repeaters are walked rather than skipped. Their contents are
+ * serialized to JSON wholesale, so a reference left populated inside one is
+ * written as the row and never recognised as a reference again.
  *
  * Mutates `data` in place, reducing each value to the reference it stands for.
  */
@@ -527,25 +532,61 @@ export function normalizeRelationshipFields(
   fields: FieldConfig[]
 ): void {
   for (const field of fields) {
-    if (field.type !== "relationship") continue;
     if (!("name" in field) || !field.name) continue;
-    if (data[field.name] == null) continue;
+    const value = data[field.name];
+    if (value == null) continue;
 
-    const config = field as { relationTo?: unknown; hasMany?: boolean };
-    const isPolymorphic = Array.isArray(config.relationTo);
-    let normalized = normalizeRelationshipValue(
-      data[field.name],
-      isPolymorphic
-    );
-
-    // A single relationship holds one value; an array reaching it means the
-    // form sent a list for a field that stores one reference.
-    if (!config.hasMany && Array.isArray(normalized)) {
-      normalized = normalized.length > 0 ? normalized[0] : null;
+    if (field.type === "relationship") {
+      data[field.name] = normalizeRelationshipField(field, value);
+      continue;
     }
 
-    data[field.name] = normalized;
+    const nested = "fields" in field ? (field.fields as FieldConfig[]) : null;
+    if (!nested || nested.length === 0) continue;
+
+    if (field.type === "repeater") {
+      if (!Array.isArray(value)) continue;
+      for (const row of value) {
+        if (row && typeof row === "object" && !Array.isArray(row)) {
+          normalizeRelationshipFields(row as Record<string, unknown>, nested);
+        }
+      }
+    } else if (field.type === "group") {
+      if (typeof value === "object" && !Array.isArray(value)) {
+        normalizeRelationshipFields(value as Record<string, unknown>, nested);
+      }
+    }
   }
+}
+
+/**
+ * Reduce one relationship value to the reference it stands for.
+ *
+ * Reads the target list from either shape a field can carry it in: code-first
+ * fields declare `relationTo`, Builder-authored ones `options.target`.
+ */
+function normalizeRelationshipField(
+  field: FieldConfig,
+  value: unknown
+): unknown {
+  const config = field as {
+    relationTo?: unknown;
+    hasMany?: boolean;
+    options?: { target?: unknown; relationType?: string };
+  };
+  const isPolymorphic =
+    Array.isArray(config.relationTo) || Array.isArray(config.options?.target);
+  const hasMany =
+    config.hasMany === true || config.options?.relationType === "manyToMany";
+
+  const normalized = normalizeRelationshipValue(value, isPolymorphic);
+
+  // A single relationship holds one value; an array reaching it means the form
+  // sent a list for a field that stores one reference.
+  if (!hasMany && Array.isArray(normalized)) {
+    return normalized.length > 0 ? normalized[0] : null;
+  }
+  return normalized;
 }
 
 /**

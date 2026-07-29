@@ -1047,6 +1047,80 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     });
   });
 
+  // A container is serialized to JSON wholesale, so a reference left populated
+  // inside one is written as the row and never read back as a reference again.
+  it("stores a reference for a populated value inside a group", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [
+                text({ name: "note" }),
+                relationship({
+                  name: "author",
+                  relationTo: ["authors", "orgs"],
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Original" }
+    );
+    const authorId = (author.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        meta: {
+          note: "n",
+          author: { relationTo: "authors", value: authorId },
+        },
+      },
+      { overrideAccess: true }
+    );
+
+    const read = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: read.data!.meta },
+      { overrideAccess: true }
+    );
+
+    await handler.updateEntry(
+      { collectionName: "authors", entryId: authorId, overrideAccess: true },
+      { name: "Renamed" }
+    );
+
+    const after = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    const meta = after.data!.meta as { author?: Record<string, unknown> };
+    // A snapshot stored inside the group would still say "Original".
+    expect(meta.author).toMatchObject({
+      relationTo: "authors",
+      value: { id: authorId, name: "Renamed" },
+    });
+  });
+
   // Neither `relationTo` nor `value` is a reserved field name, so a target
   // collection may define both. A populated row from one then looks exactly
   // like the wrapper a populated reference is served in, and reading it as one

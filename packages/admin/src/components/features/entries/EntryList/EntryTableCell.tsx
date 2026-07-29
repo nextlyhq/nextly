@@ -104,6 +104,14 @@ function getRelationshipLabel(value: unknown): string {
 
   if (typeof value === "object" && value !== null) {
     const obj = value as Record<string, unknown>;
+    // A relationship naming several collections arrives as
+    // `{ relationTo, value }`, and `value` holds the populated row once the
+    // list was read at a populating depth. The label fields live on that row,
+    // so reading the wrapper alone falls through to the generic badge and
+    // discards a label that was already fetched.
+    if (typeof obj.relationTo === "string" && "value" in obj) {
+      return getRelationshipLabel(obj.value);
+    }
     // Try common title fields in order of preference
     const label = obj.title || obj.name || obj.label || obj.email || obj.id;
     if (label) {

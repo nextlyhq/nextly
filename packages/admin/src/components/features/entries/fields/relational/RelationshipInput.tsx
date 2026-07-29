@@ -149,6 +149,28 @@ function polymorphicEntryToItem(entry: {
 }
 
 /**
+ * The document id a stored form value refers to, whatever shape it is in.
+ *
+ * A value may be a bare id, a populated row, or a `{ relationTo, value }` pair
+ * whose `value` is either of those — the pair carries the row once the entry
+ * was read at a populating depth. Comparing the raw value against an id
+ * silently matches nothing in that last case, which is how a removal or a
+ * quick-edit update can appear to succeed and change nothing.
+ */
+function referenceIdOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (value === null || typeof value !== "object") return undefined;
+  const record = value as { id?: unknown; value?: unknown };
+  if (typeof record.id === "string") return record.id;
+  if (typeof record.value === "string") return record.value;
+  if (record.value !== null && typeof record.value === "object") {
+    const nested = record.value as { id?: unknown };
+    if (typeof nested.id === "string") return nested.id;
+  }
+  return undefined;
+}
+
+/**
  * Converts the form value to an array of selected items for display.
  * Handles all value formats (simple IDs, objects, polymorphic).
  */
@@ -368,23 +390,7 @@ export function RelationshipInput<
     (itemId: string) => {
       if (hasMany) {
         const currentValues = Array.isArray(value) ? (value as unknown[]) : [];
-        const filtered = currentValues.filter(v => {
-          if (typeof v === "string") return v !== itemId;
-          if (typeof v === "object" && v !== null && "id" in v)
-            return (v as { id: string }).id !== itemId;
-          if (typeof v === "object" && v !== null && "value" in v) {
-            // `value` is the target's id, or the target row when the entry was
-            // read at a populating depth. Comparing the row against an id never
-            // matches, which would leave the item in the list after removal.
-            const target = v.value;
-            const id =
-              typeof target === "string"
-                ? target
-                : ((target as { id?: string } | null)?.id ?? undefined);
-            return id !== itemId;
-          }
-          return true;
-        });
+        const filtered = currentValues.filter(v => referenceIdOf(v) !== itemId);
         onChange(filtered);
       } else {
         onChange(null);
@@ -470,7 +476,7 @@ export function RelationshipInput<
         const currentValues = Array.isArray(value) ? [...value] : [];
         const updatedValues = currentValues.map(v => {
           // Match by ID (handle both string and object values)
-          const itemId = typeof v === "string" ? v : v?.id || v?.value;
+          const itemId = referenceIdOf(v);
           if (itemId === editingItem.id) {
             if (isPolymorphicField) {
               return {
