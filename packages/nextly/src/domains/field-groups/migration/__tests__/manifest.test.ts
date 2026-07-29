@@ -191,6 +191,33 @@ describe("field-group migration manifest", () => {
     ).toThrowError(NextlyError);
   });
 
+  // A kept row occupies its companion's name as well as its own. `fg_x` staying
+  // put means `fg_x_locales` stays put too, so another row's table cannot be
+  // renamed onto it.
+  it("refuses when a target is taken by a kept row's companion", () => {
+    try {
+      buildMigrationManifest([
+        row({ tableName: "fg_x", hasCompanion: true }),
+        row({ slug: "other", tableName: "comp_x_locales" }),
+      ]);
+      expect.fail("expected a refusal");
+    } catch (error) {
+      expect((error as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
+      expect((error as NextlyError).logContext?.to).toBe("fg_x_locales");
+    }
+  });
+
+  // A kept row without a companion reserves only its own name; the companion
+  // name is free, and refusing there would block a legitimate rename.
+  it("does not reserve a companion name for a row that has none", () => {
+    expect(() =>
+      buildMigrationManifest([
+        row({ tableName: "fg_y", hasCompanion: false }),
+        row({ slug: "other", tableName: "comp_y_locales" }),
+      ])
+    ).not.toThrow();
+  });
+
   // Renaming a table away frees its name, so two rows swapping prefixes is not
   // a conflict.
   it("allows a target whose occupant is itself renamed away", () => {

@@ -247,9 +247,17 @@ function assertNoTargetConflict(
   const renamedAway = new Set(
     entries.filter(e => e.kind !== "column").map(e => fold(e.from))
   );
-  const kept = new Set(
-    rows.map(r => fold(r.tableName)).filter(name => !renamedAway.has(name))
-  );
+  // A row this plan leaves alone keeps its companion as well as its base table,
+  // so both names stay occupied. Reserving only the base name let another row's
+  // companion be renamed onto a companion that is still there.
+  const kept = new Set<string>();
+  for (const row of rows) {
+    if (renamedAway.has(fold(row.tableName))) continue;
+    kept.add(fold(row.tableName));
+    if (row.hasCompanion) {
+      kept.add(fold(`${row.tableName}${STORAGE_FORMAT.companionSuffix}`));
+    }
+  }
 
   const claimed = new Map<string, string>();
   for (const entry of entries) {
