@@ -22,6 +22,12 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { CollectionRelationshipService } from "../services/collection-relationship-service";
+
+const PREDICATE_RULE_PATH = new URL(
+  "./_fixtures/tenant-read-rule.ts",
+  import.meta.url
+).pathname;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -188,6 +194,81 @@ describe("related rows honour Draft/Published (integration)", () => {
     expect(
       await populatedAuthor(handler, draftRefId, { status: "draft" })
     ).toBeNull();
+  });
+
+  it("records a lifecycle-filtered row as withheld rather than missing", async () => {
+    // A caller checking its expansion for completeness has to tell a deliberate
+    // refusal from a load that failed. Filtering the row out in the query would
+    // remove it before anything could record the decision, and the Single
+    // authorization view would then read the unpopulated reference as evidence
+    // lost and refuse the whole parent read with a 500.
+    const { handler, draftAuthorId, draftRefId } = await boot();
+
+    const withheld = new Set<string>();
+    const service = current!.getService<CollectionRelationshipService>(
+      "relationshipService"
+    );
+    const row = await service.fetchRelatedEntry("authors", draftAuthorId, {
+      enforceCollectionAccess: true,
+      user: { id: "reader" },
+      withheldByAccess: withheld,
+    });
+
+    expect(row).toBeNull();
+    // Keyed by collection AND id: an id is unique only within its collection.
+    expect([...withheld].some(key => key.includes(draftAuthorId))).toBe(true);
+    // And the parent read still succeeds rather than erroring.
+    expect(await populatedAuthor(handler, draftRefId)).toBeNull();
+  });
+
+  it("does not record a reference that points at nothing as withheld", async () => {
+    // The mirror, and the reason the recording is not simply "every id that did
+    // not come back": a dangling reference is a data problem, and dressing it up
+    // as a refusal would let a completeness check accept a genuine absence.
+    await boot();
+
+    const withheld = new Set<string>();
+    const service = current!.getService<CollectionRelationshipService>(
+      "relationshipService"
+    );
+    const row = await service.fetchRelatedEntry(
+      "authors",
+      "00000000-0000-4000-8000-000000000000",
+      {
+        enforceCollectionAccess: true,
+        user: { id: "reader" },
+        withheldByAccess: withheld,
+      }
+    );
+
+    expect(row).toBeNull();
+    expect([...withheld]).toEqual([]);
+  });
+
+  it("keeps a draft target through predicate confirmation for status=all", async () => {
+    // A rule answering with a predicate confirms its rows in a second query.
+    // Re-resolving the lifecycle there without the caller's intent re-applies
+    // the published-only default, so an editor reading everything loses the
+    // draft row the first fetch admitted.
+    const { handler, draftAuthorId, draftRefId } = await boot();
+    await current!.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: {
+          read: { type: "custom", functionPath: PREDICATE_RULE_PATH },
+        },
+      },
+      { and: [{ column: "slug", op: "=", value: "authors" }] }
+    );
+
+    // `name-scoped` answers with a predicate over a column `authors` has, so
+    // the confirming query really runs. A caller whose rule answers `true`
+    // never reaches it and would pass this test either way.
+    const author = await populatedAuthor(handler, draftRefId, {
+      status: "all",
+      user: { id: "name-scoped" },
+    });
+    expect(author?.id).toBe(draftAuthorId);
   });
 
   it("leaves a target with no lifecycle alone", async () => {

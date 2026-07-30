@@ -1097,12 +1097,12 @@ export class CollectionRelationshipService extends BaseService {
    *
    * System entities have no lifecycle and no collection record to ask.
    */
-  private async resolveTargetStatusCondition(
+  private async resolveTargetStatusValue(
     targetCollection: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
     schema: any,
     access: RelatedRowAccess
-  ): Promise<ReturnType<typeof eq> | undefined> {
+  ): Promise<string | undefined> {
     if (isSystemEntity(targetCollection)) return undefined;
     // Guarded on the column, not only on the collection's flag: a collection
     // whose status was switched off keeps the flag until its schema is
@@ -1128,7 +1128,7 @@ export class CollectionRelationshipService extends BaseService {
       overrideAccess: access.overrideAccess === true,
       explicit: access.status,
     });
-    return statusFilter ? eq(schema.status, statusFilter.value) : undefined;
+    return statusFilter?.value;
   }
 
   private async readTargetRows(
@@ -1147,7 +1147,7 @@ export class CollectionRelationshipService extends BaseService {
     // read of it. Without this, a caller who is 404'd asking for an unpublished
     // row is handed the whole thing — status column included — by populating a
     // relationship that points at it.
-    const statusCondition = await this.resolveTargetStatusCondition(
+    const statusValue = await this.resolveTargetStatusValue(
       targetCollection,
       schema,
       access
@@ -1156,16 +1156,23 @@ export class CollectionRelationshipService extends BaseService {
     const entries = (await this.db
       .select()
       .from(schema)
-      .where(
-        and(
-          inArray(schema.id, ids),
-          ...(statusCondition ? [statusCondition] : [])
-        )
-      )) as Record<string, unknown>[];
+      .where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
-    const rows = entries.map(entry =>
+    const fetched = entries.map(entry =>
       convertTimestampsToCamelCase({ ...entry })
     );
+    // Filtered here rather than in the query above so the rows this removes are
+    // recorded as deliberately withheld. Narrowing the fetch would drop them
+    // before anything could distinguish "exists, wrong lifecycle" from "does
+    // not exist" — and a caller checking its expansion for completeness reads
+    // an unexplained absence as evidence lost and refuses the whole parent.
+    // A row that was never there stays unrecorded, because a dangling
+    // reference is a data problem and must not be dressed up as a refusal.
+    const rows = statusValue
+      ? fetched.filter(row => row.status === statusValue)
+      : fetched;
+    this.recordWithheld(targetCollection, fetched, rows, access);
+
     const readable = await this.filterRowsByCollectionAccess(
       targetCollection,
       rows,
@@ -1387,7 +1394,10 @@ export class CollectionRelationshipService extends BaseService {
       const statusFilter = resolveStatusFilter({
         collectionHasStatus: policy.hasStatus,
         overrideAccess: access.overrideAccess === true,
-        explicit: undefined,
+        // The same intent the fetch honoured. Re-resolving without it re-applies
+        // the published-only default here, so a caller who asked to read
+        // everything loses a draft row that the fetch above admitted.
+        explicit: access.status,
       });
 
       const localizedCtx = await this.buildTargetLocalizedContext(
