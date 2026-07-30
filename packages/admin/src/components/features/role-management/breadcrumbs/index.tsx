@@ -26,8 +26,11 @@ const PAGE_LABELS = {
 export function RoleBreadcrumbs({ currentPage }: RoleBreadcrumbsProps) {
   const currentLabel = PAGE_LABELS[currentPage];
 
+  // Roles live under the Settings section (User Management) now, so the trail
+  // nests under a "Settings" parent crumb before the "Roles" item.
   const items: BreadcrumbItem[] = [
     { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+    { label: "Settings", href: ROUTES.SETTINGS },
   ];
 
   if (currentPage === "list") {

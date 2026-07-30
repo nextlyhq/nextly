@@ -35,8 +35,11 @@ const PAGE_LABELS = {
 export function UserBreadcrumbs({ currentPage }: UserBreadcrumbsProps) {
   const currentLabel = PAGE_LABELS[currentPage];
 
+  // User Management lives under the Settings section now, so the trail nests
+  // under a "Settings" parent crumb before the "Users" item.
   const items: BreadcrumbItem[] = [
     { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+    { label: "Settings", href: ROUTES.SETTINGS },
   ];
 
   if (currentPage === "list") {

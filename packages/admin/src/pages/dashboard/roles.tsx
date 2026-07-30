@@ -43,6 +43,8 @@ const RolesPage: React.FC = () => {
           <Breadcrumbs
             items={[
               { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+              // Roles live under Settings (User Management) now.
+              { label: "Settings", href: ROUTES.SETTINGS },
               { label: "Role Management" },
             ]}
           />
