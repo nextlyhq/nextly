@@ -161,6 +161,11 @@ export function probeStorage(args: {
   const catalog = indexCatalog(args.tables, identifierCase.tables);
   const columns = indexColumns(args.columns, catalog, identifierCase);
   const missing: string[] = [];
+  // A settled marker is not exempt from ownership: a registry restored or
+  // repaired with two rows that resolve to one table would otherwise be reported
+  // complete, and the verdict would authorise both field groups against the same
+  // storage.
+  const claim = createClaimLedger();
 
   for (const row of args.rows) {
     for (const object of expectedStorage(row, generation)) {
@@ -169,6 +174,7 @@ export function probeStorage(args: {
         missing.push(object.names[0]);
         continue;
       }
+      claim(found, claimantOf(row, object));
       // Only the base table carries the discriminator; companions hold
       // translations of individual fields and never the type.
       if (!object.isBase) continue;
@@ -269,6 +275,36 @@ function namesFor(
   return [row.tableName, ...(target === null ? [] : [target])];
 }
 
+/**
+ * Records which registry row owns each physical object, and refuses a second
+ * claim on one.
+ *
+ * Shared by the pre-run check and the settled-marker probe because they ask the
+ * same question and an answer that differs between them is a hole: ownership
+ * cannot be shared, whichever path notices. Claims are keyed by the **resolved**
+ * catalog name, the only level at which two spellings are known to be one
+ * object — the plan compares exactly, having no dialect.
+ */
+function createClaimLedger(): (found: string, claimant: string) => void {
+  const claims = new Map<string, string>();
+  return (found, claimant) => {
+    const previous = claims.get(found);
+    if (previous !== undefined) {
+      throw refuse("one physical object is claimed by two field groups", {
+        table: found,
+        claimedBy: previous,
+        alsoClaimedBy: claimant,
+      });
+    }
+    claims.set(found, claimant);
+  };
+}
+
+/** How a refusal names the owner of an expected object. */
+function claimantOf(row: RegistryRow, object: ExpectedObject): string {
+  return `${row.slug}${object.isBase ? "" : " companion"}`;
+}
+
 function resolveAny(
   catalog: CatalogIndex,
   names: readonly string[]
@@ -322,13 +358,7 @@ function assertEveryRowHasStorage(
 ): void {
   const missing: string[] = [];
   const caseVariants: Record<string, string> = {};
-  // Which row already claimed each physical object. Claims are tracked by the
-  // *resolved* catalog name, which is the only level where two spellings are
-  // known to be one object: the plan compares names exactly because it has no
-  // dialect, so on a folding server a row named `COMP_HERO_LOCALES` and another
-  // row's derived `comp_hero_locales` companion pass every check the plan can
-  // make while addressing the same table.
-  const claims = new Map<string, string>();
+  const claim = createClaimLedger();
 
   for (const row of rows) {
     for (const object of expectedStorage(row, "either")) {
@@ -342,17 +372,7 @@ function assertEveryRowHasStorage(
         if (variant !== undefined) caseVariants[object.names[0]] = variant;
         continue;
       }
-
-      const claimant = `${row.slug}${object.isBase ? "" : " companion"}`;
-      const previous = claims.get(found);
-      if (previous !== undefined) {
-        throw refuse("one physical object is claimed by two field groups", {
-          table: found,
-          claimedBy: previous,
-          alsoClaimedBy: claimant,
-        });
-      }
-      claims.set(found, claimant);
+      claim(found, claimantOf(row, object));
     }
   }
 

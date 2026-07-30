@@ -361,6 +361,44 @@ describe("teardownEntityComponentData catalog case folding", () => {
   // exact match while resolving its rows case-insensitively would skip registry
   // discovery entirely here, leaving every custom-named component out of the
   // sweep and its rows orphaned once the parent is deleted.
+  // A malformed row pointing back at the registry resolves to whatever spelling
+  // the catalog reports, so excluding only the exact constant would let the
+  // registry be probed as an instance table — where a missing `_parent_table`
+  // column breaks the delete and a permissive adapter could damage metadata.
+  it("never treats the registry as component storage, whatever its case", async () => {
+    const deleted: string[] = [];
+    const adapter = {
+      dialect: "mysql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue(["DYNAMIC_COMPONENTS", "comp_hero"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      getDrizzle: vi.fn(() => ({
+        execute: vi.fn(async () => [[{ lower_case_table_names: 1 }], []]),
+      })),
+      select: vi.fn(async (table: string) => {
+        if (table.toLowerCase() === "dynamic_components") {
+          // The malformed row: it points at the registry itself.
+          return [{ slug: "broken", table_name: "dynamic_components" }];
+        }
+        return [{ id: `${table}-1` }];
+      }),
+    };
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).not.toContain("DYNAMIC_COMPONENTS");
+    expect(deleted).not.toContain("DYNAMIC_COMPONENTS");
+  });
+
   it("discovers the registry when the catalog reports it in another case", async () => {
     const deleted: string[] = [];
     const adapter = {

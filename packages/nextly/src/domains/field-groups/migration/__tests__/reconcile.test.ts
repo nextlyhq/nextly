@@ -696,3 +696,43 @@ describe("reconciling a rollback", () => {
     expect(out[COLUMN_POSITION - 1]?.satisfied).toBe(true);
   });
 });
+
+describe("ownership on a settled marker", () => {
+  // Two custom-named rows that are one table on a folding server. A settled
+  // marker is not exempt from ownership: reporting this complete would let the
+  // verdict authorise both field groups against the same storage.
+  const rows = [
+    row({ slug: "alpha", tableName: "SHARED" }),
+    row({ slug: "beta", tableName: "shared" }),
+  ];
+
+  function probe(identifierCase: typeof PRESERVING, tables: readonly string[]) {
+    return probeStorage({
+      rows,
+      tables,
+      columns: columnsFor(tables, {
+        SHARED: [TARGET_COLUMN],
+        shared: [TARGET_COLUMN],
+      }),
+      identifierCase,
+      generation: "field-groups-v2",
+    });
+  }
+
+  it("refuses two rows resolving to one table", () => {
+    const refusal = capture(() =>
+      probe(FOLDING, ["dynamic_field_groups", "SHARED"])
+    );
+    expect(refusal.logContext?.reason).toMatch(/claimed by two field groups/);
+    expect(refusal.logContext?.table).toBe("SHARED");
+  });
+
+  // Where the server keeps the spellings apart they are two tables, and each row
+  // owns its own, so the same registry is complete.
+  it("accepts them where the server keeps the names apart", () => {
+    expect(
+      probe(PRESERVING, ["dynamic_field_groups", "SHARED", "shared"])
+        .migratedObjects
+    ).toEqual({ complete: true });
+  });
+});

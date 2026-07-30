@@ -249,6 +249,12 @@ async function listRegisteredComponentTables(
       // unmaterialized component would block all of them.
       .map(name => resolveCatalogName(catalog, name))
       .filter((name): name is string => name !== undefined)
+      // The registry is metadata, never component storage. A malformed row
+      // pointing back at it resolves to whatever spelling the catalog reports,
+      // so excluding it here — where that spelling is known — is what keeps it
+      // out; a caller comparing against the constant alone would miss a
+      // case-different spelling and probe the registry as an instance table.
+      .filter(name => name !== registryTable)
   );
 }
 
