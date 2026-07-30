@@ -2612,6 +2612,10 @@ export class CollectionMutationService extends BaseService {
               locale: this.localization
                 ? resolveRequestedLocale(this.localization, params.locale)
                 : undefined,
+              // A trusted write sees the row it just wrote regardless of
+              // lifecycle; an untrusted one gets the published default, the
+              // same answer its own GET would give.
+              status: params.overrideAccess === true ? "all" : undefined,
             }
           );
         } catch (expansionError) {
@@ -5162,6 +5166,10 @@ export class CollectionMutationService extends BaseService {
               locale: this.localization
                 ? resolveRequestedLocale(this.localization, params.locale)
                 : undefined,
+              // A trusted write sees the row it just wrote regardless of
+              // lifecycle; an untrusted one gets the published default, the
+              // same answer its own GET would give.
+              status: params.overrideAccess === true ? "all" : undefined,
             }
           );
         } catch (expansionError) {
