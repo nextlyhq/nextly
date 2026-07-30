@@ -22,6 +22,9 @@ import { MetaService } from "../../meta/services/meta-service";
 import { withMigrationSession } from "./session";
 import { readMigrationState } from "./state";
 
+/** The key/value table the migration marker lives in. */
+const META_TABLE = "nextly_meta";
+
 /**
  * Refuse to continue while a field-group storage migration is in flight.
  *
@@ -37,6 +40,14 @@ export async function assertNoMigrationInFlight(args: {
   adapter: DrizzleAdapter;
   logger: Logger;
 }): Promise<void> {
+  // A database that has no `nextly_meta` at all has never recorded a marker, so
+  // there is no run to be in flight. Asked explicitly rather than inferred from
+  // a failed read: an unreadable marker must still refuse, and asked explicitly
+  // rather than inferred from core-table setup either, because that returns as
+  // soon as it finds `users` and so does not establish the newer system tables
+  // on a database that predates them.
+  if (!(await args.adapter.tableExists(META_TABLE))) return;
+
   const state = await readMigrationState(
     new MetaService(args.adapter, args.logger)
   );

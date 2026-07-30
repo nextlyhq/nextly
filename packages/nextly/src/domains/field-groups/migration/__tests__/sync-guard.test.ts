@@ -18,11 +18,15 @@ const PLAN: ManifestEntry[] = [
  * A `nextly_meta` stand-in. The guard reads through `MetaService`, which selects
  * from the meta table, so the double answers that select and nothing else.
  */
-function adapterWith(marker: unknown): DrizzleAdapter {
+function adapterWith(
+  marker: unknown,
+  over: { metaTableExists?: boolean } = {}
+): DrizzleAdapter {
   return {
     // `MetaService` picks its dialect-specific table through this, so a double
     // without it answers a query the real service never issues.
     getCapabilities: () => ({ dialect: "postgresql" }),
+    tableExists: async () => over.metaTableExists ?? true,
     getDrizzle: () => ({
       select: () => ({
         from: () => ({
@@ -101,6 +105,42 @@ describe("schema sync guard", () => {
     ).resolves.toBeUndefined();
   });
 
+  // Core-table setup returns as soon as it finds `users`, so a database created
+  // before `nextly_meta` existed reaches this guard without it. No meta table
+  // means no marker was ever recorded, which is untouched storage rather than a
+  // reason to abort every sync on that database.
+  it("allows a sync on a database that has no meta table", async () => {
+    await expect(
+      assertNoMigrationInFlight({
+        adapter: adapterWith(migrating(), { metaTableExists: false }),
+        logger,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  // Absence of the table is the only thing treated as absence. A read that
+  // fails for any other reason still refuses, because an unreadable marker may
+  // describe renamed objects.
+  it("still refuses when the marker table exists but cannot be read", async () => {
+    const adapter = {
+      getCapabilities: () => ({ dialect: "postgresql" }),
+      tableExists: async () => true,
+      getDrizzle: () => ({
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: () => Promise.reject(new Error("connection lost")),
+            }),
+          }),
+        }),
+      }),
+    } as unknown as DrizzleAdapter;
+
+    await expect(
+      assertNoMigrationInFlight({ adapter, logger })
+    ).rejects.toThrowError();
+  });
+
   // An unreadable marker may still describe renamed objects, so it must not be
   // treated as absence — which would let the sync proceed over exactly the
   // storage this guard exists to protect.
@@ -149,6 +189,7 @@ function lockingAdapter(options: { marker?: unknown; heldBy?: string | null }) {
       }),
     }),
     executeQuery: async () => [],
+    tableExists: async () => true,
     transaction: async (work: (ctx: unknown) => Promise<unknown>) =>
       work({
         lockRow: async () => undefined,
