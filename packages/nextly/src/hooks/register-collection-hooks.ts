@@ -27,7 +27,7 @@ import type {
 } from "../collections/config/define-collection";
 
 import { getHookRegistry, type HookRegistry } from "./hook-registry";
-import type { HookType, HookHandler } from "./types";
+import type { HookType } from "./types";
 
 /**
  * Result of registering collection hooks
@@ -62,27 +62,6 @@ export interface RegisterCollectionHooksResult {
  * (beforeChange/afterChange) which needs to be mapped to the
  * HookRegistry types (beforeCreate/beforeUpdate, etc.)
  */
-/**
- * What this module has already registered, per registry.
- *
- * Held here rather than in the registry because the registry deliberately
- * allows the same function to be subscribed more than once: two plugins may
- * share a handler, and one unsubscribing must not silence the other. Only this
- * path can tell that a second call describes declarations it already
- * registered.
- *
- * Weakly keyed, so a registry that goes out of scope -- one per test, for
- * instance -- takes its bookkeeping with it.
- */
-const registeredByRegistry = new WeakMap<
-  HookRegistry,
-  Map<string, Set<HookHandler>>
->();
-
-function registrationKey(hookType: HookType, collection: string): string {
-  return `${hookType}:${collection}`;
-}
-
 const HOOK_TYPE_MAPPINGS: Record<keyof CollectionHooks, HookType[]> = {
   beforeOperation: ["beforeOperation"],
   beforeValidate: ["beforeCreate", "beforeUpdate"], // Validate runs before create/update
@@ -148,25 +127,6 @@ export function registerCollectionHooks(
   collections: CollectionConfig[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterCollectionHooksResult {
-  let registered = registeredByRegistry.get(registry);
-  if (!registered) {
-    registered = new Map<string, Set<HookHandler>>();
-    registeredByRegistry.set(registry, registered);
-  }
-  const rememberRegistration = (
-    hookType: HookType,
-    collection: string,
-    handler: HookHandler
-  ): void => {
-    const key = registrationKey(hookType, collection);
-    let handlers = registered.get(key);
-    if (!handlers) {
-      handlers = new Set<HookHandler>();
-      registered.set(key, handlers);
-    }
-    handlers.add(handler);
-  };
-
   const result: RegisterCollectionHooksResult = {
     collections: [],
     totalHooks: 0,
@@ -208,25 +168,7 @@ export function registerCollectionHooks(
       // Register handlers for each mapped hook type
       for (const hookType of hookTypes) {
         for (const handler of handlers) {
-          // A scaffolded app registers its collections' hooks itself and then
-          // boots, which registers the same config again. Appending both copies
-          // runs every hook twice: a transformation applied twice, and any side
-          // effect duplicated.
-          //
-          // Skipped here rather than in the registry, which deliberately allows
-          // the same function to be subscribed more than once -- two plugins may
-          // share a handler, and one unsubscribing must not silence the other.
-          // This path is different: it re-registers declarations that are
-          // already registered, so the second copy is redundant rather than
-          // additional. Identity comparison, so two distinct functions that
-          // happen to do the same thing both still register.
-          const alreadyRegistered = registered
-            .get(registrationKey(hookType, collection.slug))
-            ?.has(handler);
-          if (alreadyRegistered) continue;
-
           registry.register(hookType, collection.slug, handler);
-          rememberRegistration(hookType, collection.slug, handler);
           collectionHookCount++;
         }
       }

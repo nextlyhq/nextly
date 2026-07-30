@@ -296,7 +296,7 @@ function generateNextlyHelperTemplate(): string {
  * \`\`\`
  */
 
-import { getNextly, registerCollectionHooks, type Nextly } from "nextly";
+import { getNextly, type Nextly } from "nextly";
 import nextlyConfig from "../../nextly.config";
 
 // Track initialization state
@@ -346,13 +346,9 @@ export async function initializeNextly(): Promise<void> {
   }
 
   try {
-    // Register code-first collection hooks with the global registry
-    if (nextlyConfig.collections && nextlyConfig.collections.length > 0) {
-      const result = registerCollectionHooks(nextlyConfig.collections);
-      console.log(
-        \`[Nextly] Registered \${result.totalHooks} hooks for \${result.collections.length} collections\`
-      );
-    }
+    // Collection hooks are registered by Nextly's own boot, so there is
+    // nothing to register here. Doing it again would append the same
+    // handlers a second time and run every hook twice.
 
     initialized = true;
     console.log("[Nextly] Initialized successfully");
