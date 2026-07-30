@@ -178,18 +178,21 @@ describe("user mutation webhook events (real SQLite)", () => {
     expect(envelope.actor).toEqual({ type: "user", id: "admin-actor-2" });
   });
 
-  it("offers the fast-path drain after committing user events", async () => {
+  it("offers the fast-path drain and retention pass after committing user events", async () => {
     setWebhookAuditEnabled(true);
     const offer = vi.fn();
-    // The mutation service depends only on `offer()`, so a plain spy satisfies
-    // the injected drain without reconstructing the real scheduler.
+    const maybeRun = vi.fn().mockResolvedValue(undefined);
+    // The mutation service depends only on `offer()` and `maybeRun()`, so plain
+    // spies satisfy the injected drain and retention runner without
+    // reconstructing the real ones.
     const drained = new UserMutationService(
       adapter,
       silentLogger,
       undefined,
       undefined,
       undefined,
-      { offer }
+      { offer },
+      { maybeRun }
     );
 
     const created = await drained.createLocalUser({
@@ -198,11 +201,42 @@ describe("user mutation webhook events (real SQLite)", () => {
       password: "TestPassword123!",
       isActive: true,
     });
-    // A recorded create kicks the drain exactly once, after commit.
+    // A recorded create kicks the drain and offers a retention pass, after commit.
     expect(offer).toHaveBeenCalledTimes(1);
+    expect(maybeRun).toHaveBeenCalledTimes(1);
 
     await drained.deleteUser(created.id);
-    // A recorded delete kicks it again.
+    // A recorded delete kicks both again.
     expect(offer).toHaveBeenCalledTimes(2);
+    expect(maybeRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("records user.deleted with the account's current stored identity", async () => {
+    setWebhookAuditEnabled(true);
+    const created = await service.createLocalUser({
+      email: "hook-preimage@test.local",
+      name: "Original",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+
+    // Change the account after creation but before the delete. Because the
+    // delete event's identity is read inside the delete transaction rather than
+    // from a snapshot taken earlier, the event must carry the updated values.
+    await adapter.executeQuery(
+      "UPDATE users SET name = ?, email = ? WHERE id = ?",
+      ["Renamed", "renamed@test.local", created.id]
+    );
+
+    await service.deleteUser(created.id);
+
+    const rows = await adapter.executeQuery<EventRow>(
+      "SELECT type, resource_kind, resource_id, payload FROM nextly_events WHERE type = ? AND resource_id = ?",
+      ["user.deleted", created.id]
+    );
+    expect(rows).toHaveLength(1);
+    const envelope = JSON.parse(rows[0].payload);
+    expect(envelope.data.name).toBe("Renamed");
+    expect(envelope.data.email).toBe("renamed@test.local");
   });
 });
