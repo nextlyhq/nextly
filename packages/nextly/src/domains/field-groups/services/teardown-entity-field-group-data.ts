@@ -225,9 +225,21 @@ async function listRegisteredComponentTables(
     discovered,
     (await readIdentifierCaseRules(adapter)).tables
   );
+  // Two different questions, deliberately answered with two different names.
+  //
+  // *Which catalog entry is the registry* is physical identity, so it is resolved
+  // through the server's comparison rules and the answer is the spelling the
+  // catalog reports. That spelling is what the metadata exclusion below needs.
   const registryTable = resolveCatalogName(catalog, REGISTRY_TABLE);
   if (registryTable === undefined) return [];
 
+  // *How to address the registry through the ORM* is a different question with a
+  // different answer: the schema registry keys static schemas by the name the
+  // Drizzle table declares and looks them up exactly, so it only ever knows the
+  // canonical name. Addressing it by the catalog's spelling would be reported as
+  // unregistered on a folding server, and this function would return nothing —
+  // silently dropping every custom-named component from the sweep.
+  //
   // Consulted only when the ORM can address it. An executor with no schema
   // registered for the registry — a hand-built adapter carrying just its own
   // tables — has no schema for any component table either, so it could not
@@ -235,9 +247,12 @@ async function listRegisteredComponentTables(
   // stays complete for everything such an executor can reach. Probing rather
   // than catching keeps genuine read failures propagating instead of being
   // mistaken for "nothing registered".
-  if (!(await isResolvable(adapter, registryTable))) return [];
+  if (!(await isResolvable(adapter, REGISTRY_TABLE))) return [];
 
-  const rows = await adapter.select<Record<string, unknown>>(registryTable, {});
+  const rows = await adapter.select<Record<string, unknown>>(
+    REGISTRY_TABLE,
+    {}
+  );
 
   return (
     rows

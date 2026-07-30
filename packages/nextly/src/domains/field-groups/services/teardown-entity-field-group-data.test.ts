@@ -382,7 +382,7 @@ describe("teardownEntityComponentData catalog case folding", () => {
         execute: vi.fn(async () => [[{ lower_case_table_names: 1 }], []]),
       })),
       select: vi.fn(async (table: string) => {
-        if (table.toLowerCase() === "dynamic_components") {
+        if (table === "dynamic_components") {
           // The malformed row: it points at the registry itself.
           return [{ slug: "broken", table_name: "dynamic_components" }];
         }
@@ -414,7 +414,7 @@ describe("teardownEntityComponentData catalog case folding", () => {
         execute: vi.fn(async () => [[{ lower_case_table_names: 1 }], []]),
       })),
       select: vi.fn(async (table: string) => {
-        if (table.toLowerCase() === "dynamic_components") {
+        if (table === "dynamic_components") {
           return [{ slug: "seo", table_name: "SEO_META" }];
         }
         return [{ id: `${table}-1` }];
