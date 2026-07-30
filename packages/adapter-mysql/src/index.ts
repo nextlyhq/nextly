@@ -792,9 +792,18 @@ export class MySqlAdapter extends DrizzleAdapter {
         statement: SQL
       ): Promise<T[]> => {
         const result = await txDb().execute(statement);
-        // A tuple's first element is the rows; anything else is a result
-        // header from a statement that returned none.
-        return (Array.isArray(result) ? result[0] : []) as unknown as T[];
+        // A tuple's first element is the rows. Anything else was not understood,
+        // and must not reach a caller as "there is nothing there" — the same
+        // reason the pooled `queryStatement` refuses rather than answering
+        // empty.
+        if (!Array.isArray(result)) {
+          throw this.createDatabaseError(
+            "query",
+            "Drizzle statement returned a result shape this adapter does not recognise; refusing to report it as an empty result.",
+            undefined
+          );
+        }
+        return result[0] as unknown as T[];
       },
 
       lockRow: async (table: string, id: SqlParam): Promise<void> => {

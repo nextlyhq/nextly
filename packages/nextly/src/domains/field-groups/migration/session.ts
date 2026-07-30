@@ -194,9 +194,16 @@ export async function withMigrationSession<T>(
   // Releasing on the signal keeps the durable-claim design and removes its cost
   // on the path people actually interrupt — but only for callers that opt in.
   const releaseOnSignal = (signal: NodeJS.Signals): void => {
-    void release(adapter, claim).finally(() => {
-      process.kill(process.pid, signal);
-    });
+    // The signal is re-raised whether or not the release succeeded: a pool torn
+    // down by the same interrupt is the likely failure, and an unobserved
+    // rejection there would surface as an unhandled rejection instead of
+    // letting the process stop. A claim left behind by a failed release is the
+    // ordinary stuck-claim case an operator already has a remedy for.
+    void release(adapter, claim)
+      .catch(() => undefined)
+      .finally(() => {
+        process.kill(process.pid, signal);
+      });
   };
   const onInterrupt = (): void => releaseOnSignal("SIGINT");
   const onTerminate = (): void => releaseOnSignal("SIGTERM");
