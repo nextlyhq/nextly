@@ -718,9 +718,13 @@ export class SqliteAdapter extends DrizzleAdapter {
       // rows, which is every statement this method exists to carry. The Drizzle
       // instance is the transaction-bound one, so the statement runs inside this
       // transaction.
-      // eslint-disable-next-line @typescript-eslint/require-await
-      runStatement: async (statement: SQL): Promise<void> => {
+      //
+      // better-sqlite3 is synchronous, so this resolves an already-settled
+      // promise rather than being declared `async` over a body that never
+      // awaits.
+      runStatement: (statement: SQL): Promise<void> => {
         txDb().run(statement);
+        return Promise.resolve();
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await

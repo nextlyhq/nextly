@@ -291,7 +291,15 @@ export abstract class DrizzleAdapter {
     ) {
       return (result as { rows: T[] }).rows;
     }
-    return [];
+    // Refused rather than reported as no rows. All three drivers answer one of
+    // the shapes above, so anything else means the result was not understood —
+    // and "I could not read this" must not reach a caller as "there is nothing
+    // there", which is an answer it would act on.
+    throw this.createDatabaseError(
+      "query",
+      "Drizzle statement returned a result shape this adapter does not recognise; refusing to report it as an empty result.",
+      undefined
+    );
   }
 
   /**
