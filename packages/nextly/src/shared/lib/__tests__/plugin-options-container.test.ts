@@ -151,6 +151,38 @@ describe("the plugin options container", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("refuses a reserved container key on a code-first declaration", () => {
+    registerRecorder();
+
+    // A code-first config never passes through the manifest schema, so the
+    // refusal has to live on the path every declaration takes.
+    const issues = pluginFieldOptionIssues({
+      name: "score",
+      type: "star-rating",
+      pluginOptions: { type: "variant-a" },
+    });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe("pluginOptions.type");
+  });
+
+  it("runs the reserved check even for a type declaring no rules of its own", () => {
+    registerFieldType({
+      type: "silent",
+      storage: "number",
+      component: "@acme/s/admin#Input",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    const issues = pluginFieldOptionIssues({
+      name: "n",
+      type: "silent",
+      pluginOptions: { name: "hijack" },
+    });
+
+    expect(issues).toHaveLength(1);
+  });
+
   it("cannot displace the guaranteed identity of the field", () => {
     const instance = detachedField({
       name: "score",

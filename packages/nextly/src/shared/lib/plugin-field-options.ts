@@ -18,6 +18,11 @@ import {
   getFieldType,
   isPluginFieldTypeOnSurface,
 } from "../../domains/schema/field-types/field-type-registry";
+import {
+  PLUGIN_OPTIONS_KEY,
+  pluginOptionContainer,
+  RESERVED_PLUGIN_OPTION_KEYS,
+} from "../../plugins/plugin-options";
 
 import { detachedField } from "./detached-field";
 
@@ -56,6 +61,25 @@ export function pluginFieldOptionIssues(field: {
   // type whose author later drops `entries` while instances of it remain: those
   // keep rendering, and they must not start failing a boot.
   if (!isPluginFieldTypeOnSurface(field.type, "entries")) return [];
+
+  // Checked before the type's own rules, and regardless of whether it declares
+  // any: the instance restates `type` and `name` as its identity after folding
+  // the container, so an option under either would be shadowed and never reach
+  // the code that asked for it. The manifest schema refuses these too, but a
+  // code-first declaration never passes through it.
+  const container = pluginOptionContainer(field);
+  const reserved = container
+    ? Object.keys(container).filter(key => RESERVED_PLUGIN_OPTION_KEYS.has(key))
+    : [];
+  if (reserved.length > 0) {
+    return reserved.map(key => ({
+      path: `${PLUGIN_OPTIONS_KEY}.${key}`,
+      message: asSentence(
+        `${key} cannot be used as a plugin option: it states which field the type is looking at`
+      ),
+    }));
+  }
+
   const custom = getFieldType(field.type);
   if (!custom?.validateOptions) return [];
 

@@ -337,6 +337,28 @@ describe("codegen import collisions", () => {
     expect(file.code).not.toContain("@acme/mp");
   });
 
+  it("refuses an import that would shadow a utility the output relies on", () => {
+    registerFieldType({
+      type: "partial-named",
+      storage: "json",
+      component: "@acme/pn/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Partial"], from: "@acme/pn" }],
+        tsType: () => "Partial",
+      },
+    });
+
+    // The generated input aliases emit `Partial<Post>`; a local import of that
+    // name shadows the global for the whole file.
+    const messages = refusalMessages(() =>
+      new TypeGenerator().generateTypesFile([
+        collection([{ name: "p", type: "partial-named" }]),
+      ])
+    );
+
+    expect(messages.join(" ")).toContain("'Partial'");
+  });
+
   it("refuses an import named after a generated input alias", () => {
     registerFieldType({
       type: "input-ish",
@@ -709,6 +731,26 @@ describe("plugin field types in the Zod generator", () => {
         collection([{ name: "r", type: "substring-named" }])
       ).code
     ).not.toContain("@acme/sn");
+  });
+
+  it("does not count a name that only appears in a string literal", () => {
+    registerFieldType({
+      type: "literal-named",
+      storage: "json",
+      component: "@acme/ln/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Rating"], from: "@acme/ln" }],
+        zodSchema: () => 'z.literal("Rating")',
+      },
+    });
+
+    // Text, not a reference to the binding — emitting the import would be
+    // unused under `noUnusedLocals`.
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "r", type: "literal-named" }])
+      ).code
+    ).not.toContain("@acme/ln");
   });
 
   it("emits only the import list belonging to this file's expression", () => {

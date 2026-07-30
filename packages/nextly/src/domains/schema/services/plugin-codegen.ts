@@ -169,11 +169,18 @@ export function pluginCodegenImports(
   // other's, which would then be refused as a cross-module clash.
   const used = (name: string, expression: string | undefined): boolean => {
     if (expression === undefined) return true;
+    // A name inside a string or template literal is text, not a reference to
+    // the binding — `z.literal("Rating")` does not use an imported `Rating` —
+    // so those are removed before matching rather than parsed around.
+    const code = expression
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      .replace(/`(?:[^`\\]|\\.)*`/g, "``");
     // Identifier boundaries rather than `\b`: a legal exported name may begin
     // or end with `$`, which is a non-word character, so `\b` would fail to
     // match it and the import would be dropped as unused.
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?<![$\\w])${escaped}(?![$\\w])`).test(expression);
+    return new RegExp(`(?<![$\\w])${escaped}(?![$\\w])`).test(code);
   };
 
   const record = (

@@ -1393,8 +1393,16 @@ ${properties}
     // `declare module`, which creates no top-level binding, so an import of
     // that name coexists with it. `Config` is declared only when the config
     // interface is generated.
-    const names = new Set<string>(["User"]);
+    // Names the generated code relies on resolving globally. An import of one
+    // shadows it for the whole file — a non-generic `Partial` makes every
+    // emitted `Partial<Post>` fail to compile — so they are reserved as firmly
+    // as the interfaces this file declares.
+    const names = new Set<string>(["User", "Array", "Record"]);
     if (this.generateConfig) names.add("Config");
+    if (this.generateInputTypes) {
+      names.add("Partial");
+      names.add("Omit");
+    }
 
     for (const collection of collections) {
       const name = this.toPascalCase(collection.slug);
