@@ -229,6 +229,16 @@ let watcherReloadPending = false;
  */
 let watcherReloadOptions: LoadConfigOptions | null = null;
 
+/**
+ * Which watcher the reloads in flight belong to.
+ *
+ * Stopping a watcher bumps this. A reload already awaiting its load carries the
+ * value it started with, so it can tell that the watcher it was triggered for
+ * has since been replaced and decline to deliver a config nobody asked for to
+ * callbacks registered by whoever replaced it.
+ */
+let watcherGeneration = 0;
+
 const changeCallbacks: Set<ConfigChangeCallback> = new Set();
 
 function findConfigFile(cwd: string): string | undefined {
@@ -267,9 +277,16 @@ function startWatching(configPath: string, options: LoadConfigOptions): void {
 
 /** One reload of the watched file, notifying every registered callback. */
 async function runWatchReload(options: LoadConfigOptions): Promise<void> {
+  const generation = watcherGeneration;
   cachedConfig = null;
   try {
     const result = await loadConfigInternal(options);
+
+    // The watcher this reload belongs to was stopped while the load was in
+    // flight, so this result describes a config nothing is watching. Delivering
+    // it would hand the replacement watcher's callbacks the previous config,
+    // which they would apply until the replacement's own reload arrived.
+    if (generation !== watcherGeneration) return;
 
     for (const callback of changeCallbacks) {
       try {
@@ -333,6 +350,7 @@ function stopWatching(): void {
   // result they never asked for.
   watcherReloadPending = false;
   watcherReloadOptions = null;
+  watcherGeneration += 1;
 }
 
 async function loadConfigInternal(

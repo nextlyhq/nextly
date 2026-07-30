@@ -1252,6 +1252,28 @@ describe("plugin field types in the Zod generator", () => {
     expect(iface.imports).toContain('import type { Rating } from "@acme/nt";');
   });
 
+  it("keeps a reference after a backtick-quoted brace in an interpolation", () => {
+    registerFieldType({
+      type: "quoted-brace",
+      storage: "json",
+      component: "@acme/qb/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/qb" }],
+        tsType: () => '`${`}` extends Rating ? "y" : "n"}`',
+      },
+    });
+
+    // A backtick literal is the one quoted form still intact when the
+    // interpolation is scanned — the single- and double-quoted forms are
+    // blanked before templates are reduced. Counting its `}` as the closing
+    // brace ends the body at the opening backtick and loses the reference.
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "q", type: "quoted-brace" }])
+    );
+
+    expect(iface.imports).toContain('import type { Rating } from "@acme/qb";');
+  });
+
   it("keeps an interpolation after comment-like text in a template", () => {
     registerFieldType({
       type: "urlish",

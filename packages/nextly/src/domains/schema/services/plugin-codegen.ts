@@ -232,13 +232,27 @@ export function pluginCodegenImports(
       let depth = 1;
       const start = i + 2;
       let j = start;
+      // The quote currently open, if any. A brace inside a string is text —
+      // `${"}" extends R ? "a" : "b"}` is a legal interpolation — so counting
+      // it would end the body at the first quoted `}` and drop every reference
+      // after it.
+      let quote: string | undefined;
       for (; j < literal.length && depth > 0; j++) {
-        if (literal[j] === "\\") {
+        const ch = literal[j];
+        if (ch === "\\") {
           j++;
           continue;
         }
-        if (literal[j] === "{") depth++;
-        else if (literal[j] === "}") depth--;
+        if (quote !== undefined) {
+          if (ch === quote) quote = undefined;
+          continue;
+        }
+        if (ch === '"' || ch === "'" || ch === "`") {
+          quote = ch;
+          continue;
+        }
+        if (ch === "{") depth++;
+        else if (ch === "}") depth--;
       }
       // An unterminated interpolation keeps what is there: the expression is not
       // this function's to judge, and dropping the tail would lose references.

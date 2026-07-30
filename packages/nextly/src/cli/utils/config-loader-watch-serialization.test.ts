@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearFieldTypes } from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors/nextly-error";
 
-import { clearConfigCache, loadConfig } from "./config-loader";
+import { clearConfigCache, loadConfig, watchConfig } from "./config-loader";
 
 const bundleAndRequire = vi.hoisted(() => vi.fn());
 vi.mock("./config-bundler", () => ({ bundleAndRequire }));
@@ -141,5 +141,45 @@ describe("watched config reloads", () => {
     // first again would hand its result to callbacks registered for the
     // second, and the second's change would never be loaded at all.
     expect(bundled.at(-1)).toBe(OTHER_CONFIG_PATH);
+  });
+
+  it("does not deliver a reload whose watcher was replaced mid-load", async () => {
+    bundleAndRequire.mockResolvedValue(loaded);
+    await loadConfig({ configPath: CONFIG_PATH, cwd: "/virtual", watch: true });
+    const fireFirst = capturedListener();
+
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let call = 0;
+    bundleAndRequire.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) await gate;
+      return loaded;
+    });
+
+    // In flight against the first watcher.
+    fireFirst("change");
+
+    clearConfigCache();
+    await loadConfig({
+      configPath: OTHER_CONFIG_PATH,
+      cwd: "/virtual",
+      watch: true,
+    });
+
+    // Registered by whoever is watching now, so it must not be handed the
+    // config the superseded reload was loading when its watcher was stopped.
+    const seen: string[] = [];
+    watchConfig(result => {
+      seen.push(result.configPath);
+    });
+
+    release();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(seen).not.toContain(CONFIG_PATH);
   });
 });
