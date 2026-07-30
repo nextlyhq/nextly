@@ -72,7 +72,9 @@ describe("validateFieldValues scope", () => {
     ]);
 
     expect(issues).toHaveLength(1);
-    expect(issues[0]?.path).toBe("n");
+    // Under the repeater it was declared in, not the bare child name: the path
+    // this API returns is absolute, and two containers may each hold an `n`.
+    expect(issues[0]?.path).toBe("rows.n");
   });
 
   it("does not descend into an option a plugin type calls fields", async () => {

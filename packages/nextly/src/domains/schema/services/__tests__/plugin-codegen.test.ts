@@ -1137,6 +1137,28 @@ describe("plugin field types in the Zod generator", () => {
     ).toContain('import type { Prefix } from "@acme/tp";');
   });
 
+  it("counts a reference an interpolation quotes in its literal text", () => {
+    registerFieldType({
+      type: "quoted-interp",
+      storage: "json",
+      component: "@acme/qi/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Prefix"], from: "@acme/qi" }],
+        zodSchema: () => 'z.custom<`say "${Prefix}"`>()',
+      },
+    });
+
+    // The two quote characters are literal text of the template, and the
+    // interpolation between them is code. Reading them as a string spanning it
+    // drops the reference, and the schema then names an identifier it never
+    // imported.
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "q", type: "quoted-interp" }])
+      ).code
+    ).toContain('import type { Prefix } from "@acme/qi";');
+  });
+
   it("does not descend into an option a plugin type happens to call fields", () => {
     registerFieldType({
       type: "layout",
@@ -1339,10 +1361,9 @@ describe("plugin field types in the Zod generator", () => {
       },
     });
 
-    // A backtick literal is the one quoted form still intact when the
-    // interpolation is scanned — the single- and double-quoted forms are
-    // blanked before templates are reduced. Counting its `}` as the closing
-    // brace ends the body at the opening backtick and loses the reference.
+    // The brace is literal text of a template nested inside the interpolation,
+    // so the interpolation does not end there. Counting it as the closing brace
+    // ends the body at the opening backtick and loses the reference.
     const iface = new TypeGenerator().generateInterface(
       collection([{ name: "q", type: "quoted-brace" }])
     );

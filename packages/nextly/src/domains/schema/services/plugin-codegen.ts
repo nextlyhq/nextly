@@ -166,6 +166,225 @@ function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
 }
 
 /**
+ * The index of the quote closing the one opened at `open`, or `-1` for none.
+ *
+ * A backslash consumes the character after it, so `"a\""` ends at the last
+ * quote rather than at the escaped one it protects.
+ */
+function closingQuote(source: string, open: number): number {
+  const quote = source[open];
+  for (let i = open + 1; i < source.length; i++) {
+    if (source[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (source[i] === quote) return i;
+  }
+  return -1;
+}
+
+/**
+ * The index of the backtick closing the template opened at `open`, or `-1`.
+ *
+ * Interpolations are skipped whole: a backtick inside one opens a nested
+ * template of its own — `` `${`x`}` `` is legal — and reading it as this
+ * literal's closing backtick would end the template early and leave the code
+ * after it looking like literal text.
+ */
+function closingBacktick(source: string, open: number): number {
+  for (let i = open + 1; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === "`") return i;
+    if (ch === "$" && source[i + 1] === "{") {
+      const end = interpolationEnd(source, i);
+      if (end === -1) return -1;
+      i = end;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The index of the `}` closing the interpolation opened at `open`, or `-1`.
+ *
+ * Braces are counted rather than matched, and the quoted forms are skipped
+ * whole, because an interpolation may hold braces of its own — an object type,
+ * a mapped type, or a brace inside a string, as in
+ * `${"}" extends R ? A : B}` — and stopping at the first `}` would end the
+ * body inside its own expression and discard every reference after it.
+ */
+function interpolationEnd(source: string, open: number): number {
+  let depth = 1;
+  for (let i = open + 2; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const end =
+        ch === "`" ? closingBacktick(source, i) : closingQuote(source, i);
+      // Unterminated, so the character opened nothing: read on from the next
+      // one rather than swallowing the remainder of the interpolation.
+      if (end !== -1) i = end;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Every `${...}` body inside a template's text, itself reduced to code.
+ *
+ * The literal text around them is dropped: a name there is characters in a
+ * string type, not a reference to a binding.
+ */
+function templateInterpolations(inner: string): string {
+  const bodies: string[] = [];
+
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (inner[i] !== "$" || inner[i + 1] !== "{") continue;
+
+    const end = interpolationEnd(inner, i);
+    // An unterminated interpolation keeps what is there: the expression is not
+    // this function's to judge, and dropping the tail would lose references.
+    bodies.push(inner.slice(i + 2, end === -1 ? inner.length : end));
+    if (end === -1) break;
+    i = end;
+  }
+
+  return bodies.map(codeOnly).join(" ");
+}
+
+/**
+ * The characters a `/` may follow and still open a regex literal. After
+ * anything else — a name, a closing bracket, a digit — it divides.
+ */
+const OPENS_REGEX = /[([{,;:=!&|?+\-*%~^<>]$/;
+
+/**
+ * Whether a `/` following `before` opens a regex literal.
+ *
+ * At the very start of an expression there is no operand to divide, so a
+ * leading slash opens one.
+ */
+function opensRegex(before: string): boolean {
+  const code = before.trimEnd();
+  return code === "" || OPENS_REGEX.test(code);
+}
+
+/** The flags that may trail a regex literal's closing slash. */
+const REGEX_FLAGS = /[dgimsuvy]/;
+
+/**
+ * `source` with every span that is text rather than code blanked out.
+ *
+ * One left-to-right scan rather than a chain of replacements. Each of these
+ * forms may legally contain the opening of another — a URL's `//` in a
+ * template, a brace in a string, an apostrophe in a comment — so whichever
+ * form a chain removes first misreads the ones it has yet to run. Classifying
+ * every span once, at the character that starts it, is what makes that class
+ * of mistake impossible rather than reordered.
+ *
+ * A form left unterminated is kept as ordinary text: its opening character may
+ * not have opened anything, and consuming to the end of the expression would
+ * drop references. That is the costly direction of error — an import judged
+ * unused is omitted, and the generated file then names an identifier it never
+ * brought into scope.
+ */
+function codeOnly(source: string): string {
+  let out = "";
+  let i = 0;
+
+  while (i < source.length) {
+    const ch = source[i];
+
+    if (ch === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i + 2);
+      out += " ";
+      i = end === -1 ? source.length : end;
+      continue;
+    }
+
+    if (ch === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2);
+      if (end !== -1) {
+        out += " ";
+        i = end + 2;
+        continue;
+      }
+    } else if (ch === '"' || ch === "'") {
+      const end = closingQuote(source, i);
+      if (end !== -1) {
+        out += " ";
+        i = end + 1;
+        continue;
+      }
+    } else if (ch === "`") {
+      const end = closingBacktick(source, i);
+      if (end !== -1) {
+        out += ` ${templateInterpolations(source.slice(i + 1, end))} `;
+        i = end + 1;
+        continue;
+      }
+    } else if (ch === "/" && opensRegex(out)) {
+      const end = closingSlash(source, i);
+      if (end !== -1) {
+        out += " ";
+        i = end + 1;
+        while (i < source.length && REGEX_FLAGS.test(source[i])) i++;
+        continue;
+      }
+    }
+
+    out += ch;
+    i++;
+  }
+
+  return out;
+}
+
+/**
+ * The index of the slash closing the regex opened at `open`, or `-1`.
+ *
+ * A slash inside a character class is a literal one — `/[/]/` is a regex
+ * matching a slash — so the class is tracked and only a slash outside it ends
+ * the literal.
+ */
+function closingSlash(source: string, open: number): number {
+  let inClass = false;
+
+  for (let i = open + 1; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    // A regex literal cannot span lines, so a newline means the slash divided
+    // rather than opened one.
+    if (ch === "\n") return -1;
+    if (ch === "[") inClass = true;
+    else if (ch === "]") inClass = false;
+    else if (ch === "/" && !inClass) return i;
+  }
+
+  return -1;
+}
+
+/**
  * The `import type` lines a generated file needs for the plugin types it uses.
  *
  * Collected from the fields actually emitted, so a registered type nobody
@@ -201,72 +420,6 @@ export function pluginCodegenImports(
     });
   };
 
-  // A whole template literal, interpolations included. The `${...}` alternative
-  // is consumed before the closing backtick is looked for, so a template nested
-  // inside an interpolation — `` `${{ kind: `x` } extends R ? "a" : "b"}` `` is
-  // a legal template-literal type — does not end the match at its own backtick
-  // and take everything after it.
-  const TEMPLATE_LITERAL =
-    /`(?:[^`\\$]|\\.|\$(?!\{)|\$\{(?:[^{}`]|`[^`]*`|\{[^{}]*\})*\})*`/g;
-
-  /**
-   * A template literal reduced to its `${...}` bodies, with the literal text
-   * dropped.
-   *
-   * Brace depth is counted rather than matched with a regex: an interpolation may
-   * hold braces of its own — an object type, a mapped type, a nested block — and
-   * stopping at the first `}` would discard everything after it. That direction
-   * of error is the costly one: it drops an import the expression really needs,
-   * leaving the generated file naming an identifier it never brought into scope.
-   */
-  function keepInterpolations(literal: string): string {
-    const bodies: string[] = [];
-
-    for (let i = 0; i < literal.length; i++) {
-      if (literal[i] === "\\") {
-        i++;
-        continue;
-      }
-      if (literal[i] !== "$" || literal[i + 1] !== "{") continue;
-
-      let depth = 1;
-      const start = i + 2;
-      let j = start;
-      // The quote currently open, if any. A brace inside a string is text —
-      // `${"}" extends R ? "a" : "b"}` is a legal interpolation — so counting
-      // it would end the body at the first quoted `}` and drop every reference
-      // after it.
-      let quote: string | undefined;
-      for (; j < literal.length && depth > 0; j++) {
-        const ch = literal[j];
-        if (ch === "\\") {
-          j++;
-          continue;
-        }
-        if (quote !== undefined) {
-          if (ch === quote) quote = undefined;
-          continue;
-        }
-        if (ch === '"' || ch === "'" || ch === "`") {
-          quote = ch;
-          continue;
-        }
-        if (ch === "{") depth++;
-        else if (ch === "}") depth--;
-      }
-      // An unterminated interpolation keeps what is there: the expression is not
-      // this function's to judge, and dropping the tail would lose references.
-      bodies.push(literal.slice(start, depth === 0 ? j - 1 : literal.length));
-      i = j - 1;
-    }
-
-    // Reduced again: a body may itself hold a template, and `String.replace`
-    // does not rescan what a replacer returns — so `${`Rating`}` would hand
-    // back the inner literal and its text would read as a reference. Each pass
-    // removes one level of nesting, so this terminates.
-    return bodies.join(" ").replace(TEMPLATE_LITERAL, keepInterpolations);
-  }
-
   // Whether the expression THIS field emitted actually names the import.
   // A declared list belongs to a field type, but a callback may use an import
   // only for some option values, so a field where it did not would carry an
@@ -276,31 +429,11 @@ export function pluginCodegenImports(
   // other's, which would then be refused as a cross-module clash.
   const used = (name: string, expression: string | undefined): boolean => {
     if (expression === undefined) return true;
-    // A name inside a string or template literal is text, not a reference to
-    // the binding — `z.literal("Rating")` does not use an imported `Rating` —
-    // so those are removed before matching rather than parsed around.
-    const code = expression
-      .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-      .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-      // Templates are reduced first, before comments: a template's literal text
-      // may legitimately contain `//` — `` `https://${Rating}` `` is a valid
-      // template-literal type — and stripping comments while it is still intact
-      // would take the rest of the line, interpolations and all. Its
-      // `${...}` bodies survive as ordinary text, so the passes below still
-      // apply to them.
-      .replace(TEMPLATE_LITERAL, keepInterpolations)
-      // A comment is text as well: `string /* Rating */` references nothing.
-      // Stripped after the quoted forms, so a `//` inside a string is not read
-      // as one, and before the regex removal below, which SUBSTITUTES `//` and
-      // would otherwise leave a token that ate the rest of the line. A regex
-      // literal is not caught here, since a line comment needs two slashes and
-      // `/Rating/` has one before its first character.
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/\/\/[^\n]*/g, " ")
-      // Regex literals are text too: `z.string().regex(/Rating/)` names no
-      // binding. Removed after the quoted forms so a slash inside a string is
-      // not mistaken for the start of one.
-      .replace(/\/(?:[^/\\\n]|\\.)+\/[gimsuy]*/g, "//")
+    // A name inside a string, a template's literal text, a comment or a regex
+    // is text, not a reference to the binding — `z.literal("Rating")` does not
+    // use an imported `Rating` — so those spans are blanked before matching.
+    // Interpolation bodies survive it, being code the expression really runs.
+    const code = codeOnly(expression)
       // A property key is a name, not a reference: `{ Rating: string }` and
       // `z.object({ Rating: z.string() })` use the binding on the value side or
       // not at all. Only the key is removed, so `{ a: Rating }` still counts.

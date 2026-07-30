@@ -76,6 +76,38 @@ describe("validateFieldValues", () => {
     expect(issues[0]?.message).toContain("0-5");
   });
 
+  it("reports an unknown type by the name it was declared under", async () => {
+    const issues = await validateFieldValues({}, [
+      { name: "kind", type: "star-rating" },
+    ] as Parameters<typeof validateFieldValues>[1]);
+
+    expect(issues).toEqual([
+      {
+        path: "kind",
+        code: "INVALID_FIELD_TYPE",
+        message: "kind declares an unknown field type.",
+      },
+    ]);
+  });
+
+  it("reports an unknown nested type under its container's path", async () => {
+    const issues = await validateFieldValues({}, [
+      {
+        name: "settings",
+        type: "group",
+        fields: [{ name: "kind", type: "star-rating" }],
+      },
+    ] as Parameters<typeof validateFieldValues>[1]);
+
+    // The path this API returns is absolute. Naming the child alone makes two
+    // identically named children in different containers indistinguishable to
+    // a caller mapping the issue back to a declaration.
+    expect(issues[0]?.path).toBe("settings.kind");
+    expect(issues[0]?.message).toBe(
+      "settings.kind declares an unknown field type."
+    );
+  });
+
   it("reports where a value nested in a container actually sits", async () => {
     const issues = await validateFieldValues({ rows: [{ title: "" }] }, [
       {

@@ -114,22 +114,8 @@ export type FieldValueDeclarationInput =
   | ValidatableField;
 
 /**
- * Check `values` against `fields`, returning every violation rather than the
- * first, so a caller can report or repair a whole object in one pass.
- *
- * Runs the same rules a write does, in the same order: the built-in checks for
- * the field's type, then a plugin field type's own `validate`, then the field's
- * `validate`. Issue paths are absolute and index a row in brackets
- * (`rows[0].title`), so a value nested in a container reports where it sits.
- *
- * Every declared type must be a built-in or a registered plugin type, and one
- * that is neither is reported instead of its values being checked. Plugin types
- * register while the config loads, so call this from a write path rather than
- * from a plugin's own `setup()`: called before registration, a plugin-typed
- * declaration is not yet knowable and every one of them is reported.
- */
-/**
- * Every declaration in a tree, nested children included.
+ * Every declaration in a tree, nested children included, each with the
+ * absolute path that addresses it.
  *
  * The container types this API advertises carry their own declarations, and
  * `validateEntryData` descends into them — so a misspelled child type reaches
@@ -137,21 +123,54 @@ export type FieldValueDeclarationInput =
  * a misspelled top-level one did.
  */
 function* walkDeclarations(
-  fields: readonly FieldValueDeclarationInput[]
-): Generator<FieldValueDeclarationInput> {
+  fields: readonly FieldValueDeclarationInput[],
+  basePath = ""
+): Generator<{ field: FieldValueDeclarationInput; path: string }> {
   for (const field of fields) {
-    yield field;
+    const name = (field as { name?: unknown }).name;
+    const prefix = basePath ? `${basePath}.` : "";
+    // An unnamed declaration has nothing to address it by, so its path names
+    // the list it sits in rather than the field. Still absolute, which keeps
+    // the lists of two different containers apart.
+    const path =
+      typeof name === "string" ? `${prefix}${name}` : `${prefix}fields`;
+    yield { field, path };
+
     const nested = (field as { fields?: unknown }).fields;
     const type = (field as { type?: unknown }).type;
     // Only the containers whose children the validator itself walks. A plugin
     // type is free to call one of its own options `fields`, and descending into
     // that would report its configuration as a bad declaration.
     if ((type === "repeater" || type === "group") && Array.isArray(nested)) {
-      yield* walkDeclarations(nested as FieldValueDeclarationInput[]);
+      // Children hang off the container's own path, so a child reports where it
+      // sits rather than under a bare name two containers could both hold. An
+      // unnamed container contributes nothing to address by, so its children
+      // keep the path it was reached through.
+      yield* walkDeclarations(
+        nested as FieldValueDeclarationInput[],
+        typeof name === "string" ? path : basePath
+      );
     }
   }
 }
 
+/**
+ * Check `values` against `fields`, returning every violation rather than the
+ * first, so a caller can report or repair a whole object in one pass.
+ *
+ * Runs the same rules a write does, in the same order: the built-in checks for
+ * the field's type, then a plugin field type's own `validate`, then the field's
+ * `validate`. Issue paths are absolute and index a row in brackets
+ * (`rows[0].title`), so a value nested in a container reports where it sits. A
+ * declaration issue names the declaration instead of a value, so it carries the
+ * dotted path (`rows.title`) with no index.
+ *
+ * Every declared type must be a built-in or a registered plugin type, and one
+ * that is neither is reported instead of its values being checked. Plugin types
+ * register while the config loads, so call this from a write path rather than
+ * from a plugin's own `setup()`: called before registration, a plugin-typed
+ * declaration is not yet knowable and every one of them is reported.
+ */
 export async function validateFieldValues(
   values: Record<string, unknown>,
   fields: readonly FieldValueDeclarationInput[],
@@ -161,7 +180,7 @@ export async function validateFieldValues(
   // validation, so a token it does not know reaches its default branch and any
   // value for that field is reported as valid. A caller writing declarations by
   // hand has had nothing check them, so a typo would read as a clean pass.
-  const unknownTypes = [...walkDeclarations(fields)].filter(field => {
+  const unknownTypes = [...walkDeclarations(fields)].filter(({ field }) => {
     const type = (field as { type?: unknown }).type;
     return (
       typeof type !== "string" ||
@@ -169,15 +188,11 @@ export async function validateFieldValues(
     );
   });
   if (unknownTypes.length > 0) {
-    return unknownTypes.map(field => {
-      const name = (field as { name?: unknown }).name;
-      const path = typeof name === "string" ? name : "fields";
-      return {
-        path,
-        code: "INVALID_FIELD_TYPE",
-        message: `${path} declares an unknown field type.`,
-      };
-    });
+    return unknownTypes.map(({ path }) => ({
+      path,
+      code: "INVALID_FIELD_TYPE",
+      message: `${path} declares an unknown field type.`,
+    }));
   }
 
   // Both arms describe the same field, one open for authoring and one the

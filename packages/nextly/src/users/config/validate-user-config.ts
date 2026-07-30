@@ -30,6 +30,7 @@
 
 import { SQL_RESERVED_KEYWORDS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
 
 import type { UserConfig } from "./types";
 
@@ -45,6 +46,7 @@ export type UserValidationErrorCode =
   | "USER_FIELD_TYPE_NOT_ALLOWED"
   | "USER_FIELD_TYPE_REQUIRED"
   | "USER_FIELD_HAS_MANY_UNSUPPORTED"
+  | "USER_FIELD_PLUGIN_OPTION_RESERVED"
   // Field name errors
   | "USER_FIELD_NAME_REQUIRED"
   | "USER_FIELD_NAME_INVALID_FORMAT"
@@ -418,6 +420,25 @@ function validateUserFields(
         code: "USER_FIELD_HAS_MANY_UNSUPPORTED",
         message: `User custom field '${f.type}' stores a single value, so hasMany cannot be used with it.`,
       });
+    }
+
+    // The instance a field type is handed restates `type` and `name` as its
+    // identity after folding the container, so an option under either would be
+    // shadowed and never reach the callback that asked for it. Type generation
+    // refuses these already, but only once `nextly build` runs — long after a
+    // config carrying one has booted and synced. Checked wherever the container
+    // is written rather than only for a plugin-typed field, because generation
+    // reads it off every user field and would fail on any of them.
+    const container = f.pluginOptions;
+    if (container !== null && typeof container === "object") {
+      for (const key of Object.keys(container)) {
+        if (!RESERVED_PLUGIN_OPTION_KEYS.has(key)) continue;
+        errors.push({
+          path: `${fieldPath}.pluginOptions.${key}`,
+          code: "USER_FIELD_PLUGIN_OPTION_RESERVED",
+          message: `'${key}' cannot be used as a plugin option: it states which field the type is looking at`,
+        });
+      }
     }
 
     // Field-specific validation
