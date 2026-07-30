@@ -175,6 +175,10 @@ export function pluginCodegenImports(
     const code = expression
       .replace(/"(?:[^"\\]|\\.)*"/g, '""')
       .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      // Regex literals are text too: `z.string().regex(/Rating/)` names no
+      // binding. Removed after the quoted forms so a slash inside a string is
+      // not mistaken for the start of one.
+      .replace(/\/(?:[^/\\\n]|\\.)+\/[gimsuy]*/g, "//")
       // A template's literal text is text, but its `${...}` interpolations hold
       // real references — a template-literal type is a plausible thing for a
       // type to emit — so only the parts between them are dropped.

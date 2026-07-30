@@ -362,9 +362,20 @@ export class TypeGenerator {
     // for the whole file — a non-generic `Partial` makes every `Partial<Post>`
     // fail to compile — but only the ones this output actually wrote are worth
     // reserving, so a name no construct here uses stays free.
-    const emittedBody = lines.slice(importSlot).join("\n");
+    // Reserved only where the generator itself wrote them. A plugin expression
+    // naming `Partial<Model>` is the plugin using its own import, so its uses
+    // are subtracted rather than removed from the text — deleting them would
+    // also erase core's own `Partial<Post>` and reserve nothing.
+    const body = lines.slice(importSlot).join("\n");
+    const occurrences = (haystack: string, needle: string): number =>
+      haystack.split(needle).length - 1;
     for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
-      if (new RegExp(`\\b${global}<`).test(emittedBody)) reserved.add(global);
+      const token = `${global}<`;
+      const byPlugins = [...this.pluginExpressions.values()].reduce(
+        (total, expression) => total + occurrences(expression, token),
+        0
+      );
+      if (occurrences(body, token) > byPlugins) reserved.add(global);
     }
 
     const imports: string[] = [];
@@ -790,7 +801,7 @@ export class TypeGenerator {
           storageType === undefined
             ? null
             : this.generateFieldType(
-                asStorageEquivalentField(field, storageType),
+                this.asScalarStorageField(field, storageType),
                 allCollections,
                 allComponents
               );
@@ -1382,6 +1393,27 @@ ${properties}
    * input aliases when those are generated — a collection declares
    * `<Name>CreateInput` and `<Name>UpdateInput`, a single `<Name>UpdateInput`.
    */
+  /**
+   * A plugin field retyped as the scalar its storage primitive writes.
+   *
+   * `hasMany` goes with it: the primitive maps to one column, so generating a
+   * list would promise a shape the table cannot hold — the column mapper and
+   * the Zod fallback both emit the scalar.
+   */
+  private asScalarStorageField(
+    field: DataFieldConfig,
+    storageType: Parameters<typeof asStorageEquivalentField>[1]
+  ): DataFieldConfig {
+    const scalar: Record<string, unknown> = {
+      ...(field as unknown as Record<string, unknown>),
+    };
+    delete scalar.hasMany;
+    return asStorageEquivalentField(
+      scalar,
+      storageType
+    ) as unknown as DataFieldConfig;
+  }
+
   private declaredInterfaceNames(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[],

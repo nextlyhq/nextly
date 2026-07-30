@@ -464,6 +464,9 @@ const NORMALIZED_USER_FIELD_KEYS: readonly string[] = [
   "max",
   "defaultValue",
   "options",
+  // Only `placeholder` and `description` are hoisted out of it onto the record,
+  // so a type reading `field.admin` would otherwise find nothing.
+  "admin",
 ];
 
 /** The declared options a user field carries beyond the modelled set. */

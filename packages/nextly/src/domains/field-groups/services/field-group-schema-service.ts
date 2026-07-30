@@ -70,6 +70,10 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
+import {
+  isPluginDataField,
+  pluginStorageFieldType,
+} from "../../schema/services/plugin-codegen";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -208,7 +212,7 @@ export class FieldGroupSchemaService {
     );
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       // Skip component fields — data lives in the referenced component's table.
       if (isFieldGroupField(field)) continue;
       // i18n: translatable columns live in the companion, not the main comp_ table.
@@ -216,7 +220,7 @@ export class FieldGroupSchemaService {
         continue;
       }
 
-      const columnSQL = this.generateColumnSQL(field);
+      const columnSQL = this.generateColumnSQL(this.asMappableField(field));
       if (columnSQL) {
         lines.push(`  ${columnSQL},`);
       }
@@ -253,7 +257,7 @@ export class FieldGroupSchemaService {
     }
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
@@ -275,7 +279,7 @@ export class FieldGroupSchemaService {
     }
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
@@ -298,7 +302,7 @@ export class FieldGroupSchemaService {
     }
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
@@ -345,7 +349,7 @@ export class FieldGroupSchemaService {
     for (const [name, field] of newFieldMap) {
       if (oldFieldMap.has(name)) continue;
 
-      const columnType = this.getColumnType(field);
+      const columnType = this.getColumnType(this.asMappableField(field));
       if (!columnType) continue;
 
       const columnName = this.toSnakeCase(name);
@@ -522,11 +526,11 @@ export class FieldGroupSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
-      const column = this.mapFieldToPostgresColumn(field);
+      const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
@@ -572,11 +576,11 @@ export class FieldGroupSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
-      const column = this.mapFieldToMySQLColumn(field);
+      const column = this.mapFieldToMySQLColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
@@ -614,11 +618,11 @@ export class FieldGroupSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
-      const column = this.mapFieldToSQLiteColumn(field);
+      const column = this.mapFieldToSQLiteColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
@@ -636,11 +640,29 @@ export class FieldGroupSchemaService {
     );
   }
 
+  /**
+   * A field as the column mappers below can read it.
+   *
+   * They switch on `field.type`, which for a plugin-contributed type matches no
+   * case. Substituting the storage primitive's built-in type makes them emit
+   * the column that type persists as — the same substitution
+   * `getColumnDescriptor` makes for collections and singles, so a component
+   * column matches what the schema pipeline creates for it.
+   */
+  private asMappableField(field: DataFieldConfig): DataFieldConfig {
+    const storageType = pluginStorageFieldType(field);
+    if (storageType === undefined) return field;
+    return {
+      ...(field as unknown as Record<string, unknown>),
+      type: storageType,
+    } as unknown as DataFieldConfig;
+  }
+
   private generateColumnSQL(field: DataFieldConfig): string | null {
     if (!("name" in field) || !field.name) return null;
 
     const columnName = this.toSnakeCase(field.name);
-    const columnType = this.getColumnType(field);
+    const columnType = this.getColumnType(this.asMappableField(field));
     if (!columnType) return null;
 
     const parts = [`${this.q}${columnName}${this.q}`, columnType];
@@ -962,7 +984,7 @@ export class FieldGroupSchemaService {
   private buildFieldMap(fields: FieldConfig[]): Map<string, DataFieldConfig> {
     const map = new Map<string, DataFieldConfig>();
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       map.set(field.name, field);
