@@ -380,6 +380,31 @@ describe("field-group migration session", () => {
     expect(ran).not.toHaveBeenCalled();
   });
 
+  // The mirror of the sync's recovery handler, and the reason it is opt-in: a
+  // signal does not stop the work already in flight, so releasing a migration's
+  // claim would free the row while it is still renaming tables and let a second
+  // process resume the same run against a database the first is still writing.
+  it("keeps a migration's claim held when the process is interrupted", async () => {
+    const h = createAdapter({ heldBy: null });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    let ownerAfterSignal: string | null = null;
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+      async () => {
+        process.emit("SIGINT");
+        await new Promise(resolve => setImmediate(resolve));
+        ownerAfterSignal = h.owner();
+      }
+    );
+
+    // Still held while the run was in flight, and released only by the ordinary
+    // exit path afterwards.
+    expect(ownerAfterSignal).not.toBeNull();
+    expect(kill).not.toHaveBeenCalled();
+    kill.mockRestore();
+  });
+
   it("uses a lock table distinct from the schema pipeline's", () => {
     expect(MIGRATION_LOCK_TABLE).toBe("nextly_field_group_lock");
     expect(MIGRATION_LOCK_TABLE).not.toBe("nextly_migrate_lock");

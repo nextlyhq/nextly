@@ -112,6 +112,10 @@ export async function withMigrationExcluded<T>(
       dialect: args.adapter.getCapabilities().dialect,
       label: args.label,
       requireExistingLock: !args.mayCreateLock,
+      // A sync's claim is safe to drop on a signal: two syncs overlapping is
+      // the state that existed before this exclusion, whereas a migration's
+      // claim must survive interruption.
+      releaseOnInterrupt: true,
     },
     async () => {
       await assertNoMigrationInFlight({

@@ -124,6 +124,20 @@ export async function withMigrationSession<T>(
      * DML but not DDL would be refused outright.
      */
     requireExistingLock?: boolean;
+    /**
+     * Release the claim if the process is interrupted.
+     *
+     * For schema syncs only. Watch mode documents Ctrl+C as the way to stop, so
+     * a claim that survived it would block every later sync — but a claim is
+     * only safe to drop on a signal if whatever still holds it is harmless to
+     * run twice, and a migration is not. Releasing a migration's claim would
+     * free the row while its work is still in flight, letting a second process
+     * resume the same run against a database the first is still writing to.
+     *
+     * So the migration keeps the strict behaviour this lock was designed for: an
+     * interrupted run stays held, and an operator clears it.
+     */
+    releaseOnInterrupt?: boolean;
   },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
@@ -178,7 +192,7 @@ export async function withMigrationSession<T>(
   // deliberate; it is the wrong one for a schema sync, where the documented way
   // to stop watch mode is Ctrl+C and a stuck claim would block every later sync.
   // Releasing on the signal keeps the durable-claim design and removes its cost
-  // on the path people actually interrupt.
+  // on the path people actually interrupt — but only for callers that opt in.
   const releaseOnSignal = (signal: NodeJS.Signals): void => {
     void release(adapter, claim).finally(() => {
       process.kill(process.pid, signal);
@@ -186,8 +200,14 @@ export async function withMigrationSession<T>(
   };
   const onInterrupt = (): void => releaseOnSignal("SIGINT");
   const onTerminate = (): void => releaseOnSignal("SIGTERM");
-  process.once("SIGINT", onInterrupt);
-  process.once("SIGTERM", onTerminate);
+  // Registered only where the claim is safe to drop mid-flight. The signal does
+  // not stop `fn`, so releasing here hands the row to whoever asks next while
+  // this process is still working — survivable for a sync, which was never
+  // mutually exclusive with another sync, and not for a migration.
+  if (args.releaseOnInterrupt === true) {
+    process.once("SIGINT", onInterrupt);
+    process.once("SIGTERM", onTerminate);
+  }
 
   try {
     return await fn(session);
