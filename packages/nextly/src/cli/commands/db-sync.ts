@@ -83,6 +83,7 @@ import {
   clearConfigCache,
   type LoadConfigResult,
 } from "../utils/config-loader";
+import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration } from "../utils/logger";
 
 import {
@@ -349,13 +350,7 @@ export async function runDbSync(
     // collections and singles: `loadConfig({ watch: true })` has already opened
     // the file watcher, so a user-fields-only project stayed alive with no
     // callback registered and never re-synced `user_ext` on a later edit.
-    if (
-      options.watch &&
-      (collectionCount > 0 ||
-        singleCount > 0 ||
-        componentCount > 0 ||
-        userFieldCount > 0)
-    ) {
+    if (options.watch && hasSchemaToSync(configResult.config)) {
       logger.newline();
       logger.divider();
       logger.info("Watching for config changes... (press Ctrl+C to stop)");

@@ -58,6 +58,7 @@ import {
   type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
 import {
   discoverMigrationGroups,
@@ -262,11 +263,7 @@ export async function runBuild(
   // Any supported entity is enough to build for. Gating on collections alone
   // meant an app of singles, field groups, or plugin-backed user fields wrote
   // no types at all, or kept a stale file from a previous run.
-  const hasSchema =
-    collectionCount > 0 ||
-    (configResult.config.singles?.length ?? 0) > 0 ||
-    (configResult.config.fieldGroups?.length ?? 0) > 0 ||
-    (configResult.config.users?.fields?.length ?? 0) > 0;
+  const hasSchema = hasSchemaToSync(configResult.config);
 
   if (!hasSchema) {
     if (entityValidation.errors.length > 0) {
