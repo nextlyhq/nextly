@@ -5,6 +5,7 @@ import type { MetaService } from "../../../meta/services/meta-service";
 import { hashManifest, type ManifestEntry } from "../manifest";
 import { runMigrationSteps, type MigrationStep } from "../runner";
 import type { MigrationSession } from "../session";
+import { MIGRATION_MARKER_VERSION } from "../state";
 
 const SESSION = {
   dialect: "postgresql",
@@ -43,7 +44,7 @@ const MARKER_PLAN_HASH = hashManifest(MARKER_PLAN);
 // a real marker rather than just recording calls.
 function markerMeta(events: string[], migrationId: string) {
   let stored: Record<string, unknown> = {
-    version: 1,
+    version: MIGRATION_MARKER_VERSION,
     status: "migrating",
     direction: "up",
     migrationId,
@@ -147,7 +148,7 @@ describe("field-group migration runner", () => {
     const meta = markerMeta(events, "run-1");
     // The marker already reports step 1 done.
     await meta.set("k", {
-      version: 1,
+      version: MIGRATION_MARKER_VERSION,
       status: "migrating",
       direction: "up",
       migrationId: "run-1",

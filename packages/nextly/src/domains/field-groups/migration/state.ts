@@ -24,8 +24,22 @@ import { hashManifest, MIGRATION_TARGET, type ManifestEntry } from "./manifest";
 /** `nextly_meta` key holding the marker. */
 export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
 
-/** Marker payload version, so a later migration can evolve this shape. */
-export const MIGRATION_MARKER_VERSION = 1;
+/**
+ * Marker payload version.
+ *
+ * **Bump this whenever the recorded plan's entry format changes, or whenever the
+ * mapping from entries to executable steps changes.** A marker records progress
+ * as `step: N`, and a number only means something against a specific step list.
+ * The plan itself is persisted rather than rebuilt, so its *contents* cannot
+ * drift — but a build that turns those same entries into a different list of
+ * steps makes the recorded position address different work, and nothing in the
+ * plan's own bytes reveals that. This constant is what does.
+ *
+ * Version 2 is this rename engine's plan format, in which a localization
+ * companion is carried on the entry for the table it belongs to rather than
+ * occupying an entry, and therefore a step position, of its own.
+ */
+export const MIGRATION_MARKER_VERSION = 2;
 
 /**
  * Highest step the marker will hold, one below the safe-integer ceiling.
@@ -201,9 +215,21 @@ export async function readMigrationState(
   const marker = entry.value as unknown as StoredMarker;
 
   if (marker.version !== MIGRATION_MARKER_VERSION) {
-    throw markerCorrupt(
-      `marker version ${String(marker.version)} is not supported by this build`
-    );
+    // Not reported as corruption: the bytes are intact and were written by a
+    // build whose step list this one may no longer reproduce, so a recorded
+    // position cannot be trusted to address the same work. The operator's remedy
+    // differs too — finish or roll back the run with the version that started
+    // it, rather than investigate a damaged marker.
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration marker was written by a different version of Nextly",
+      logContext: {
+        key: FIELD_GROUP_MIGRATION_KEY,
+        reason: "migration marker version is not this build's",
+        recordedVersion: marker.version,
+        supportedVersion: MIGRATION_MARKER_VERSION,
+      },
+    });
   }
 
   if (marker.status === "settled") {

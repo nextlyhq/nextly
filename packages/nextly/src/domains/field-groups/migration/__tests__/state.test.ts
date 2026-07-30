@@ -495,15 +495,17 @@ describe("field-group migration marker", () => {
   it.each([
     ["not an object", "nonsense"],
     [
-      "unknown version",
-      { version: 99, status: "settled", generation: "legacy" },
+      "unknown generation",
+      { version: MIGRATION_MARKER_VERSION, status: "settled", generation: "?" },
     ],
-    ["unknown generation", { version: 1, status: "settled", generation: "?" }],
-    ["unknown status", { version: 1, status: "elsewhere" }],
+    [
+      "unknown status",
+      { version: MIGRATION_MARKER_VERSION, status: "elsewhere" },
+    ],
     [
       "in-flight without a direction",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         migrationId: "r",
         step: 0,
@@ -513,7 +515,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight without an id",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         step: 0,
@@ -523,7 +525,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight with a fractional step",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -534,7 +536,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight without a manifest hash",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -545,7 +547,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight without a registry identity hash",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -559,7 +561,7 @@ describe("field-group migration marker", () => {
       // position, whatever `Number.isInteger` says about it.
       "in-flight with a step beyond the safe integer range",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -574,7 +576,7 @@ describe("field-group migration marker", () => {
       // rejected by the next read -- a marker with no way forward.
       "in-flight at the safe integer ceiling",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -586,7 +588,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight without a plan hash",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -604,6 +606,35 @@ describe("field-group migration marker", () => {
     await expect(readMigrationState(meta)).rejects.toMatchObject({
       code: "SERVICE_UNAVAILABLE",
     });
+  });
+
+  // `step` is a position in a step list, and only the build that produced that
+  // list can say what position N addressed. A marker from another version is
+  // therefore refused — and refused as a version mismatch rather than as
+  // corruption, because the bytes are intact and the operator's remedy is to
+  // finish or roll back the run with the version that started it.
+  it("refuses a marker written by a different version of Nextly", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION - 1,
+      status: "migrating",
+      direction: "up",
+      migrationId: "r",
+      step: 2,
+      registryHash: "s",
+      manifestHash: "h",
+    });
+
+    const error = await readMigrationState(meta).catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toBe(
+        "migration marker version is not this build's"
+      );
+      expect(error.logContext?.recordedVersion).toBe(
+        MIGRATION_MARKER_VERSION - 1
+      );
+      expect(error.logContext?.supportedVersion).toBe(MIGRATION_MARKER_VERSION);
+    }
   });
 
   // A row whose value is SQL NULL, and a row holding the JSON literal `null`,
@@ -686,7 +717,7 @@ describe("the persisted plan is the resume's authority", () => {
   // only thing standing between a corrupted blob and a run that executes it.
   it("refuses a plan that does not match its recorded hash", async () => {
     const { meta } = createMeta({
-      version: 1,
+      version: MIGRATION_MARKER_VERSION,
       status: "migrating",
       direction: "up",
       migrationId: "run-1",
@@ -710,7 +741,7 @@ describe("the persisted plan is the resume's authority", () => {
     "refuses an in-flight %s marker carrying no plan",
     async direction => {
       const { meta } = createMeta({
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction,
         migrationId: "run-1",
