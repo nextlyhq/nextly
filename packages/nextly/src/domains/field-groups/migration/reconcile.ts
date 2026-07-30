@@ -97,13 +97,23 @@ export function reconcilePlan(args: {
 
   assertEveryRowHasStorage(rows, catalog);
 
-  // A column entry names its table's post-rename name, so before that rename
-  // runs the table is still under the name it came from. Mapping each target
-  // back to its source is what lets a column be inspected either side of the
-  // rename that moves its table.
-  const sourceOf = new Map<string, string>();
+  // A column entry names one fixed spelling of its table, but the table itself
+  // moves during the run, so the columns have to be findable under either name.
+  // Which of the two is the "other" one depends on direction: going up a column
+  // names the post-rename table and the other name is where it came from, while
+  // a rollback keeps that same spelling as the name the table starts under, so
+  // the other name is where the revert takes it. Recording both directions makes
+  // the lookup independent of which way the run is going.
+  const otherNames = new Map<string, string[]>();
+  const linkNames = (name: string, other: string): void => {
+    const existing = otherNames.get(name);
+    if (existing === undefined) otherNames.set(name, [other]);
+    else existing.push(other);
+  };
   for (const entry of entries) {
-    if (entry.kind !== "column") sourceOf.set(entry.to, entry.from);
+    if (entry.kind === "column") continue;
+    linkNames(entry.to, entry.from);
+    linkNames(entry.from, entry.to);
   }
 
   return entries.map((entry, index) => {
@@ -112,7 +122,7 @@ export function reconcilePlan(args: {
       return reconcileColumn(entry, {
         catalog,
         columns,
-        sourceOf,
+        otherNames,
         position,
         run,
       });
@@ -391,21 +401,20 @@ function reconcileColumn(
   context: {
     catalog: CatalogIndex;
     columns: Map<string, CatalogIndex>;
-    sourceOf: Map<string, string>;
+    otherNames: Map<string, string[]>;
     position: number;
     run: RunRecord;
   }
 ): ManifestEntry {
-  const { catalog, columns, sourceOf, position, run } = context;
+  const { catalog, columns, otherNames, position, run } = context;
   const table = entry.table;
   if (table === undefined) return entry;
 
-  // Either side of its table's rename: the post-rename name if that has already
-  // happened, otherwise the name the table is still under.
-  const source = sourceOf.get(table);
+  // Either side of its table's rename: the name the entry carries if the table
+  // is still under it, otherwise whichever name the plan moves it to or from.
   const current =
     resolveCatalogName(catalog, table) ??
-    (source === undefined ? undefined : resolveCatalogName(catalog, source));
+    resolveAny(catalog, otherNames.get(table) ?? []);
 
   // Neither the table nor its predecessor exists. There is no work to do and
   // nothing to verify, and the missing storage is reported by the row check

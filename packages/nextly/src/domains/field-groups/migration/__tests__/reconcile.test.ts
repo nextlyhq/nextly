@@ -5,6 +5,7 @@ import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
 import {
   buildMigrationManifest,
+  invertManifest,
   MIGRATION_TARGET,
   type RegistryRow,
 } from "../manifest";
@@ -647,5 +648,51 @@ describe("column metadata keyed in another case", () => {
         identifierCase: FOLDING,
       })
     ).not.toThrow();
+  });
+});
+
+describe("reconciling a rollback", () => {
+  const rows = [row()];
+  // The applied plan, reversed: registry first, then the column while its table
+  // still carries the migrated name, then the table itself.
+  const down = invertManifest(buildMigrationManifest(rows).entries).entries;
+  const COLUMN_POSITION = 2;
+
+  function reconcile(columnOnTable: string[]) {
+    // The table revert has committed, so the table is back to `comp_hero`, and
+    // the column entry still names `fg_hero`.
+    const tables = ["dynamic_components", "comp_hero"];
+    return reconcilePlan({
+      entries: down,
+      rows,
+      tables,
+      columns: columnsFor(tables, { comp_hero: columnOnTable }),
+      run: { recorded: true, direction: "down", step: down.length },
+      direction: "down",
+      identifierCase: PRESERVING,
+    });
+  }
+
+  it("inverts into the order the rollback runs", () => {
+    expect(down.map(e => e.kind)).toEqual(["registry", "column", "table"]);
+    expect(down[COLUMN_POSITION - 1]?.table).toBe("fg_hero");
+  });
+
+  // The column entry names the pre-revert table, so once the table revert has
+  // applied that name is gone and the columns have to be found under the name
+  // the revert produced. Without that, the step reads as satisfied and a
+  // rollback that never reverted the discriminator settles legacy storage
+  // carrying `_field_group_type`.
+  it("refuses a rollback that left the migrated discriminator in place", () => {
+    const refusal = capture(() => reconcile([TARGET_COLUMN]));
+    expect(refusal.logContext?.reason).toMatch(
+      /column rename the marker records as verified/
+    );
+    expect(refusal.logContext?.table).toBe("comp_hero");
+  });
+
+  it("accepts a rollback that reverted the discriminator", () => {
+    const out = reconcile([LEGACY_COLUMN]);
+    expect(out[COLUMN_POSITION - 1]?.satisfied).toBe(true);
   });
 });
