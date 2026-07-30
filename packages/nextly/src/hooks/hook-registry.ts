@@ -97,7 +97,19 @@ export class HookRegistry {
       this.hooks.set(key, []);
     }
 
-    this.hooks.get(key)!.push(handler);
+    const handlers = this.hooks.get(key)!;
+    // The same function, for the same hook and collection, twice is never
+    // something a caller wants: it runs the handler twice, applying a
+    // transformation twice and duplicating whatever side effect it has. It
+    // happens when two boot paths register the same config -- a scaffolded app
+    // that registers its collections' hooks itself and then boots, which
+    // registers them again -- and the second registration is redundant rather
+    // than additional. Compared by identity, so two distinct functions that
+    // happen to do the same thing both still register.
+    if (handlers.includes(handler)) {
+      return;
+    }
+    handlers.push(handler);
   }
 
   /**

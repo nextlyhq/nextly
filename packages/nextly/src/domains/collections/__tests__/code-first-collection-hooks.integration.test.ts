@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
+import { registerCollectionHooks } from "../../../hooks/register-collection-hooks";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -114,6 +115,44 @@ describe("code-first collection hooks (integration)", () => {
 
     expect(created.success).toBe(true);
     expect((created.data as { title?: string }).title).toBe("Draft (checked)");
+  });
+
+  it("runs a hook once when the same config is registered twice", async () => {
+    // A scaffolded app registers its collections' hooks itself and then boots,
+    // which registers them again. Appending both copies runs every hook twice:
+    // a transformation is applied twice and any side effect is duplicated.
+    const fired: string[] = [];
+
+    // Held so the second registration below uses the very same function
+    // references a scaffolded app would, which is what makes the duplicate a
+    // duplicate.
+    const docs = defineCollection({
+      slug: "docs",
+      access: { create: () => true, read: () => true },
+      hooks: {
+        beforeChange: [
+          async ({ data }: { data?: unknown }) => {
+            fired.push("beforeChange");
+            return data;
+          },
+        ],
+      },
+      fields: [text({ name: "title" })],
+    });
+
+    current = await createTestNextly({ collections: [docs] });
+
+    // The registration a scaffolded app performs before booting.
+    registerCollectionHooks([docs]);
+
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    await handler.createEntry(
+      { collectionName: "docs", overrideAccess: true },
+      { title: "T" }
+    );
+
+    expect(fired).toEqual(["beforeChange"]);
   });
 
   it("does not run hooks from a collection a disabled plugin contributed", async () => {
