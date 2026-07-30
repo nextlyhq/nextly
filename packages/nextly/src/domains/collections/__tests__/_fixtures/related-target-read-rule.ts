@@ -32,6 +32,11 @@ export default function relatedTargetReadRule({
     // collection, but only the rows matching their tenant.
     case "tenant-scoped":
       return { tenant: { equals: req.user?.tenant } };
+    // Answers DIFFERENTLY depending on the row asked about: unrestricted when
+    // asked in general, tenant-scoped for a concrete document. A narrowing
+    // resolved without the id would be the weaker of the two.
+    case "id-varying":
+      return id === undefined ? true : { tenant: { equals: req.user?.tenant } };
     default:
       return true;
   }

@@ -105,12 +105,6 @@ interface RelatedRowAccess {
 /** A target collection's read policy, as one expansion needs it. */
 export interface TargetReadPolicy {
   rules: CollectionAccessRules | undefined;
-  /**
-   * The predicate a stored rule answered with, when it answered with one
-   * rather than a verdict. Applied to the target table rather than compared in
-   * memory, so it binds exactly as it does on a direct read.
-   */
-  queryConstraint: Record<string, unknown> | null;
 }
 
 /**
@@ -1018,21 +1012,48 @@ export class CollectionRelationshipService extends BaseService {
     // verdicts are zipped back against the original order, so the rows keep
     // the sequence they were fetched in.
     const verdicts = await Promise.all(
-      rows.map(row =>
-        this.rowPassesTargetPolicy(row, policy, accessService, user)
-      )
+      rows.map(row => this.judgeRow(row, policy, accessService, user))
     );
-    const admitted = rows.filter((_, index) => verdicts[index]);
+    const admitted = rows.filter((_, index) => verdicts[index].allowed);
     this.recordWithheld(rows, admitted, access);
+    if (admitted.length === 0) return admitted;
 
-    if (!policy.queryConstraint || admitted.length === 0) return admitted;
-    const narrowed = await this.narrowByTargetPredicate(
-      targetCollection,
-      admitted,
-      policy.queryConstraint
-    );
-    this.recordWithheld(admitted, narrowed, access);
-    return narrowed;
+    // Rows sharing a predicate are confirmed together, so the usual case of one
+    // predicate for the whole collection costs one query — and a rule that
+    // answers different rows differently still has each row confirmed against
+    // the predicate it was actually judged by.
+    const byPredicate = new Map<string, Record<string, unknown>[]>();
+    const predicates = new Map<string, Record<string, unknown>>();
+    const unrestricted: Record<string, unknown>[] = [];
+    admitted.forEach(row => {
+      const predicate = verdicts[rows.indexOf(row)].predicate;
+      if (!predicate) {
+        unrestricted.push(row);
+        return;
+      }
+      const key = JSON.stringify(predicate);
+      predicates.set(key, predicate);
+      const group = byPredicate.get(key);
+      if (group) group.push(row);
+      else byPredicate.set(key, [row]);
+    });
+
+    const confirmed = [...unrestricted];
+    for (const [key, group] of byPredicate) {
+      confirmed.push(
+        ...(await this.narrowByTargetPredicate(
+          targetCollection,
+          group,
+          predicates.get(key) as Record<string, unknown>
+        ))
+      );
+    }
+    // Restored to the order they were fetched in, since the grouping above
+    // reads them out by predicate.
+    const kept = new Set(confirmed);
+    const ordered = admitted.filter(row => kept.has(row));
+    this.recordWithheld(admitted, ordered, access);
+    return ordered;
   }
 
   /**
@@ -1079,12 +1100,6 @@ export class CollectionRelationshipService extends BaseService {
       return {
         rules: accessService.getAccessRules(
           collection as Record<string, unknown>
-        ),
-        queryConstraint: await accessService.getAccessQueryConstraint(
-          targetCollection,
-          access.user as UserContext | undefined,
-          false,
-          access.authenticatedScope
         ),
       };
     })();
@@ -1146,7 +1161,13 @@ export class CollectionRelationshipService extends BaseService {
       // admit every row. Withhold instead: the rule asked to narrow.
       if (!condition) return [];
 
-      const ids = rows.map(row => row.id as string);
+      // A row without a string id cannot be matched against the target table.
+      // Binding an absent one throws on some dialects, and the catch below then
+      // withholds every row of the collection instead of just this one.
+      const ids = rows
+        .map(row => row.id)
+        .filter((id): id is string => typeof id === "string");
+      if (ids.length === 0) return [];
       const admitted = await this.db
         .select({ id: schema.id })
         .from(schema)
@@ -1173,12 +1194,12 @@ export class CollectionRelationshipService extends BaseService {
    * rule shape, and nothing that could read an operator differently from the
    * query the direct read compiles.
    */
-  private async rowPassesTargetPolicy(
+  private async judgeRow(
     row: Record<string, unknown>,
     policy: TargetReadPolicy,
     accessService: CollectionAccessService,
     user: UserContext | undefined
-  ): Promise<boolean> {
+  ): Promise<{ allowed: boolean; predicate: Record<string, unknown> | null }> {
     const result = await this.accessControl.evaluateAccess(
       policy.rules,
       "read",
@@ -1194,18 +1215,14 @@ export class CollectionRelationshipService extends BaseService {
       DEFAULT_OWNER_FIELD
     );
 
-    // A predicate is not a verdict: it narrows which rows are readable, and the
-    // narrowing is applied to the target table afterwards. Answering "denied"
-    // here would hide rows the rule admits.
-    //
-    // But the narrowing has to actually be available. The lookup that resolves
-    // it reports its own failure as "no predicate", which is indistinguishable
-    // from a rule that never had one — and a rule that answered with a
-    // predicate whose predicate went missing would otherwise admit every row.
-    // Withhold instead, so a transient failure cannot widen a restricted
-    // target into an open one.
-    if (result.query && !policy.queryConstraint) return false;
-    return result.allowed;
+    // The predicate travels with the verdict that produced it. A rule may vary
+    // by document id and answer a concrete row with a narrower predicate than
+    // it answers an id-less question with, so resolving the narrowing
+    // separately would apply the weaker one to rows judged by the stronger.
+    return {
+      allowed: result.allowed,
+      predicate: result.query ?? null,
+    };
   }
 
   /**

@@ -494,12 +494,10 @@ describe("related-row collection access — policy resolution (integration)", ()
       { and: [{ column: "slug", op: "=", value: "orgs" }] }
     );
 
-    // Unique to policy resolution: the row fetches and the redaction pass read
-    // collection metadata too, so counting that would count them as well.
-    const spy = vi.spyOn(
-      CollectionAccessService.prototype,
-      "getAccessQueryConstraint"
-    );
+    // Reading a target's stored rules happens once per policy resolution. The
+    // row fetches and the redaction pass read collection metadata too, so
+    // counting that instead would count them as well.
+    const spy = vi.spyOn(CollectionAccessService.prototype, "getAccessRules");
     try {
       const result = await handler.getEntry({
         collectionName: "posts",
@@ -515,7 +513,7 @@ describe("related-row collection access — policy resolution (integration)", ()
       expect(JSON.stringify(result.data)).toContain("Acme");
 
       const orgResolutions = spy.mock.calls.filter(
-        call => call[0] === "orgs"
+        call => (call[0] as { slug?: string } | undefined)?.slug === "orgs"
       ).length;
       expect(orgResolutions).toBe(1);
     } finally {
@@ -612,11 +610,12 @@ describe("related-row collection access — query predicates (integration)", () 
   });
 });
 
-describe("related-row collection access — predicate resolution failure", () => {
-  // The lookup that resolves a predicate reports its own failure as "no
-  // predicate", which looks exactly like a rule that never had one. A rule that
-  // DID answer with a predicate must not then be treated as unrestricted.
-  it("withholds rows when the predicate could not be resolved", async () => {
+describe("related-row collection access — id-varying predicates", () => {
+  // A rule may answer a concrete document more strictly than it answers an
+  // id-less question. The narrowing applied to a row has to be the one that row
+  // was judged by, or the weaker answer decides and rows the rule excludes come
+  // back.
+  it("applies the predicate the row itself was judged by", async () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -634,13 +633,13 @@ describe("related-row collection access — predicate resolution failure", () =>
     });
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
-    const page = await handler.createEntry(
+    const theirs = await handler.createEntry(
       { collectionName: "pages", overrideAccess: true },
-      { title: "Scoped page", tenant: "acme" }
+      { title: "Other tenant page", tenant: "other" }
     );
     const ref = await handler.createEntry(
       { collectionName: "refs", overrideAccess: true },
-      { name: "r", target: (page.data as { id: string }).id }
+      { name: "r", target: (theirs.data as { id: string }).id }
     );
     await current.adapter.update(
       "dynamic_collections",
@@ -650,25 +649,62 @@ describe("related-row collection access — predicate resolution failure", () =>
       { and: [{ column: "slug", op: "=", value: "pages" }] }
     );
 
-    // Stand in for the transient failure the real lookup swallows: the rule
-    // still answers with a predicate, but the predicate does not arrive.
-    const spy = vi
-      .spyOn(CollectionAccessService.prototype, "getAccessQueryConstraint")
-      .mockResolvedValue(null);
-    try {
-      const result = await handler.getEntry({
-        collectionName: "refs",
-        entryId: (ref.data as { id: string }).id,
-        depth: 1,
-        user: { id: "tenant-scoped", tenant: "acme" },
-        routeAuthorized: true,
-      });
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: (ref.data as { id: string }).id,
+      depth: 1,
+      user: { id: "id-varying", tenant: "acme" },
+      routeAuthorized: true,
+    });
 
-      // The parent is still served; the target it could not narrow is absent.
-      expect(result.success).toBe(true);
-      expect(JSON.stringify(result.data)).not.toContain("Scoped page");
-    } finally {
-      spy.mockRestore();
-    }
+    expect(result.success).toBe(true);
+    // The id-less answer is an unrestricted allow; the row's own answer scopes
+    // it to another tenant, so the row must not come back.
+    expect(JSON.stringify(result.data)).not.toContain("Other tenant page");
+  });
+
+  it("still returns a row that predicate admits", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          fields: [text({ name: "title" }), text({ name: "tenant" })],
+        }),
+        defineCollection({
+          slug: "refs",
+          fields: [
+            text({ name: "name" }),
+            relationship({ name: "target", relationTo: "pages" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const mine = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "My tenant page", tenant: "acme" }
+    );
+    const ref = await handler.createEntry(
+      { collectionName: "refs", overrideAccess: true },
+      { name: "r", target: (mine.data as { id: string }).id }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: { read: { type: "custom", functionPath: ID_RULE_PATH } },
+      },
+      { and: [{ column: "slug", op: "=", value: "pages" }] }
+    );
+
+    const result = await handler.getEntry({
+      collectionName: "refs",
+      entryId: (ref.data as { id: string }).id,
+      depth: 1,
+      user: { id: "id-varying", tenant: "acme" },
+      routeAuthorized: true,
+    });
+
+    expect(JSON.stringify(result.data)).toContain("My tenant page");
   });
 });
