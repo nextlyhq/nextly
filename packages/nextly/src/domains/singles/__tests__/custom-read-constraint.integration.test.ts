@@ -1245,6 +1245,70 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(JSON.stringify(authors)).not.toContain("Refused");
   });
 
+  // The preliminary view and the response have to agree about whether a target
+  // is readable. A view shown a row the response will withhold lets a rule
+  // reading that row approve the document, so the read's side effects run and
+  // only the final check discovers the row is gone — the denial arrives after
+  // the hooks it was supposed to precede.
+  it("runs no read hook when a target the response withholds is refused", async () => {
+    const beforeRead = vi.fn(async () => undefined);
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          hooks: { beforeRead: [beforeRead] },
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Ada" }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    // The target refuses this caller, while the Single's own rule admits the
+    // document only while its `author` is a populated row.
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: {
+          read: { type: "custom", functionPath: TARGET_RULE_PATH },
+        },
+      },
+      { and: [{ column: "slug", op: "=", value: "authors" }] }
+    );
+    beforeRead.mockClear();
+
+    const result = await entry.get("branding", {
+      user: { id: "needs-populated-author" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    // The decision was reached on the same evidence the response would carry,
+    // so it landed before the read's side effects rather than after them.
+    expect(beforeRead).not.toHaveBeenCalled();
+  });
+
   // A container is serialized to JSON wholesale, so a reference left populated
   // inside one is written as the row and never read back as a reference again.
   it("stores a reference for a populated value inside a group", async () => {

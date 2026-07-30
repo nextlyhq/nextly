@@ -57,6 +57,11 @@ export interface ComponentReadAccess {
    */
   withheldByAccess?: Set<string>;
   /**
+   * Evaluate the target collection's own read rules even when field redaction
+   * is off, so an authorization view is not shown a row the response withholds.
+   */
+  enforceCollectionAccess?: boolean;
+  /**
    * Target read policies resolved during this population.
    *
    * Component rows are expanded concurrently, and rows pointing at the same
@@ -1118,6 +1123,7 @@ export class FieldGroupQueryService extends BaseService {
           // The related row belongs to another collection, so it is judged by
           // that collection's field rules for this caller.
           enforceFieldAccess: access.enforceFieldAccess,
+          enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,

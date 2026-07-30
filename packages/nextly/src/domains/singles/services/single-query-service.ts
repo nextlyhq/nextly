@@ -63,6 +63,7 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { relationKey } from "../../collections/services/collection-relationship-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   populateCompanionFields,
@@ -293,6 +294,37 @@ function referenceId(reference: unknown): string {
   return "";
 }
 
+/**
+ * The collection a stored reference points at.
+ *
+ * A field naming several targets records the collection on the value itself;
+ * anything else belongs to the field's declared target. Needed because a
+ * withheld row is recorded per collection — an id alone is only unique within
+ * one, so a refusal in one target would otherwise excuse a lost row in another.
+ */
+/** A relationship field's declared target, in either shape it is declared in. */
+function singleFieldTarget(field: FieldConfig): string {
+  const config = field as {
+    relationTo?: unknown;
+    options?: { target?: unknown };
+  };
+  if (typeof config.relationTo === "string") return config.relationTo;
+  if (Array.isArray(config.relationTo)) return "";
+  const target = config.options?.target;
+  return typeof target === "string" ? target : "";
+}
+
+function referenceCollection(
+  reference: unknown,
+  fallbackCollection: string
+): string {
+  if (reference !== null && typeof reference === "object") {
+    const { relationTo } = reference as Record<string, unknown>;
+    if (typeof relationTo === "string") return relationTo;
+  }
+  return fallbackCollection;
+}
+
 function referencesExpanded(
   stored: unknown,
   assembled: unknown,
@@ -303,7 +335,9 @@ function referencesExpanded(
    * missing would refuse a document the caller may read because something it
    * points at is something they may not.
    */
-  withheldByAccess?: Set<string>
+  withheldByAccess?: Set<string>,
+  /** The field's declared target, for references that do not name their own. */
+  fieldTarget = ""
 ): boolean {
   const parsedStored = parseReferenceValue(stored);
   if (parsedStored === UNREADABLE_CONTAINER) return false;
@@ -313,14 +347,19 @@ function referencesExpanded(
   // readable and refused rows therefore compares the shortened list against
   // the references that were actually expandable, rather than against every
   // reference the row stored.
-  const expectable = (ref: unknown): boolean =>
-    !withheldByAccess?.has(referenceId(ref));
+  const withheld = (ref: unknown): boolean =>
+    Boolean(
+      withheldByAccess?.has(
+        relationKey(referenceCollection(ref, fieldTarget), referenceId(ref))
+      )
+    );
+  const expectable = (ref: unknown): boolean => !withheld(ref);
   if (withheldByAccess?.size) {
     const refusedEveryReference = (
       Array.isArray(storedList) ? storedList : [storedList]
     )
       .filter(ref => !isEmptyValue(ref))
-      .every(ref => withheldByAccess.has(referenceId(ref)));
+      .every(ref => withheld(ref));
     if (refusedEveryReference) return true;
   }
   const storedRefs = Array.isArray(storedList)
@@ -754,6 +793,11 @@ export class SingleQueryService extends BaseService {
       options.depth,
       {
         enforceFieldAccess: enforceRelatedFieldAccess,
+        // Always on, unlike field redaction: the authorization view must not be
+        // shown a related row the response is going to withhold, or its rule
+        // approves the document and the read's side effects run before the
+        // final check discovers the row is gone.
+        enforceCollectionAccess: true,
         user: options.user,
         overrideAccess: options.overrideAccess,
         authenticatedScope: options.authenticatedScope,
@@ -785,6 +829,7 @@ export class SingleQueryService extends BaseService {
           // caller travels down to reach the related row's own rules.
           access: {
             enforceFieldAccess: enforceRelatedFieldAccess,
+            enforceCollectionAccess: true,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,
             // A relationship inside a component is populated by the same
@@ -889,7 +934,14 @@ export class SingleQueryService extends BaseService {
         // populated whatever depth is configured, so the same exemption would
         // skip their only check.
         if (type !== "upload" && relationshipMaxDepth(field) === 0) continue;
-        if (!referencesExpanded(before, after, withheldByAccess)) {
+        if (
+          !referencesExpanded(
+            before,
+            after,
+            withheldByAccess,
+            singleFieldTarget(field)
+          )
+        ) {
           this.logger.error(
             "Refusing a single read: relationship evidence could not be assembled",
             { single: slug, field: where }
@@ -961,6 +1013,8 @@ export class SingleQueryService extends BaseService {
     skipLocalizedOverlay?: boolean;
   }): Promise<SingleDocument> {
     let references: SingleDocument | undefined;
+    // Rows the targets' own rules refused while assembling this view.
+    const viewWithheld = new Set<string>();
     const assembled = await this.assembleStoredDocument({
       ...params,
       // Every reference the read will resolve, including the localized ones the
@@ -987,12 +1041,20 @@ export class SingleQueryService extends BaseService {
       },
       // Judged on complete data or not at all.
       strict: true,
+      // The view withholds a target this caller may not read, exactly as the
+      // response will, so the check below has to know which absences that
+      // accounts for — otherwise the refusal it was asked to make reads back to
+      // it as evidence that failed to load.
+      withheldByAccess: viewWithheld,
     });
     this.assertRelationshipsExpanded(
       params.slug,
       params.singleMeta.fields,
       references ?? params.doc,
-      assembled
+      assembled,
+      true,
+      "",
+      viewWithheld
     );
     // The response carries the per-locale overview when it is asked for, so a
     // rule deciding on translation state has to see it here too, or the two
@@ -2368,6 +2430,12 @@ export class SingleQueryService extends BaseService {
     // enforcing for the former strips protected fields from everybody.
     access: {
       enforceFieldAccess?: boolean;
+      /**
+       * Evaluate the target collection's own read rules even when field
+       * redaction is off, so the authorization view is not shown a row the
+       * response will withhold.
+       */
+      enforceCollectionAccess?: boolean;
       user?: UserContext;
       overrideAccess?: boolean;
       /**
@@ -2427,6 +2495,7 @@ export class SingleQueryService extends BaseService {
           // path does not, so its response keeps the fields it already returned
           // rather than having them stripped as if nobody were asking.
           enforceFieldAccess: access.enforceFieldAccess,
+          enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user as Record<string, unknown> | undefined,
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,

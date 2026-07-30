@@ -23,6 +23,9 @@ export default function relatedTargetReadRule({
     // readable document whose relationship target is not readable.
     case "denied":
     case "always":
+    // Refused here while the Single's own rule admits the caller, so the
+    // document is readable and its relationship target is not.
+    case "needs-populated-author":
       return false;
     // Everything except one document. Evaluated without the id this reads as
     // "allowed" and hands back the one row it exists to withhold.

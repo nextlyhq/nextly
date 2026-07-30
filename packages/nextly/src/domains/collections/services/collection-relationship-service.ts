@@ -78,6 +78,13 @@ interface RelatedRowAccess {
    * point opts in as its own caller forwarding lands.
    */
   enforceFieldAccess?: boolean;
+  /**
+   * Evaluate the TARGET collection's own read rules, independently of whether
+   * this caller redacts fields. A Single's authorization view wants the second
+   * without the first: its rule must read real field values, and must still not
+   * be shown a row the response will withhold.
+   */
+  enforceCollectionAccess?: boolean;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
   /**
@@ -151,6 +158,12 @@ export interface RelationshipExpansionOptions {
    * read paths that forward a real caller; see {@link RelatedRowAccess}.
    */
   enforceFieldAccess?: boolean;
+
+  /**
+   * Evaluate the target collection's own read rules even when field redaction
+   * is off. See {@link RelatedRowAccess.enforceCollectionAccess}.
+   */
+  enforceCollectionAccess?: boolean;
 
   /**
    * Collects the ids withheld because a target collection refused the caller,
@@ -759,7 +772,7 @@ function readRelationshipRef(
  * id for two of them, and a lookup keyed on the id alone would hand back
  * whichever row was fetched last.
  */
-function relationKey(collection: string, id: string): string {
+export function relationKey(collection: string, id: string): string {
   // A NUL separator cannot appear in a slug or an id, so no two distinct
   // pairs can collapse to the same key.
   return `${collection}\u0000${id}`;
@@ -976,7 +989,16 @@ export class CollectionRelationshipService extends BaseService {
     rows: Record<string, unknown>[],
     access: RelatedRowAccess
   ): Promise<Record<string, unknown>[]> {
-    if (!access.enforceFieldAccess) return rows;
+    // Deliberately NOT keyed on `enforceFieldAccess`. That flag asks whether a
+    // related row's FIELDS should be redacted; this asks whether the caller may
+    // see the row at all, and the two have different callers. A Single's
+    // authorization view populates without field redaction so its rule reads
+    // real values — but if the response is going to withhold the row, the
+    // preliminary view has to withhold it too, or the rule approves a document
+    // on evidence the response then removes and side effects run in between.
+    if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
+      return rows;
+    }
     if (access.overrideAccess) return rows;
     if (rows.length === 0) return rows;
     // System entities carry no stored collection rules; their secrets are
@@ -1017,7 +1039,7 @@ export class CollectionRelationshipService extends BaseService {
       rows.map(row => this.judgeRow(row, policy, accessService, user))
     );
     const admitted = rows.filter((_, index) => verdicts[index].allowed);
-    this.recordWithheld(rows, admitted, access);
+    this.recordWithheld(targetCollection, rows, admitted, access);
     if (admitted.length === 0) return admitted;
 
     // Rows sharing a predicate are confirmed together, so the usual case of one
@@ -1055,27 +1077,41 @@ export class CollectionRelationshipService extends BaseService {
       else confirmed.push(...narrowed);
     }
     // Restored to the order they were fetched in, since the grouping above
-    // reads them out by predicate.
-    const kept = new Set(confirmed);
-    const ordered = admitted.filter(row => kept.has(row));
-    if (!anyPredicateFailed) this.recordWithheld(admitted, ordered, access);
+    // reads them out by predicate. Matched on id rather than object identity:
+    // narrowing re-reads the rows it admits, so what comes back describes the
+    // same row but is not the same object.
+    const byId = new Map(
+      confirmed.map(row => [row.id as string, row] as const)
+    );
+    const ordered = admitted
+      .map(row => byId.get(row.id as string))
+      .filter((row): row is Record<string, unknown> => row !== undefined);
+    if (!anyPredicateFailed)
+      this.recordWithheld(targetCollection, admitted, ordered, access);
     return ordered;
   }
 
   /**
-   * Note which ids a refusal removed, so a caller checking its expansion for
+   * Note which rows a refusal removed, so a caller checking its expansion for
    * completeness reads them as absent on purpose rather than as evidence lost.
+   *
+   * Keyed by collection AND id, because an id is only unique within its own
+   * collection: two targets can carry the same one, and a bare-id record would
+   * let a refusal in the first excuse a genuine load failure in the second.
    */
   private recordWithheld(
+    targetCollection: string,
     before: Record<string, unknown>[],
     after: Record<string, unknown>[],
     access: RelatedRowAccess
   ): void {
     if (!access.withheldByAccess || before.length === after.length) return;
-    const kept = new Set(after.map(row => row.id as string));
+    const kept = new Set(after);
     for (const row of before) {
-      const id = row.id as string | undefined;
-      if (id && !kept.has(id)) access.withheldByAccess.add(id);
+      if (kept.has(row)) continue;
+      if (typeof row.id === "string") {
+        access.withheldByAccess.add(relationKey(targetCollection, row.id));
+      }
     }
   }
 
@@ -1174,14 +1210,29 @@ export class CollectionRelationshipService extends BaseService {
         .map(row => row.id)
         .filter((id): id is string => typeof id === "string");
       if (ids.length === 0) return [];
-      const admitted = await this.db
-        .select({ id: schema.id })
+      // The whole row is re-read under the predicate, not just its id. Reading
+      // the id alone authorizes the row as it is NOW and then returns the copy
+      // fetched a moment earlier: if a predicate field changed in between — an
+      // ownership or tenant reassignment that also replaced the contents — the
+      // caller would be handed the version that belonged to whoever held it
+      // before. Authorization and the data it admits come from one read.
+      const admitted = (await this.db
+        .select()
         .from(schema)
-        .where(and(inArray(schema.id, ids), condition));
-      const allowed = new Set(
-        (admitted as { id: string }[]).map(row => row.id)
+        .where(and(inArray(schema.id, ids), condition))) as Record<
+        string,
+        unknown
+      >[];
+      const fresh = new Map(
+        admitted.map(row => {
+          const normalized = convertTimestampsToCamelCase({ ...row });
+          return [normalized.id as string, normalized];
+        })
       );
-      return rows.filter(row => allowed.has(row.id as string));
+      // Ordered by the rows that came in, so the caller's sequence survives.
+      return rows
+        .map(row => fresh.get(row.id as string))
+        .filter((row): row is Record<string, unknown> => row !== undefined);
     } catch (error) {
       this.logger.warn("Could not apply a target collection's read predicate", {
         collection: targetCollection,
@@ -1427,6 +1478,7 @@ export class CollectionRelationshipService extends BaseService {
     // by its own collection's field rules.
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
+      enforceCollectionAccess: options.enforceCollectionAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
@@ -2078,6 +2130,7 @@ export class CollectionRelationshipService extends BaseService {
     // any depth is judged by its own collection's field rules.
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
+      enforceCollectionAccess: options.enforceCollectionAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
