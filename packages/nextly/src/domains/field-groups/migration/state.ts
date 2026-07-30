@@ -16,7 +16,10 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { MetaService } from "../../meta/services/meta-service";
+
+import { MIGRATION_TARGET, type ManifestEntry } from "./manifest";
 
 /** `nextly_meta` key holding the marker. */
 export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
@@ -66,6 +69,19 @@ export interface SettledState {
    * unexplained rather than expected.
    */
   recorded: boolean;
+  /**
+   * The plan that produced this generation, kept so a rollback can reverse it.
+   *
+   * A rollback cannot derive the reverse mapping: nothing in the database
+   * distinguishes a `fg_*` name this migration created from one an author chose
+   * before it existed, so renaming by prefix on the way down would destroy the
+   * latter. Only the record of what was applied carries that distinction, which
+   * is why it survives settlement rather than being discarded with the run.
+   *
+   * Absent on a `legacy` generation that no run produced, and on markers written
+   * before a plan was recorded.
+   */
+  appliedManifest?: ManifestEntry[];
 }
 
 /**
@@ -103,6 +119,20 @@ export interface MigratingState {
   migrationId: string;
   step: number;
   plan: MigrationPlanIdentity;
+  /**
+   * The plan being applied, carried for the whole run.
+   *
+   * Always the plan that was applied to reach migrated storage, never its
+   * inverse. A rollback reverses it at execution time; storing it pre-inverted
+   * would let a resume invert it twice and migrate forward while believing it
+   * was rolling back.
+   *
+   * A `down` run reverses what an earlier `up` recorded, so the record has to
+   * survive the transition out of `settled` and every step after it. Writing it
+   * only at settlement would lose it the moment a rollback started, leaving a
+   * crashed run with a step position and no plan to index into.
+   */
+  appliedManifest?: ManifestEntry[];
 }
 
 export type MigrationState = SettledState | MigratingState;
@@ -117,6 +147,7 @@ interface StoredMarker {
   step?: number;
   manifestHash?: string;
   planHash?: string;
+  appliedManifest?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -170,6 +201,9 @@ export async function readMigrationState(
       status: "settled",
       generation: marker.generation,
       recorded: true,
+      ...(marker.appliedManifest === undefined
+        ? {}
+        : { appliedManifest: parseAppliedManifest(marker.appliedManifest) }),
     };
   }
 
@@ -207,6 +241,9 @@ export async function readMigrationState(
       migrationId,
       step,
       plan: { manifestHash, planHash },
+      ...(marker.appliedManifest === undefined
+        ? {}
+        : { appliedManifest: parseAppliedManifest(marker.appliedManifest) }),
     };
   }
 
@@ -220,13 +257,33 @@ export async function readMigrationState(
  * this write resumes at step 1 and re-runs the first step from scratch. Every
  * step is idempotent precisely so that re-run is safe.
  */
+/**
+ * Starting a run, with the plan required exactly where a run cannot do without it.
+ *
+ * A `down` run reverses a recorded plan; it cannot derive one, because nothing in
+ * the database says which names this migration created. An `up` run builds its
+ * plan from registry rows, so it has none to carry in. Expressing that as a union
+ * rather than an optional field with a comment means the unsafe call does not
+ * typecheck — a comment saying "required" while the type says otherwise is the
+ * kind of claim that goes unenforced.
+ */
+export type BeginMigrationArgs =
+  | {
+      direction: "up";
+      migrationId: string;
+      plan: MigrationPlanIdentity;
+      appliedManifest?: undefined;
+    }
+  | {
+      direction: "down";
+      migrationId: string;
+      plan: MigrationPlanIdentity;
+      appliedManifest: readonly ManifestEntry[];
+    };
+
 export async function beginMigration(
   meta: MetaService,
-  args: {
-    direction: MigrationDirection;
-    migrationId: string;
-    plan: MigrationPlanIdentity;
-  }
+  args: BeginMigrationArgs
 ): Promise<void> {
   // The writer holds itself to the reader's invariants. Persisting a marker the
   // next read would reject leaves the database unavailable with no way forward,
@@ -243,6 +300,13 @@ export async function beginMigration(
     step: 0,
     manifestHash: args.plan.manifestHash,
     planHash: args.plan.planHash,
+    // Carried from the settled marker rather than dropped: a rollback has no
+    // other source for the plan it is reversing. Validated through the same
+    // function the read uses, so a write cannot produce a marker its own reader
+    // refuses -- which would strand a run after its first step had committed.
+    ...(args.appliedManifest === undefined
+      ? {}
+      : { appliedManifest: parseAppliedManifest(args.appliedManifest) }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
@@ -317,6 +381,11 @@ export async function advanceStep(
     step: args.step,
     manifestHash: current.plan.manifestHash,
     planHash: current.plan.planHash,
+    // Preserved on every step. Losing it mid-run would leave a crash with a
+    // step position and no plan to index into.
+    ...(current.appliedManifest === undefined
+      ? {}
+      : { appliedManifest: current.appliedManifest }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
@@ -376,16 +445,119 @@ function planMoved(
  * Called only after structural verification passes, so the generation the
  * marker reports is one that has been checked rather than assumed.
  */
+/**
+ * Settling, with the plan required exactly where a rollback will need it.
+ *
+ * Settling at `field-groups-v2` is the only moment the plan that produced it can
+ * still be recorded, and a rollback has no other source for it. Settling back at
+ * `legacy` is the end of a reversal, with nothing left to reverse. Making the
+ * distinction a union stops the v2 case being settled without a plan, which the
+ * previous optional argument allowed and which no comment could prevent.
+ */
+export type SettleArgs =
+  | { generation: "field-groups-v2"; appliedManifest: readonly ManifestEntry[] }
+  | { generation: "legacy" };
+
 export async function settleMigration(
   meta: MetaService,
-  generation: StorageGeneration
+  settled: SettleArgs
 ): Promise<void> {
+  const { generation } = settled;
+  const appliedManifest =
+    settled.generation === "field-groups-v2"
+      ? settled.appliedManifest
+      : undefined;
   const marker: StoredMarker = {
     version: MIGRATION_MARKER_VERSION,
     status: "settled",
     generation,
+    // Recorded so a later process can reverse this run. Inverting a persisted
+    // plan is the only safe rollback: the reverse cannot be derived from the
+    // database, which cannot say which names this migration created.
+    ...(appliedManifest === undefined
+      ? {}
+      : { appliedManifest: parseAppliedManifest(appliedManifest) }),
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
+}
+
+/**
+ * Validate a persisted plan on the way back in.
+ *
+ * A rollback acts on this, so a marker carrying something unreadable must
+ * refuse rather than hand back a partial plan that would revert some objects
+ * and silently leave others migrated.
+ */
+function parseAppliedManifest(value: unknown): ManifestEntry[] {
+  if (!Array.isArray(value)) {
+    throw markerCorrupt("recorded plan is not a list");
+  }
+  // Every plan renames the registry exactly once, so a recorded plan without
+  // that entry is a fragment rather than a plan. Accepting one would let a
+  // rollback reverse the data tables and leave the registry migrated, which is
+  // a state no direction can then interpret. An empty list fails here too.
+  const registryEntries = value.filter(
+    raw => isRecord(raw) && raw.kind === "registry"
+  );
+  if (registryEntries.length !== 1) {
+    throw markerCorrupt(
+      `recorded plan renames the registry ${String(registryEntries.length)} times, not once`
+    );
+  }
+  // Counting the entry is not enough: it has to be *the* registry rename, in the
+  // one direction a record of applied work can have.
+  //
+  // `appliedManifest` always holds the plan that was applied to reach migrated
+  // storage — legacy to target. It is a record of what happened, not of what is
+  // about to happen, and a rollback inverts it at execution time rather than
+  // storing it pre-inverted. Accepting the inverted form would let a rollback
+  // invert it a second time and generate legacy-to-migrated operations while
+  // claiming to restore legacy.
+  const registry = registryEntries[0] as Record<string, unknown>;
+  if (
+    registry.from !== STORAGE_FORMAT.registryTable ||
+    registry.to !== MIGRATION_TARGET.registryTable
+  ) {
+    throw markerCorrupt(
+      "recorded plan's registry entry is not the applied registry rename"
+    );
+  }
+  return value.map(raw => {
+    if (!isRecord(raw)) {
+      throw markerCorrupt("recorded plan contains a non-object entry");
+    }
+    const { kind, from, to, table } = raw;
+    if (
+      kind !== "registry" &&
+      kind !== "table" &&
+      kind !== "companion" &&
+      kind !== "column"
+    ) {
+      throw markerCorrupt("recorded plan entry has no known kind");
+    }
+    if (typeof from !== "string" || from.length === 0) {
+      throw markerCorrupt("recorded plan entry has no source name");
+    }
+    if (typeof to !== "string" || to.length === 0) {
+      throw markerCorrupt("recorded plan entry has no target name");
+    }
+    // A column rename is addressed through its table, so an entry without one
+    // cannot be executed or reversed. Accepting it would hand a rollback a plan
+    // that reverts some objects and silently skips others.
+    if (kind === "column") {
+      if (typeof table !== "string" || table.length === 0) {
+        throw markerCorrupt("recorded column entry names no table");
+      }
+    } else if (table !== undefined && typeof table !== "string") {
+      throw markerCorrupt("recorded plan entry has an invalid table");
+    }
+    return {
+      kind,
+      from,
+      to,
+      ...(table === undefined ? {} : { table }),
+    };
+  });
 }
 
 // A marker that exists but cannot be read is refused rather than ignored:

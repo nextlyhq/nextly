@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
+import { buildMigrationManifest } from "../manifest";
 import {
   advanceStep,
   MAX_MIGRATION_STEP,
@@ -195,12 +196,264 @@ describe("field-group migration marker", () => {
       migrationId: "run-1",
       plan: { manifestHash: "hash-1", planHash: "plan-1" },
     });
-    await settleMigration(meta, "field-groups-v2");
-    await expect(readMigrationState(meta)).resolves.toEqual({
+    await settleMigration(meta, {
+      generation: "field-groups-v2",
+      appliedManifest: [
+        { kind: "table", from: "comp_hero", to: "fg_hero" },
+        {
+          kind: "registry",
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+      ],
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
       status: "settled",
       generation: "field-groups-v2",
       recorded: true,
     });
+  });
+
+  // The plan must survive the transition out of `settled` and every step after
+  // it. Writing it only at settlement loses it the moment a rollback starts.
+  it("carries the applied plan through a run and its steps", async () => {
+    const { meta } = createMeta();
+    // A down run records the plan that was APPLIED, not its inverse: the record
+    // says what happened, and the rollback inverts it when it executes.
+    const applied = [
+      {
+        kind: "registry" as const,
+        from: "dynamic_components",
+        to: "dynamic_field_groups",
+      },
+      { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
+      {
+        kind: "column" as const,
+        from: "_component_type",
+        to: "_field_group_type",
+        table: "fg_hero",
+      },
+    ];
+    await beginMigration(meta, {
+      direction: "down",
+      migrationId: "run-1",
+      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      appliedManifest: applied,
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      status: "migrating",
+      appliedManifest: applied,
+    });
+
+    await advanceStep(meta, { migrationId: "run-1", step: 1 });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      status: "migrating",
+      step: 1,
+      appliedManifest: applied,
+    });
+  });
+
+  // Every plan renames the registry exactly once, so a recorded plan without
+  // that entry is a fragment. Reversing it would restore the data tables and
+  // leave the registry migrated -- a state no direction can then interpret.
+  it.each([
+    ["an empty list", []],
+    [
+      "a list with no registry rename",
+      [{ kind: "table" as const, from: "fg_a", to: "comp_a" }],
+    ],
+    [
+      "a registry entry that renames something else",
+      [{ kind: "registry" as const, from: "x", to: "y" }],
+    ],
+    [
+      // The inverse of an applied plan is not a record of applied work. Storing
+      // it would let a rollback invert it twice and migrate forward.
+      "a pre-inverted registry entry",
+      [
+        {
+          kind: "registry" as const,
+          from: "dynamic_field_groups",
+          to: "dynamic_components",
+        },
+      ],
+    ],
+    [
+      "a list renaming the registry twice",
+      [
+        {
+          kind: "registry" as const,
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+        {
+          kind: "registry" as const,
+          from: "dynamic_field_groups",
+          to: "dynamic_components",
+        },
+      ],
+    ],
+  ])("refuses a recorded plan that is %s", async (_label, appliedManifest) => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest,
+    });
+    await expect(readMigrationState(meta)).rejects.toThrowError(NextlyError);
+  });
+
+  // A plan built by the manifest always satisfies that invariant, so the
+  // round-trip has to keep working.
+  it("accepts a plan built by the manifest builder", async () => {
+    const { meta } = createMeta();
+    const built = buildMigrationManifest([
+      { slug: "hero", tableName: "comp_hero", hasCompanion: false },
+    ]);
+    await settleMigration(meta, {
+      generation: "field-groups-v2",
+      appliedManifest: built.entries,
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      appliedManifest: built.entries,
+    });
+  });
+
+  // The writer holds itself to the reader's rules. Writing a plan the next read
+  // refuses would strand a run after its first step had already committed.
+  it.each([
+    ["an empty source", { kind: "table" as const, from: "", to: "fg_a" }],
+    ["an empty target", { kind: "table" as const, from: "comp_a", to: "" }],
+    [
+      "a column with no table",
+      {
+        kind: "column" as const,
+        from: "_component_type",
+        to: "_field_group_type",
+      },
+    ],
+  ])("refuses to begin a rollback with %s in the plan", async (_l, entry) => {
+    const { meta, read } = createMeta();
+    await expect(
+      beginMigration(meta, {
+        direction: "down",
+        migrationId: "run-1",
+        plan: { manifestHash: "h", planHash: "p" },
+        // Otherwise valid: the registry entry is present, so the refusal is
+        // attributable to the bad entry rather than to a missing registry.
+        appliedManifest: [
+          {
+            kind: "registry" as const,
+            from: "dynamic_components",
+            to: "dynamic_field_groups",
+          },
+          entry,
+        ],
+      })
+    ).rejects.toThrowError(NextlyError);
+    expect(read()).toBe(ABSENT);
+  });
+
+  it("refuses to settle with a plan its own reader would reject", async () => {
+    const { meta, read } = createMeta();
+    await expect(
+      settleMigration(meta, {
+        generation: "field-groups-v2",
+        appliedManifest: [
+          {
+            kind: "registry",
+            from: "dynamic_components",
+            to: "dynamic_field_groups",
+          },
+          { kind: "table", from: "comp_a", to: "" },
+        ],
+      })
+    ).rejects.toThrowError(NextlyError);
+    expect(read()).toBe(ABSENT);
+  });
+
+  // A column rename is addressed through its table, so an entry without one
+  // cannot be executed or reversed.
+  it("refuses a recorded column entry that names no table", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: [
+        {
+          kind: "registry",
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+        { kind: "column", from: "_component_type", to: "_field_group_type" },
+      ],
+    });
+    await expect(readMigrationState(meta)).rejects.toThrowError(NextlyError);
+  });
+
+  // A rollback reverses a persisted plan, so the plan has to survive
+  // settlement. Deriving the reverse is impossible: nothing in the database
+  // says which `fg_*` names this migration created.
+  it("keeps the applied plan through settlement", async () => {
+    const { meta } = createMeta();
+    const applied = [
+      { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
+      {
+        kind: "column" as const,
+        from: "_component_type",
+        to: "_field_group_type",
+        table: "fg_hero",
+      },
+      {
+        kind: "registry" as const,
+        from: "dynamic_components",
+        to: "dynamic_field_groups",
+      },
+    ];
+    await settleMigration(meta, {
+      generation: "field-groups-v2",
+      appliedManifest: applied,
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: applied,
+    });
+  });
+
+  // Settling back at `legacy` ends a reversal, so there is nothing left to
+  // reverse and no plan to carry. The v2 case cannot be settled this way: the
+  // type does not allow it.
+  it("settles at legacy without a plan", async () => {
+    const { meta } = createMeta();
+    await settleMigration(meta, { generation: "legacy" });
+    const state = await readMigrationState(meta);
+    expect(state).toMatchObject({ status: "settled", generation: "legacy" });
+    expect(
+      (state as { appliedManifest?: unknown }).appliedManifest
+    ).toBeUndefined();
+  });
+
+  // A rollback acts on this plan, so an unreadable one must refuse rather than
+  // revert some objects and silently leave others migrated.
+  it.each([
+    ["not a list", "nonsense"],
+    ["a non-object entry", [42]],
+    ["an entry with no known kind", [{ kind: "whatever", from: "a", to: "b" }]],
+    ["an entry with no source", [{ kind: "table", to: "b" }]],
+    ["an entry with no target", [{ kind: "table", from: "a" }]],
+    [
+      "an entry with an invalid table",
+      [{ kind: "column", from: "a", to: "b", table: 7 }],
+    ],
+  ])("refuses a recorded plan that is %s", async (_label, appliedManifest) => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest,
+    });
+    await expect(readMigrationState(meta)).rejects.toThrowError(NextlyError);
   });
 
   // A marker that exists but cannot be read must never degrade to "absent":
