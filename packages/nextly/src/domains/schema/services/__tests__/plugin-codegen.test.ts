@@ -58,9 +58,9 @@ const TALLY: PluginFieldType = {
   component: "@acme/tally/admin#TallyInput",
 };
 
-const collection = (fields: unknown[]) =>
+const collection = (fields: unknown[], slug = "posts") =>
   ({
-    slug: "posts",
+    slug,
     labels: { singular: "Post", plural: "Posts" },
     fields,
   }) as unknown as DynamicCollectionRecord;
@@ -251,6 +251,72 @@ describe("standalone interface generation", () => {
     }
 
     expect(message).toContain("'Posts'");
+  });
+
+  it("reserves per interface when one generator is reused", () => {
+    registerFieldType({
+      type: "reused-array",
+      storage: "json",
+      component: "@acme/ru/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Array"], from: "@acme/ru" }],
+        tsType: () => "Array<string>",
+      },
+    });
+
+    // The second call must reserve against its own body. Counting emissions
+    // left over from the first would credit it with text this interface never
+    // wrote, so the repeater's `Array<` would look like the plugin's.
+    const generator = new TypeGenerator();
+    generator.generateInterface(
+      collection([{ name: "a", type: "reused-array" }])
+    );
+
+    let message = "";
+    try {
+      generator.generateInterface(
+        collection([
+          {
+            name: "rows",
+            type: "repeater",
+            fields: [{ name: "t", type: "text" }],
+          },
+          { name: "b", type: "reused-array" },
+        ])
+      );
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'Array'");
+  });
+
+  it("keeps a global free when one shared field emitted it twice", () => {
+    registerFieldType({
+      type: "shared-array",
+      storage: "json",
+      component: "@acme/sh/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Array"], from: "@acme/sh" }],
+        tsType: () => "Array<string>",
+      },
+    });
+
+    // One field object reused by two collections, which is how a shared field
+    // definition is normally written. Both emit `Array<`, so the body holds two
+    // while an identity-keyed map holds one — and the generator would credit
+    // itself with the difference and reserve a name only the plugin wrote.
+    const shared = { name: "s", type: "shared-array" };
+    const file = new TypeGenerator().generateTypesFile([
+      collection([shared], "posts"),
+      collection([shared], "pages"),
+    ]);
+
+    expect(file.code).toContain('import type { Array } from "@acme/sh";');
   });
 
   it("refuses a global the standalone interface itself relies on", () => {

@@ -264,6 +264,19 @@ export class TypeGenerator {
    */
   private pluginExpressions = new Map<object, string>();
 
+  /**
+   * Every expression a plugin emitted, in emission order and with repeats.
+   *
+   * `pluginExpressions` is keyed by field object so each field's own text can
+   * be found when deciding whether it references an import. That makes it the
+   * wrong thing to count with: two entities can share one field object, which
+   * is how a shared field definition is normally written, and the map then
+   * holds one entry for two emissions. Subtracting the map's occurrences from
+   * the body would credit the generator with the difference and reserve a
+   * global only the plugin ever wrote.
+   */
+  private pluginEmissions: string[] = [];
+
   constructor(options: TypeGeneratorOptions = {}) {
     this.includeComments = options.includeComments ?? true;
     this.generateInputTypes = options.generateInputTypes ?? true;
@@ -297,6 +310,7 @@ export class TypeGenerator {
   ): GeneratedTypesFile {
     const lines: string[] = [];
     this.pluginExpressions = new Map();
+    this.pluginEmissions = [];
 
     // File header
     lines.push("/* tslint:disable */");
@@ -862,6 +876,7 @@ export class TypeGenerator {
       const contributed = pluginTsType(field);
       if (contributed !== undefined) {
         this.pluginExpressions.set(field, contributed);
+        this.pluginEmissions.push(contributed);
         tsType = contributed;
       } else {
         // No rendering of its own, but the registry still knows what it stores.
@@ -945,6 +960,7 @@ export class TypeGenerator {
         const contributed = pluginTsType(field);
         if (contributed !== undefined) {
           this.pluginExpressions.set(field, contributed);
+          this.pluginEmissions.push(contributed);
           tsType = contributed;
           break;
         }
@@ -1470,9 +1486,19 @@ ${properties}
    * an interface twice, and two interfaces can share a field object, either of
    * which makes "what was added since" report nothing for the later call.
    */
-  private beginOwnExpressions(): Map<object, string> {
-    const outer = this.pluginExpressions;
+  private beginOwnExpressions(): {
+    expressions: Map<object, string>;
+    emissions: string[];
+  } {
+    const outer = {
+      expressions: this.pluginExpressions,
+      emissions: this.pluginEmissions,
+    };
     this.pluginExpressions = new Map();
+    // Scoped with them: this interface reserves against what IT wrote, so
+    // emissions from an earlier call would make it credit the generator with
+    // text that is not in this body and under-reserve.
+    this.pluginEmissions = [];
     return outer;
   }
 
@@ -1487,7 +1513,7 @@ ${properties}
    * the emitted source, read for the globals it relies on.
    */
   private endOwnExpressions(
-    outer: Map<object, string>,
+    outer: { expressions: Map<object, string>; emissions: string[] },
     declares: string,
     body: string
   ): string[] {
@@ -1502,8 +1528,14 @@ ${properties}
       "tsImports",
       own
     );
-    for (const [field, expression] of own) outer.set(field, expression);
-    this.pluginExpressions = outer;
+    for (const [field, expression] of own) {
+      outer.expressions.set(field, expression);
+    }
+    // Concatenated rather than merged: a repeat is the thing the whole-file
+    // reservation has to see.
+    outer.emissions.push(...this.pluginEmissions);
+    this.pluginExpressions = outer.expressions;
+    this.pluginEmissions = outer.emissions;
     return imports;
   }
 
@@ -1525,7 +1557,7 @@ ${properties}
       haystack.split(needle).length - 1;
     for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
       const token = `${global}<`;
-      const byPlugins = [...this.pluginExpressions.values()].reduce(
+      const byPlugins = this.pluginEmissions.reduce(
         (total, expression) => total + occurrences(expression, token),
         0
       );
