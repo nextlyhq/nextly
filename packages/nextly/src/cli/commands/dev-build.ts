@@ -14,6 +14,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
+import {
+  beginI18nTransition,
+  type I18nTransitionKind,
+  type TransitionStateStore,
+} from "../../domains/i18n/migration/transition-state";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import {
@@ -790,6 +795,35 @@ async function handleRemovedComponents(
  * `ensureCompanionTable` returns early when the table is already there — so
  * running it on every sync costs one probe per localized entity.
  */
+/**
+ * Where a localization transition gets recorded, paired with the locale to record.
+ *
+ * Returns undefined when the app names no default locale: no entity can be localized without one,
+ * so there is no transition to describe and nothing to record it against. Keeping the two together
+ * means a caller cannot hold a store and reach for a locale that was never configured.
+ */
+async function resolveTransitionRecorder(
+  config: LoadConfigResult["config"],
+  adapter: DrizzleAdapter,
+  logger: ServiceLogger
+): Promise<(TransitionStateStore & { defaultLocale: string }) | undefined> {
+  const defaultLocale = (
+    config as { localization?: { defaultLocale?: string } }
+  ).localization?.defaultLocale;
+  if (typeof defaultLocale !== "string" || defaultLocale.length === 0) {
+    return undefined;
+  }
+  const { MetaService } = await import(
+    "../../domains/meta/services/meta-service"
+  );
+  const meta = new MetaService(adapter, logger);
+  return {
+    defaultLocale,
+    getEntry: key => meta.getEntry(key),
+    set: (key, value) => meta.set(key, value),
+  };
+}
+
 export async function ensureLocalizedCompanions(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
@@ -805,6 +839,14 @@ export async function ensureLocalizedCompanions(
   const dialect = adapter.getCapabilities().dialect;
   const { ensureCompanionTable, reconcileCompanionColumns } = await import(
     "../../domains/i18n/runtime/companion-io"
+  );
+  // Where a newly created companion's transition gets recorded, and the locale it
+  // gets recorded with. Undefined when the app configures no default locale, in
+  // which case no entity can be localized and nothing reaches the write below.
+  const transitions = await resolveTransitionRecorder(
+    config,
+    adapter as unknown as DrizzleAdapter,
+    logger
   );
   // Each entity kind resolves its physical table differently, and a custom
   // `dbName` is where they diverge: collections and singles force their `dc_` /
@@ -827,16 +869,26 @@ export async function ensureLocalizedCompanions(
     fields?: { name: string; type: string; localized?: boolean }[];
   }
 
-  const groups: [LocalizableEntity[], (e: LocalizableEntity) => string][] = [
+  // The kind travels with each group because it is part of the transition record's
+  // key: a collection, a single and a field group may share one slug, and only one
+  // of them may have transitioned.
+  const groups: [
+    I18nTransitionKind,
+    LocalizableEntity[],
+    (e: LocalizableEntity) => string,
+  ][] = [
     [
+      "collection",
       (config.collections ?? []) as LocalizableEntity[],
       e => resolveCollectionTableName(e.slug!, e.dbName),
     ],
     [
+      "single",
       (config.singles ?? []) as LocalizableEntity[],
       e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
     ],
     [
+      "fieldGroup",
       (config.fieldGroups ?? []) as LocalizableEntity[],
       // Field groups derive their table from the slug alone — unlike collections
       // and singles they carry no `dbName` override.
@@ -845,7 +897,7 @@ export async function ensureLocalizedCompanions(
   ];
 
   const failures: string[] = [];
-  for (const [group, resolveTableName] of groups) {
+  for (const [kind, group, resolveTableName] of groups) {
     for (const entity of group) {
       if (!entity.slug || entity.localized !== true) continue;
       const tableName = resolveTableName(entity);
@@ -856,7 +908,7 @@ export async function ensureLocalizedCompanions(
       // DrizzleAdapter — the same conversion this file already uses for the sync
       // service above. `ensureCompanionTable` needs `executeQuery`, which the
       // declared CLI interface omits.
-      await ensureCompanionTable(
+      const created = await ensureCompanionTable(
         adapter as unknown as DrizzleAdapter,
         {
           slug: entity.slug,
@@ -874,6 +926,18 @@ export async function ensureLocalizedCompanions(
           failures.push(entity.slug!);
         }
       );
+      // Only when this call is the one that created the companion. The content on
+      // the main table was written under the default locale in force at the time,
+      // and this is the one moment the current default is still that locale —
+      // afterwards nothing on disk can say what it was. Recorded for an existing
+      // companion it would attach today's default to older content.
+      if (created && transitions) {
+        await beginI18nTransition(transitions, {
+          kind,
+          slug: entity.slug,
+          sourceLocale: transitions.defaultLocale,
+        });
+      }
       // Creating the companion is not enough on its own. `ensureCompanionTable` returns
       // immediately once the table is there, so marking a FURTHER field localized on an
       // entity that is already localized leaves the companion a column short — while the

@@ -35,6 +35,8 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { readI18nTransitionState } from "../../../domains/i18n/migration/transition-state";
+import { MetaService } from "../../../domains/meta/services/meta-service";
 import { getDialectTables } from "../../../database/index";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { createLogger } from "../../utils/logger";
@@ -112,6 +114,30 @@ async function runSync(config: LoadConfigResult["config"]): Promise<void> {
   await ensureLocalizedCompanions(config, cli, context);
 }
 
+/**
+ * The recorded transition for an entity, read through the production reader.
+ *
+ * Reading it any other way would let the test agree with a key layout the runtime
+ * does not use.
+ */
+async function readTransition(
+  kind: Parameters<typeof readI18nTransitionState>[1],
+  slug: string
+): Promise<Awaited<ReturnType<typeof readI18nTransitionState>>> {
+  const noop = () => {};
+  const meta = new MetaService(adapter as unknown as DrizzleAdapter, {
+    info: noop,
+    warn: noop,
+    error: noop,
+    debug: noop,
+  });
+  return readI18nTransitionState(
+    { getEntry: key => meta.getEntry(key), set: (key, v) => meta.set(key, v) },
+    kind,
+    slug
+  );
+}
+
 describe("db:sync creates localized companion tables in-process (integration)", () => {
   it("creates a localized collection's companion in the same run", async () => {
     await runSync(
@@ -178,6 +204,56 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(await tableExists("dc_dbsync_notes")).toBe(true);
     expect(await tableExists("dc_dbsync_notes_locales")).toBe(true);
     expect(await tableExists("dbsync_notes_locales")).toBe(false);
+  });
+
+  it("records the language the content was written in when it creates the companion", async () => {
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "de" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_marked",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    // Nothing on disk can say this afterwards: the main table's values were written
+    // under whatever default was in force, and the default can change.
+    await expect(
+      readTransition("collection", "dbsync_marked")
+    ).resolves.toEqual({
+      status: "enabling",
+      sourceLocale: "de",
+    });
+  });
+
+  it("does not re-record a transition for a companion that already existed", async () => {
+    // The hazard this closes: recording on every sync would attach the CURRENT
+    // default to content written under an earlier one, and a confident wrong
+    // language is worse than no record at all. The second run changes the default,
+    // so a re-record would either overwrite `de` with `en` or be refused outright.
+    const config = (defaultLocale: string) =>
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale },
+        collections: [
+          defineCollection({
+            slug: "dbsync_once",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      });
+
+    await runSync(config("de"));
+    await runSync(config("en"));
+
+    await expect(readTransition("collection", "dbsync_once")).resolves.toEqual({
+      status: "enabling",
+      sourceLocale: "de",
+    });
   });
 
   it("leaves a non-localized collection with no companion", async () => {

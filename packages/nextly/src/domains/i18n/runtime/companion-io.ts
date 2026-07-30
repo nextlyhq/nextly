@@ -445,6 +445,12 @@ export async function companionHasStatusColumn(
  * code-first localized collection / single / component gets a working companion without a manual
  * migrate step. Best-effort: a failure (e.g. main table not yet created) is swallowed so it
  * retries on the next boot.
+ *
+ * Returns whether THIS call created the table. Only true at the one moment an entity crosses from
+ * unlocalized to localized, which is the only moment the current default locale is a safe answer
+ * to "what language is the content on the main table in". Callers that record the transition read
+ * this rather than assuming, because writing that record for a companion which already existed
+ * would attach today's default to content written under some earlier one.
  */
 export async function ensureCompanionTable(
   adapter: CompanionWriteAdapter,
@@ -460,10 +466,10 @@ export async function ensureCompanionTable(
    * without it the previous swallow-and-retry-next-boot behaviour is preserved.
    */
   onError?: (error: unknown) => void
-): Promise<void> {
+): Promise<boolean> {
   const companionTableName = `${args.tableName}_locales`;
   try {
-    if (await companionTableExists(adapter, companionTableName)) return;
+    if (await companionTableExists(adapter, companionTableName)) return false;
     // Lazy import avoids a cycle (reconcile-companion → migration helpers).
     const { buildCompanionReconcileStatements } = await import(
       "../migration/reconcile-companion"
@@ -483,6 +489,7 @@ export async function ensureCompanionTable(
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
     }
+    return true;
   } catch (error) {
     // Another process may have created it between the probe and the CREATE — `db:sync` and a
     // dev boot/HMR reload provision the same companions, and `CREATE TABLE` is not idempotent
@@ -492,7 +499,10 @@ export async function ensureCompanionTable(
     if (
       await companionTableExists(adapter, companionTableName).catch(() => false)
     ) {
-      return;
+      // Reported as not-created on purpose: whoever won the race owns recording why
+      // the companion exists, and a second record of the same transition could name
+      // a different source locale.
+      return false;
     }
     // Best-effort: the main table may not exist yet on a very first boot, where the
     // companion is created on the next boot (or by `nextly migrate`). That case is
@@ -503,5 +513,6 @@ export async function ensureCompanionTable(
     // function still resolves, because refusing to boot over a companion is worse
     // than booting with non-default-locale writes refused.
     onError?.(error);
+    return false;
   }
 }
