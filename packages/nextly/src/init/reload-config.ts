@@ -575,6 +575,28 @@ function republishRecordingPolicies(
  * Never throws: a companion that cannot be provisioned must not take down a config reload. The
  * write guard in the mutation services is what protects content in the meantime.
  */
+/**
+ * Whether an entity's MAIN table is physically present.
+ *
+ * Asked through the canonical introspection helper rather than by running a probe query and
+ * catching the failure: that shape is valid on SQLite and MySQL and poisons a transaction on
+ * PostgreSQL, and it is the exact pattern the integration harness now fails tests for.
+ */
+async function mainTableExists(
+  adapter: AdapterLike,
+  tableName: string
+): Promise<boolean> {
+  const { introspectLiveSnapshot } = await import(
+    "../domains/schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  return snapshot.tables.some(t => t.name === tableName);
+}
+
 async function ensureLocalizedCompanionsForReload(
   adapter: AdapterLike,
   config: {
@@ -594,7 +616,23 @@ async function ensureLocalizedCompanionsForReload(
   // Deliberately per entity rather than a single "something was deferred" flag: entities whose
   // schema IS in step still need provisioning on this pass, and skipping them wholesale
   // reintroduces the missing-companion window this function exists to close.
-  deferred: ReadonlySet<string> = new Set()
+  deferred: ReadonlySet<string> = new Set(),
+  /**
+   * Which side of the schema apply this pass runs on.
+   *
+   * `beforeApply` exists because enabling localization removes the translatable columns from the
+   * entity's desired main table, so the apply wants to DROP them. Running only afterwards means
+   * the copy either never happens (the drop was classified destructive and the entity deferred)
+   * or happens too late (the operator confirmed, and the values are already gone). This pass
+   * therefore copies first, which makes the drop that follows harmless.
+   *
+   * It is restricted to entities whose main table already exists, because those are the only ones
+   * that can hold content worth copying — and because a companion carries a foreign key to its
+   * main table, which a brand-new entity does not have until the apply creates it. Those are left
+   * to `afterApply`, which is also where column reconciliation belongs: the apply is what adds the
+   * columns a reconcile would be looking for.
+   */
+  phase: "beforeApply" | "afterApply" = "afterApply"
 ): Promise<void> {
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
   if (process.env.NODE_ENV === "production") return;
@@ -654,11 +692,20 @@ async function ensureLocalizedCompanionsForReload(
     for (const entity of entities) {
       if (!entity.slug || entity.localized !== true) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
+      const tableName = resolveTableName(entity);
+      if (
+        phase === "beforeApply" &&
+        !(await mainTableExists(adapter, tableName))
+      ) {
+        // Nothing to preserve and nothing to hang a foreign key on yet. The post-apply pass
+        // creates this entity's companion once the apply has produced its main table.
+        continue;
+      }
       const created = await ensureCompanionTable(
         adapter,
         {
           slug: entity.slug,
-          tableName: resolveTableName(entity),
+          tableName,
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
           status: entity.status === true,
@@ -694,6 +741,11 @@ async function ensureLocalizedCompanionsForReload(
       // Safe here despite issuing DDL, because the production guard at the top of this
       // function has already returned: this runs only under `next dev`. The reconcile is
       // additive, so it never removes a column even when a field stops being localized.
+      //
+      // Skipped before the apply, which is what creates the columns a reconcile would be looking
+      // for. Running it early would compare the companion against a main table the apply has not
+      // finished shaping.
+      if (phase === "beforeApply") continue;
       await reconcileCompanionColumns(
         adapter,
         {
@@ -1470,6 +1522,16 @@ async function runReload(opts?: {
     // Unused for HMR — we don't surface bumped versions in the log.
     readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
   });
+
+  // Before the apply, so an entity gaining localization has its existing content copied into the
+  // companion while the main table still carries it. The apply's DROP of those columns is then a
+  // cleanup rather than a loss, and it no longer matters whether the operator confirms it.
+  await ensureLocalizedCompanionsForReload(
+    adapter,
+    newConfig,
+    deferredEntities,
+    "beforeApply"
+  );
 
   const applyResult = await apply(desired, "code", {
     promptChannel: "terminal",
