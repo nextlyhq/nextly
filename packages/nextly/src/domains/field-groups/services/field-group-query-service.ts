@@ -69,6 +69,17 @@ export interface ComponentReadAccess {
    * across them all rather than created per row.
    */
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
+  /**
+   * The language the surrounding read resolved to, forwarded so a target
+   * collection's read rule can be applied when it filters on a localized field
+   * of that collection.
+   *
+   * Separate from this population's own `locale`, which decides which
+   * translation of the COMPONENT's fields to overlay. The two are the same
+   * language on every current caller, but they answer different questions and a
+   * component read that resolved no locale must not silently borrow one.
+   */
+  locale?: string;
 }
 
 export interface PopulateComponentDataParams {
@@ -1129,6 +1140,7 @@ export class FieldGroupQueryService extends BaseService {
           authenticatedScope: access.authenticatedScope,
           targetPolicies: access.targetPolicies,
           withheldByAccess: access.withheldByAccess,
+          locale: access.locale,
         }
       );
 

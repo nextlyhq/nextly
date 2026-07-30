@@ -11,6 +11,7 @@ import {
   keysToCamelCase,
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import { resolveStatusFilter } from "../../../lib/status-filter";
 import {
   AccessControlService,
   DEFAULT_OWNER_FIELD,
@@ -21,7 +22,11 @@ import {
   stripNoOpConstraintMembers,
 } from "../../../services/access/constraint-shape";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
-import { buildDrizzleCondition } from "../../../services/collections/drizzle-condition";
+import {
+  buildDrizzleCondition,
+  buildLocalizedWhereExists,
+  type LocalizedQueryContext,
+} from "../../../services/collections/drizzle-condition";
 import {
   buildWhereClause,
   type WhereFilter,
@@ -107,6 +112,20 @@ interface RelatedRowAccess {
    * instead of once per value.
    */
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
+  /**
+   * The language the surrounding read resolved to, used when a target
+   * collection's read rule filters on a localized field.
+   *
+   * Already resolved by the caller — the requested locale, or the default when
+   * none was asked for — because resolving it needs the localization config and
+   * this service has none. Absent means no companion filter can be built, so
+   * such a rule withholds its rows.
+   *
+   * This does NOT make expansion return a related row's translated values: a
+   * related row is still read from its main table. It decides only which
+   * language a rule's predicate is evaluated against.
+   */
+  locale?: string;
 }
 
 /** A target collection's read policy, as one expansion needs it. */
@@ -191,6 +210,15 @@ export interface RelationshipExpansionOptions {
    * owner's session would get.
    */
   authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * The language this read resolved to, forwarded so a target collection's read
+   * rule can be applied when it filters on a localized field.
+   *
+   * Pass the resolved locale, not the raw request parameter: see
+   * {@link RelatedRowAccess.locale}.
+   */
+  locale?: string;
 }
 
 /**
@@ -1070,7 +1098,8 @@ export class CollectionRelationshipService extends BaseService {
         this.narrowByTargetPredicate(
           targetCollection,
           group,
-          predicates.get(key) as Record<string, unknown>
+          predicates.get(key) as Record<string, unknown>,
+          access
         )
       )
     );
@@ -1172,7 +1201,8 @@ export class CollectionRelationshipService extends BaseService {
   private async narrowByTargetPredicate(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    constraint: Record<string, unknown>
+    constraint: Record<string, unknown>,
+    access: RelatedRowAccess
   ): Promise<Record<string, unknown>[] | null> {
     try {
       const schema = isSystemEntity(targetCollection)
@@ -1180,12 +1210,22 @@ export class CollectionRelationshipService extends BaseService {
         : await this.fileManager.loadDynamicSchema(targetCollection);
       if (!schema) return [];
 
+      const localizedCtx = await this.buildTargetLocalizedContext(
+        targetCollection,
+        schema,
+        access
+      );
+
       const untranslatable = describeUntranslatableConstraint(
         constraint,
         name => Object.prototype.hasOwnProperty.call(schema, name),
-        // No companion support on this path, so a filter on a localized field
-        // is reported untranslatable here rather than quietly dropped.
-        () => false
+        // A localized field has no column on the main table, so it counts as
+        // translatable only while a companion context is in hand. Without one
+        // it is reported untranslatable and the rows are withheld, rather than
+        // the member being dropped and the read running under a weaker
+        // predicate than the rule states.
+        name =>
+          Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
       );
       if (untranslatable !== null) {
         this.logger.warn(
@@ -1203,7 +1243,9 @@ export class CollectionRelationshipService extends BaseService {
       const condition = buildDrizzleCondition(
         buildWhereClause(restricting as WhereFilter),
         schema,
-        this.adapter.dialect ?? "postgresql"
+        this.adapter.dialect ?? "postgresql",
+        localizedCtx,
+        buildLocalizedWhereExists
       );
       // A constraint that restricts on paper and compiles to nothing would
       // admit every row. Withhold instead: the rule asked to narrow.
@@ -1248,6 +1290,55 @@ export class CollectionRelationshipService extends BaseService {
       // caller must not report this as a refusal — nothing was decided.
       return null;
     }
+  }
+
+  /**
+   * The companion context a predicate on a localized field of the TARGET
+   * collection needs, or null when there is none to build.
+   *
+   * A localized field has no column on the main table — it lives in the
+   * collection's `_locales` companion, one row per language — so a predicate
+   * naming one can only be applied as a subquery against that table. Without
+   * this the field looked like a column the target does not have, and every row
+   * behind such a rule was withheld from expansion while a list read of the
+   * same collection returned them.
+   *
+   * Null when the target is not localized, or when no locale reached this
+   * expansion: a companion filter has to name one language, and the read that
+   * asked for every language at once (or never said) has no single answer.
+   * Withholding is the outcome then, unchanged from before.
+   */
+  private async buildTargetLocalizedContext(
+    targetCollection: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
+    schema: any,
+    access: RelatedRowAccess
+  ): Promise<LocalizedQueryContext | null> {
+    if (!access.locale || isSystemEntity(targetCollection)) return null;
+    const companion =
+      await this.fileManager.loadCompanionSchema(targetCollection);
+    if (!companion || companion.localizedFields.length === 0) return null;
+
+    // The status an untrusted read of this target resolves to, asked of the
+    // helper that owns that decision rather than restated here. A companion row
+    // in another state must not satisfy the filter: a draft translation holding
+    // the permitted value would otherwise admit a row that the target's own
+    // list read, filtering on the same resolved status, excludes.
+    const statusFilter = resolveStatusFilter({
+      collectionHasStatus: companion.hasStatus,
+      overrideAccess: access.overrideAccess === true,
+      explicit: undefined,
+    });
+
+    return {
+      companionTableName: companion.companionTableName,
+      localizedFields: companion.localizedFields,
+      // The same table object the confirming query selects FROM, so the
+      // companion's `_parent` correlates against the row being judged.
+      mainIdColumn: schema.id,
+      locale: access.locale,
+      statusValue: statusFilter?.value,
+    };
   }
 
   /**
@@ -1488,6 +1579,7 @@ export class CollectionRelationshipService extends BaseService {
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      locale: options.locale,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
@@ -2140,6 +2232,7 @@ export class CollectionRelationshipService extends BaseService {
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      locale: options.locale,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits

@@ -2223,6 +2223,12 @@ export class SingleMutationService extends BaseService {
           user: options.user,
           overrideAccess: options.overrideAccess,
           authenticatedScope: options.authenticatedScope,
+          // The language just written: a target collection's read rule may
+          // scope reads by one of its own localized fields, and that filter
+          // needs to name a language to be applied at all.
+          locale: this.localization
+            ? resolveRequestedLocale(this.localization, options.locale)
+            : undefined,
         }
       );
 
