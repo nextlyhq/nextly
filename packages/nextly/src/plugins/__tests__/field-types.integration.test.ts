@@ -104,11 +104,16 @@ describe("custom field types", () => {
         ],
       })
     ).toThrow();
+
+    // And deferred, not refused, by the define-time validators: they run before
+    // the registry is populated, so the surface is not knowable there either.
     const result = validateCollectionConfig({
       slug: "ratings",
       fields: [{ name: "score", type: "rating" }],
     } as unknown as CollectionConfig);
-    expect(result.errors.some(e => e.code === "FIELD_TYPE_INVALID")).toBe(true);
+    expect(result.errors.some(e => e.code === "FIELD_TYPE_INVALID")).toBe(
+      false
+    );
   });
 
   it("persists a custom-typed field end-to-end through a real boot", async () => {
