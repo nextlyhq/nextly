@@ -10,22 +10,29 @@
 
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
-/** A single AND-ed filter condition (subset of the adapter WhereClause). */
+/** A single filter condition (subset of the adapter WhereClause). */
 export interface VersionsWhereCondition {
   column: string;
   // `<` powers keyset pagination (versionNo < cursor); `IN` powers the
-  // retention delete, which removes several rows in one statement. The
-  // adapter's WhereOperator spells the set operator uppercase.
-  op: "=" | "!=" | "<" | "IN";
+  // retention delete, which removes several rows in one statement; `IS NULL`
+  // powers the locale filter, which must also match shared (null-locale)
+  // snapshots. The adapter's WhereOperator spells the set operator uppercase.
+  op: "=" | "!=" | "<" | "IN" | "IS NULL";
   // Matches the adapter's WhereCondition.value so the adapter and the
   // transaction context both structurally satisfy VersionsDbApi (a looser
   // `unknown` here breaks that assignability under method-parameter variance).
   value?: SqlParam | SqlParam[];
 }
 
-/** Conjunction-only where (all versions queries are simple AND filters). */
+/**
+ * A where clause: a conjunction (`and`) of conditions or nested clauses, with an
+ * optional disjunction (`or`) group. Still a strict subset of the adapter's
+ * WhereClause, so both the adapter and the transaction context satisfy the port.
+ * The `or` group exists for the locale filter alone (locale X OR shared/null).
+ */
 export interface VersionsWhere {
-  and?: VersionsWhereCondition[];
+  and?: (VersionsWhereCondition | VersionsWhere)[];
+  or?: (VersionsWhereCondition | VersionsWhere)[];
 }
 
 /** Select options subset the versions repository uses. */

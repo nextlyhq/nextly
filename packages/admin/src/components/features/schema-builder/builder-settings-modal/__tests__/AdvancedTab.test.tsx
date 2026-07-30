@@ -118,9 +118,9 @@ describe("AdvancedTab -- version history", () => {
     ).toHaveValue(20);
   });
 
-  it("commits the default when a custom retention count is cleared", async () => {
-    // Clearing the field must not leave the previous number persisted on save;
-    // it commits undefined (the default) while the input stays visible.
+  it("keeps the prior cap when the field is cleared and restores it on blur", async () => {
+    // Clearing mid-edit must not drop the committed cap (to the default or 0);
+    // it stays until a valid replacement is typed, and blur restores the field.
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(
@@ -134,10 +134,15 @@ describe("AdvancedTab -- version history", () => {
       name: /versions to keep per document/i,
     });
     await user.clear(input);
-    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
-    expect(last.versionsMaxPerDoc).toBeUndefined();
-    // The field is still on screen so a replacement can be typed.
-    expect(input).toBeInTheDocument();
+    await user.tab(); // blur
+
+    // Clearing never committed a change away from the prior cap...
+    const committed = onChange.mock.calls.map(
+      c => (c[0] as BuilderSettingsValues).versionsMaxPerDoc
+    );
+    expect(committed).not.toContain(undefined);
+    // ...and the field is restored to the committed value, still on screen.
+    expect(input).toHaveValue(20);
   });
 
   it("keeps the saved cap and restores the field when invalid text is entered", async () => {

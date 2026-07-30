@@ -17,7 +17,11 @@ import type {
   VersionStatus,
 } from "../../schemas/versions/types";
 
-import type { VersionsDbApi, VersionsWhereCondition } from "./db-api";
+import type {
+  VersionsDbApi,
+  VersionsWhere,
+  VersionsWhereCondition,
+} from "./db-api";
 import type { PrunableVersion } from "./retention";
 
 const TABLE = "nextly_versions";
@@ -239,15 +243,27 @@ export class VersionsRepository {
       locale?: string;
     } = {}
   ): Promise<VersionMeta[]> {
-    const and = [...this.docWhere(ref)];
+    const and: (VersionsWhereCondition | VersionsWhere)[] = [
+      ...this.docWhere(ref),
+    ];
     if (!opts.includeAutosave) {
       and.push({ column: "isAutosave", op: "=", value: false });
     }
     // Scope to one locale's history when asked. A localized document captures a
     // version per locale, so the list can be narrowed to the language an editor
     // is working in; absent, every locale's versions are returned.
+    //
+    // Shared (null-locale) snapshots are included: a write touching only fields
+    // shared across locales is recorded with `locale: null` yet still changes
+    // this locale's document, so excluding it would omit real history and could
+    // present an older locale-specific row as the latest state.
     if (opts.locale !== undefined) {
-      and.push({ column: "locale", op: "=", value: opts.locale });
+      and.push({
+        or: [
+          { column: "locale", op: "=", value: opts.locale },
+          { column: "locale", op: "IS NULL" },
+        ],
+      });
     }
     // Keyset pagination: return versions strictly older than the cursor, which
     // is the last versionNo the caller already has. Stable under concurrent

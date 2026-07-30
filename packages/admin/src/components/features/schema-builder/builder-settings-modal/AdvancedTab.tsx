@@ -163,22 +163,20 @@ function RetentionField({
 
   const onCount = (text: string) => {
     setCustomText(text);
-    // A blank field commits the default rather than leaving the previous number
-    // persisted if the user saves before typing a replacement; the mode stays
-    // "custom" (explicit state) so the input remains visible meanwhile.
-    if (text === "") {
-      onChange(undefined);
-      return;
-    }
+    // Only a valid non-negative integer is committed; a blank or invalid entry
+    // (mid-edit "", "-1", "20.5") leaves the last valid cap in place. Committing
+    // a fallback here would let clearing-then-typing-invalid silently drop a cap
+    // above the default down to the default and enable unintended pruning. To
+    // choose the default or unlimited, the user picks that mode in the select.
     const n = Number(text);
-    if (Number.isInteger(n) && n >= 0) onChange(n);
+    if (text !== "" && Number.isInteger(n) && n >= 0) onChange(n);
   };
 
   const onBlur = () => {
     // Snap the visible text back to the committed value once editing ends, so a
-    // save can never persist a cap different from what is shown: an invalid
-    // entry (e.g. "20.5" or "-1") is not committed, and the modal's Save is not
-    // a form submit, so the input's min/step never reject it on their own.
+    // save can never persist a cap different from what is shown: an invalid or
+    // blank entry is not committed, and the modal's Save is not a form submit,
+    // so the input's min/step never reject it on their own.
     setCustomText(typeof value === "number" ? String(value) : "50");
   };
 

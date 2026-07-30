@@ -63,6 +63,13 @@ export interface VersionHistorySheetProps {
    * about whether this change is publicly visible.
    */
   liveStatus?: string | null;
+  /**
+   * Whether the document's entity is localized. This is the authoritative
+   * signal for the locale filter: a localized document can record shared-field
+   * writes with a null locale, so the loaded rows alone cannot prove one way or
+   * the other. Absent, the panel falls back to inferring it from the rows.
+   */
+  entityLocalized?: boolean;
 }
 
 function ListSkeleton() {
@@ -88,6 +95,7 @@ export function VersionHistorySheet({
   fields,
   canRestore = false,
   liveStatus = null,
+  entityLocalized,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   // The version pair being compared (older -> newer), or null when not
@@ -193,19 +201,16 @@ export function VersionHistorySheet({
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
 
-  // Whether THIS document is localized, not just whether the app is. A localized
-  // entity stamps a locale on every version and a non-localized one never does,
-  // so the presence of any locale in its own history is the reliable per-entity
-  // signal — `useLocalization().enabled` alone would show the filter on a
-  // non-localized document in an app that has other localized ones, where
-  // picking a locale could only ever match its NULL-locale versions (nothing).
-  //
-  // An active filter also proves the document is localized (it could not have
-  // been set otherwise), so the signal survives filtering to a locale that has
-  // no versions yet — where the filtered result is empty and would otherwise
-  // hide the very control needed to clear or change that filter.
+  // Whether THIS document is localized, not just whether the app is. The
+  // authoritative signal is the entity's own localization flag: a localized
+  // document can record shared-field writes with a null locale, so a loaded page
+  // that happens to hold only such rows (or only one locale) cannot prove it
+  // either way. When the flag is not supplied, fall back to inferring it — any
+  // locale present in the history, or an active filter (which could not have
+  // been set on a non-localized document).
   const isLocalizedDocument =
-    localeFilter !== undefined || versions.some(v => v.locale !== null);
+    entityLocalized ??
+    (localeFilter !== undefined || versions.some(v => v.locale !== null));
 
   // Compare targets for the version being previewed. A comparison must stay
   // within one locale (the server rejects a cross-locale pair), so both the
