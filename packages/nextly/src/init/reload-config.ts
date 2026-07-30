@@ -662,6 +662,10 @@ async function ensureLocalizedCompanionsForReload(
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
           status: entity.status === true,
+          // Turns creation into a transition: content already on the main table is
+          // copied in as this locale's rows, instead of being left behind an empty
+          // companion that reads null.
+          sourceLocale: transitions?.defaultLocale,
         },
         error => {
           console.warn(

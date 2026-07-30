@@ -256,6 +256,85 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     });
   });
 
+  it("copies content that predates localization into the companion", async () => {
+    // The defect this closes: enabling localization in `nextly.config.ts` on an entity that
+    // already has content used to CREATE an empty companion, after which every localized read
+    // resolved through it and returned null over data still sitting on the main table. The admin
+    // Builder path never had this problem — it has always seeded — so the same product hid content
+    // or preserved it depending on which way you turned localization on.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_seeded",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(unlocalized);
+
+    // Content written while the entity was NOT localized, so it lives on the main table.
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_seeded" ("id", "slug", "title") VALUES ('row1', 'r1', 'Written before')`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_seeded",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    const rows = await adapter?.executeQuery<{
+      _parent: string;
+      title: string;
+    }>(
+      `SELECT "_parent", "title" FROM "dc_dbsync_seeded_locales" WHERE "_locale" = 'en'`
+    );
+    expect(rows).toEqual([{ _parent: "row1", title: "Written before" }]);
+  });
+
+  it("leaves the main table's columns in place when it seeds", async () => {
+    // Unattended provisioning is additive-only. The Builder toggle drops the columns it copied
+    // from, which is right for an explicit transition and wrong here: a dropped column is not
+    // something the next boot can put back.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_kept",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_kept" ("id", "slug", "title") VALUES ('row1', 'r1', 'Still here')`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_kept",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_kept" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Still here" }]);
+  });
+
   it("leaves a non-localized collection with no companion", async () => {
     await runSync(
       defineConfig({

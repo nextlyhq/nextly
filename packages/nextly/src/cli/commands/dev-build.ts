@@ -887,6 +887,10 @@ export async function ensureLocalizedCompanions(
           fields: entity.fields ?? [],
           dialect,
           status: entity.status === true,
+          // Turns creation into a transition: content already on the main table is
+          // copied in as this locale's rows, instead of being left behind an empty
+          // companion that reads null.
+          sourceLocale: transitions?.defaultLocale,
         },
         error => {
           logger.error(

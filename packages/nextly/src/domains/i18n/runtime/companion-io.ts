@@ -452,14 +452,98 @@ export async function companionHasStatusColumn(
  * this rather than assuming, because writing that record for a companion which already existed
  * would attach today's default to content written under some earlier one.
  */
+/**
+ * The create-plus-seed plan, or null when a plain create is what this entity needs.
+ *
+ * The Schema Builder's localization toggle has always copied the main table's values into the
+ * companion as it creates it; the code-first path created an empty table and stopped, so turning
+ * localization on in `nextly.config.ts` left existing content sitting on the main table with every
+ * read resolving through an empty companion and returning null. Same product, two provisioning
+ * paths, opposite outcomes — so this routes the second one through the plan the first already uses.
+ *
+ * Only the localized columns that PHYSICALLY exist on the main table are seeded from. A field
+ * localized in the same change has no main column to copy, and a field name is not a column name
+ * (`subTitle` lives at `sub_title`), so the physical shape decides rather than the config.
+ *
+ * Returns null when there is nothing to copy — no source locale, or no localized column present on
+ * main — because then the seeding plan and a plain create produce the same table, and the simpler
+ * path is the one already covered by its own tests.
+ */
+async function buildSeedingCreateStatements(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    dialect: SupportedDialect;
+    status?: boolean;
+    sourceLocale?: string;
+  },
+  newLocalized: CompanionFieldLike[]
+): Promise<string[] | null> {
+  if (!args.sourceLocale) return null;
+
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [args.tableName]
+  );
+  const present = new Set(
+    snapshot.tables
+      .find(t => t.name === args.tableName)
+      ?.columns.map(c => c.name) ?? []
+  );
+
+  const { deriveCompanionSpec } = await import(
+    "../migration/derive-companion-spec"
+  );
+  const spec = deriveCompanionSpec({
+    slug: args.slug,
+    dbName: args.tableName,
+    fields: newLocalized,
+    dialect: args.dialect,
+    defaultLocale: args.sourceLocale,
+    collectionLocalized: true,
+    status: args.status === true,
+  });
+  if (!spec) return null;
+
+  const columnsOnMain = spec.columns
+    .map(c => c.name)
+    .filter(name => present.has(name));
+  if (columnsOnMain.length === 0) return null;
+
+  const { buildLocalizationUpStatements } = await import(
+    "../migration/generate-up"
+  );
+  // Additive only: this runs unattended from boot and `db:sync`, where a dropped column is not
+  // something the next boot can put back. The copies left on main are inert once reads resolve
+  // through the companion, and `nextly migrate` removes them under supervision.
+  return buildLocalizationUpStatements(
+    { ...spec, columnsOnMain },
+    { dropSeededColumns: false }
+  );
+}
+
 export async function ensureCompanionTable(
-  adapter: CompanionWriteAdapter,
+  adapter: CompanionIntrospectAdapter,
   args: {
     slug: string;
     tableName: string;
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
+    /**
+     * The language the main table's existing content is in.
+     *
+     * Supplied turns creation into a TRANSITION: the values already on the main table are copied
+     * into the companion as this locale's rows, so content written before localization was
+     * enabled stays readable. Omitted creates an empty companion, which is only correct for an
+     * entity that has never held content outside a companion.
+     */
+    sourceLocale?: string;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -477,15 +561,18 @@ export async function ensureCompanionTable(
     const localizedNames = new Set(
       resolveLocalizedFieldNames(args.fields, true)
     );
-    const statements = buildCompanionReconcileStatements({
-      slug: args.slug,
-      tableName: args.tableName,
-      oldLocalized: [],
-      newLocalized: args.fields.filter(f => localizedNames.has(f.name)),
-      dialect: args.dialect,
-      status: args.status === true,
-      companionExists: false,
-    });
+    const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
+    const statements =
+      (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
+      buildCompanionReconcileStatements({
+        slug: args.slug,
+        tableName: args.tableName,
+        oldLocalized: [],
+        newLocalized,
+        dialect: args.dialect,
+        status: args.status === true,
+        companionExists: false,
+      });
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
     }
