@@ -144,22 +144,26 @@ describe("watched config reloads", () => {
       return loaded;
     });
 
-    // A reload is now in flight against the first watcher.
+    // A reload is now in flight against the first watcher, with a second change
+    // queued behind it.
+    fireFirst("change");
     fireFirst("change");
 
     // The first watcher is stopped and a different config is watched instead,
     // which is what `clearConfigCache()` followed by another watched load does.
     clearConfigCache();
-    await loadConfig({
+    // Started rather than awaited: the replacement load rebuilds the same
+    // registry as the reload in flight, so it queues behind it instead of
+    // running beside it, and awaiting it before the gate opens would wait on a
+    // reload that only this test can release.
+    const replacement = loadConfig({
       configPath: OTHER_CONFIG_PATH,
       cwd: "/virtual",
       watch: true,
     });
-    const fireSecond = capturedListener();
-    fireSecond("change");
 
     release();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await replacement;
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setTimeout(resolve, 0));
 
@@ -189,7 +193,9 @@ describe("watched config reloads", () => {
     fireFirst("change");
 
     clearConfigCache();
-    await loadConfig({
+    // Queued behind the reload in flight, so it is started before the gate
+    // opens and awaited after.
+    const replacement = loadConfig({
       configPath: OTHER_CONFIG_PATH,
       cwd: "/virtual",
       watch: true,
@@ -203,6 +209,7 @@ describe("watched config reloads", () => {
     });
 
     release();
+    await replacement;
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setTimeout(resolve, 0));
 
@@ -233,14 +240,17 @@ describe("watched config reloads", () => {
     fireFirst("change");
 
     clearConfigCache();
-    await loadConfig({
+    // Queued behind the reload in flight rather than running beside it, so the
+    // superseded reload puts the installed set back BEFORE this one registers,
+    // instead of over the top of it.
+    const replacement = loadConfig({
       configPath: OTHER_CONFIG_PATH,
       cwd: "/virtual",
       watch: true,
     });
 
     release();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await replacement;
     await new Promise(resolve => setTimeout(resolve, 0));
 
     // The superseded reload rebuilt the live registry on its way through. What
@@ -248,5 +258,47 @@ describe("watched config reloads", () => {
     // later lookup classifies its fields with the obsolete storage mappings.
     expect(getFieldType("second-type")).toBeDefined();
     expect(getFieldType("first-type")).toBeUndefined();
+  });
+
+  it("does not run an explicit load beside an in-flight reload", async () => {
+    bundleAndRequire.mockResolvedValue(loaded);
+    await loadConfig({ configPath: CONFIG_PATH, cwd: "/virtual", watch: true });
+    const fireFirst = capturedListener();
+
+    let active = 0;
+    let maxActive = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let call = 0;
+
+    bundleAndRequire.mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      call += 1;
+      if (call === 1) await gate;
+      active -= 1;
+      return loaded;
+    });
+
+    // A reload is in flight, and an explicit load arrives while it is.
+    fireFirst("change");
+    clearConfigCache();
+    const replacement = loadConfig({
+      configPath: OTHER_CONFIG_PATH,
+      cwd: "/virtual",
+      watch: true,
+    });
+
+    release();
+    await replacement;
+
+    // Both rebuild the one process-wide registry, so an explicit load has to
+    // wait for the reload rather than clear and re-register underneath it: each
+    // would otherwise capture what the other left behind, and a reload that
+    // finds itself superseded would restore the installed set over the
+    // registrations of the load that replaced it.
+    expect(maxActive).toBe(1);
   });
 });

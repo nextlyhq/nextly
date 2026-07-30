@@ -248,6 +248,37 @@ let watcherGeneration = 0;
  */
 let installedFieldTypes: ReadonlyMap<string, PluginFieldType> | null = null;
 
+/**
+ * The tail of the loads that rebuild the process-wide field-type registry.
+ *
+ * A load clears the registry, registers the config's own types, and only then
+ * awaits again before snapshotting what it registered. Two loads overlapping
+ * across that await share one registry, so each can capture the other's types —
+ * and a superseded watcher reload, whose job is to put the installed set back,
+ * can put it back over a live load's registrations, leaving the new config
+ * paired with the previous config's types.
+ *
+ * The watcher's own reloads were already serialized against each other. An
+ * explicit `loadConfig()` never joined them, so a `clearConfigCache()` and
+ * reload arriving while a reload was in flight overlapped with it.
+ */
+let registryLoad: Promise<void> = Promise.resolve();
+
+/**
+ * Run `load` once every earlier registry-rebuilding load has finished.
+ *
+ * The chain records completion rather than outcome: a rejection left on it
+ * would be adopted by every later waiter and fail loads that were fine.
+ */
+function withRegistryLock<T>(load: () => Promise<T>): Promise<T> {
+  const run = registryLoad.then(load);
+  registryLoad = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 const changeCallbacks: Set<ConfigChangeCallback> = new Set();
 
 function findConfigFile(cwd: string): string | undefined {
@@ -288,40 +319,53 @@ function startWatching(configPath: string, options: LoadConfigOptions): void {
 async function runWatchReload(options: LoadConfigOptions): Promise<void> {
   const generation = watcherGeneration;
   cachedConfig = null;
-  try {
-    const result = await loadConfigInternal(options);
 
-    // The watcher this reload belongs to was stopped while the load was in
-    // flight, so this result describes a config nothing is watching. Delivering
-    // it would hand the replacement watcher's callbacks the previous config,
-    // which they would apply until the replacement's own reload arrived.
-    if (generation !== watcherGeneration) {
-      // The load cleared and rebuilt the live registry on its way through, so
-      // the set left behind is this obsolete config's. Put back whatever the
-      // watcher that is actually installed loaded, or every later lookup would
-      // classify its fields with the wrong storage primitives.
-      if (installedFieldTypes) restoreFieldTypes(installedFieldTypes);
-      return;
-    }
+  // The lock covers the load and the registry bookkeeping that follows it, so
+  // the decision about which set is installed is made against a registry no
+  // other load is rebuilding. It is released before the callbacks run: those
+  // are caller code, and one of them calling `loadConfig()` while this held the
+  // lock would wait on itself.
+  const result = await withRegistryLock(async () => {
+    try {
+      const loaded = await loadConfigInternal(options);
 
-    // This reload is the live one, so its registry is the authoritative set.
-    installedFieldTypes = result.fieldTypes ?? snapshotFieldTypes();
-
-    for (const callback of changeCallbacks) {
-      try {
-        callback(result);
-      } catch (error) {
-        console.error("[config-loader] Error in change callback:", error);
+      // The watcher this reload belongs to was stopped while the load was in
+      // flight, so this result describes a config nothing is watching.
+      // Delivering it would hand the replacement watcher's callbacks the
+      // previous config, which they would apply until the replacement's own
+      // reload arrived.
+      if (generation !== watcherGeneration) {
+        // The load cleared and rebuilt the live registry on its way through, so
+        // the set left behind is this obsolete config's. Put back whatever the
+        // watcher that is actually installed loaded, or every later lookup
+        // would classify its fields with the wrong storage primitives.
+        if (installedFieldTypes) restoreFieldTypes(installedFieldTypes);
+        return null;
       }
+
+      // This reload is the live one, so its registry is the authoritative set.
+      installedFieldTypes = loaded.fieldTypes ?? snapshotFieldTypes();
+      return loaded;
+    } catch (error) {
+      // A failed load restores the registry it found, which for a superseded
+      // reload is the obsolete config's rather than the installed one's. Put
+      // the installed set back for the same reason the success path does.
+      if (generation !== watcherGeneration && installedFieldTypes) {
+        restoreFieldTypes(installedFieldTypes);
+      }
+      console.error("[config-loader] Error reloading config:", error);
+      return null;
     }
-  } catch (error) {
-    // A failed load restores the registry it found, which for a superseded
-    // reload is the obsolete config's rather than the installed one's. Put the
-    // installed set back for the same reason the success path does.
-    if (generation !== watcherGeneration && installedFieldTypes) {
-      restoreFieldTypes(installedFieldTypes);
+  });
+
+  if (!result) return;
+
+  for (const callback of changeCallbacks) {
+    try {
+      callback(result);
+    } catch (error) {
+      console.error("[config-loader] Error in change callback:", error);
     }
-    console.error("[config-loader] Error reloading config:", error);
   }
 }
 
@@ -652,12 +696,18 @@ export async function loadConfig(
     return cachedConfig;
   }
 
-  const result = await loadConfigInternal(options);
+  // Serialized with the watcher's reloads, which rebuild the same registry. A
+  // reload still in flight from a watcher this call is replacing would
+  // otherwise interleave with it and put its own set back over this one's.
+  const result = await withRegistryLock(async () => {
+    const loaded = await loadConfigInternal(options);
 
-  cachedConfig = result;
-  // This config is now the installed one, so its registry is what a superseded
-  // reload has to put back if it finishes after the swap.
-  markInstalledFieldTypes(result);
+    cachedConfig = loaded;
+    // This config is now the installed one, so its registry is what a
+    // superseded reload has to put back if it finishes after the swap.
+    markInstalledFieldTypes(loaded);
+    return loaded;
+  });
 
   if (options.watch && result.configPath) {
     startWatching(result.configPath, options);

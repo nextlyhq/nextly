@@ -108,6 +108,35 @@ describe("validateFieldValues", () => {
     );
   });
 
+  it("refuses a declaration with no usable name", async () => {
+    const issues = await validateFieldValues({}, [
+      { name: "", type: "text", required: true },
+    ] as Parameters<typeof validateFieldValues>[1]);
+
+    // The validator keys values by name and skips a field without one, so
+    // delegating would report success having checked neither the required rule
+    // nor the value.
+    expect(issues).toEqual([
+      {
+        path: "fields[0]",
+        code: "INVALID_FIELD_NAME",
+        message: "fields[0] declares no field name.",
+      },
+    ]);
+  });
+
+  it("refuses an unnamed declaration nested in a container", async () => {
+    const issues = await validateFieldValues({}, [
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [{ type: "text", required: true }],
+      },
+    ] as Parameters<typeof validateFieldValues>[1]);
+
+    expect(issues[0]?.path).toBe("rows.fields[0]");
+  });
+
   it("reports where a value nested in a container actually sits", async () => {
     const issues = await validateFieldValues({ rows: [{ title: "" }] }, [
       {

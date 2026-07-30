@@ -1581,7 +1581,18 @@ ${properties}
     // could not have shadowed anything.
     const occurrences = (haystack: string, name: string): number =>
       haystack.match(new RegExp(`(?<![$\\w])${name}<`, "g"))?.length ?? 0;
-    for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
+
+    // Every name the output applies type arguments to, rather than a list of
+    // the ones that happened to come up. `Partial` is not special: `Readonly`,
+    // `Required`, `Exclude` and the rest shadow just as badly, and a standard
+    // utility missing from a fixed list would be imported over in silence.
+    // Matching requires the `<` to follow immediately, as a generic
+    // application does, so a comparison never reads as one.
+    const applied = new Set(
+      Array.from(body.matchAll(/(?<![$\w])([A-Za-z_$][\w$]*)</g), m => m[1])
+    );
+
+    for (const global of applied) {
       // Only an emission whose own type declared an import for this name is
       // subtracted. A plugin writing `Partial<Model>` without importing
       // `Partial` means the standard global, exactly as core does, so its use

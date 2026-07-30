@@ -126,14 +126,16 @@ function* walkDeclarations(
   fields: readonly FieldValueDeclarationInput[],
   basePath = ""
 ): Generator<{ field: FieldValueDeclarationInput; path: string }> {
-  for (const field of fields) {
+  for (const [index, field] of fields.entries()) {
     const name = (field as { name?: unknown }).name;
     const prefix = basePath ? `${basePath}.` : "";
-    // An unnamed declaration has nothing to address it by, so its path names
-    // the list it sits in rather than the field. Still absolute, which keeps
+    // A declaration with no usable name has nothing to address it by, so its
+    // path is its position in the list it sits in. Still absolute, which keeps
     // the lists of two different containers apart.
     const path =
-      typeof name === "string" ? `${prefix}${name}` : `${prefix}fields`;
+      typeof name === "string" && name !== ""
+        ? `${prefix}${name}`
+        : `${prefix}fields[${index}]`;
     yield { field, path };
 
     const nested = (field as { fields?: unknown }).fields;
@@ -143,13 +145,8 @@ function* walkDeclarations(
     // that would report its configuration as a bad declaration.
     if ((type === "repeater" || type === "group") && Array.isArray(nested)) {
       // Children hang off the container's own path, so a child reports where it
-      // sits rather than under a bare name two containers could both hold. An
-      // unnamed container contributes nothing to address by, so its children
-      // keep the path it was reached through.
-      yield* walkDeclarations(
-        nested as FieldValueDeclarationInput[],
-        typeof name === "string" ? path : basePath
-      );
+      // sits rather than under a bare name two containers could both hold.
+      yield* walkDeclarations(nested as FieldValueDeclarationInput[], path);
     }
   }
 }
@@ -177,23 +174,37 @@ export async function validateFieldValues(
   options: ValidateFieldValuesOptions = {}
 ): Promise<ValidationIssue[]> {
   // The internal validator assumes its declarations already passed config
-  // validation, so a token it does not know reaches its default branch and any
+  // validation, so anything it cannot act on is silently skipped and every
   // value for that field is reported as valid. A caller writing declarations by
   // hand has had nothing check them, so a typo would read as a clean pass.
-  const unknownTypes = [...walkDeclarations(fields)].filter(({ field }) => {
+  const unusable: ValidationIssue[] = [];
+  for (const { field, path } of walkDeclarations(fields)) {
+    const name = (field as { name?: unknown }).name;
+    // The validator keys values by name and skips a field without one, so a
+    // blank or missing name means neither `required` nor the value itself is
+    // ever looked at — the whole call returns success having checked nothing.
+    if (typeof name !== "string" || name === "") {
+      unusable.push({
+        path,
+        code: "INVALID_FIELD_NAME",
+        message: `${path} declares no field name.`,
+      });
+      continue;
+    }
+
     const type = (field as { type?: unknown }).type;
-    return (
+    if (
       typeof type !== "string" ||
       !(BUILT_IN_FIELD_TYPES.has(type) || hasFieldType(type))
-    );
-  });
-  if (unknownTypes.length > 0) {
-    return unknownTypes.map(({ path }) => ({
-      path,
-      code: "INVALID_FIELD_TYPE",
-      message: `${path} declares an unknown field type.`,
-    }));
+    ) {
+      unusable.push({
+        path,
+        code: "INVALID_FIELD_TYPE",
+        message: `${path} declares an unknown field type.`,
+      });
+    }
   }
+  if (unusable.length > 0) return unusable;
 
   // Both arms describe the same field, one open for authoring and one the
   // minimal shape existing configs already satisfy; the validator reads only

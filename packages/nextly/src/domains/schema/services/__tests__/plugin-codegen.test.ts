@@ -393,6 +393,49 @@ describe("standalone interface generation", () => {
     expect(message).toContain("'Partial'");
   });
 
+  it("reserves a standard utility beyond the common few", () => {
+    registerFieldType({
+      type: "uses-readonly",
+      storage: "json",
+      component: "@acme/ur2/admin#Input",
+      // No `Readonly` import, so this is the standard global.
+      codegen: { tsType: () => "Readonly<string[]>" },
+    });
+    registerFieldType({
+      type: "imports-readonly",
+      storage: "json",
+      component: "@acme/ir/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Readonly"], from: "@acme/ir" }],
+        tsType: () => "Readonly<string>",
+      },
+    });
+
+    // Reserving from a fixed list of utility names leaves every one outside it
+    // shadowable: the second plugin's import lands in the same scope and the
+    // first field's type resolves to it instead of the standard utility.
+    let message = "";
+    try {
+      new TypeGenerator({
+        generateInputTypes: false,
+        generateConfig: false,
+      }).generateTypesFile([
+        collection([
+          { name: "r", type: "uses-readonly" },
+          { name: "i", type: "imports-readonly" },
+        ]),
+      ]);
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'Readonly'");
+  });
+
   it("keeps a global free when one shared field emitted it twice", () => {
     registerFieldType({
       type: "shared-array",
