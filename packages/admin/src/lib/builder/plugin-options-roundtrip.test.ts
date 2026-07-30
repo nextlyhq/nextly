@@ -145,6 +145,18 @@ describe("plugin field options round-trip through the builder", () => {
     expect(Object.getPrototypeOf(carried)).toBe(Object.prototype);
   });
 
+  it("ignores a container that is not a plain object", () => {
+    // Core reads only plain objects, so the builder has to agree or a field
+    // round-trips differently through each.
+    const stored = {
+      name: "rating",
+      type: "star-rating",
+      pluginOptions: ["ratingScale"],
+    } as unknown as Parameters<typeof convertToBuilderField>[0];
+
+    expect(convertToBuilderField(stored, 0).pluginOptions).toBeUndefined();
+  });
+
   it("leaves the bag off a field that declares nothing extra", () => {
     const plain = {
       name: "title",

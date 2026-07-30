@@ -393,6 +393,15 @@ const BUILDER_MODELLED_FIELD_KEYS: ReadonlySet<string> = new Set([
   "pluginOptions",
 ]);
 
+/** Whether a value is a `{}` literal, matching what core accepts as a container. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 /**
  * Gather the properties the builder does not model into one bag.
  *
@@ -427,9 +436,14 @@ function collectUnmodelledOptions(
   // The container's entries win over any of the same name sitting directly on
   // the field: a type that moved an option into the container did so to escape
   // the meaning the surrounding schema gives that name.
-  const container = (field as { pluginOptions?: unknown }).pluginOptions;
-  if (container !== null && typeof container === "object") {
-    for (const [key, value] of Object.entries(container)) collect(key, value);
+  // Own, and a plain object: `typeof x === "object"` also admits arrays and
+  // class instances, which the core reader rejects — the two have to agree on
+  // what counts as a container or a field round-trips differently through each.
+  if (Object.prototype.hasOwnProperty.call(field, "pluginOptions")) {
+    const container = (field as { pluginOptions?: unknown }).pluginOptions;
+    if (isPlainRecord(container)) {
+      for (const [key, value] of Object.entries(container)) collect(key, value);
+    }
   }
 
   return Object.keys(carried).length > 0 ? carried : undefined;

@@ -82,6 +82,9 @@ describe("detachedField", () => {
 
     expect(hasOwnProperty(detached.policy, "__proto__")).toBe(true);
     expect(Object.getPrototypeOf(detached.policy)).toBe(Object.prototype);
+    // The value too: preserving the key while losing what it held would be the
+    // same data loss wearing a different shape.
+    expect(detached.policy.__proto__).toEqual({ polluted: true });
   });
 });
 
@@ -91,5 +94,6 @@ describe("detachData", () => {
 
     expect(hasOwnProperty(detached.body, "__proto__")).toBe(true);
     expect(detached.body.kept).toBe(1);
+    expect(detached.body.__proto__).toEqual({ polluted: true });
   });
 });

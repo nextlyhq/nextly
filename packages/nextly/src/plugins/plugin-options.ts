@@ -45,10 +45,19 @@ export function isPluginOptionContainer(
   return proto === Object.prototype || proto === null;
 }
 
-/** The container's contents, or nothing when the field declares none. */
+/**
+ * The container's contents, or nothing when the field declares none.
+ *
+ * Own properties only. A field reached through a prototype that happens to
+ * carry `pluginOptions` has not declared one, and folding an inherited object
+ * would hand a type options nothing in its own declaration put there.
+ */
 export function pluginOptionContainer(
   field: object
 ): Record<string, unknown> | undefined {
+  if (!Object.prototype.hasOwnProperty.call(field, PLUGIN_OPTIONS_KEY)) {
+    return undefined;
+  }
   const held = (field as Record<string, unknown>)[PLUGIN_OPTIONS_KEY];
   return isPluginOptionContainer(held) ? held : undefined;
 }

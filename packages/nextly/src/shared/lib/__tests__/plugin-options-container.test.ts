@@ -17,6 +17,7 @@ import {
 } from "../../../domains/schema/field-types/field-type-registry";
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
 import { detachedField } from "../detached-field";
+import { pluginOptionContainer } from "../../../plugins/plugin-options";
 import { pluginFieldOptionIssues } from "../plugin-field-options";
 
 afterEach(() => {
@@ -181,6 +182,28 @@ describe("the plugin options container", () => {
     });
 
     expect(issues).toHaveLength(1);
+  });
+
+  it("reads the container only as an own property", () => {
+    const inherited = Object.create({
+      pluginOptions: { ratingScale: { max: 99 } },
+    }) as Record<string, unknown>;
+    inherited.type = "star-rating";
+
+    // Nothing in this field's own declaration put that there. The callers all
+    // spread the field first, which strips it anyway, so this is the reader
+    // agreeing with them rather than relying on them.
+    expect(pluginOptionContainer(inherited)).toBeUndefined();
+  });
+
+  it("rejects a container that is an array or a class instance", () => {
+    class Options {}
+    expect(
+      pluginOptionContainer({ type: "t", pluginOptions: ["ratingScale"] })
+    ).toBeUndefined();
+    expect(
+      pluginOptionContainer({ type: "t", pluginOptions: new Options() })
+    ).toBeUndefined();
   });
 
   it("cannot displace the guaranteed identity of the field", () => {
