@@ -19,11 +19,6 @@ import { randomBytes } from "node:crypto";
 
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
-import {
-  PG_ABORTED_TRANSACTION_SQLSTATE,
-  isAbortedTransactionError,
-  recordAbortedTransaction,
-} from "../__tests__/aborted-transaction-sightings";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import { createAdapter } from "../database/factory";
 import {
@@ -65,6 +60,11 @@ import { _resetEnvCache } from "../shared/lib/env";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
 
+import {
+  PG_ABORTED_TRANSACTION_SQLSTATE,
+  isAbortedTransactionError,
+  recordAbortedTransaction,
+} from "./aborted-transaction-sightings";
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
 import { clearPluginServices } from "./services/plugin-services-registry";
@@ -137,8 +137,9 @@ interface AbortProbeContext {
  * one more statement is the only thing that reveals it: the aborted state answers, because the
  * error that caused it is gone.
  *
- * A probe failure that is not the abort signature is ignored. The probe exists to observe the
- * transaction, never to add a failure mode of its own.
+ * A probe failure that is NOT the abort signature propagates. The probe is meant to observe the
+ * transaction rather than change it, and a statement of its own that fails has changed it: the
+ * transaction is now aborted because of this query, and reporting success would be a lie.
  */
 async function probeForAbortedTransaction(
   ctx: AbortProbeContext
@@ -149,7 +150,15 @@ async function probeForAbortedTransaction(
   } catch (error) {
     if (isAbortedTransactionError(error)) {
       recordAbortedTransaction(driverMessage(error));
+      // Left to resolve or reject as it would have. The callback caused this, and changing the
+      // outcome would change the path under test; the recorded sighting is what fails the test.
+      return;
     }
+    // Anything else means the probe itself broke the transaction — a `statement_timeout` from the
+    // `timeoutMs` option is the realistic case. PostgreSQL would then accept the COMMIT as a
+    // rollback and the call would resolve having discarded every write, so swallowing this would
+    // manufacture exactly the silent loss the guard exists to catch.
+    throw error;
   }
 }
 
@@ -175,7 +184,16 @@ async function probeForAbortedTransaction(
  * something unrelated. The probe cannot run, and the outer catch sees only the substitute, so
  * the sighting is lost — but that failure is at least loud, because the substitute propagates.
  */
+const GUARDED = Symbol.for("nextly.abortedTransactionGuardInstalled");
+
 function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
+  // An adapter can be handed to `createTestNextly` more than once — that is how a test keeps an
+  // in-memory database alive across boots. Wrapping the wrapper would nest a probe per boot, so a
+  // single abort would report two, three, four times and each transaction would pay for every
+  // boot that ever happened.
+  const marker = adapter as unknown as Record<symbol, boolean>;
+  if (marker[GUARDED]) return adapter;
+
   const originalTransaction = adapter.transaction?.bind(adapter);
   if (!originalTransaction) return adapter;
   const wrapped = async (...args: unknown[]): Promise<unknown> => {
@@ -204,6 +222,7 @@ function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
     }
   };
   (adapter as { transaction: unknown }).transaction = wrapped;
+  marker[GUARDED] = true;
   return adapter;
 }
 

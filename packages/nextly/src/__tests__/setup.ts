@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, afterEach, expect } from "vitest";
 
-import { takeAbortedTransactionSightings } from "./aborted-transaction-sightings";
+import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
 beforeAll(() => {
   // Setup test environment
@@ -20,18 +20,13 @@ beforeAll(() => {
  * no individual test knows to look for it.
  *
  * Runs after EVERY test so the failure is attributed to the test that caused it rather than to
- * whichever one happens to run last. Reported through `expect.fail` so it arrives as an
- * assertion failure, which is what a test runner knows how to present.
+ * whichever one happens to run last. The message comes from the same function published through
+ * `nextly/testing`, so this suite and a plugin author's suite report the identical diagnosis;
+ * only the assertion differs, because each runner reports its own best.
  */
 afterEach(() => {
-  const sightings = takeAbortedTransactionSightings();
-  if (sightings.length === 0) return;
-  expect.fail(
-    `A PostgreSQL transaction was aborted during this test, which means an earlier ` +
-      `statement inside it failed and was swallowed. Find the swallowed error — it is the ` +
-      `real defect, and this message is only its shadow. Seen ${sightings.length} time(s):\n` +
-      sightings.map(s => `  - ${s}`).join("\n")
-  );
+  const aborted = describeAbortedTransactions();
+  if (aborted) expect.fail(aborted);
 });
 
 afterAll(() => {

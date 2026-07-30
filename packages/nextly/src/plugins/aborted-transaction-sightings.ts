@@ -1,13 +1,18 @@
 /**
  * Shared buffer and detection for PostgreSQL aborted-transaction sightings.
  *
- * Deliberately dependency-free. `src/__tests__/setup.ts` is the setup file for BOTH the unit and
- * the integration vitest configs, so anything it imports is loaded into every unit test too.
- * Importing the integration harness there pulls in the DI registry, the adapters and the event
- * bus, which is enough to break unit suites that expect none of it. Keeping the buffer in its own
- * module lets the assertion live in the shared setup without dragging the harness along.
+ * Deliberately dependency-free, for two reasons. `src/__tests__/setup.ts` is the setup file for
+ * BOTH the unit and the integration vitest configs, so anything it imports is loaded into every
+ * unit test too — importing the harness there pulls in the DI registry, the adapters and the event
+ * bus, which is enough to break unit suites that expect none of it. And this module ships through
+ * `nextly/testing`, so it must not reach for a test framework: `expect` comes from vitest, which is
+ * a devDependency and absent for consumers.
  *
- * @module __tests__/aborted-transaction-sightings
+ * That is why nothing here throws. `describeAbortedTransactions` returns the message and leaves the
+ * assertion to the caller, so this package's own setup file and a plugin author's setup file can
+ * each fail the test with their own runner while sharing one buffer, one detector and one message.
+ *
+ * @module plugins/aborted-transaction-sightings
  */
 
 /**
@@ -93,4 +98,34 @@ export function recordAbortedTransaction(message: string): void {
 export function takeAbortedTransactionSightings(): string[] {
   const buffer = sightings();
   return buffer.splice(0, buffer.length);
+}
+
+/**
+ * The failure message for anything recorded since the last check, or `null` when clean.
+ *
+ * Returns rather than throws so the caller's own test runner reports it: a thrown error from this
+ * package would either depend on vitest or arrive as a `NextlyError`, whose public message is
+ * deliberately generic and would hide the sightings behind "An unexpected error occurred."
+ *
+ * Consumes the buffer, so a failure is attributed to the test that caused it and never re-reported
+ * against the next one. Use it from a per-test hook:
+ *
+ * ```ts
+ * import { describeAbortedTransactions } from "nextly/testing";
+ *
+ * afterEach(() => {
+ *   const aborted = describeAbortedTransactions();
+ *   if (aborted) expect.fail(aborted);
+ * });
+ * ```
+ */
+export function describeAbortedTransactions(): string | null {
+  const seen = takeAbortedTransactionSightings();
+  if (seen.length === 0) return null;
+  return (
+    `A PostgreSQL transaction was aborted during this test, which means an earlier ` +
+    `statement inside it failed and was swallowed. Find the swallowed error — it is the ` +
+    `real defect, and this message is only its shadow. Seen ${seen.length} time(s):\n` +
+    seen.map(s => `  - ${s}`).join("\n")
+  );
 }

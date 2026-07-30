@@ -18,7 +18,9 @@
 import { createTestNextly as createThroughPublishedEntry } from "nextly/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { takeAbortedTransactionSightings } from "../../__tests__/aborted-transaction-sightings";
+import { createAdapter } from "../../database/factory";
+import { clearServices } from "../../di/register";
+import { takeAbortedTransactionSightings } from "../aborted-transaction-sightings";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -118,5 +120,36 @@ describe.skipIf(!onPostgres)("aborted-transaction guard (integration)", () => {
     });
 
     expect(takeAbortedTransactionSightings()).toEqual([]);
+  });
+});
+
+describe("instrumenting an adapter more than once", () => {
+  it("installs the guard exactly once across boots", async () => {
+    // Handing the same adapter back to `createTestNextly` is how a test keeps a database alive
+    // across boots. Each boot instruments the adapter, so without a marker the second boot would
+    // wrap the first wrapper: one abort would then report twice, and every transaction would carry
+    // a probe for every boot that ever happened.
+    //
+    // Asserted on the identity of the installed method rather than by counting sightings, because
+    // re-wrapping necessarily replaces it with a new closure. Reboots the adapter the way the
+    // builder suites do — a caller-owned in-memory adapter, and `clearServices` rather than
+    // `destroy`, since the latter disconnects the adapter the second boot needs.
+    process.env.DB_DIALECT = "sqlite";
+    const adapter = await createAdapter({
+      type: "sqlite",
+      memory: true,
+    } as Parameters<typeof createAdapter>[0]);
+
+    const first = await createTestNextly({ adapter });
+    const afterFirstBoot = first.adapter.transaction;
+    expect(first.adapter).toBe(adapter);
+
+    clearServices();
+    const second = await createTestNextly({ adapter });
+    try {
+      expect(second.adapter.transaction).toBe(afterFirstBoot);
+    } finally {
+      await second.destroy();
+    }
   });
 });

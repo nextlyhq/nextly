@@ -14,10 +14,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   PG_ABORTED_TRANSACTION_SQLSTATE,
+  describeAbortedTransactions,
   isAbortedTransactionError,
   recordAbortedTransaction,
   takeAbortedTransactionSightings,
-} from "./aborted-transaction-sightings";
+} from "../aborted-transaction-sightings";
 
 /** The `DatabaseError` shape `createDatabaseError` produces, minus the fields not read here. */
 function classified(fields: {
@@ -113,5 +114,33 @@ describe("the sightings buffer", () => {
     expect(takeAbortedTransactionSightings()).toEqual(["first", "second"]);
     // Cleared on read, so one test's failure is never re-reported against the next.
     expect(takeAbortedTransactionSightings()).toEqual([]);
+  });
+});
+
+describe("describeAbortedTransactions", () => {
+  it("returns null when nothing was recorded", () => {
+    // Returning rather than throwing is what lets the same message serve this package's vitest
+    // setup and a plugin author's runner, without shipping a dependency on either.
+    expect(describeAbortedTransactions()).toBeNull();
+  });
+
+  it("names every sighting and says the message is not the defect", () => {
+    recordAbortedTransaction("current transaction is aborted (one)");
+    recordAbortedTransaction("current transaction is aborted (two)");
+
+    const described = describeAbortedTransactions();
+
+    expect(described).toContain("Seen 2 time(s)");
+    expect(described).toContain("(one)");
+    expect(described).toContain("(two)");
+    // The point of the message: whoever reads it must go looking for the swallowed error.
+    expect(described).toContain("swallowed");
+  });
+
+  it("consumes the buffer so the next test starts clean", () => {
+    recordAbortedTransaction("current transaction is aborted");
+
+    expect(describeAbortedTransactions()).not.toBeNull();
+    expect(describeAbortedTransactions()).toBeNull();
   });
 });
