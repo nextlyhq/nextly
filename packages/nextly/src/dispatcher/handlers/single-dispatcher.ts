@@ -318,6 +318,23 @@ async function reconcileSingleCompanion(args: {
     await adapter.executeQuery(stmt);
   }
 
+  // The transition record describes a companion that no longer exists, so it stops being true the
+  // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale
+  // — the check that protects a live transition would block a legitimate one instead.
+  if (plan.companionDropped) {
+    const { resolveTransitionStore } = await import(
+      "../../domains/i18n/migration/transition-recorder"
+    );
+    const { forgetI18nTransition } = await import(
+      "../../domains/i18n/migration/transition-state"
+    );
+    await forgetI18nTransition(
+      await resolveTransitionStore(adapter),
+      "single",
+      slug
+    );
+  }
+
   // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when
   // the plan dropped the companion (disable) or the single is no longer localized.
   if (!plan.companionDropped && localized) {

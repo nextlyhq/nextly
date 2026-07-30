@@ -35,6 +35,7 @@ import type { MetaEntry } from "../../meta/services/meta-service";
 export interface TransitionStateStore {
   getEntry<T = unknown>(key: string): Promise<MetaEntry<T>>;
   set(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 /**
@@ -280,4 +281,31 @@ function markerCorrupt(key: string, reason: string): NextlyError {
     logMessage: `localization transition marker is unreadable: ${reason}`,
     logContext: { key, reason },
   });
+}
+
+/**
+ * Forget an entity's transition entirely.
+ *
+ * The record is keyed by kind and slug, which a later entity can reuse. Two moments make the old
+ * record actively harmful rather than merely stale:
+ *
+ * - The entity is deleted. A new one created under the same slug would inherit a predecessor's
+ *   source locale, and `beginI18nTransition` would refuse its real one — after its companion had
+ *   already been created and seeded.
+ * - Localization is disabled. The companion is gone and the values are back on main, so the
+ *   transition it describes no longer exists. If the default locale changes before localization is
+ *   enabled again, main holds content in the new default while the record still names the old one,
+ *   and the refusal that protects a live transition instead blocks a legitimate one.
+ *
+ * Deleting is right for both. What the record protects is a transition in progress; once there is
+ * no companion there is nothing to protect, and the next enable should record what is true then.
+ *
+ * Absent is the state this produces, so removing a record that was never there is not an error.
+ */
+export async function forgetI18nTransition(
+  store: TransitionStateStore,
+  kind: I18nTransitionKind,
+  slug: string
+): Promise<void> {
+  await store.delete(markerKey(kind, slug));
 }

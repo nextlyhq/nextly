@@ -19,6 +19,7 @@ import type { MetaEntry } from "../../meta/services/meta-service";
 import {
   I18N_TRANSITION_MARKER_VERSION,
   beginI18nTransition,
+  forgetI18nTransition,
   readI18nTransitionState,
   settleI18nTransition,
   type TransitionStateStore,
@@ -37,6 +38,10 @@ function fakeStore(seed: Record<string, unknown> = {}): TransitionStateStore & {
     },
     set(key: string, value: unknown): Promise<void> {
       rows.set(key, value);
+      return Promise.resolve();
+    },
+    delete(key: string): Promise<void> {
+      rows.delete(key);
       return Promise.resolve();
     },
   };
@@ -260,6 +265,60 @@ describe("settleI18nTransition", () => {
     await settleI18nTransition(store, { kind: "collection", slug: "posts" });
     await expect(
       settleI18nTransition(store, { kind: "collection", slug: "posts" })
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("forgetI18nTransition", () => {
+  it("lets a recreated slug record its own source locale", async () => {
+    // The key is kind plus slug, which a later entity can reuse. Without forgetting, a new entity
+    // inherits its predecessor's locale and `begin` refuses the real one — after the new
+    // companion has already been created and seeded.
+    const store = fakeStore();
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+
+    await forgetI18nTransition(store, "collection", "posts");
+
+    await expect(
+      beginI18nTransition(store, {
+        kind: "collection",
+        slug: "posts",
+        sourceLocale: "fr",
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toEqual({ status: "enabling", sourceLocale: "fr" });
+  });
+
+  it("releases a settled entity too, so disabling does not block re-enabling", async () => {
+    // After a disable there is no companion and the values are back on main. The transition the
+    // record describes no longer exists, and keeping it blocks the next legitimate one.
+    const store = fakeStore();
+    await beginI18nTransition(store, {
+      kind: "single",
+      slug: "homepage",
+      sourceLocale: "en",
+    });
+    await settleI18nTransition(store, { kind: "single", slug: "homepage" });
+
+    await forgetI18nTransition(store, "single", "homepage");
+
+    await expect(
+      readI18nTransitionState(store, "single", "homepage")
+    ).resolves.toEqual({ status: "untracked" });
+  });
+
+  it("is not an error when there was no record", async () => {
+    // Absent is the state it produces, so producing it twice is not a failure.
+    const store = fakeStore();
+
+    await expect(
+      forgetI18nTransition(store, "fieldGroup", "never_localized")
     ).resolves.toBeUndefined();
   });
 });

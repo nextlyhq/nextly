@@ -60,6 +60,26 @@ const SILENT_LOGGER: Logger = {
  * the CLI carries a real logger, the dev reload path writes through `console`.
  * Neither matters to the record itself.
  */
+/**
+ * The store alone, without a locale.
+ *
+ * Forgetting a transition needs somewhere to delete from and nothing else, and it has to work for
+ * an entity whose localization is being turned off — where asking for a default locale would be
+ * asking the wrong question, and would fail for an app that no longer configures one.
+ */
+export async function resolveTransitionStore(
+  adapter: MetaCapableAdapter,
+  logger: Logger = SILENT_LOGGER
+): Promise<TransitionStateStore> {
+  const { MetaService } = await import("../../meta/services/meta-service");
+  const meta = new MetaService(adapter as DrizzleAdapter, logger);
+  return {
+    getEntry: key => meta.getEntry(key),
+    set: (key, value) => meta.set(key, value),
+    delete: key => meta.delete(key),
+  };
+}
+
 export async function resolveTransitionRecorder(
   config: { localization?: { defaultLocale?: string } },
   adapter: MetaCapableAdapter,
@@ -71,11 +91,6 @@ export async function resolveTransitionRecorder(
   }
   // Imported here rather than at module scope: this module is reached from the
   // dev reload path, and the service pulls in the dialect schema tables.
-  const { MetaService } = await import("../../meta/services/meta-service");
-  const meta = new MetaService(adapter as DrizzleAdapter, logger);
-  return {
-    defaultLocale,
-    getEntry: key => meta.getEntry(key),
-    set: (key, value) => meta.set(key, value),
-  };
+  const store = await resolveTransitionStore(adapter, logger);
+  return { defaultLocale, ...store };
 }
