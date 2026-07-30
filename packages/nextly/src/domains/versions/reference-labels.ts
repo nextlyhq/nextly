@@ -208,16 +208,40 @@ function isSystemUserCollection(collection: string): boolean {
 }
 
 /**
+ * Whether the caller may read a system resource (`media`, `users`).
+ *
+ * The `media` and `users` entities are system tables, not dynamic collections,
+ * so their readers (`mediaService.findById`, `userService.listUsersByIds`)
+ * bypass `getEntry` and perform no authorization of their own. This is the ONE
+ * gate those readers share, so the rule lives in a single place rather than
+ * being re-derived per resolver: a scoped API key is judged on its OWN
+ * `read-<resource>` grant, and a session or system caller (`null` scope) falls
+ * through to the role-based RBAC check.
+ */
+async function assertResourceReadable(
+  resource: string,
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
+): Promise<boolean> {
+  const scopeAllows = apiKeyScopeAllows(authenticatedScope, "read", resource);
+  if (scopeAllows !== null) return scopeAllows;
+  const rbac = getService("rbacAccessControlService");
+  return rbac.checkAccess({
+    userId: String(user.id),
+    operation: "read",
+    resource,
+  });
+}
+
+/**
  * Resolve a `users` system-entity target to its display name.
  *
  * `users` is not a dynamic collection `collectionsHandler.getEntry` can load, so
  * it is read through the same name lookup the version-author projection uses.
  * Unlike that projection, this resolves an arbitrary `users` relationship field
  * rather than the change's own author, so it is gated on the caller's own
- * `read-users` grant: a scoped API key is judged on its scope, and a session or
- * system caller (`null`) falls through to the role-based user-read check. A
- * caller without user-read access keeps the bare id rather than learning the
- * referenced account's name.
+ * `read-users` grant (via {@link assertResourceReadable}). A caller without
+ * user-read access keeps the bare id rather than learning the account's name.
  */
 async function resolveSystemUser(
   ref: ReferenceRequest,
@@ -225,18 +249,9 @@ async function resolveSystemUser(
   authenticatedScope?: AuthenticatedScope
 ): Promise<ResolvedReference> {
   try {
-    const scopeAllows = apiKeyScopeAllows(authenticatedScope, "read", "users");
-    if (scopeAllows === false) return { id: ref.id, label: null };
-    if (scopeAllows === null) {
-      const rbac = getService("rbacAccessControlService");
-      const allowed = await rbac.checkAccess({
-        userId: String(user.id),
-        operation: "read",
-        resource: "users",
-      });
-      if (!allowed) return { id: ref.id, label: null };
+    if (!(await assertResourceReadable("users", user, authenticatedScope))) {
+      return { id: ref.id, label: null };
     }
-
     const users = getService("userService");
     const [found] = await users.listUsersByIds([ref.id]);
     return { id: ref.id, label: found?.name ?? null };
@@ -366,9 +381,9 @@ async function resolveUploadEntry(
  * history view renders.
  *
  * `MediaService.findById` ignores its context argument and performs no
- * authorization of its own, so the caller's permission to read media is checked
- * here first: without it, resolving a stored id would hand a filename and a URL
- * to someone with no access to the library.
+ * authorization of its own, so the caller's media-read permission is checked
+ * first (via {@link assertResourceReadable}): without it, resolving a stored id
+ * would hand a filename and a URL to someone with no access to the library.
  */
 async function resolveUpload(
   ref: ReferenceRequest,
@@ -382,20 +397,9 @@ async function resolveUpload(
   };
 
   try {
-    // A scoped API key is judged on its OWN media-read grant; a session or
-    // system caller (`null`) falls through to the role-based media check.
-    const scopeAllows = apiKeyScopeAllows(authenticatedScope, "read", "media");
-    if (scopeAllows === false) return unresolved;
-    if (scopeAllows === null) {
-      const rbac = getService("rbacAccessControlService");
-      const allowed = await rbac.checkAccess({
-        userId: String(user.id),
-        operation: "read",
-        resource: "media",
-      });
-      if (!allowed) return unresolved;
+    if (!(await assertResourceReadable("media", user, authenticatedScope))) {
+      return unresolved;
     }
-
     const media = getService("mediaService");
     const file = await media.findById(ref.id, {});
     return {
@@ -456,6 +460,12 @@ export async function resolveReferenceLabels(
  * access-checked entry read for a custom upload collection. A relationship
  * resolves to a label: a `users` system entity through the user reader,
  * everything else through the entry read.
+ *
+ * INVARIANT: every branch below is access-gated for the caller. The two
+ * dynamic-collection branches (custom uploads, relationships) inherit `getEntry`'s
+ * own gate via {@link readTargetRow}; the two system-table branches (`media`,
+ * `users`) gate through {@link assertResourceReadable} because their readers do
+ * no authorization of their own. A new branch here MUST keep that property.
  */
 async function resolveOne(
   ref: ReferenceRequest,
