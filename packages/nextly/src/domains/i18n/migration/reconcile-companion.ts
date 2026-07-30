@@ -180,6 +180,18 @@ export interface CompanionTransitionArgs {
   newFields: CompanionFieldLike[];
   /** Whether the companion `<tableName>_locales` table currently exists. */
   companionExists: boolean;
+  /**
+   * Localized columns the MAIN table still physically carries.
+   *
+   * Only the disable direction reads it. Unattended provisioning may seed a companion without
+   * dropping the columns it copied from, so a later disable can meet a main table that still has
+   * them: re-adding one fails, and skipping the restore because it is present reverts content to
+   * whatever it held before the entity was localized.
+   *
+   * Omitted means "none of them", which is the shape a transition produced by an explicit toggle
+   * or a migration file leaves behind.
+   */
+  existingMainColumns?: readonly string[];
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
 }
@@ -297,7 +309,9 @@ export function buildCompanionTransitionStatements(
     // Nothing to restore (no companion, or the entity had no translatable columns).
     if (!spec || !companionExists) return none;
     return {
-      statements: buildLocalizationDownStatements(spec),
+      statements: buildLocalizationDownStatements(spec, {
+        existingMainColumns: args.existingMainColumns,
+      }),
       needsArchive: true,
       companionDropped: true,
     };

@@ -22,8 +22,26 @@ export function buildLocalizationDownSql(spec: CompanionMigrationSpec): string {
  * runtime disable path (a Builder-entity localization toggle, which has no migration file) runs
  * these individually via the adapter after ensuring `nextly_i18n_archive` exists.
  */
+/** Options for {@link buildLocalizationDownStatements}. */
+export interface LocalizationDownOptions {
+  /**
+   * Localized columns the main table ALREADY carries, which must not be re-added.
+   *
+   * Unattended provisioning can seed a companion without dropping the columns it copied from, so
+   * disabling later meets a main table that still has them. `ALTER TABLE ADD COLUMN` is not
+   * idempotent on any supported dialect, so re-adding one fails the whole disable.
+   *
+   * They are still RESTORED. Their presence says only that a column exists, never that its value
+   * is current: every localized write since the transition went to the companion alone, so a
+   * retained column holds whatever it held before the entity was localized. Treating it as an
+   * already-completed restore is what silently reverts content to its pre-localization state.
+   */
+  existingMainColumns?: readonly string[];
+}
+
 export function buildLocalizationDownStatements(
-  spec: CompanionMigrationSpec
+  spec: CompanionMigrationSpec,
+  options: LocalizationDownOptions = {}
 ): string[] {
   const {
     dialect,
@@ -45,8 +63,11 @@ export function buildLocalizationDownStatements(
     ? columns.filter(c => onMainSet.has(c.name))
     : columns;
 
-  // 1. re-add columns (nullable — localized columns are always nullable)
+  // 1. re-add columns (nullable — localized columns are always nullable), skipping any the main
+  // table still carries. Restoring them is handled below regardless: see `existingMainColumns`.
+  const alreadyPresent = new Set(options.existingMainColumns ?? []);
   for (const c of onMain) {
+    if (alreadyPresent.has(c.name)) continue;
     stmts.push(
       `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${ddlType(c, dialect)}`
     );
