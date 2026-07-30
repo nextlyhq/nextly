@@ -201,11 +201,18 @@ export function submissionsCollection(
     fields: finalFields,
     timestamps: true,
 
-    // Submissions carry visitor-entered content plus ipAddress/userAgent, so
-    // they are never recorded to the webhook outbox — otherwise every submission
-    // would be delivered to any endpoint subscribed to entry.created or `*`. An
-    // operator who wants submission webhooks can override this to `true`.
-    webhooks: false,
+    // Submissions carry visitor-entered answers plus ipAddress/userAgent, so the
+    // default `entry.*` events stay suppressed — otherwise every submission would
+    // be delivered to any endpoint subscribed to `entry.created` or `*`. Instead
+    // emit a curated `form.submission.created` carrying ONLY safe metadata (which
+    // form, when, and the status) — never the answers, IP, or user agent.
+    webhooks: {
+      record: false,
+      emit: {
+        event: "form.submission.created",
+        fields: ["form", "submittedAt", "status"],
+      },
+    },
 
     admin: {
       isPlugin: true,

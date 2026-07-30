@@ -484,9 +484,14 @@ function publishScopeRecording(
     pluginSlugs.has(slug) ? "plugin" : "code";
 
   // Opt-outs first, always: safe regardless of sync state (recording is off).
+  // The curated `emit` is NOT attached here: it reads the field tree to strip
+  // secrets from its payload, so it waits on `synced` exactly like an opt-in
+  // (attached below). Otherwise a reload that adds `emit` while making a field
+  // newly sensitive could ship the stale field's value unstripped.
   for (const e of entities) {
     if (!e.slug) continue;
-    if (resolveWebhookRecording(e.webhooks).record === false) {
+    const resolved = resolveWebhookRecording(e.webhooks);
+    if (resolved.record === false) {
       setWebhookRecording(scope, e.slug, false, sourceOf(e.slug));
     }
   }
@@ -500,8 +505,19 @@ function publishScopeRecording(
   pruneRemovedCodeFirstRecording(scope, present);
   for (const e of entities) {
     if (!e.slug) continue;
-    if (resolveWebhookRecording(e.webhooks).record === true) {
-      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug));
+    const resolved = resolveWebhookRecording(e.webhooks);
+    if (resolved.record === true) {
+      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug), resolved.emit);
+    } else if (resolved.emit) {
+      // Re-publish the opt-out WITH its curated emit now that the field tree is
+      // in step, so the curated payload strips against current metadata.
+      setWebhookRecording(
+        scope,
+        e.slug,
+        false,
+        sourceOf(e.slug),
+        resolved.emit
+      );
     }
   }
 }

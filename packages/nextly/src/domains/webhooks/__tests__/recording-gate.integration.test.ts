@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, group, password, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -87,5 +87,103 @@ describe("webhook recording opt-out (integration)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].resourceId).toBe(postId);
     expect(rows.some(r => r.resourceId === leadId)).toBe(false);
+  });
+
+  it("emits a curated, metadata-only event via webhooks.emit while suppressing entry.created and its PII", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "leads",
+          // Suppress the PII-bearing entry.* events and instead emit a curated
+          // form.submission.created carrying only the allowlisted `title`.
+          webhooks: {
+            record: false,
+            emit: { event: "form.submission.created", fields: ["title"] },
+          },
+          fields: [text({ name: "title" }), text({ name: "secretAnswer" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const lead = await handler.createEntry(
+      { collectionName: "leads", overrideAccess: true },
+      { title: "Contact form", secretAnswer: "my private answer" }
+    );
+    expect(lead.success).toBe(true);
+    const leadId = (lead.data as { id: string }).id;
+
+    const rows = await current.adapter.select<{
+      type: string;
+      resourceKind: string;
+      resourceId: string;
+      payload: unknown;
+    }>("nextly_events");
+
+    // Exactly one event: the curated form.submission.created — never the
+    // suppressed entry.created for the same write.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].type).toBe("form.submission.created");
+    expect(rows[0].resourceKind).toBe("form");
+    expect(rows[0].resourceId).toBe(leadId);
+
+    // The payload carries ONLY the allowlisted metadata — never the secret answer.
+    const payload = (
+      typeof rows[0].payload === "string"
+        ? JSON.parse(rows[0].payload)
+        : rows[0].payload
+    ) as { data: Record<string, unknown> };
+    expect(payload.data).toEqual({ title: "Contact form" });
+    expect(JSON.stringify(rows[0])).not.toMatch(
+      /secretAnswer|my private answer/
+    );
+  });
+
+  it("strips a sensitive field nested inside a curated event's allowlisted subtree", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "leads",
+          // Allowlist the whole `contact` group; the curated payload must still
+          // drop its nested password (default-deny picks the subtree, then
+          // sensitive-field stripping removes the secret inside it).
+          webhooks: {
+            record: false,
+            emit: { event: "form.submission.created", fields: ["contact"] },
+          },
+          fields: [
+            group({
+              name: "contact",
+              fields: [text({ name: "name" }), password({ name: "secret" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+
+    const lead = await handler.createEntry(
+      { collectionName: "leads", overrideAccess: true },
+      { contact: { name: "Ada", secret: "Sup3r-Secret-Pw!" } }
+    );
+    expect(lead.success).toBe(true);
+
+    const rows = await current.adapter.select<{
+      type: string;
+      payload: unknown;
+    }>("nextly_events");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].type).toBe("form.submission.created");
+    const payload = (
+      typeof rows[0].payload === "string"
+        ? JSON.parse(rows[0].payload)
+        : rows[0].payload
+    ) as { data: { contact?: Record<string, unknown> } };
+    // The allowlisted group ships its safe field but never the nested password.
+    expect(payload.data.contact?.name).toBe("Ada");
+    expect(payload.data.contact ?? {}).not.toHaveProperty("secret");
+    expect(JSON.stringify(rows[0])).not.toMatch(/Sup3r-Secret-Pw/);
   });
 });
