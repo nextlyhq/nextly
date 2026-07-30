@@ -160,11 +160,16 @@ describe("schema sync guard", () => {
  * The lock is the whole mechanism under test, so a double that let a second
  * claim succeed would certify exclusion that does not exist.
  */
-function lockingAdapter(options: { marker?: unknown; heldBy?: string | null }) {
+function lockingAdapter(options: {
+  marker?: unknown;
+  heldBy?: string | null;
+  lockTableExists?: boolean;
+}) {
   const lock: { seeded: boolean; owner: string | null } = {
     seeded: options.heldBy !== undefined,
     owner: options.heldBy ?? null,
   };
+  const ddl: string[] = [];
 
   function matches(where: unknown): boolean {
     const clauses =
@@ -188,8 +193,14 @@ function lockingAdapter(options: { marker?: unknown; heldBy?: string | null }) {
         }),
       }),
     }),
-    executeQuery: async () => [],
-    tableExists: async () => true,
+    executeQuery: async (sql: string) => {
+      ddl.push(sql);
+      return [];
+    },
+    tableExists: async (name: string) =>
+      name === "nextly_field_group_lock"
+        ? (options.lockTableExists ?? true)
+        : true,
     transaction: async (work: (ctx: unknown) => Promise<unknown>) =>
       work({
         lockRow: async () => undefined,
@@ -214,7 +225,7 @@ function lockingAdapter(options: { marker?: unknown; heldBy?: string | null }) {
       }),
   } as unknown as DrizzleAdapter;
 
-  return { adapter, ownerNow: () => lock.owner };
+  return { adapter, ownerNow: () => lock.owner, ddlIssued: () => [...ddl] };
 }
 
 describe("holding the exclusion for the whole sync", () => {
@@ -244,6 +255,61 @@ describe("holding the exclusion for the whole sync", () => {
 
     expect(NextlyError.is(error)).toBe(true);
     expect(work).not.toHaveBeenCalled();
+  });
+
+  // `--no-auto-sync` is chosen precisely to keep schema changes in migration
+  // files, and a role granted DML but not DDL would be refused outright by a
+  // CREATE TABLE. The sync therefore never creates the lock table.
+  it("issues no DDL while taking the exclusion", async () => {
+    const { adapter, ddlIssued } = lockingAdapter({});
+    await withMigrationExcluded({ adapter, logger, label: "db:sync" }, () =>
+      Promise.resolve()
+    );
+    expect(ddlIssued().filter(sql => /CREATE TABLE/i.test(sql))).toEqual([]);
+  });
+
+  // Absence of the lock table means no run has ever been recorded here, so
+  // there is nothing to be excluded from — and nothing worth creating a table
+  // for on a database whose role may not be allowed to.
+  it("runs the work when no lock table exists", async () => {
+    const { adapter, ddlIssued } = lockingAdapter({ lockTableExists: false });
+    const work = vi.fn(() => Promise.resolve());
+
+    await withMigrationExcluded({ adapter, logger, label: "db:sync" }, work);
+
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(ddlIssued()).toEqual([]);
+  });
+
+  // Watch mode documents Ctrl+C as the way to stop, and the claim is durable
+  // with no expiry, so without this a routine interrupt would leave a claim
+  // only an operator could clear — blocking every later sync and migration.
+  it("releases the claim when the process is interrupted", async () => {
+    const { adapter, ownerNow } = lockingAdapter({});
+    const exits: string[] = [];
+    const kill = vi
+      .spyOn(process, "kill")
+      .mockImplementation((_pid: number, signal?: string | number) => {
+        exits.push(String(signal));
+        return true;
+      });
+
+    let ownerWhileHeld: string | null = null;
+    await withMigrationExcluded(
+      { adapter, logger, label: "db:sync watch" },
+      async () => {
+        ownerWhileHeld = ownerNow();
+        process.emit("SIGINT");
+        // Let the release settle before the work returns, so this observes the
+        // signal path rather than the ordinary one in `finally`.
+        await new Promise(resolve => setImmediate(resolve));
+        expect(ownerNow()).toBeNull();
+      }
+    );
+
+    expect(ownerWhileHeld).not.toBeNull();
+    expect(exits).toContain("SIGINT");
+    kill.mockRestore();
   });
 
   // Holding the lock is necessary and not sufficient. An operator who cleared a

@@ -93,6 +93,10 @@ export async function withMigrationExcluded<T>(
       adapter: args.adapter,
       dialect: args.adapter.getCapabilities().dialect,
       label: args.label,
+      // A sync neither owns the lock table nor may create one: `--no-auto-sync`
+      // promises no schema changes, and its absence already means no migration
+      // has ever run here.
+      requireExistingLock: true,
     },
     async () => {
       await assertNoMigrationInFlight({

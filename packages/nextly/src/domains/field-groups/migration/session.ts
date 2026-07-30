@@ -93,7 +93,22 @@ export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
  * two runs would rename the same objects and rewrite the same rows.
  */
 export async function withMigrationSession<T>(
-  args: { adapter: DrizzleAdapter; dialect: MigrationDialect; label: string },
+  args: {
+    adapter: DrizzleAdapter;
+    dialect: MigrationDialect;
+    label: string;
+    /**
+     * Take the lock only if it already exists, and never create it.
+     *
+     * For callers that are not the migration. The lock table is created by the
+     * migration, so its absence means no run has ever happened on this database
+     * and there is nothing to be excluded from. Creating it from those callers
+     * would issue DDL on paths that promise none — `--no-auto-sync` exists
+     * precisely to keep schema changes in migration files, and a role granted
+     * DML but not DDL would be refused outright.
+     */
+    requireExistingLock?: boolean;
+  },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
   const { adapter, dialect, label } = args;
@@ -111,7 +126,19 @@ export async function withMigrationSession<T>(
   // second. Uniqueness by construction removes that whole class of mistake.
   const claim = `${label}#${randomUUID()}`;
 
-  await ensureLockRow(adapter, dialect);
+  const session: MigrationSession = {
+    dialect,
+    inTransaction: work => adapter.transaction(work),
+  };
+
+  if (args.requireExistingLock === true) {
+    // No lock table means no run has ever been recorded here, so there is
+    // nothing to exclude and nothing worth creating a table for.
+    if (!(await adapter.tableExists(MIGRATION_LOCK_TABLE))) return fn(session);
+    await seedLockRow(adapter);
+  } else {
+    await ensureLockRow(adapter, dialect);
+  }
 
   const acquired = await acquire(adapter, claim);
   if (!acquired.ok) {
@@ -129,12 +156,30 @@ export async function withMigrationSession<T>(
     });
   }
 
-  try {
-    return await fn({
-      dialect,
-      inTransaction: work => adapter.transaction(work),
+  // A terminated process never reaches `finally`, and this lock has no expiry by
+  // design, so an interrupted holder would leave a claim that only an operator
+  // could clear. That is the right trade for a migration, which is rare and
+  // deliberate; it is the wrong one for a schema sync, where the documented way
+  // to stop watch mode is Ctrl+C and a stuck claim would block every later sync.
+  // Releasing on the signal keeps the durable-claim design and removes its cost
+  // on the path people actually interrupt.
+  const releaseOnSignal = (signal: NodeJS.Signals): void => {
+    void release(adapter, claim).finally(() => {
+      process.kill(process.pid, signal);
     });
+  };
+  const onInterrupt = (): void => releaseOnSignal("SIGINT");
+  const onTerminate = (): void => releaseOnSignal("SIGTERM");
+  process.once("SIGINT", onInterrupt);
+  process.once("SIGTERM", onTerminate);
+
+  try {
+    return await fn(session);
   } finally {
+    // Removed before releasing, so a signal arriving during an orderly release
+    // cannot start a second one.
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onTerminate);
     await release(adapter, claim);
   }
 }
@@ -152,7 +197,16 @@ async function ensureLockRow(
   for (const statement of getMigrationLockDdl(dialect)) {
     await adapter.executeQuery(statement);
   }
+  await seedLockRow(adapter);
+}
 
+/**
+ * Seed the single lock row, assuming its table is already there.
+ *
+ * Separated from the DDL so a caller that must not issue schema changes can
+ * still establish the row it needs to contend for.
+ */
+async function seedLockRow(adapter: DrizzleAdapter): Promise<void> {
   const existing = await adapter.transaction(async ctx =>
     ctx.selectOne<{ id: number }>(MIGRATION_LOCK_TABLE, {
       where: lockRowWhere(),
