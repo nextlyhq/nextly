@@ -65,6 +65,29 @@ describe("plugin field types on a field group", () => {
     );
   });
 
+  it("does not let a plugin option reshape the column", () => {
+    registerFieldType({
+      type: "metric",
+      storage: "number",
+      component: "@acme/metric/admin#Metric",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    // `dbType` is how a built-in number states it wants exact decimal storage.
+    // Here it is the plugin type's own option, which core does not interpret —
+    // reading it would give this field a decimal column in a component while
+    // the canonical descriptor kept mapping the primitive to an integer.
+    const sql = new FieldGroupSchemaService("postgresql").generateMigrationSQL(
+      "comp_hero",
+      [
+        { name: "score", type: "metric", dbType: "decimal" },
+      ] as unknown as FieldConfig[]
+    );
+
+    expect(sql).not.toMatch(/"score"\s+(?:NUMERIC|DECIMAL)/i);
+    expect(sql).toMatch(/"score"\s+(?:INTEGER|BIGINT)/i);
+  });
+
   it("omits it when the type is not registered", () => {
     // An unregistered type is not a plugin field, and guessing a column for it
     // would be worse than leaving it out.

@@ -659,10 +659,27 @@ export class FieldGroupSchemaService {
   private asMappableField(field: DataFieldConfig): DataFieldConfig {
     const storageType = pluginStorageFieldType(field);
     if (storageType === undefined) return field;
-    return {
+    const mapped: Record<string, unknown> = {
       ...(field as unknown as Record<string, unknown>),
       type: storageType,
-    } as unknown as DataFieldConfig;
+    };
+    // The keys below are how a BUILT-IN field states its physical shape, and
+    // the mappers read them straight off the field. A plugin type's options are
+    // its own and core does not interpret them, so one that happens to be named
+    // `dbType` or `maxLength` would otherwise reshape the column here while the
+    // canonical descriptor — which never sees them — kept mapping the primitive
+    // as declared. The same field would then be one type in a component and
+    // another in a collection.
+    for (const physical of [
+      "dbType",
+      "precision",
+      "scale",
+      "maxLength",
+      "options",
+    ]) {
+      delete mapped[physical];
+    }
+    return mapped as unknown as DataFieldConfig;
   }
 
   private generateColumnSQL(field: DataFieldConfig): string | null {

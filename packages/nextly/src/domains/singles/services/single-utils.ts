@@ -22,6 +22,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { validateBlocksValue } from "../../../collections/fields/validators/blocks-validator";
 import { NextlyError } from "../../../errors";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
 import type { SingleDocument, SingleResult } from "../types";
@@ -563,10 +564,7 @@ export function serializeJsonFields(
     if (!("name" in field) || !field.name) continue;
 
     if (shouldTreatAsJson(field) && result[field.name] != null) {
-      const value = result[field.name];
-      if (typeof value === "object") {
-        result[field.name] = JSON.stringify(value);
-      }
+      result[field.name] = toJsonColumnValue(result[field.name]).value;
     }
   }
 

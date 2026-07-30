@@ -71,6 +71,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
@@ -2122,21 +2123,12 @@ export class CollectionMutationService extends BaseService {
           isJsonFieldType(field.type, field) &&
           finalData[field.name] != null
         ) {
-          const value = finalData[field.name];
-          // Only stringify if it's an object/array and not already a string
-          if (typeof value === "object") {
-            finalData[field.name] = JSON.stringify(value);
-          } else if (typeof value === "string") {
-            // Already a string - check if it's valid JSON to avoid double-serialization
-            try {
-              JSON.parse(value);
-              // It's already valid JSON string, keep as-is
-            } catch {
-              // Not valid JSON string - this is unusual for JSON fields
-              console.warn(
-                `[createEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
-              );
-            }
+          const encoded = toJsonColumnValue(finalData[field.name]);
+          finalData[field.name] = encoded.value;
+          if (encoded.invalidJsonString) {
+            console.warn(
+              `[createEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
+            );
           }
         }
       });
@@ -4030,21 +4022,12 @@ export class CollectionMutationService extends BaseService {
           isJsonFieldType(field.type, field) &&
           finalData[field.name] != null
         ) {
-          const value = finalData[field.name];
-          // Only stringify if it's an object/array and not already a string
-          if (typeof value === "object") {
-            finalData[field.name] = JSON.stringify(value);
-          } else if (typeof value === "string") {
-            // Already a string - check if it's valid JSON to avoid double-serialization
-            try {
-              JSON.parse(value);
-              // It's already valid JSON string, keep as-is
-            } catch {
-              // Not valid JSON string - this is unusual for JSON fields
-              console.warn(
-                `[updateEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
-              );
-            }
+          const encoded = toJsonColumnValue(finalData[field.name]);
+          finalData[field.name] = encoded.value;
+          if (encoded.invalidJsonString) {
+            console.warn(
+              `[updateEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
+            );
           }
         }
       });

@@ -201,6 +201,14 @@ export function pluginCodegenImports(
     });
   };
 
+  // A whole template literal, interpolations included. The `${...}` alternative
+  // is consumed before the closing backtick is looked for, so a template nested
+  // inside an interpolation — `` `${{ kind: `x` } extends R ? "a" : "b"}` `` is
+  // a legal template-literal type — does not end the match at its own backtick
+  // and take everything after it.
+  const TEMPLATE_LITERAL =
+    /`(?:[^`\\$]|\\.|\$(?!\{)|\$\{(?:[^{}`]|`[^`]*`|\{[^{}]*\})*\})*`/g;
+
   /**
    * A template literal reduced to its `${...}` bodies, with the literal text
    * dropped.
@@ -262,7 +270,7 @@ export function pluginCodegenImports(
       // would take the rest of the line, interpolations and all. Its
       // `${...}` bodies survive as ordinary text, so the passes below still
       // apply to them.
-      .replace(/`(?:[^`\\]|\\.)*`/g, keepInterpolations)
+      .replace(TEMPLATE_LITERAL, keepInterpolations)
       // A comment is text as well: `string /* Rating */` references nothing.
       // Stripped after the quoted forms, so a `//` inside a string is not read
       // as one, and before the regex removal below, which SUBSTITUTES `//` and

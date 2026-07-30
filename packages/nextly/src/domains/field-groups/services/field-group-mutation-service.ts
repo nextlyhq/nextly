@@ -22,6 +22,7 @@ import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
 } from "../../../shared/lib/field-transform";
+import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -1563,15 +1564,9 @@ export class FieldGroupMutationService extends BaseService {
 
       const columnName = toSnakeCase(key);
 
-      if (
-        shouldTreatAsJson(field) &&
-        value != null &&
-        typeof value === "object"
-      ) {
-        result[columnName] = JSON.stringify(value);
-      } else {
-        result[columnName] = value;
-      }
+      result[columnName] = shouldTreatAsJson(field)
+        ? toJsonColumnValue(value).value
+        : value;
     }
 
     return result;

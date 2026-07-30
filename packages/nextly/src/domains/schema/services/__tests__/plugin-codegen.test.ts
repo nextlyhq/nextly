@@ -1231,6 +1231,27 @@ describe("plugin field types in the Zod generator", () => {
     expect(iface.imports).toEqual([]);
   });
 
+  it("keeps a reference after a template nested in an interpolation", () => {
+    registerFieldType({
+      type: "nested-tpl",
+      storage: "json",
+      component: "@acme/nt/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/nt" }],
+        tsType: () => '`${{ kind: `x` } extends Rating ? "yes" : "no"}`',
+      },
+    });
+
+    // The nested backtick would otherwise close the outer template early, so
+    // everything after it — including the only reference — is lost and the
+    // generated type names an identifier it never imported.
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "n", type: "nested-tpl" }])
+    );
+
+    expect(iface.imports).toContain('import type { Rating } from "@acme/nt";');
+  });
+
   it("keeps an interpolation after comment-like text in a template", () => {
     registerFieldType({
       type: "urlish",
