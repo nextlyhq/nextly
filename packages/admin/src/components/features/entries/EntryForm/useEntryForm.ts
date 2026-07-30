@@ -471,7 +471,13 @@ function getDefaultValues(
       }
 
       default:
-        defaults[fieldName] = null;
+        // A contributed field type reaches here, since the cases above name
+        // only the built-ins. Reading its declared default rather than forcing
+        // null is what lets a plugin field open a create form with the value
+        // its schema author chose; forcing null discarded that and submitted an
+        // explicit empty over it.
+        defaults[fieldName] =
+          (field as { defaultValue?: unknown }).defaultValue ?? null;
     }
   }
 

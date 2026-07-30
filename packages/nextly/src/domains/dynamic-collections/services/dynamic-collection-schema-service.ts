@@ -24,7 +24,10 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
-import { pluginEmptyValue } from "../../../shared/lib/plugin-storage";
+import {
+  pluginEmptyValue,
+  storageTypeToken,
+} from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
@@ -989,11 +992,18 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * consolidation rather than with a per-column patch.
    */
   mapFieldTypeToSQL(
-    type: string,
+    declaredType: string,
     length?: number,
     options?: FieldDefinition["options"],
     validation?: FieldDefinition["validation"]
   ): string {
+    // A contributed type persists as its storage primitive, and this map has
+    // never heard of the token it is declared under. Left unresolved it falls
+    // through to `text`, so the column the DDL creates and the column the ORM
+    // binds describe different things. The same resolution `getColumnDescriptor`
+    // and the missing-column scan already make.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     if (this.dialect === "sqlite") {
       // SQLite type mapping. SQLite has dynamic typing, so types are simplified.
       const sqliteTypeMap: Record<string, string> = {
@@ -1066,8 +1076,10 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
   ): string {
     // A contributed type states its own backfill before the primitive's is
     // derived: `{}` satisfies a json column and then fails every read that
-    // expects the structure the type actually stores.
-    const contributed = pluginEmptyValue({ ...field, type });
+    // expects the structure the type actually stores. Read from the field as
+    // DECLARED — `type` here may already be the storage primitive, under which
+    // the contributed type is not registered and states nothing.
+    const contributed = pluginEmptyValue(field ?? { type });
     if (contributed !== undefined) {
       return quoteJsonSqlDefault(contributed, this.dialect);
     }
@@ -1110,7 +1122,12 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
   /**
    * Format a default value for SQL (dialect-aware)
    */
-  formatDefaultValue(value: unknown, type: string): string {
+  formatDefaultValue(value: unknown, declaredType: string): string {
+    // Resolved for the same reason the type map is: a contributed token names
+    // none of the branches below, so a structured default would fall through
+    // to the string arm and be written as `[object Object]`.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     // Handle string-like types (need quotes in SQL)
     if (
       type === "text" ||

@@ -371,7 +371,11 @@ export class FieldGroupSchemaService {
       if (hasConstantDefault) {
         defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, mapped.type)}`;
       } else if ("required" in field && field.required) {
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, mapped)}`;
+        // The MAPPED type drives the switch and the ORIGINAL field carries the
+        // declared token: a contributed type states its own empty value under
+        // its own name, and `mapped` has already replaced that with the storage
+        // primitive.
+        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, field)}`;
       }
 
       statements.push(
@@ -1004,8 +1008,10 @@ export class FieldGroupSchemaService {
   private getDefaultValueForType(type: string, field?: FieldConfig): string {
     // A contributed type states its own backfill before the primitive's is
     // derived: `{}` satisfies a json column and then fails every read that
-    // expects the structure the type actually stores.
-    const contributed = pluginEmptyValue({ ...field, type });
+    // expects the structure the type actually stores. Read from the field as
+    // DECLARED — `type` here may already be the storage primitive, under which
+    // the contributed type is not registered and states nothing.
+    const contributed = pluginEmptyValue(field ?? { type });
     if (contributed !== undefined) {
       return quoteJsonSqlDefault(contributed, this.dialect);
     }

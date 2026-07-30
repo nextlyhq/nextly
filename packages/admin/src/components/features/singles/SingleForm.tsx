@@ -290,7 +290,11 @@ function getDefaultValues(
         break;
       }
       default:
-        defaults[fieldName] = null;
+        // A contributed field type reaches here, since the cases above name
+        // only the built-ins. Forcing null discarded the default its schema
+        // author declared and submitted an explicit empty over it.
+        defaults[fieldName] =
+          (field as { defaultValue?: unknown }).defaultValue ?? null;
     }
   }
 

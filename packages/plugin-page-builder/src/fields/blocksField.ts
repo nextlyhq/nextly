@@ -14,6 +14,10 @@
  * @module fields/blocksField
  */
 
+import {
+  DOCUMENT_FORMAT_VERSION,
+  DOCUMENT_KINDS,
+} from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldInstance,
   PluginFieldType,
@@ -119,6 +123,26 @@ export const BLOCKS_FIELD_TYPE: PluginFieldType = {
           },
         ];
       }
+
+      // The kind set is closed. A declaration is the only place an unknown one
+      // can be refused outright: the engine validates documents in forgiving
+      // mode, where an unrecognised kind is a warning, and the policy check
+      // then compares against the same bad value — so the field would accept
+      // documents nothing else in the system understands, and seed and generate
+      // for them too.
+      const unknown = kinds.filter(
+        kind => !(DOCUMENT_KINDS as readonly unknown[]).includes(kind)
+      );
+      if (unknown.length > 0) {
+        return [
+          {
+            path: "blocks.kinds",
+            message: `blocks.kinds contains unknown document kinds: ${unknown
+              .map(String)
+              .join(", ")}. Accepted: ${DOCUMENT_KINDS.join(", ")}.`,
+          },
+        ];
+      }
     }
 
     return true;
@@ -142,9 +166,11 @@ export const BLOCKS_FIELD_TYPE: PluginFieldType = {
     tsType: () => "BlockDocument",
 
     /**
-     * The envelope, pinned to the kinds this field accepts, so a value the
-     * generated schema admits is one the server admits too. The node tree is
-     * checked in depth by the engine on write rather than restated here.
+     * The envelope, pinned to the format version the engine supports and to
+     * the kinds this field accepts, so a value the generated schema admits is
+     * one the server admits too. Accepting any numeric version would let an app
+     * validate a document the write path then rejects. The node tree is checked
+     * in depth by the engine on write rather than restated here.
      */
     zodSchema: field => {
       const kinds = policyOf(field).kinds;
@@ -152,7 +178,7 @@ export const BLOCKS_FIELD_TYPE: PluginFieldType = {
       const kindSchema = `z.enum([${accepted
         .map(kind => `"${String(kind).replace(/["\\]/g, "\\$&")}"`)
         .join(", ")}])`;
-      return `z.object({ formatVersion: z.number(), kind: ${kindSchema}, nodes: z.array(z.unknown()) }).passthrough()`;
+      return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: ${kindSchema}, nodes: z.array(z.unknown()) }).passthrough()`;
     },
   },
 };

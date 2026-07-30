@@ -24,7 +24,7 @@ function ddlType(dialect: (typeof DIALECTS)[number]): string {
   return new DynamicCollectionSchemaService(
     undefined,
     dialect
-  ).mapFieldTypeToSQL("json");
+  ).mapFieldTypeToSQL("doc");
 }
 
 describe("a json-backed contributed type's column", () => {
@@ -70,7 +70,7 @@ describe("a json-backed contributed type's column", () => {
       const service = new DynamicCollectionSchemaService(undefined, dialect);
       const generated = service.formatDefaultValue(
         { formatVersion: 1, kind: "page", nodes: [] },
-        "json"
+        "doc"
       );
       const text =
         dialect === "mysql"
@@ -121,12 +121,13 @@ describe("a json-backed contributed type's column", () => {
     }
   });
 
-  it("maps chips the same way as json", () => {
-    // A JSON-backed type that diverged from its siblings would be a bug in
-    // this map rather than a deliberate difference.
+  it("maps the contributed token exactly as its storage primitive", () => {
+    // The declared token is what every DDL path passes. Resolving it through
+    // the primitive is the only thing that keeps the created column and the
+    // bound column the same.
     for (const dialect of DIALECTS) {
       const service = new DynamicCollectionSchemaService(undefined, dialect);
-      expect(service.mapFieldTypeToSQL("chips"), dialect).toBe(
+      expect(service.mapFieldTypeToSQL("doc"), dialect).toBe(
         service.mapFieldTypeToSQL("json")
       );
     }
