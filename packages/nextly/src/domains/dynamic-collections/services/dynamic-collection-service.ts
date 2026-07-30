@@ -82,6 +82,9 @@ export interface CreateCollectionInput {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Whether writes bust cache tags. Default on; false opts out entirely. */
   revalidate?: boolean;
   /**
@@ -110,6 +113,9 @@ export interface UpdateCollectionInput {
   localized?: boolean;
   /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
   versions?: boolean;
+  /** Retention, honoured with the switch. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). */
+  versionsMaxPerDoc?: number | false;
   /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
   revalidate?: boolean;
   /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
@@ -293,8 +299,8 @@ export class DynamicCollectionService extends BaseService {
       localized: data.localized === true,
       // Persist version history from the create payload; without it a
       // collection created with the switch on is written unversioned and the
-      // switch reads as off the moment the editor loads.
-      versions: resolveBuilderVersions(data.versions),
+      // switch reads as off the moment the editor loads. Retention rides along.
+      versions: resolveBuilderVersions(data.versions, data.versionsMaxPerDoc),
       // Persist the cache-revalidation opt-out from the create payload (null =
       // standard tags, { disable: true } = off) so the write path reads it back.
       revalidate: resolveBuilderRevalidate(data.revalidate),
@@ -525,8 +531,29 @@ export class DynamicCollectionService extends BaseService {
     // off writes null. `status` is deliberately not passed to the resolver —
     // it aliases to a versioned config for back-compat, which would stop the
     // toggle from ever turning versioning off on a Draft/Published entity.
+    // Retention without the on/off switch is ambiguous — the resolver needs the
+    // enabled state — so a retention-only update is rejected rather than
+    // silently dropped. This is the chokepoint every collection-update caller
+    // reaches (the dispatcher forwards its raw body here).
+    if (
+      updates.versionsMaxPerDoc !== undefined &&
+      updates.versions === undefined
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "versionsMaxPerDoc",
+            code: "MISSING_DEPENDENCY",
+            message: "versionsMaxPerDoc requires versions to be set.",
+          },
+        ],
+      });
+    }
     if (updates.versions !== undefined) {
-      metadataUpdates.versions = resolveBuilderVersions(updates.versions);
+      metadataUpdates.versions = resolveBuilderVersions(
+        updates.versions,
+        updates.versionsMaxPerDoc
+      );
     }
     // Cache-revalidation toggle. The column holds the resolved config the write
     // path reads, so the boolean is normalized before storing; off writes the

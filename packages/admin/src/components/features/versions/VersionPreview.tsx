@@ -14,6 +14,7 @@ import { FieldValueDisplay } from "@admin/components/features/versions/value-dis
 import {
   Alert,
   AlertDescription,
+  Badge,
   Button,
   Skeleton,
 } from "@admin/components/ui";
@@ -27,6 +28,8 @@ export interface VersionPreviewProps {
   onRetry?: () => void;
   /** The locale this version was captured in, when the document is localized. */
   locale?: string | null;
+  /** The version this one was restored from, when it is a restore; else null. */
+  sourceVersionNo?: number | null;
 }
 
 function PreviewSkeleton() {
@@ -53,6 +56,7 @@ export function VersionPreview({
   error = null,
   onRetry,
   locale = null,
+  sourceVersionNo = null,
 }: VersionPreviewProps) {
   if (isLoading) return <PreviewSkeleton />;
 
@@ -80,7 +84,7 @@ export function VersionPreview({
 
   return (
     <div className="flex flex-col">
-      <div className="px-4 py-2 bg-primary/5 border-b border-border">
+      <div className="px-4 py-2 bg-primary/5 border-b border-border flex flex-wrap items-center gap-2">
         <p className="text-sm text-foreground">
           Viewing version {versionNo}
           {/* A localized document captures a version per locale, so the banner
@@ -88,6 +92,11 @@ export function VersionPreview({
           {locale ? ` (${locale})` : ""}. This is a past state of the document,
           not what is live.
         </p>
+        {/* Lineage, mirroring the row chip: a restored version names the one it
+            was made from. */}
+        {sourceVersionNo !== null && (
+          <Badge variant="default">Restored from v{sourceVersionNo}</Badge>
+        )}
       </div>
 
       <div className="p-4 flex flex-col gap-4">

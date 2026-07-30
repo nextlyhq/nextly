@@ -79,6 +79,8 @@ export interface VersionMethodArgs {
   authenticatedScope?: AuthenticatedScope;
   limit?: number;
   cursor?: number;
+  /** Scope the history listing to one locale's versions. */
+  locale?: string;
 }
 
 /**
@@ -151,6 +153,10 @@ export async function listVersionsForDocument(
     {
       limit: limit + 1,
       ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+      // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
+      // it); treat that as absent so both list surfaces list every locale rather
+      // than matching a non-existent empty-string locale and returning nothing.
+      ...(args.locale ? { locale: args.locale } : {}),
     }
   );
   const hasNext = window.length > limit;

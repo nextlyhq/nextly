@@ -304,7 +304,7 @@ export interface ApiSingle {
    * shape, so reads carry the object while writes send a boolean — see
    * `UpdateSinglePayload`.
    */
-  versions?: { enabled?: boolean } | null;
+  versions?: { enabled?: boolean; maxPerDoc?: number | false } | null;
 
   /**
    * Resolved cache-revalidation config, or null/absent when revalidation is on
@@ -345,6 +345,9 @@ export type UpdateSinglePayload = Omit<
   "versions" | "revalidate" | "webhooks"
 > & {
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   revalidate?: boolean;
   webhooks?: boolean;
 };

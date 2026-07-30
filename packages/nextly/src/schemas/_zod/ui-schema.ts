@@ -471,6 +471,15 @@ function entity(kind?: "collection" | "single" | "component") {
        */
       versions: z.boolean().optional(),
       /**
+       * Retention for version history: durable versions kept per document.
+       * `false` = unlimited, a non-negative integer = keep that many, absent =
+       * the default (50). Stripped like any unknown key, so it is declared here
+       * to survive a round-trip through the manifest.
+       */
+      versionsMaxPerDoc: z
+        .union([z.number().int().nonnegative(), z.literal(false)])
+        .optional(),
+      /**
        * Whether writes to this entity bust cache tags. Boolean rather than the
        * code-first `{ tags?, disable? }`: the Schema Builder offers on/off
        * (custom extra tags stay a code-first control). On is the default, so an
@@ -526,6 +535,19 @@ function entity(kind?: "collection" | "single" | "component") {
           code: z.ZodIssueCode.custom,
           message: "'versions' is not supported on components",
           path: ["versions"],
+        });
+      }
+      // Retention rides with version history, which components do not have, so
+      // it is rejected for the same reason as `versions` above rather than
+      // round-tripping a setting no component metadata path reads.
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.versionsMaxPerDoc !== undefined
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'versionsMaxPerDoc' is not supported on components",
+          path: ["versionsMaxPerDoc"],
         });
       }
       // Components have no entries and no registry row of their own, so a
