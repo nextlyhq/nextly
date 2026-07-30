@@ -11,7 +11,7 @@
  *   EmailService for verification/reset flows.
  */
 
-import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
+import { resolveWebhookWritePathInfra } from "../../domains/webhooks/write-path-infra";
 import type { EmailService } from "../../services/email/email-service";
 import { UserAccountService } from "../../services/users/user-account-service";
 import { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
@@ -65,13 +65,12 @@ export function registerUserServices(ctx: RegistrationContext): void {
       ? container.get<EmailService>("emailService")
       : undefined;
 
-    // Offer the fast-path drain from the user write paths too, when the app has
-    // booted webhooks. Resolved lazily (this factory runs per request), so
-    // registration order does not matter; a bare container gets none and the
-    // scheduled drain delivers.
-    const fastDrainScheduler = container.has("webhookFastDrainScheduler")
-      ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
-      : undefined;
+    // Offer the fast-path drain and retention prune from the user write paths
+    // too, when the app has booted webhooks. Resolved lazily (this factory runs
+    // per request), so registration order does not matter; a bare container gets
+    // neither and the scheduled drain covers both.
+    const { fastDrainScheduler, retentionRunner } =
+      resolveWebhookWritePathInfra(adapter, logger);
 
     const mutationService = new UserMutationService(
       adapter,
@@ -79,7 +78,8 @@ export function registerUserServices(ctx: RegistrationContext): void {
       config.users,
       userExtSchema,
       emailService,
-      fastDrainScheduler
+      fastDrainScheduler,
+      retentionRunner
     );
 
     const accountService = new UserAccountService(adapter, logger);

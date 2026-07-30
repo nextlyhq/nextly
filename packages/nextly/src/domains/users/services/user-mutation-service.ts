@@ -97,6 +97,13 @@ interface DrizzleTransactionLike {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+  select(fields: unknown): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
 }
 
 /**
@@ -109,6 +116,16 @@ interface DrizzleTransactionLike {
  */
 interface WebhookDrainOffer {
   offer(): void;
+}
+
+/**
+ * The single capability the user write paths need from the webhook retention
+ * runner: a bounded, self-gating prune offered after a committed write. Narrow
+ * (which `WebhookRetentionRunner` satisfies) for the same reason as
+ * {@link WebhookDrainOffer}.
+ */
+interface WebhookRetentionOffer {
+  maybeRun(maxBatches?: number): Promise<void>;
 }
 
 /**
@@ -216,7 +233,10 @@ export class UserMutationService extends BaseService {
     emailService?: EmailService,
     // Optional so a bare service (CLI, seed, unit test) still records events and
     // simply relies on the scheduled drain; wired from DI on the request paths.
-    fastDrainScheduler?: WebhookDrainOffer
+    fastDrainScheduler?: WebhookDrainOffer,
+    // Optional bounded outbox prune offered after committed writes; absent when
+    // webhook retention is not configured, where the scheduled drain prunes.
+    retentionRunner?: WebhookRetentionOffer
   ) {
     super(adapter, logger);
 
@@ -224,6 +244,7 @@ export class UserMutationService extends BaseService {
     this.userExtSchemaService = userExtSchemaService;
     this.emailService = emailService;
     this.fastDrainScheduler = fastDrainScheduler;
+    this.retentionRunner = retentionRunner;
 
     // Build merged Zod schemas when custom fields are configured
     if (userConfig?.fields && userConfig.fields.length > 0) {
@@ -366,6 +387,15 @@ export class UserMutationService extends BaseService {
   // Post-commit fast-path drain kick, shared with the collection/single/media
   // write paths. Absent on bare services, where the scheduled drain delivers.
   private readonly fastDrainScheduler?: WebhookDrainOffer;
+
+  // Post-commit bounded outbox prune, shared with the same write paths. Absent
+  // when webhook retention is not configured, where the scheduled drain prunes.
+  private readonly retentionRunner?: WebhookRetentionOffer;
+
+  // Cap the write-path prune so a user write that happens to win the retention
+  // gate is never held up by a large backlog; the scheduled drain owns bulk
+  // pruning. Matches the collection/single write-path bound.
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
 
   /**
    * Create a new local user with password authentication.
@@ -619,12 +649,17 @@ export class UserMutationService extends BaseService {
         }
       }
 
-      // With the account and its outbox row committed, kick the fast-path drain
-      // so the first delivery attempt happens immediately instead of waiting for
-      // the scheduled trigger — mirroring the collection/single/media write
-      // paths. Gated on a real recording and deferred until after commit; the
-      // call is synchronous, self-gating, and a no-op off a Next runtime or with
-      // no subscribers, so the scheduled drain stays the backstop.
+      // With the account and its outbox row committed, offer the shared
+      // post-commit hooks, mirroring the collection/single/media write paths: a
+      // bounded retention pass trims old outbox rows even on a
+      // user-management-only install that relies on write-triggered maintenance,
+      // and the fast-path drain delivers the recorded event immediately instead
+      // of at the next scheduled trigger. Both are no-ops when unconfigured;
+      // retention runs regardless of a recording, the drain only when one
+      // happened.
+      await this.retentionRunner?.maybeRun(
+        UserMutationService.WRITE_PATH_PRUNE_BATCHES
+      );
       if (userCreatedRecorded) this.fastDrainScheduler?.offer();
 
       // Fetch created user
@@ -1094,35 +1129,37 @@ export class UserMutationService extends BaseService {
   ): Promise<void> {
     const { users, accounts, userRoles } = this.tables;
 
-    // Check if user exists. Email and name are read too so the delete event can
-    // identify the removed account to external systems (which routinely key on
-    // email), not just by an opaque id.
-    let user;
-    try {
-      user = await this.db.query.users.findFirst({
-        where: { id: userId },
-        columns: { id: true, email: true, name: true },
-      });
-    } catch (err) {
-      // Normalise raw driver errors so the DB kind is preserved.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-    }
-
-    if (!user) {
-      throw NextlyError.notFound({
-        logContext: { entity: "user", id: userId },
-      });
-    }
-
     // Delete user and related data in a single Drizzle transaction so that
-    // partial deletes can't leave orphaned rows. The tx alias is `any` because
-    // BaseService.withTransaction yields `unknown` (it can't reference the
-    // dialect-specific Drizzle transaction type without binding to all three
-    // driver packages); the fluent query API is identical across dialects.
+    // partial deletes can't leave orphaned rows. The tx alias is a structural
+    // type because BaseService.withTransaction yields `unknown` (it can't
+    // reference the dialect-specific Drizzle transaction type without binding to
+    // all three driver packages); the fluent query API is identical across
+    // dialects.
     let userDeletedRecorded = false;
     try {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
+
+        // Read the removed account's identity INSIDE the transaction, right
+        // before the delete, so the event reports the row actually being
+        // removed. Email and name are read (external systems key on email, not
+        // an opaque id); reading here rather than before the transaction means
+        // an `updateUser` that commits in between cannot make the event record a
+        // stale address. Absence is the NOT_FOUND case — thrown inside the tx,
+        // which rolls back and surfaces unchanged through the catch below.
+        const preimage = (
+          await txDb
+            .select({ id: users.id, email: users.email, name: users.name })
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1)
+        )[0];
+        if (!preimage) {
+          throw NextlyError.notFound({
+            logContext: { entity: "user", id: userId },
+          });
+        }
+
         // Delete user_ext row if custom fields are configured
         if (this.hasCustomFields()) {
           const userExtTable = this.getUserExtTable();
@@ -1156,10 +1193,10 @@ export class UserMutationService extends BaseService {
 
         // Record `user.deleted` only when THIS transaction actually removed the
         // account, in the same transaction so it commits with the removal and
-        // never fires for a rolled-back delete. Two concurrent deletes both pass
-        // the pre-transaction existence read, but only one deletes a row; without
-        // this guard the loser would emit a duplicate event with a fresh id that
-        // downstream idempotency cannot collapse. PII-safe identity only.
+        // never fires for a rolled-back delete. Two concurrent deletes both read
+        // the identity above, but only one deletes a row; without this guard the
+        // loser would emit a duplicate event with a fresh id that downstream
+        // idempotency cannot collapse. PII-safe identity only.
         if (affectedRowCount(deleteResult, this.dialect) > 0) {
           userDeletedRecorded = await recordMutationEventInTx(
             txDb,
@@ -1168,9 +1205,9 @@ export class UserMutationService extends BaseService {
               type: "user.deleted",
               resource: { kind: "user", id: String(userId) },
               data: {
-                id: user.id,
-                email: user.email ?? null,
-                name: user.name ?? null,
+                id: preimage.id,
+                email: preimage.email ?? null,
+                name: preimage.name ?? null,
               },
               fields: [],
               actor: actor ?? null,
@@ -1184,11 +1221,14 @@ export class UserMutationService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
 
-    // With the removal and its outbox row committed, kick the fast-path drain so
-    // the delete event is delivered immediately rather than at the next
-    // scheduled trigger (same rationale as createLocalUser). Gated on a real
-    // recording, synchronous, self-gating, and a no-op without a Next runtime or
-    // subscribers.
+    // With the removal and its outbox row committed, offer the same post-commit
+    // hooks as createLocalUser: a bounded retention prune (so user churn on a
+    // write-triggered-maintenance install still trims the outbox) and the
+    // fast-path drain for the recorded event (same rationale as createLocalUser).
+    // Retention runs regardless of a recording, the drain only when one happened.
+    await this.retentionRunner?.maybeRun(
+      UserMutationService.WRITE_PATH_PRUNE_BATCHES
+    );
     if (userDeletedRecorded) this.fastDrainScheduler?.offer();
   }
 }

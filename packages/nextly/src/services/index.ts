@@ -14,6 +14,7 @@ import { UserRoleService } from "../domains/auth/services/user-role-service";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
+import { resolveWebhookWritePathInfra } from "../domains/webhooks/write-path-infra";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionsHandler } from "./collections-handler";
@@ -216,19 +217,21 @@ export class ServiceContainer {
         ? container.get<Logger>("logger")
         : (console as unknown as Logger);
       // The dispatcher (admin REST) and the setup seeder reach users through
-      // this facade, so inject the shared drain fast path here — otherwise their
-      // user.created/deleted events would sit in the outbox until the scheduled
-      // drain. Absent on a bare container (CLI/test), which relies on that drain.
-      const fastDrainScheduler = container.has("webhookFastDrainScheduler")
-        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
-        : undefined;
+      // this facade, so offer the same post-commit hooks the DI-registered user
+      // service does — otherwise their user.created/deleted events would sit in
+      // the outbox until the scheduled drain, and an install relying on
+      // write-triggered maintenance would never prune from a user write. Absent
+      // on a bare container (CLI/test), which relies on that drain.
+      const { fastDrainScheduler, retentionRunner } =
+        resolveWebhookWritePathInfra(this.adapter, logger);
       this._users = new UsersService(
         this.adapter,
         logger,
         config?.users,
         userExtSchemaService,
         emailService,
-        fastDrainScheduler
+        fastDrainScheduler,
+        retentionRunner
       );
     }
     return this._users;
