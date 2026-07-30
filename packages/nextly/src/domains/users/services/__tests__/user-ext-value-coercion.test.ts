@@ -157,6 +157,28 @@ describe("coerceUserExtValue", () => {
     );
   });
 
+  it("refuses a non-finite number", () => {
+    registerFieldType({
+      type: "metric3",
+      storage: "number",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    // Both are numbers by `typeof`, and no dialect's numeric column stores
+    // either faithfully.
+    expect(() =>
+      coerceUserExtValue(Number.NaN, { name: "s", type: "metric3" })
+    ).toThrow(NextlyError);
+    expect(() =>
+      coerceUserExtValue(Number.POSITIVE_INFINITY, {
+        name: "s",
+        type: "metric3",
+      })
+    ).toThrow(NextlyError);
+    expect(coerceUserExtValue(0, { name: "s", type: "metric3" })).toBe(0);
+  });
+
   it("refuses an Invalid Date object", () => {
     registerFieldType({
       type: "occurred3",

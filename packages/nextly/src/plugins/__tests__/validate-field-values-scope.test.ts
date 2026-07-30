@@ -58,4 +58,34 @@ describe("validateFieldValues scope", () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]?.path).toBe("score");
   });
+
+  it("refuses an unknown type nested in a container", async () => {
+    // The validator descends into a repeater, so a misspelled child reached its
+    // default branch and reported arbitrary nested values as valid — the same
+    // hole the top-level check closed.
+    const issues = await validateFieldValues({ rows: [{ n: 1 }] }, [
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [{ name: "n", type: "numbre" }],
+      },
+    ]);
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe("n");
+  });
+
+  it("does not descend into an option a plugin type calls fields", async () => {
+    // Only the containers the validator itself walks. A plugin type's own
+    // `fields` option is configuration, not declarations.
+    const issues = await validateFieldValues({ layout: {} }, [
+      {
+        name: "layout",
+        type: "json",
+        fields: [{ name: "slot", type: "not-a-type" }],
+      },
+    ]);
+
+    expect(issues).toEqual([]);
+  });
 });

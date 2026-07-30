@@ -188,7 +188,10 @@ export function coerceUserExtValue(
   // the value. So the shape is answered for here, where it can still be
   // reported, rather than at the column where it is silently lost.
   if (value !== null && value !== undefined) {
-    if (token === "number" && typeof value !== "number") {
+    if (token === "number" && !Number.isFinite(value)) {
+      // Not just the type: `NaN` and `Infinity` are numbers that no dialect's
+      // numeric column stores faithfully, and the built-in `z.number()` path
+      // refuses them too.
       throw userExtValueError(name, "a number");
     }
     if (token === "checkbox" && typeof value !== "boolean") {

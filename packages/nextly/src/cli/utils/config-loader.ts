@@ -315,6 +315,12 @@ async function runWatchReload(options: LoadConfigOptions): Promise<void> {
       }
     }
   } catch (error) {
+    // A failed load restores the registry it found, which for a superseded
+    // reload is the obsolete config's rather than the installed one's. Put the
+    // installed set back for the same reason the success path does.
+    if (generation !== watcherGeneration && installedFieldTypes) {
+      restoreFieldTypes(installedFieldTypes);
+    }
     console.error("[config-loader] Error reloading config:", error);
   }
 }

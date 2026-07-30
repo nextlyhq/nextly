@@ -98,6 +98,11 @@ export interface UserPluginFieldConfig extends UserPluginFieldInput {
 /**
  * Declare a user field whose type a plugin contributed.
  *
+ * A built-in token is refused here. Marking one would put it on the open arm,
+ * where its own shape is never checked — `{ type: "select" }` would satisfy
+ * `UserFieldConfig` without the `options` a select requires, which is the very
+ * thing the marker exists to prevent.
+ *
  * @example
  * ```ts
  * users: {
@@ -108,8 +113,13 @@ export interface UserPluginFieldConfig extends UserPluginFieldInput {
  * }
  * ```
  */
-export function pluginUserField(
-  field: UserPluginFieldInput
+export function pluginUserField<const T extends UserPluginFieldInput>(
+  field: T &
+    (T["type"] extends UserFieldType
+      ? {
+          type: "this is a built-in field type; declare it directly so its own shape is checked";
+        }
+      : unknown)
 ): UserPluginFieldConfig {
   // Built rather than asserted, so the value really carries what its type says.
   // A symbol key is invisible to `JSON.stringify` and to `Object.keys`, so the

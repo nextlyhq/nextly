@@ -128,6 +128,30 @@ export type FieldValueDeclarationInput =
  * from a plugin's own `setup()`: called before registration, a plugin-typed
  * declaration is not yet knowable and every one of them is reported.
  */
+/**
+ * Every declaration in a tree, nested children included.
+ *
+ * The container types this API advertises carry their own declarations, and
+ * `validateEntryData` descends into them — so a misspelled child type reaches
+ * its default branch and reports arbitrary nested values as valid, exactly as
+ * a misspelled top-level one did.
+ */
+function* walkDeclarations(
+  fields: readonly FieldValueDeclarationInput[]
+): Generator<FieldValueDeclarationInput> {
+  for (const field of fields) {
+    yield field;
+    const nested = (field as { fields?: unknown }).fields;
+    const type = (field as { type?: unknown }).type;
+    // Only the containers whose children the validator itself walks. A plugin
+    // type is free to call one of its own options `fields`, and descending into
+    // that would report its configuration as a bad declaration.
+    if ((type === "repeater" || type === "group") && Array.isArray(nested)) {
+      yield* walkDeclarations(nested as FieldValueDeclarationInput[]);
+    }
+  }
+}
+
 export async function validateFieldValues(
   values: Record<string, unknown>,
   fields: readonly FieldValueDeclarationInput[],
@@ -137,7 +161,7 @@ export async function validateFieldValues(
   // validation, so a token it does not know reaches its default branch and any
   // value for that field is reported as valid. A caller writing declarations by
   // hand has had nothing check them, so a typo would read as a clean pass.
-  const unknownTypes = fields.filter(field => {
+  const unknownTypes = [...walkDeclarations(fields)].filter(field => {
     const type = (field as { type?: unknown }).type;
     return (
       typeof type !== "string" ||
