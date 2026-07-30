@@ -20,7 +20,8 @@ import { randomBytes } from "node:crypto";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
 import {
-  PG_ABORTED_TRANSACTION,
+  PG_ABORTED_TRANSACTION_SQLSTATE,
+  isAbortedTransactionError,
   recordAbortedTransaction,
 } from "../__tests__/aborted-transaction-sightings";
 import type { CollectionConfig } from "../collections/config/define-collection";
@@ -107,14 +108,18 @@ export function getConfiguredTestDialects(): TestDialect[] {
 }
 
 /**
- * Read the driver's text off an unknown thrown value.
+ * Read the driver's text off an unknown thrown value, for the recorded sighting.
  *
  * Only the two shapes that can actually carry it. Anything else is not a database error, and
- * stringifying it would produce "[object Object]" rather than a message worth matching.
+ * stringifying it would produce "[object Object]" rather than a message worth reporting. The
+ * message is what gets shown to whoever has to find the swallowed error; whether the value counts
+ * as an abort at all is decided structurally by `isAbortedTransactionError`.
  */
 function driverMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  return typeof error === "string" ? error : "";
+  return typeof error === "string"
+    ? error
+    : `aborted transaction reported without a readable message (SQLSTATE ${PG_ABORTED_TRANSACTION_SQLSTATE})`;
 }
 
 /** The one method the abort probe needs from a transaction context. */
@@ -142,9 +147,8 @@ async function probeForAbortedTransaction(
   try {
     await ctx.execute("SELECT 1");
   } catch (error) {
-    const message = driverMessage(error);
-    if (message.includes(PG_ABORTED_TRANSACTION)) {
-      recordAbortedTransaction(message);
+    if (isAbortedTransactionError(error)) {
+      recordAbortedTransaction(driverMessage(error));
     }
   }
 }
@@ -193,9 +197,8 @@ function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
         originalTransaction as (...a: unknown[]) => Promise<unknown>
       )(instrumented, ...rest);
     } catch (error) {
-      const message = driverMessage(error);
-      if (message.includes(PG_ABORTED_TRANSACTION)) {
-        recordAbortedTransaction(message);
+      if (isAbortedTransactionError(error)) {
+        recordAbortedTransaction(driverMessage(error));
       }
       throw error;
     }

@@ -15,6 +15,7 @@
  * PostgreSQL only. SQLite and MySQL do not poison a transaction on a failed statement, which is
  * the entire reason the guard exists.
  */
+import { createTestNextly as createThroughPublishedEntry } from "nextly/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { takeAbortedTransactionSightings } from "../../__tests__/aborted-transaction-sightings";
@@ -76,6 +77,37 @@ describe.skipIf(!onPostgres)("aborted-transaction guard (integration)", () => {
     const sightings = takeAbortedTransactionSightings();
     expect(sightings.length).toBeGreaterThan(0);
     expect(sightings[0]).toMatch(/current transaction is aborted/);
+  });
+
+  it("records an abort raised through the published entry point", async () => {
+    // The harness reaches tests two ways: this file imports the source module, while suites that
+    // import `nextly/testing` get the copy bundled into `dist/testing.mjs`. Those are separate
+    // module instances, so a buffer held in module scope would give them one array each — the
+    // bundled harness would record an abort that the shared assertion, reading the source array,
+    // never sees. That failure is silent and it fails open, which is the one outcome a guard
+    // must not have. Holding the buffer on `globalThis` gives both instances the same array.
+    const viaPublished = await createThroughPublishedEntry({
+      dialect: "postgresql",
+    });
+    try {
+      await expect(
+        viaPublished.adapter.transaction(async tx => {
+          try {
+            await tx.execute("SELECT 1 FROM a_relation_that_does_not_exist");
+          } catch {
+            // Swallowed on purpose: this is the pattern being guarded against.
+          }
+          await tx.execute("SELECT 1");
+        })
+      ).rejects.toThrow();
+    } finally {
+      await viaPublished.destroy();
+    }
+
+    // Read through the source module. Seeing the sighting here is the assertion: it can only
+    // have arrived from the bundled harness, so the two instances share one buffer.
+    const sightings = takeAbortedTransactionSightings();
+    expect(sightings.length).toBeGreaterThan(0);
   });
 
   it("stays silent when nothing aborts", async () => {
