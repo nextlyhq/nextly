@@ -536,10 +536,7 @@ async function loadConfigInternal(
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
       // collector the runtime boot runs (register.ts), so both paths agree (D50).
-      collectCustomPermissions(
-        config as unknown as NextlyServiceConfig,
-        plugins
-      );
+      collectCustomPermissions(config, plugins);
 
       debugLog(
         options,

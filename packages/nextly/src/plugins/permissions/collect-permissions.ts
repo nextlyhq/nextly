@@ -1,4 +1,3 @@
-import type { NextlyServiceConfig } from "../../di/register";
 import { isSystemResource } from "../../schemas/_zod/rbac";
 import type { PluginPermission } from "../contributions";
 import { permissionCollisionError } from "../permission-error";
@@ -57,6 +56,20 @@ const titleCase = (s: string): string =>
     .join(" ");
 
 /**
+ * The parts of a config a permission collector reads.
+ *
+ * Named rather than taking the whole service config: a caller holding a loaded
+ * config has no image processor or adapter to offer, and widening the gap with
+ * a cast would stop the compiler checking that the fields actually read are
+ * runtime callers are unaffected.
+ */
+export interface PermissionConfigSource {
+  collections?: ReadonlyArray<{ slug: string }>;
+  singles?: ReadonlyArray<{ slug: string }>;
+  permissions?: readonly PluginPermission[];
+}
+
+/**
  * Fold every plugin's `contributes.permissions` into a deduped, collision-
  * validated list of seedable custom permissions. Pure. Runs over ALL
  * plugins incl. disabled ones so declarative permissions stay deterministic
@@ -72,7 +85,7 @@ const titleCase = (s: string): string =>
  * silently dropped instead of rejected. See `ADOPTED_LIFECYCLE_ACTIONS`.
  */
 export function collectCustomPermissions(
-  config: NextlyServiceConfig,
+  config: PermissionConfigSource,
   plugins: PluginDefinition[]
 ): CollectedPermission[] {
   const collectionSlugs = new Set((config.collections ?? []).map(c => c.slug));

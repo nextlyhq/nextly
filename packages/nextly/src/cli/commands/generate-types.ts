@@ -30,7 +30,6 @@ import { resolve, dirname } from "node:path";
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { NextlyServiceConfig } from "../../di/register";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
@@ -265,7 +264,7 @@ async function generateTypes(
   // `config` is the already-merged config (plugin contributions folded by
   // loadConfig); `config.plugins` is the resolved plugin list.
   const { permissionSlugs, eventNames } = collectCodegenNames(
-    config as unknown as NextlyServiceConfig,
+    config,
     config.plugins ?? []
   );
 

@@ -398,6 +398,10 @@ function validateUserFields(
     validateUserFieldType(f, fieldPath, errors, configUsersTypes);
     validateUserFieldName(f.name, fieldPath, errors, seenNames);
 
+    // Both routes a plugin type reaches this validator by: registered in the
+    // live registry, and declared by a config whose plugins have not been
+    // registered yet. `checkUserFieldType` already accepts either, so checking
+    // only the registry let a code-defined type through to fail at the column.
     // A plugin type persists as one storage primitive, which is one column
     // holding one value. The user_ext mapper builds that scalar column whatever
     // this says, so a list would be accepted here, generated as a scalar, and
@@ -406,7 +410,8 @@ function validateUserFields(
     if (
       typeof f.type === "string" &&
       f.hasMany === true &&
-      isPluginFieldTypeOnSurface(f.type, "users")
+      (isPluginFieldTypeOnSurface(f.type, "users") ||
+        configUsersTypes?.has(f.type) === true)
     ) {
       errors.push({
         path: `${fieldPath}.hasMany`,
