@@ -90,6 +90,31 @@ describe("the plugin options container", () => {
     expect(captured.seen).not.toHaveProperty("pluginOptions");
   });
 
+  it("refuses hasMany on a type whose storage holds one value", () => {
+    registerRecorder();
+
+    // Generation drops the flag to match the column and the validator reads it
+    // as written, so accepting it left the two disagreeing about the same
+    // field: a generated scalar the validator refused, and an array it accepted
+    // that the column could not hold.
+    const issues = pluginFieldOptionIssues({
+      name: "score",
+      type: "star-rating",
+      hasMany: true,
+    });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe("hasMany");
+  });
+
+  it("accepts a plugin field that does not ask for a list", () => {
+    registerRecorder();
+
+    expect(
+      pluginFieldOptionIssues({ name: "score", type: "star-rating" })
+    ).toEqual([]);
+  });
+
   it("refuses a manifest field whose container uses a reserved name", () => {
     // The identity restatement would shadow these, so an option under either
     // name could never reach the type that declared it. Refused at the write

@@ -51,6 +51,7 @@ export interface PluginFieldOptionIssue {
 export function pluginFieldOptionIssues(field: {
   type?: unknown;
   name?: unknown;
+  hasMany?: unknown;
 }): PluginFieldOptionIssue[] {
   if (typeof field.type !== "string") return [];
   // Only for a type that opted into the entry-schema surface, which is the one
@@ -78,6 +79,23 @@ export function pluginFieldOptionIssues(field: {
         `${key} cannot be used as a plugin option: it states which field the type is looking at`
       ),
     }));
+  }
+
+  // A storage primitive is one column holding one value, so a list has nowhere
+  // to go. Generation drops the flag to match the column, and the validator
+  // reads it as written, so leaving it accepted meant the three disagreed: a
+  // generated scalar the validator refused, and an array it accepted that the
+  // column could not store. Refused where it is written rather than ignored,
+  // which would leave an author believing they had declared a list.
+  if (field.hasMany === true) {
+    return [
+      {
+        path: "hasMany",
+        message: asSentence(
+          `${String(field.type)} stores a single value, so hasMany cannot be used with it`
+        ),
+      },
+    ];
   }
 
   const custom = getFieldType(field.type);

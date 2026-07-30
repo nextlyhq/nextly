@@ -10,7 +10,9 @@
  * A deliberately narrower surface than the internal entry validator. Options
  * that belong to a collection write, such as which fields a localized entity
  * keeps in its companion row, are not exposed: they describe a stored entity,
- * and a caller holding a loose set of values has no entity to answer for.
+ * and a caller holding a loose set of values has no entity to answer for. For
+ * the same reason a component field is not descended into — its rows live in
+ * their own table, written and checked by `FieldGroupDataService`.
  *
  * @module plugins/validate-field-values
  */
@@ -49,7 +51,15 @@ export interface FieldValueDeclaration {
   hasMany?: boolean;
   /** Choices for `select` and `radio`. */
   options?: unknown;
-  /** Nested declarations for `repeater`, `group` and component fields. */
+  /**
+   * Nested declarations for `repeater` and `group`, which are walked.
+   *
+   * Not component fields. A component is stored in its own table by
+   * `FieldGroupDataService`, which validates it there, and a caller of this API
+   * holds a loose set of values rather than a stored entity — the same reason
+   * the entity-shaped options are absent. A component declaration passed here
+   * is not descended into, so its children are not checked.
+   */
   fields?: FieldValueDeclaration[];
   /** Rules the built-in checks read, flat or under `validation`. */
   minLength?: number;
