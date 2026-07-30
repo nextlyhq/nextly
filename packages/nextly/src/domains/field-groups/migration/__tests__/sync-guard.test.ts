@@ -5,7 +5,10 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { Logger } from "../../../../shared/types";
 import { hashManifest, type ManifestEntry } from "../manifest";
 import { MIGRATION_MARKER_VERSION } from "../state";
-import { assertNoMigrationInFlight } from "../sync-guard";
+import {
+  assertNoMigrationInFlight,
+  withMigrationExcluded,
+} from "../sync-guard";
 
 const PLAN: ManifestEntry[] = [
   { kind: "registry", from: "dynamic_components", to: "dynamic_field_groups" },
@@ -108,5 +111,116 @@ describe("schema sync guard", () => {
         logger,
       })
     ).rejects.toThrowError(NextlyError);
+  });
+});
+
+/**
+ * An adapter that models the lock row rather than accepting every write.
+ *
+ * The lock is the whole mechanism under test, so a double that let a second
+ * claim succeed would certify exclusion that does not exist.
+ */
+function lockingAdapter(options: { marker?: unknown; heldBy?: string | null }) {
+  const lock: { seeded: boolean; owner: string | null } = {
+    seeded: options.heldBy !== undefined,
+    owner: options.heldBy ?? null,
+  };
+
+  function matches(where: unknown): boolean {
+    const clauses =
+      (where as { and?: { column: string; value: unknown }[] }).and ?? [];
+    return clauses.every(clause =>
+      clause.column === "owner" ? lock.owner === clause.value : true
+    );
+  }
+
+  const adapter = {
+    getCapabilities: () => ({ dialect: "postgresql" }),
+    getDrizzle: () => ({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () =>
+              options.marker === undefined
+                ? []
+                : [{ key: "k", value: JSON.stringify(options.marker) }],
+          }),
+        }),
+      }),
+    }),
+    executeQuery: async () => [],
+    transaction: async (work: (ctx: unknown) => Promise<unknown>) =>
+      work({
+        lockRow: async () => undefined,
+        selectOne: async () =>
+          lock.seeded ? { id: 1, owner: lock.owner } : null,
+        insert: async (_table: string, data: { owner: string | null }) => {
+          lock.seeded = true;
+          lock.owner = data.owner;
+          return data;
+        },
+        update: async (
+          _table: string,
+          data: { owner: string | null },
+          where: unknown
+        ) => {
+          // An occupied row refuses a new claim, exactly as the real one does:
+          // `acquire` reads back what it wrote, so a double that overwrote a
+          // held lock would report a successful claim over a live migration.
+          if (matches(where)) lock.owner = data.owner;
+          return [];
+        },
+      }),
+  } as unknown as DrizzleAdapter;
+
+  return { adapter, ownerNow: () => lock.owner };
+}
+
+describe("holding the exclusion for the whole sync", () => {
+  // The point of the change: a point-in-time read only says a migration had not
+  // started by the instant of the read, and a sync runs far longer than that.
+  it("holds the migration lock while the work runs, and releases it after", async () => {
+    const { adapter, ownerNow } = lockingAdapter({});
+    let ownerDuringWork: string | null = null;
+
+    await withMigrationExcluded({ adapter, logger, label: "db:sync" }, () => {
+      ownerDuringWork = ownerNow();
+      return Promise.resolve();
+    });
+
+    expect(ownerDuringWork).not.toBeNull();
+    expect(ownerNow()).toBeNull();
+  });
+
+  it("refuses, and never runs the work, while a migration holds the lock", async () => {
+    const { adapter } = lockingAdapter({ heldBy: "field-group-migration#abc" });
+    const work = vi.fn(() => Promise.resolve());
+
+    const error = await withMigrationExcluded(
+      { adapter, logger, label: "db:sync" },
+      work
+    ).catch((caught: unknown) => caught);
+
+    expect(NextlyError.is(error)).toBe(true);
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  // Holding the lock is necessary and not sufficient. An operator who cleared a
+  // dead run's lock row without settling its marker would otherwise be let
+  // straight into half-renamed storage.
+  it("still refuses on an in-flight marker when the lock is free", async () => {
+    const { adapter } = lockingAdapter({ marker: migrating() });
+    const work = vi.fn(() => Promise.resolve());
+
+    const error = await withMigrationExcluded(
+      { adapter, logger, label: "db:sync" },
+      work
+    ).catch((caught: unknown) => caught);
+
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toMatch(/migration is in flight/);
+    }
+    expect(work).not.toHaveBeenCalled();
   });
 });

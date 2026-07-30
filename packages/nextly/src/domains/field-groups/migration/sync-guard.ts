@@ -19,6 +19,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { Logger } from "../../../shared/types";
 import { MetaService } from "../../meta/services/meta-service";
 
+import { withMigrationSession } from "./session";
 import { readMigrationState } from "./state";
 
 /**
@@ -51,4 +52,43 @@ export async function assertNoMigrationInFlight(args: {
       step: state.step,
     },
   });
+}
+
+/**
+ * Run schema sync work with a storage migration excluded for its whole duration.
+ *
+ * Reading the marker and then proceeding only answers whether a migration had
+ * started by the instant of the read. A sync takes far longer than that, and a
+ * migration beginning immediately afterwards renames tables underneath work that
+ * has already decided what exists — with `--remove-orphaned`, deciding to delete
+ * it. Exclusion has to be *held*, not sampled.
+ *
+ * The migration's own lock is what it is held with, so the two exclude each
+ * other through one mechanism rather than two that must agree. A run in flight
+ * holds it and this refuses; a run that died holds it still, by design, because
+ * there is no trustworthy clock to expire it with.
+ *
+ * The marker is then checked inside the lock, because holding it is necessary
+ * and not sufficient: an operator who cleared a dead run's lock row without
+ * settling its marker would otherwise be let straight through into exactly the
+ * half-renamed storage this exists to protect.
+ */
+export async function withMigrationExcluded<T>(
+  args: { adapter: DrizzleAdapter; logger: Logger; label: string },
+  work: () => Promise<T>
+): Promise<T> {
+  return withMigrationSession(
+    {
+      adapter: args.adapter,
+      dialect: args.adapter.getCapabilities().dialect,
+      label: args.label,
+    },
+    async () => {
+      await assertNoMigrationInFlight({
+        adapter: args.adapter,
+        logger: args.logger,
+      });
+      return work();
+    }
+  );
 }

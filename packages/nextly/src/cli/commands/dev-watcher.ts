@@ -10,7 +10,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
+import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -81,37 +81,45 @@ export function createDebouncedSync(
         // can begin after the watcher starts, so checking only at boot leaves
         // every later save free to reconcile — and, with `--remove-orphaned`,
         // delete — tables that are halfway through being renamed.
-        await assertNoMigrationInFlight({
-          adapter: adapter as unknown as DrizzleAdapter,
-          logger,
-        });
+        //
+        // Held for the whole re-sync rather than read once at the top of it: a
+        // migration beginning a moment later would rename tables underneath work
+        // that has already decided what exists.
+        await withMigrationExcluded(
+          {
+            adapter: adapter as unknown as DrizzleAdapter,
+            logger,
+            label: "db:sync watch",
+          },
+          async () => {
+            // Unconditional, so the orphan scan still runs when the config declares none of a
+            // type: deleting the last entry of a kind is precisely what orphans its table, making
+            // a zero count the case where the scan matters most.
+            await syncCollections(configToSync, adapter, options, context);
+            await syncSingles(configToSync, adapter, options, context);
+            await syncComponents(configToSync, adapter, options, context);
 
-        // Unconditional, so the orphan scan still runs when the config declares none of a
-        // type: deleting the last entry of a kind is precisely what orphans its table, making
-        // a zero count the case where the scan matters most.
-        await syncCollections(configToSync, adapter, options, context);
-        await syncSingles(configToSync, adapter, options, context);
-        await syncComponents(configToSync, adapter, options, context);
+            // Turning on localization is a config edit, so it arrives through this
+            // watcher as often as through `db:sync`. The companion table is not part of
+            // the push pipeline, and creating it here rather than at the next boot is
+            // what keeps a running server from advertising localization it cannot store.
+            // Suppressed under `--no-auto-sync` for the same reason the rest of the
+            // push is: it issues DDL and can copy rows.
+            if (options.autoSync !== false) {
+              await ensureLocalizedCompanions(
+                configToSync.config,
+                adapter,
+                context
+              );
+            }
 
-        // Turning on localization is a config edit, so it arrives through this
-        // watcher as often as through `db:sync`. The companion table is not part of
-        // the push pipeline, and creating it here rather than at the next boot is
-        // what keeps a running server from advertising localization it cannot store.
-        // Suppressed under `--no-auto-sync` for the same reason the rest of the
-        // push is: it issues DDL and can copy rows.
-        if (options.autoSync !== false) {
-          await ensureLocalizedCompanions(
-            configToSync.config,
-            adapter,
-            context
-          );
-        }
+            // Sync user_ext table (always — handles both code and UI fields)
+            await syncUserFields(configToSync, adapter, options, context);
 
-        // Sync user_ext table (always — handles both code and UI fields)
-        await syncUserFields(configToSync, adapter, options, context);
-
-        // Seed permissions for new/updated collections and singles
-        await performPermissionSeeding(adapter, options, context);
+            // Seed permissions for new/updated collections and singles
+            await performPermissionSeeding(adapter, options, context);
+          }
+        );
       });
     } catch (error) {
       logger.error(`Re-sync failed: ${describeError(error)}`);

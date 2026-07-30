@@ -62,7 +62,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
-import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
+import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
@@ -286,10 +286,11 @@ export async function runDbSync(
     // config against that, and `--remove-orphaned` deletes what it cannot
     // account for. Placed after the core tables so the marker's own table is
     // guaranteed to exist, and before anything that reads or changes schema.
-    await assertNoMigrationInFlight({
-      adapter: adapter as unknown as DrizzleAdapter,
-      logger,
-    });
+    // Held across the sync rather than sampled before it. A migration starting
+    // just after a point-in-time check renames tables underneath work that has
+    // already decided what exists, and `--remove-orphaned` deletes what it
+    // cannot account for. Watch mode is deliberately outside: it never returns,
+    // and each debounced re-sync takes the exclusion for itself.
 
     // Step 4-5.5: Sync collections, singles and components.
     //
@@ -309,56 +310,70 @@ export async function runDbSync(
     // builds the `comp_` runtime tables from the same storage mappings: left
     // outside, it would shape them from a newer config than the sync that then
     // addresses them.
-    await runWithFieldTypes(configResult.fieldTypes, async () => {
-      // Step 3.6: Register the runtime schema of every component in the database. The registry
-      // built above holds STATIC system tables only, so `comp_` tables are unaddressable by
-      // the ORM until this runs — and the orphan cleanup below has to delete rows from them.
-      // Reads from `dynamic_components` rather than the config so components already removed
-      // from code are still reachable.
-      await registerComponentSchemas({
+    await withMigrationExcluded(
+      {
         adapter: adapter as unknown as DrizzleAdapter,
-        registry: schemaRegistry,
-        dialect: (adapter as unknown as DrizzleAdapter).getCapabilities()
-          .dialect,
         logger,
-      });
+        label: "db:sync",
+      },
+      async () =>
+        await runWithFieldTypes(configResult.fieldTypes, async () => {
+          // Step 3.6: Register the runtime schema of every component in the database. The registry
+          // built above holds STATIC system tables only, so `comp_` tables are unaddressable by
+          // the ORM until this runs — and the orphan cleanup below has to delete rows from them.
+          // Reads from `dynamic_components` rather than the config so components already removed
+          // from code are still reachable.
+          await registerComponentSchemas({
+            adapter: adapter as unknown as DrizzleAdapter,
+            registry: schemaRegistry,
+            dialect: (adapter as unknown as DrizzleAdapter).getCapabilities()
+              .dialect,
+            logger,
+          });
 
-      assertPluginFieldDeclarations(configResult.config);
+          assertPluginFieldDeclarations(configResult.config);
 
-      await syncCollections(configResult, adapter, options, context);
-      await syncSingles(configResult, adapter, options, context);
-      await syncComponents(configResult, adapter, options, context);
+          await syncCollections(configResult, adapter, options, context);
+          await syncSingles(configResult, adapter, options, context);
+          await syncComponents(configResult, adapter, options, context);
 
-      // Step 5.6: Create the `_locales` companion of every localized entity, which
-      // the push pipeline does not manage. Runs after all three syncs because the
-      // companion references its main table. Without this, `db:sync` left the
-      // registry saying "localized" with no table to hold translations until the
-      // app next booted, and writes in that window overwrote the default language.
-      //
-      // Gated on the same flag as the rest of the schema push: this issues DDL and
-      // can copy rows, so `--no-auto-sync` — chosen precisely to keep physical
-      // schema changes in migration files — must suppress it too.
-      //
-      // Inside the pinned scope with the syncs it follows: a companion holds the
-      // localized subset of the same fields, so it has to resolve plugin types
-      // against the config the main tables were just materialized from.
-      if (options.autoSync !== false) {
-        await ensureLocalizedCompanions(configResult.config, adapter, context);
-      }
+          // Step 5.6: Create the `_locales` companion of every localized entity, which
+          // the push pipeline does not manage. Runs after all three syncs because the
+          // companion references its main table. Without this, `db:sync` left the
+          // registry saying "localized" with no table to hold translations until the
+          // app next booted, and writes in that window overwrote the default language.
+          //
+          // Gated on the same flag as the rest of the schema push: this issues DDL and
+          // can copy rows, so `--no-auto-sync` — chosen precisely to keep physical
+          // schema changes in migration files — must suppress it too.
+          //
+          // Inside the pinned scope with the syncs it follows: a companion holds the
+          // localized subset of the same fields, so it has to resolve plugin types
+          // against the config the main tables were just materialized from.
+          if (options.autoSync !== false) {
+            await ensureLocalizedCompanions(
+              configResult.config,
+              adapter,
+              context
+            );
+          }
 
-      if (collectionCount === 0) {
-        logger.warn("No collections defined in config");
-        logger.info("Add collections to your nextly.config.ts to get started.");
-      }
+          if (collectionCount === 0) {
+            logger.warn("No collections defined in config");
+            logger.info(
+              "Add collections to your nextly.config.ts to get started."
+            );
+          }
 
-      // Step 5.6: Sync user_ext table (always — handles both code and UI fields)
-      await syncUserFields(configResult, adapter, options, context);
+          // Step 5.6: Sync user_ext table (always — handles both code and UI fields)
+          await syncUserFields(configResult, adapter, options, context);
 
-      // Step 5.7: Seed permissions for collections and singles (always, idempotent).
-      // demo content seeding moved to a Payload-style admin-triggered POST
-      // route in the project itself (src/app/admin/api/seed/route.ts).
-      await performPermissionSeeding(adapter, options, context);
-    });
+          // Step 5.7: Seed permissions for collections and singles (always, idempotent).
+          // demo content seeding moved to a Payload-style admin-triggered POST
+          // route in the project itself (src/app/admin/api/seed/route.ts).
+          await performPermissionSeeding(adapter, options, context);
+        })
+    );
 
     // Step 7: Watch mode. Gated on any entity kind this command syncs, not just
     // collections and singles: `loadConfig({ watch: true })` has already opened
