@@ -78,6 +78,18 @@ describe("resolveWebhookRecording", () => {
     ).toEqual({ event: "user.created", kind: "user" });
   });
 
+  it("drops an entry-family curated event (it would be suppressed by the same opt-out)", () => {
+    // `entry.*` derives kind `entry`, which is gated by this very collection's
+    // `record: false` — so a curated entry event could never emit. It is
+    // rejected at normalization rather than silently suppressed at the seam.
+    expect(
+      resolveWebhookRecording({
+        record: false,
+        emit: { event: "entry.created", fields: ["title"] },
+      })
+    ).toEqual({ record: false });
+  });
+
   it("drops a malformed emit rather than throwing", () => {
     const asInput = (v: unknown) =>
       v as boolean | { record?: boolean } | undefined;

@@ -449,10 +449,15 @@ export class CollectionMutationService extends BaseService {
     const emitSpec = getWebhookEmitSpec("collection", collectionName);
     if (!emitSpec) return false;
     const locale = writeLocale ? { locale: writeLocale } : {};
-    const resource: WebhookResource =
-      emitSpec.kind === "entry"
-        ? { kind: "entry", collection: collectionName, id: entryId, ...locale }
-        : { kind: emitSpec.kind, slug: collectionName, id: entryId, ...locale };
+    // `emitSpec.kind` is a non-entry family (normalization rejects entry.*), so
+    // the resource carries a `slug` and never a `collection`: the per-collection
+    // opt-out that suppressed the raw entry.* events does not gate this kind.
+    const resource: WebhookResource = {
+      kind: emitSpec.kind,
+      slug: collectionName,
+      id: entryId,
+      ...locale,
+    };
     return recordMutationEvent(tx, {
       type: emitSpec.event,
       resource,
@@ -6019,7 +6024,11 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
+        !isRecordingDisabledByConfig("collection", params.collectionName) ||
+        // A curated `webhooks.emit` consumes the assembled document too — its
+        // allowlist may include a component/m2m field — so assemble relations
+        // even when the raw entry.* recording is opted out for this collection.
+        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
       const { documentParts: createdParts, document: createdDocument } =
         await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
@@ -6540,7 +6549,11 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
+        !isRecordingDisabledByConfig("collection", params.collectionName) ||
+        // A curated `webhooks.emit` consumes the assembled document too — its
+        // allowlist may include a component/m2m field — so assemble relations
+        // even when the raw entry.* recording is opted out for this collection.
+        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
       // The `previous` document is carried ONLY by the outbox event, never by the
       // version snapshot, so gate its relation read on webhook recording alone: a
       // version-only update (versioning on, recording disabled by config) skips it
@@ -7413,7 +7426,11 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
+        !isRecordingDisabledByConfig("collection", params.collectionName) ||
+        // A curated `webhooks.emit` consumes the assembled document too — its
+        // allowlist may include a component/m2m field — so assemble relations
+        // even when the raw entry.* recording is opted out for this collection.
+        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
       const { documentParts: createdParts, document: createdDocument } =
         await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
@@ -8006,7 +8023,11 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
+        !isRecordingDisabledByConfig("collection", params.collectionName) ||
+        // A curated `webhooks.emit` consumes the assembled document too — its
+        // allowlist may include a component/m2m field — so assemble relations
+        // even when the raw entry.* recording is opted out for this collection.
+        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
       // The `previous` document is carried ONLY by the outbox event, never by the
       // version snapshot, so gate its relation read on webhook recording alone: a
       // version-only update (versioning on, recording disabled by config) skips it

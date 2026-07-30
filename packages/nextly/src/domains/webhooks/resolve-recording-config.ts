@@ -25,8 +25,12 @@ import {
 export interface ResolvedWebhookEmit {
   /** The event type to record, e.g. `"form.submission.created"`. */
   event: WebhookEventType;
-  /** Resource family, derived from the event's first segment (`form.*` → `form`). */
-  kind: WebhookResourceKind;
+  /**
+   * Resource family, derived from the event's first segment (`form.*` → `form`).
+   * Never `entry`: an entry-family curated event would hit the same
+   * per-collection opt-out and be suppressed, so those are rejected upstream.
+   */
+  kind: Exclude<WebhookResourceKind, "entry">;
   /** Allowlist of document keys copied into the payload; default-deny. */
   fields?: readonly string[];
 }
@@ -55,8 +59,13 @@ function isWebhookEventType(value: unknown): value is WebhookEventType {
   );
 }
 
-function isResourceKind(value: string): value is WebhookResourceKind {
-  return (WEBHOOK_RESOURCE_KINDS as readonly string[]).includes(value);
+function isNonEntryResourceKind(
+  value: string
+): value is Exclude<WebhookResourceKind, "entry"> {
+  return (
+    value !== "entry" &&
+    (WEBHOOK_RESOURCE_KINDS as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -66,14 +75,17 @@ function isResourceKind(value: string): value is WebhookResourceKind {
  * lands in the right resource family without the author restating it. A
  * malformed emit (unknown event, non-string field names) is dropped rather than
  * throwing at boot: the default-deny stance keeps a bad config from emitting a
- * bogus or unfiltered event.
+ * bogus or unfiltered event. An `entry.*`-family event is dropped for the same
+ * reason it cannot work: a curated event exists to REPLACE the suppressed
+ * `entry.*` events with one the per-collection opt-out does not gate, so an
+ * entry-family event would be suppressed by that same opt-out and never emit.
  */
 function resolveEmit(emit: unknown): ResolvedWebhookEmit | undefined {
   if (typeof emit !== "object" || emit === null) return undefined;
   const { event, fields } = emit as { event?: unknown; fields?: unknown };
   if (!isWebhookEventType(event)) return undefined;
   const derivedKind = event.split(".")[0];
-  if (!isResourceKind(derivedKind)) return undefined;
+  if (!isNonEntryResourceKind(derivedKind)) return undefined;
   const safeFields =
     Array.isArray(fields) && fields.every(f => typeof f === "string")
       ? (fields as readonly string[])
