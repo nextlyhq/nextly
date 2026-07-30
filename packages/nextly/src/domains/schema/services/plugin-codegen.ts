@@ -39,6 +39,24 @@ function codegenFor(field: CodegenField) {
 }
 
 /**
+ * The local names a field's type declared imports for, on one output.
+ *
+ * A global utility a plugin writes WITHOUT declaring an import for is the
+ * standard one, exactly as core's own use of it is, so it has to be protected
+ * from another plugin's same-named import. Telling the two apart needs to know
+ * which names an expression's own type actually brought in.
+ */
+export function pluginDeclaredImportNames(
+  field: CodegenField,
+  usedBy: "tsImports" | "zodImports"
+): ReadonlySet<string> {
+  const declared = codegenFor(field)?.[usedBy] ?? [];
+  const names = new Set<string>();
+  for (const entry of declared) for (const name of entry.names) names.add(name);
+  return names;
+}
+
+/**
  * The field as its own type sees it: options folded into one flat view.
  *
  * The Schema Builder writes unmodelled options into `pluginOptions`, so a
@@ -238,6 +256,14 @@ export function pluginCodegenImports(
     const code = expression
       .replace(/"(?:[^"\\]|\\.)*"/g, '""')
       .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      // A comment is text as well: `string /* Rating */` references nothing.
+      // Stripped after the quoted forms, so a `//` inside a string is not read
+      // as one, and before the regex removal below, which SUBSTITUTES `//` and
+      // would otherwise leave a token that ate the rest of the line. A regex
+      // literal is not caught here, since a line comment needs two slashes and
+      // `/Rating/` has one before its first character.
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ")
       // Regex literals are text too: `z.string().regex(/Rating/)` names no
       // binding. Removed after the quoted forms so a slash inside a string is
       // not mistaken for the start of one.

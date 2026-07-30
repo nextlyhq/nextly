@@ -295,6 +295,53 @@ describe("standalone interface generation", () => {
     expect(message).toContain("'Array'");
   });
 
+  it("reserves a global a plugin used without importing it", () => {
+    registerFieldType({
+      type: "uses-global",
+      storage: "json",
+      component: "@acme/ug/admin#Input",
+      // No `Partial` import: this means the standard global, as core's own use
+      // of it does.
+      codegen: { tsType: () => "Partial<Record<string, string>>" },
+    });
+    registerFieldType({
+      type: "imports-partial",
+      storage: "json",
+      component: "@acme/ip/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Partial"], from: "@acme/ip" }],
+        tsType: () => "Partial<string>",
+      },
+    });
+
+    // Crediting both expressions as plugin-owned would leave `Partial`
+    // unreserved, and the second plugin's import would shadow the global that
+    // the first field's type depends on.
+    // Input types are off so core writes no `Partial<` of its own: with them on,
+    // the generated `PostsUpdateInput` supplies a third occurrence and the name
+    // is reserved whether or not the subtraction is right.
+    let message = "";
+    try {
+      new TypeGenerator({
+        generateInputTypes: false,
+        generateConfig: false,
+      }).generateTypesFile([
+        collection([
+          { name: "g", type: "uses-global" },
+          { name: "i", type: "imports-partial" },
+        ]),
+      ]);
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'Partial'");
+  });
+
   it("keeps a global free when one shared field emitted it twice", () => {
     registerFieldType({
       type: "shared-array",
@@ -1149,6 +1196,42 @@ describe("plugin field types in the Zod generator", () => {
     );
 
     expect(iface.imports).toEqual([]);
+  });
+
+  it("does not count a name that appears only in a comment", () => {
+    registerFieldType({
+      type: "commented",
+      storage: "json",
+      component: "@acme/cm/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Rating"], from: "@acme/cm" }],
+        zodSchema: () => "z.string() /* Rating */ // Rating",
+      },
+    });
+
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "c", type: "commented" }])
+      ).code
+    ).not.toContain("@acme/cm");
+  });
+
+  it("still counts a name outside the comment on the same line", () => {
+    registerFieldType({
+      type: "half-commented",
+      storage: "json",
+      component: "@acme/hc/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Rating"], from: "@acme/hc" }],
+        zodSchema: () => "z.custom<Rating>() /* not Ratings here */",
+      },
+    });
+
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "h", type: "half-commented" }])
+      ).code
+    ).toContain('import type { Rating } from "@acme/hc";');
   });
 
   it("does not count a name used only after a dot", () => {

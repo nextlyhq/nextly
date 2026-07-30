@@ -49,6 +49,7 @@ import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-defi
 
 import {
   asScalarStorageField,
+  pluginDeclaredImportNames,
   asStorageEquivalentField,
   isPluginDataField,
   pluginCodegenImports,
@@ -275,7 +276,10 @@ export class TypeGenerator {
    * the body would credit the generator with the difference and reserve a
    * global only the plugin ever wrote.
    */
-  private pluginEmissions: string[] = [];
+  private pluginEmissions: Array<{
+    expression: string;
+    imported: ReadonlySet<string>;
+  }> = [];
 
   constructor(options: TypeGeneratorOptions = {}) {
     this.includeComments = options.includeComments ?? true;
@@ -876,7 +880,10 @@ export class TypeGenerator {
       const contributed = pluginTsType(field);
       if (contributed !== undefined) {
         this.pluginExpressions.set(field, contributed);
-        this.pluginEmissions.push(contributed);
+        this.pluginEmissions.push({
+          expression: contributed,
+          imported: pluginDeclaredImportNames(field, "tsImports"),
+        });
         tsType = contributed;
       } else {
         // No rendering of its own, but the registry still knows what it stores.
@@ -960,7 +967,10 @@ export class TypeGenerator {
         const contributed = pluginTsType(field);
         if (contributed !== undefined) {
           this.pluginExpressions.set(field, contributed);
-          this.pluginEmissions.push(contributed);
+          this.pluginEmissions.push({
+            expression: contributed,
+            imported: pluginDeclaredImportNames(field, "tsImports"),
+          });
           tsType = contributed;
           break;
         }
@@ -1488,7 +1498,7 @@ ${properties}
    */
   private beginOwnExpressions(): {
     expressions: Map<object, string>;
-    emissions: string[];
+    emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
   } {
     const outer = {
       expressions: this.pluginExpressions,
@@ -1513,7 +1523,10 @@ ${properties}
    * the emitted source, read for the globals it relies on.
    */
   private endOwnExpressions(
-    outer: { expressions: Map<object, string>; emissions: string[] },
+    outer: {
+      expressions: Map<object, string>;
+      emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
+    },
     declares: string,
     body: string
   ): string[] {
@@ -1557,8 +1570,16 @@ ${properties}
       haystack.split(needle).length - 1;
     for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
       const token = `${global}<`;
+      // Only an emission whose own type declared an import for this name is
+      // subtracted. A plugin writing `Partial<Model>` without importing
+      // `Partial` means the standard global, exactly as core does, so its use
+      // has to be protected from another plugin's same-named import rather
+      // than counted as that plugin's own.
       const byPlugins = this.pluginEmissions.reduce(
-        (total, expression) => total + occurrences(expression, token),
+        (total, emission) =>
+          emission.imported.has(global)
+            ? total + occurrences(emission.expression, token)
+            : total,
         0
       );
       if (occurrences(body, token) > byPlugins) reserved.add(global);
