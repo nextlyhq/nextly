@@ -1,0 +1,575 @@
+/**
+ * Decides a rename plan against what the database actually contains.
+ *
+ * The plan itself is a pure function of registry rows and knows nothing about
+ * the database. Reconciling it needs four things the plan deliberately does not
+ * have: the catalog, the server's rules for deciding whether two spellings are
+ * one object, the columns those objects carry, and how far a run has already
+ * got. Those live here.
+ *
+ * Nothing is removed from a plan. Progress is annotated, because the plan is
+ * indexed by position and identified by hash: dropping an entry renumbers every
+ * later step and changes the identity the marker recorded, so a resume would
+ * refuse the plan it is resuming.
+ *
+ * @module domains/field-groups/migration/reconcile
+ */
+
+import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  findCaseVariant,
+  indexCatalog,
+  resolveCatalogName,
+  type CatalogIndex,
+  type IdentifierCaseRules,
+} from "../../schema/utils/resolve-catalog-name";
+
+import type { MigratedObjectsVerification, StorageProbe } from "./guard";
+import {
+  MIGRATION_TARGET,
+  retargetName,
+  type ManifestEntry,
+  type RegistryRow,
+} from "./manifest";
+import type { MigrationDirection, StorageGeneration } from "./state";
+
+/** The columns one table carries, as the database reported them. */
+export interface TableColumns {
+  readonly table: string;
+  readonly columns: readonly string[];
+}
+
+/**
+ * How far a run has been recorded, which is what gives a half-applied database
+ * its meaning.
+ *
+ * A target that exists while its source is gone is *completed work* only if the
+ * run that did it got that far. Presence of a run record is not enough on its
+ * own: a marker recording step 1 says nothing about step 7, so treating any
+ * record as blanket permission would adopt an unrelated object that happened to
+ * be sitting on step 7's target name.
+ *
+ * `step` is the last position whose postcondition verified, matching the marker,
+ * so positions up to `step + 1` are explicable — `step + 1` being the crash
+ * window the runner deliberately supports, where a statement committed but its
+ * marker write did not.
+ */
+export type RunRecord =
+  | { recorded: false }
+  | { recorded: true; direction: MigrationDirection; step: number };
+
+/**
+ * Reconcile a plan against the catalog.
+ *
+ * Refuses rather than proceeding whenever the facts have no single reading.
+ * Every refusal here costs an operator a look; the alternative is a run that
+ * fails after its marker is written, leaving storage half-migrated.
+ *
+ * `direction` is the direction of the plan being handed in. It is checked
+ * against the recorded run because the two must agree: a `down` plan is the
+ * inverse of an `up` one, so scoring an `up` plan's positions against a `down`
+ * run's progress would mark real work as already done and skip it.
+ */
+export function reconcilePlan(args: {
+  entries: readonly ManifestEntry[];
+  rows: readonly RegistryRow[];
+  tables: readonly string[];
+  columns: readonly TableColumns[];
+  run: RunRecord;
+  direction: MigrationDirection;
+  identifierCase: IdentifierCaseRules;
+}): ManifestEntry[] {
+  const { entries, rows, run, direction, identifierCase } = args;
+
+  if (run.recorded && run.direction !== direction) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "reconciled a plan against a run going the other way",
+        planDirection: direction,
+        runDirection: run.direction,
+      },
+    });
+  }
+
+  const catalog = indexCatalog(args.tables, identifierCase.tables);
+  const columns = indexColumns(args.columns, catalog, identifierCase);
+
+  assertEveryRowHasStorage(rows, catalog);
+
+  // A column entry names one fixed spelling of its table, but the table itself
+  // moves during the run, so the columns have to be findable under either name.
+  // Which of the two is the "other" one depends on direction: going up a column
+  // names the post-rename table and the other name is where it came from, while
+  // a rollback keeps that same spelling as the name the table starts under, so
+  // the other name is where the revert takes it. Recording both directions makes
+  // the lookup independent of which way the run is going.
+  const otherNames = new Map<string, string[]>();
+  const linkNames = (name: string, other: string): void => {
+    const existing = otherNames.get(name);
+    if (existing === undefined) otherNames.set(name, [other]);
+    else existing.push(other);
+  };
+  for (const entry of entries) {
+    if (entry.kind === "column") continue;
+    linkNames(entry.to, entry.from);
+    linkNames(entry.from, entry.to);
+  }
+
+  return entries.map((entry, index) => {
+    const position = index + 1;
+    if (entry.kind === "column") {
+      return reconcileColumn(entry, {
+        catalog,
+        columns,
+        otherNames,
+        position,
+        run,
+      });
+    }
+    return reconcileRename(entry, catalog, position, run);
+  });
+}
+
+/**
+ * Build the probe the storage guard consumes.
+ *
+ * `migratedObjects` is what stops the guard trusting registry presence alone:
+ * the read path turns a missing data table into an empty result, so an
+ * incomplete rename would serve blank content rather than fail.
+ *
+ * `typeColumn` is the discriminator the generation being probed must carry —
+ * the legacy spelling when probing legacy storage, the migrated one when probing
+ * migrated storage. It is checked because a table present under its migrated
+ * name while still holding the old column is *not* migrated storage, and reading
+ * it addresses a column that is not there.
+ */
+export function probeStorage(args: {
+  rows: readonly RegistryRow[];
+  tables: readonly string[];
+  columns: readonly TableColumns[];
+  identifierCase: IdentifierCaseRules;
+  generation: StorageGeneration;
+}): StorageProbe {
+  const { identifierCase, generation } = args;
+  // Derived from the generation rather than passed alongside it, so the column
+  // required and the names required cannot disagree.
+  const typeColumn =
+    generation === "field-groups-v2"
+      ? MIGRATION_TARGET.columnType
+      : STORAGE_FORMAT.columns.type;
+  const catalog = indexCatalog(args.tables, identifierCase.tables);
+  const columns = indexColumns(args.columns, catalog, identifierCase);
+  const missing: string[] = [];
+  // A settled marker is not exempt from ownership: a registry restored or
+  // repaired with two rows that resolve to one table would otherwise be reported
+  // complete, and the verdict would authorise both field groups against the same
+  // storage.
+  const claim = createClaimLedger();
+
+  for (const row of args.rows) {
+    for (const object of expectedStorage(row, generation)) {
+      const found = resolveAny(catalog, object.names);
+      if (found === undefined) {
+        missing.push(object.names[0]);
+        continue;
+      }
+      claim(found, claimantOf(row, object));
+      // Only the base table carries the discriminator; companions hold
+      // translations of individual fields and never the type.
+      if (!object.isBase) continue;
+      const tableColumns = columns.get(found);
+      if (
+        tableColumns === undefined ||
+        resolveCatalogName(tableColumns, typeColumn) === undefined
+      ) {
+        missing.push(`${found}.${typeColumn}`);
+      }
+    }
+  }
+
+  const migratedObjects: MigratedObjectsVerification =
+    missing.length === 0 ? { complete: true } : { complete: false, missing };
+
+  return {
+    targetRegistryPresent:
+      resolveCatalogName(catalog, MIGRATION_TARGET.registryTable) !== undefined,
+    legacyRegistryPresent:
+      resolveCatalogName(catalog, STORAGE_FORMAT.registryTable) !== undefined,
+    migratedObjects,
+  };
+}
+
+/** One physical object a registry row requires, and the names it may go by. */
+interface ExpectedObject {
+  /** Acceptable names, stored name first. */
+  readonly names: string[];
+  /** The row's own table, as opposed to its companion. */
+  readonly isBase: boolean;
+}
+
+/**
+ * Which physical names count as satisfying a row.
+ *
+ * `either` is for reconciling a run in flight, where a row is under its stored
+ * name until its rename commits and under the migrated name afterwards. The two
+ * generation values are for *verifying a settled marker*, where only one name is
+ * acceptable — accepting both there would report a migration complete that never
+ * renamed anything.
+ */
+type StorageNaming = "either" | StorageGeneration;
+
+/**
+ * Every object a registry row requires to exist.
+ *
+ * The single definition of that question, shared by the up-front check and the
+ * probe so the two cannot diverge: a check that ran before any rename while
+ * omitting companions would pass a row whose companion is already gone, and the
+ * loss would surface only after other objects had moved.
+ *
+ * A companion is included whenever one is physically present per the registry,
+ * including for a row this plan leaves alone: `buildMigrationManifest` emits a
+ * companion rename only for rows it retargets, so nothing else in the plan ever
+ * names a custom-named row's companion.
+ *
+ * Both the stored name and the migrated name are acceptable because during a run
+ * exactly one of them is real, and which one depends on whether this row's
+ * rename has already committed. Accepting either is not a loophole for an
+ * unexplained target: `reconcileRename` still refuses a target that no recorded
+ * progress accounts for, and does it with a message that names the conflict.
+ */
+function expectedStorage(
+  row: RegistryRow,
+  naming: StorageNaming
+): ExpectedObject[] {
+  const target = retargetName(row);
+  const suffix = STORAGE_FORMAT.companionSuffix;
+
+  const base = namesFor(row, target, naming);
+  const objects: ExpectedObject[] = [{ names: base, isBase: true }];
+  if (row.hasCompanion) {
+    objects.push({
+      names: base.map(name => `${name}${suffix}`),
+      isBase: false,
+    });
+  }
+  return objects;
+}
+
+/**
+ * The base names acceptable for a row under a given naming mode.
+ *
+ * For `field-groups-v2` the retargeted name is **required**: a settled marker
+ * plus a row still naming its legacy table means the rename never happened, and
+ * accepting the legacy name there would authorise migrated storage that does not
+ * exist. A row with no retarget — a custom name this migration leaves alone — is
+ * already at its final name, so that name is the required one.
+ */
+function namesFor(
+  row: RegistryRow,
+  target: string | null,
+  naming: StorageNaming
+): string[] {
+  if (naming === "legacy") return [row.tableName];
+  if (naming === "field-groups-v2") return [target ?? row.tableName];
+  return [row.tableName, ...(target === null ? [] : [target])];
+}
+
+/**
+ * Records which registry row owns each physical object, and refuses a second
+ * claim on one.
+ *
+ * Shared by the pre-run check and the settled-marker probe because they ask the
+ * same question and an answer that differs between them is a hole: ownership
+ * cannot be shared, whichever path notices. Claims are keyed by the **resolved**
+ * catalog name, the only level at which two spellings are known to be one
+ * object — the plan compares exactly, having no dialect.
+ */
+function createClaimLedger(): (found: string, claimant: string) => void {
+  const claims = new Map<string, string>();
+  return (found, claimant) => {
+    const previous = claims.get(found);
+    if (previous !== undefined) {
+      throw refuse("one physical object is claimed by two field groups", {
+        table: found,
+        claimedBy: previous,
+        alsoClaimedBy: claimant,
+      });
+    }
+    claims.set(found, claimant);
+  };
+}
+
+/** How a refusal names the owner of an expected object. */
+function claimantOf(row: RegistryRow, object: ExpectedObject): string {
+  return `${row.slug}${object.isBase ? "" : " companion"}`;
+}
+
+function resolveAny(
+  catalog: CatalogIndex,
+  names: readonly string[]
+): string | undefined {
+  for (const name of names) {
+    const found = resolveCatalogName(catalog, name);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Index each table's columns under the server's column rules.
+ *
+ * Keyed by the catalog's own spelling of the table name, resolved through the
+ * table rules, so a lookup that found a table can find its columns under the
+ * same name.
+ */
+function indexColumns(
+  tables: readonly TableColumns[],
+  catalog: CatalogIndex,
+  identifierCase: IdentifierCaseRules
+): Map<string, CatalogIndex> {
+  const byTable = new Map<string, CatalogIndex>();
+  for (const entry of tables) {
+    // Keyed by the catalog's spelling, because that is the spelling every lookup
+    // here arrives with: callers resolve a table before asking for its columns.
+    // Keying by the caller's spelling instead would miss on any server that
+    // reports a name in a different case, and reconciliation would then refuse
+    // storage that is present.
+    const table = resolveCatalogName(catalog, entry.table);
+    // Columns for a table the catalog does not list describe nothing that can be
+    // renamed or verified.
+    if (table === undefined) continue;
+    byTable.set(table, indexCatalog(entry.columns, identifierCase.columns));
+  }
+  return byTable;
+}
+
+/**
+ * Every registry row must have storage, including rows this plan leaves alone.
+ *
+ * A custom-named row produces no rename entry, so an entry-driven check cannot
+ * see it. Its storage can still be missing — the legacy read path tolerates that
+ * by returning an empty result — and the migration would then rename around a
+ * row whose data is already gone.
+ */
+function assertEveryRowHasStorage(
+  rows: readonly RegistryRow[],
+  catalog: CatalogIndex
+): void {
+  const missing: string[] = [];
+  const caseVariants: Record<string, string> = {};
+  const claim = createClaimLedger();
+
+  for (const row of rows) {
+    for (const object of expectedStorage(row, "either")) {
+      const found = resolveAny(catalog, object.names);
+      if (found === undefined) {
+        missing.push(object.names[0]);
+        // A name present under a different case is a different object on this
+        // server, and saying so turns "a table is missing" into a row an operator
+        // can correct.
+        const variant = findCaseVariant(catalog, object.names[0]);
+        if (variant !== undefined) caseVariants[object.names[0]] = variant;
+        continue;
+      }
+      claim(found, claimantOf(row, object));
+    }
+  }
+
+  if (missing.length === 0) return;
+  throw refuse("registry rows name storage that does not exist", {
+    missing,
+    ...(Object.keys(caseVariants).length > 0 ? { caseVariants } : {}),
+  });
+}
+
+/**
+ * Whether recorded progress explains this position already being applied.
+ *
+ * Positions at or below the recorded step verified. The one after it is the
+ * crash window the runner supports, where a statement committed before its
+ * marker write. Anything beyond that has not been attempted, so an applied-looking
+ * object there was not put in place by this run.
+ */
+function acceptsApplied(position: number, run: RunRecord): boolean {
+  return run.recorded && position <= run.step + 1;
+}
+
+/**
+ * Whether the marker claims this position's postcondition already verified.
+ *
+ * Stricter than `acceptsApplied` by exactly the crash window: a position at or
+ * below the recorded step was verified and **will never run again**, because the
+ * guard resumes at `step + 1`. So finding its source still in place is not
+ * outstanding work — nothing will pick it up — it is the marker and the database
+ * contradicting each other.
+ */
+function recordedAsDone(position: number, run: RunRecord): boolean {
+  return run.recorded && position <= run.step;
+}
+
+/**
+ * Decide a column rename against the columns the table actually has.
+ *
+ * The table's presence says nothing about the column: a rename that commits
+ * before its marker write leaves the table in place both before and after, so
+ * without looking at the columns a resume cannot tell outstanding work from work
+ * already done and would retry a rename whose source column is gone.
+ */
+function reconcileColumn(
+  entry: ManifestEntry,
+  context: {
+    catalog: CatalogIndex;
+    columns: Map<string, CatalogIndex>;
+    otherNames: Map<string, string[]>;
+    position: number;
+    run: RunRecord;
+  }
+): ManifestEntry {
+  const { catalog, columns, otherNames, position, run } = context;
+  const table = entry.table;
+  if (table === undefined) return entry;
+
+  // Either side of its table's rename: the name the entry carries if the table
+  // is still under it, otherwise whichever name the plan moves it to or from.
+  const current =
+    resolveCatalogName(catalog, table) ??
+    resolveAny(catalog, otherNames.get(table) ?? []);
+
+  // Neither the table nor its predecessor exists. There is no work to do and
+  // nothing to verify, and the missing storage is reported by the row check
+  // rather than here, where the table is not the subject.
+  if (current === undefined) return { ...entry, satisfied: true };
+
+  const tableColumns = columns.get(current);
+  if (tableColumns === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "reconciliation was given no columns for a table that exists",
+        table: current,
+      },
+    });
+  }
+
+  const hasFrom = resolveCatalogName(tableColumns, entry.from) !== undefined;
+  const hasTo = resolveCatalogName(tableColumns, entry.to) !== undefined;
+
+  if (hasFrom && hasTo) {
+    throw refuse("both discriminator columns exist on one table", {
+      table: current,
+      from: entry.from,
+      to: entry.to,
+    });
+  }
+
+  if (hasFrom) {
+    if (recordedAsDone(position, run)) {
+      throw refuse(
+        "a column rename the marker records as verified has not been applied",
+        {
+          table: current,
+          from: entry.from,
+          to: entry.to,
+          position,
+          recordedStep: run.recorded ? run.step : null,
+        }
+      );
+    }
+    return entry;
+  }
+
+  if (hasTo) {
+    if (!acceptsApplied(position, run)) {
+      throw refuse(
+        "a column carries the migrated name but no recorded progress accounts for it",
+        {
+          table: current,
+          from: entry.from,
+          to: entry.to,
+          position,
+          recordedStep: run.recorded ? run.step : null,
+        }
+      );
+    }
+    return { ...entry, satisfied: true };
+  }
+
+  // Every field-group data table carries the discriminator: the schema service
+  // emits it unconditionally. A table holding neither spelling is not field-group
+  // storage this migration can reason about.
+  throw refuse("field group table has no discriminator column", {
+    table: current,
+    from: entry.from,
+    to: entry.to,
+  });
+}
+
+function reconcileRename(
+  entry: ManifestEntry,
+  catalog: CatalogIndex,
+  position: number,
+  run: RunRecord
+): ManifestEntry {
+  const source = resolveCatalogName(catalog, entry.from);
+  const target = resolveCatalogName(catalog, entry.to);
+
+  if (source !== undefined && target !== undefined) {
+    throw refuse("migration target name is already in use", {
+      from: entry.from,
+      to: entry.to,
+      occupiedBy: target,
+    });
+  }
+
+  if (source !== undefined) {
+    if (recordedAsDone(position, run)) {
+      throw refuse(
+        "a rename the marker records as verified has not been applied",
+        {
+          from: entry.from,
+          to: entry.to,
+          position,
+          recordedStep: run.recorded ? run.step : null,
+        }
+      );
+    }
+    return entry;
+  }
+
+  if (target !== undefined) {
+    // Source gone, target present. Only progress that reached this position
+    // makes it our own finished work; otherwise it is an object belonging to
+    // something else, sitting on the name this migration wants, and adopting it
+    // would treat a stranger's table as migrated field-group storage.
+    if (!acceptsApplied(position, run)) {
+      throw refuse(
+        "an object using the migrated storage name exists but no recorded progress accounts for it",
+        {
+          from: entry.from,
+          to: entry.to,
+          occupiedBy: target,
+          position,
+          recordedStep: run.recorded ? run.step : null,
+        }
+      );
+    }
+    return { ...entry, satisfied: true };
+  }
+
+  throw refuse("migration source object is missing", {
+    from: entry.from,
+    to: entry.to,
+  });
+}
+
+/**
+ * Refusals are 503: the database is in a shape a human has to look at, and the
+ * process must not serve or migrate until they have. Detail goes to `logContext`
+ * so operators get the full picture while the public message stays generic.
+ */
+function refuse(reason: string, context: Record<string, unknown>): NextlyError {
+  return NextlyError.serviceUnavailable({
+    logMessage: `field-group migration refused to proceed: ${reason}`,
+    logContext: { reason, ...context },
+  });
+}
