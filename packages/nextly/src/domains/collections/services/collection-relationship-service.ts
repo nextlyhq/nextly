@@ -1062,19 +1062,25 @@ export class CollectionRelationshipService extends BaseService {
       else byPredicate.set(key, [row]);
     });
 
+    // One query per distinct predicate, run together: the usual case is a single
+    // group, and a rule answering rows differently should not pay for each group
+    // in turn when the groups do not depend on one another.
+    const narrowedGroups = await Promise.all(
+      [...byPredicate].map(([key, group]) =>
+        this.narrowByTargetPredicate(
+          targetCollection,
+          group,
+          predicates.get(key) as Record<string, unknown>
+        )
+      )
+    );
     const confirmed = [...unrestricted];
-    let anyPredicateFailed = false;
-    for (const [key, group] of byPredicate) {
-      const narrowed = await this.narrowByTargetPredicate(
-        targetCollection,
-        group,
-        predicates.get(key) as Record<string, unknown>
-      );
-      // Null means the predicate could not be applied at all. The rows stay out
-      // either way, but nothing was decided about them, so they are not
-      // reported as refused.
-      if (narrowed === null) anyPredicateFailed = true;
-      else confirmed.push(...narrowed);
+    // Null means the predicate could not be applied at all. The rows stay out
+    // either way, but nothing was decided about them, so they are not reported
+    // as refused.
+    const anyPredicateFailed = narrowedGroups.some(g => g === null);
+    for (const group of narrowedGroups) {
+      if (group !== null) confirmed.push(...group);
     }
     // Restored to the order they were fetched in, since the grouping above
     // reads them out by predicate. Matched on id rather than object identity:
