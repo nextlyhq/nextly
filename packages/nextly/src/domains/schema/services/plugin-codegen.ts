@@ -169,9 +169,11 @@ export function pluginCodegenImports(
   // other's, which would then be refused as a cross-module clash.
   const used = (name: string, expression: string | undefined): boolean => {
     if (expression === undefined) return true;
-    return new RegExp(
-      `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
-    ).test(expression);
+    // Identifier boundaries rather than `\b`: a legal exported name may begin
+    // or end with `$`, which is a non-word character, so `\b` would fail to
+    // match it and the import would be dropped as unused.
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?<![$\\w])${escaped}(?![$\\w])`).test(expression);
   };
 
   const record = (

@@ -51,12 +51,27 @@ export interface UserPhoneFieldConfig extends UserSurfaceFieldBase {
 }
 
 /**
+ * A field whose type a plugin contributed and opted into the `users` surface.
+ *
+ * The type id is not knowable here — it belongs to whichever plugin is
+ * installed — so the arm is open on both the token and the options the type
+ * declares for itself. Runtime validation already accepts these; without an arm
+ * for them the authoring type did not, so a code-defined plugin user field
+ * failed the app's type check unless it was cast.
+ */
+export interface UserPluginFieldConfig extends UserSurfaceFieldBase {
+  type: string & {};
+  [option: string]: unknown;
+}
+
+/**
  * A field configuration restricted to user-allowed types.
  */
 export type UserFieldConfig =
   | Extract<DataFieldConfig, { type: CanonicalUserFieldType }>
   | UserUrlFieldConfig
-  | UserPhoneFieldConfig;
+  | UserPhoneFieldConfig
+  | UserPluginFieldConfig;
 
 /**
  * Admin panel options for user management.

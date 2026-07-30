@@ -673,6 +673,44 @@ describe("plugin field types in the Zod generator", () => {
     expect(schema.code).not.toContain("@acme/b");
   });
 
+  it("recognizes an identifier that begins with a dollar sign", () => {
+    registerFieldType({
+      type: "dollar-named",
+      storage: "json",
+      component: "@acme/dn/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["$Rating"], from: "@acme/dn" }],
+        zodSchema: () => "z.custom<$Rating>()",
+      },
+    });
+
+    // `\b` cannot match before `$` — both are non-word characters — so a word
+    // boundary would classify this legal export as unused and drop it.
+    const schema = new ZodGenerator().generateSchema(
+      collection([{ name: "r", type: "dollar-named" }])
+    );
+
+    expect(schema.code).toContain('import type { $Rating } from "@acme/dn";');
+  });
+
+  it("still rejects a name that only appears inside a longer identifier", () => {
+    registerFieldType({
+      type: "substring-named",
+      storage: "json",
+      component: "@acme/sn/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Rate"], from: "@acme/sn" }],
+        zodSchema: () => "z.custom<RateLimiter>()",
+      },
+    });
+
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "r", type: "substring-named" }])
+      ).code
+    ).not.toContain("@acme/sn");
+  });
+
   it("emits only the import list belonging to this file's expression", () => {
     // Both expressions exist, but each names its own imports, so the type used
     // by only one of them appears in only that file.

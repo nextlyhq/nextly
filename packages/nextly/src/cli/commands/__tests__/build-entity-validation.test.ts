@@ -132,7 +132,7 @@ describe("nextly build validates every entity kind", () => {
     expect(lines.join("\n")).toContain("policy.kinds must name a kind");
   });
 
-  it("still reports nothing to build when the entities are valid", async () => {
+  it("builds a project whose only schema is singles", async () => {
     registerDocument();
     stubConfig({
       collections: [],
@@ -145,9 +145,14 @@ describe("nextly build validates every entity kind", () => {
     const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
     const exitSpy = stubExit();
 
-    await runBuild({}, context);
+    // Generation is switched off: what this pins is the gate, and the stub
+    // config carries no output paths for the generators to write to.
+    await runBuild({ zod: false, types: false }, context);
 
     expect(exitSpy).not.toHaveBeenCalled();
+    // The absence of collections is still worth saying, but it no longer stops
+    // the build: the single's types are exactly what this run has to write.
     expect(lines.join("\n")).toContain("No collections defined in config");
+    expect(lines.join("\n")).not.toContain("Add collections to your");
   });
 });

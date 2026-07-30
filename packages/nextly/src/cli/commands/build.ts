@@ -258,7 +258,16 @@ export async function runBuild(
   );
   result.errors.push(...entityValidation.errors);
 
-  if (collectionCount === 0) {
+  // Any supported entity is enough to build for. Gating on collections alone
+  // meant an app of singles, field groups, or plugin-backed user fields wrote
+  // no types at all, or kept a stale file from a previous run.
+  const hasSchema =
+    collectionCount > 0 ||
+    (configResult.config.singles?.length ?? 0) > 0 ||
+    (configResult.config.fieldGroups?.length ?? 0) > 0 ||
+    (configResult.config.users?.fields?.length ?? 0) > 0;
+
+  if (!hasSchema) {
     if (entityValidation.errors.length > 0) {
       reportDeclarationErrors(entityValidation.errors, context);
       result.success = false;
@@ -267,9 +276,16 @@ export async function runBuild(
       logger.info("Fix the errors above and run `nextly build` again.");
       process.exit(1);
     }
-    logger.warn("No collections defined in config");
+    logger.warn("No schema defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
     return;
+  }
+
+  // Worth saying even though the build continues: the other entity kinds still
+  // generate types, so stopping here would leave an app of singles or user
+  // fields with no output.
+  if (collectionCount === 0) {
+    logger.warn("No collections defined in config");
   }
 
   // Step 2: Validate all collections
