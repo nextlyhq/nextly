@@ -1273,6 +1273,24 @@ describe("plugin field types in the Zod generator", () => {
     expect(iface.imports).toContain('import type { Rating } from "@acme/ur";');
   });
 
+  it("omits imports for a type that declares them but emits nothing", () => {
+    registerFieldType({
+      type: "declares-only",
+      storage: "number",
+      component: "@acme/do/admin#Input",
+      // `tsType` is optional beside `tsImports`, so generation falls back to
+      // the storage primitive and this field contributes no expression.
+      codegen: { tsImports: [{ names: ["Rating"], from: "@acme/do" }] },
+    });
+
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "d", type: "declares-only" }]),
+    ]);
+
+    expect(file.code).not.toContain("@acme/do");
+    expect(file.code).toContain("d?: number");
+  });
+
   it("does not count a name that appears only in a comment", () => {
     registerFieldType({
       type: "commented",

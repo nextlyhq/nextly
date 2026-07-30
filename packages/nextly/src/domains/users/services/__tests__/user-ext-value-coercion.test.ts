@@ -86,6 +86,58 @@ describe("coerceUserExtValue", () => {
     ).toThrow(NextlyError);
   });
 
+  it("refuses a value the column cannot hold", () => {
+    registerFieldType({
+      type: "metric",
+      storage: "number",
+      component: "c",
+      surfaces: ["users"],
+    });
+    registerFieldType({
+      type: "toggle",
+      storage: "boolean",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    // Nothing upstream looks at these: a plugin user field validates through
+    // `z.unknown()`, and a failed user_ext insert is read as the table being
+    // absent, so an unusable value is dropped rather than reported.
+    expect(() =>
+      coerceUserExtValue({ nested: true }, { name: "score", type: "metric" })
+    ).toThrow(NextlyError);
+    expect(() =>
+      coerceUserExtValue("yes", { name: "flag", type: "toggle" })
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses an Invalid Date object", () => {
+    registerFieldType({
+      type: "occurred3",
+      storage: "timestamp",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    expect(() =>
+      coerceUserExtValue(new Date("nope"), { name: "at", type: "occurred3" })
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts the values each primitive can hold", () => {
+    registerFieldType({
+      type: "metric2",
+      storage: "number",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    expect(coerceUserExtValue(7, { name: "score", type: "metric2" })).toBe(7);
+    expect(
+      coerceUserExtValue(null, { name: "score", type: "metric2" })
+    ).toBeNull();
+  });
+
   it("passes through what is not a string", () => {
     expect(coerceUserExtValue(null, { type: "date" })).toBeNull();
     const already = new Date("2026-07-30T00:00:00.000Z");

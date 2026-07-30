@@ -178,8 +178,36 @@ export function coerceUserExtValue(
   value: unknown,
   field: { name?: unknown; type?: unknown }
 ): unknown {
+  const token = storageTypeToken(field);
+  const name = typeof field.name === "string" ? field.name : "input";
+
+  // A plugin user field validates through `z.unknown()`, so nothing upstream
+  // has looked at the value at all. Whatever reaches here goes straight to the
+  // driver, and a failed `user_ext` insert is read as the table being absent —
+  // the extension is disabled for the process and the user is written without
+  // the value. So the shape is answered for here, where it can still be
+  // reported, rather than at the column where it is silently lost.
+  if (value !== null && value !== undefined) {
+    if (token === "number" && typeof value !== "number") {
+      throw userExtValueError(name, "a number");
+    }
+    if (token === "checkbox" && typeof value !== "boolean") {
+      throw userExtValueError(name, "true or false");
+    }
+    if (token === "date" && value instanceof Date) {
+      // An Invalid Date binds as NULL on some drivers and throws on others.
+      if (Number.isNaN(value.getTime())) {
+        throw userExtValueError(name, "a valid date");
+      }
+      return value;
+    }
+    if (token === "date" && typeof value !== "string") {
+      throw userExtValueError(name, "a date");
+    }
+  }
+
   if (typeof value !== "string") return value;
-  if (storageTypeToken(field) !== "date") return value;
+  if (token !== "date") return value;
   const parsed = new Date(value);
   if (!Number.isNaN(parsed.getTime())) return parsed;
 
@@ -187,13 +215,17 @@ export function coerceUserExtValue(
   // field validates as `z.union([z.date(), z.string()])` and a plugin type
   // falls to `z.unknown()` — so passing it on reaches the driver, and the
   // caller is told the value was stored when it was not.
-  const name = typeof field.name === "string" ? field.name : "input";
-  throw NextlyError.validation({
+  throw userExtValueError(name, "a valid date");
+}
+
+/** A refusal naming the field and what its column can hold. */
+function userExtValueError(name: string, expected: string): NextlyError {
+  return NextlyError.validation({
     errors: [
       {
         path: name,
-        code: "INVALID_DATE",
-        message: `${name} is not a valid date.`,
+        code: "INVALID_USER_FIELD_VALUE",
+        message: `${name} must be ${expected}.`,
       },
     ],
   });

@@ -60,6 +60,7 @@ import {
 } from "drizzle-orm/pg-core";
 import {
   sqliteTable,
+  customType,
   text as sqliteText,
   integer as sqliteInteger,
   real as sqliteReal,
@@ -187,6 +188,34 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
 // ============================================================
 // UserExtSchemaService
 // ============================================================
+
+/**
+ * A SQLite JSON column that tolerates values written before it was one.
+ *
+ * SQLite has no JSON type, so the value is held as text. Drizzle's built-in
+ * `{ mode: "json" }` would encode and decode it, but decoding is
+ * unconditional: a row written while this column was plain text can hold a
+ * bare string such as `hello`, and `JSON.parse` throws on it. The read path
+ * treats a failed `user_ext` query as the table being absent and returns the
+ * user with no custom fields at all, so one legacy row would silently empty
+ * every custom field on that user.
+ *
+ * Encoding is unconditional — that is the half worth having, since a plain
+ * text column stored a live object as `[object Object]`. Decoding falls back
+ * to the raw string, which is exactly what such a row meant when it was
+ * written.
+ */
+const sqliteTolerantJson = customType<{ data: unknown; driverData: string }>({
+  dataType: () => "text",
+  toDriver: (value: unknown): string => JSON.stringify(value),
+  fromDriver: (value: string): unknown => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  },
+});
 
 export class UserExtSchemaService {
   private readonly dialect: SupportedDialect;
@@ -1257,11 +1286,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
           case "timestamp":
             return sqliteInteger(colName, { mode: "timestamp" });
           case "json":
-            // SQLite has no JSON type, so the value is held as text. Declaring
-            // the mode makes Drizzle serialize on write and parse on read;
-            // a plain text column would take a live object and store it as
-            // `[object Object]`, with nothing to parse it back on the way out.
-            return sqliteText(colName, { mode: "json" });
+            return sqliteTolerantJson(colName);
           default:
             return sqliteText(colName); // text / longText
         }

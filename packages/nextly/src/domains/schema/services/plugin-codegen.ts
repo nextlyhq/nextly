@@ -350,7 +350,15 @@ export function pluginCodegenImports(
       // carried an unused import, which fails a consuming app compiled with
       // `noUnusedLocals`.
       const imports = codegenFor(field)?.[usedBy];
-      if (imports) record(imports, emittedByField?.get(field));
+      if (!imports) continue;
+      // A field the caller recorded nothing for emitted nothing: its type
+      // declares imports but its callback is optional, and generation fell back
+      // to the storage primitive. Its declared names are then referenced by no
+      // output, and emitting them fails a consuming app under `noUnusedLocals`.
+      // Only when the caller passed a map at all — without one it cannot say
+      // what was emitted, so the permissive reading is the only one available.
+      if (emittedByField && !emittedByField.has(field)) continue;
+      record(imports, emittedByField?.get(field));
     }
   }
 

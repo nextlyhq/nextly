@@ -44,6 +44,7 @@ export type UserValidationErrorCode =
   // Field type errors
   | "USER_FIELD_TYPE_NOT_ALLOWED"
   | "USER_FIELD_TYPE_REQUIRED"
+  | "USER_FIELD_HAS_MANY_UNSUPPORTED"
   // Field name errors
   | "USER_FIELD_NAME_REQUIRED"
   | "USER_FIELD_NAME_INVALID_FORMAT"
@@ -396,6 +397,23 @@ function validateUserFields(
 
     validateUserFieldType(f, fieldPath, errors, configUsersTypes);
     validateUserFieldName(f.name, fieldPath, errors, seenNames);
+
+    // A plugin type persists as one storage primitive, which is one column
+    // holding one value. The user_ext mapper builds that scalar column whatever
+    // this says, so a list would be accepted here, generated as a scalar, and
+    // then fail while binding — and a failed user_ext insert is read as the
+    // table being absent, so the value would be dropped rather than reported.
+    if (
+      typeof f.type === "string" &&
+      f.hasMany === true &&
+      isPluginFieldTypeOnSurface(f.type, "users")
+    ) {
+      errors.push({
+        path: `${fieldPath}.hasMany`,
+        code: "USER_FIELD_HAS_MANY_UNSUPPORTED",
+        message: `User custom field '${f.type}' stores a single value, so hasMany cannot be used with it.`,
+      });
+    }
 
     // Field-specific validation
     const fieldType = f.type;
