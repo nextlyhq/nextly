@@ -199,7 +199,13 @@ export function VersionHistorySheet({
   // signal — `useLocalization().enabled` alone would show the filter on a
   // non-localized document in an app that has other localized ones, where
   // picking a locale could only ever match its NULL-locale versions (nothing).
-  const isLocalizedDocument = versions.some(v => v.locale !== null);
+  //
+  // An active filter also proves the document is localized (it could not have
+  // been set otherwise), so the signal survives filtering to a locale that has
+  // no versions yet — where the filtered result is empty and would otherwise
+  // hide the very control needed to clear or change that filter.
+  const isLocalizedDocument =
+    localeFilter !== undefined || versions.some(v => v.locale !== null);
 
   // Compare targets for the version being previewed. A comparison must stay
   // within one locale (the server rejects a cross-locale pair), so both the

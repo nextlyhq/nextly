@@ -140,6 +140,35 @@ describe("AdvancedTab -- version history", () => {
     expect(input).toBeInTheDocument();
   });
 
+  it("keeps the saved cap and restores the field when invalid text is entered", async () => {
+    // An invalid entry (fractional/negative) is never committed, and on blur the
+    // field snaps back to the committed value so a save can't persist a cap
+    // different from what is shown.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["versions"]}
+        initial={{ versions: true, versionsMaxPerDoc: 20 }}
+        onChange={onChange}
+      />
+    );
+    const input = screen.getByRole("spinbutton", {
+      name: /versions to keep per document/i,
+    });
+    await user.clear(input);
+    await user.type(input, "20.5");
+    await user.tab(); // blur
+
+    const last = onChange.mock.lastCall?.[0] as
+      | BuilderSettingsValues
+      | undefined;
+    // The invalid value was never committed, so the cap is still the last valid
+    // one (or unchanged), and the field shows that value, not "20.5".
+    expect(last?.versionsMaxPerDoc).not.toBe(20.5);
+    expect(input).toHaveValue(20);
+  });
+
   it("does not show a retention count when versioning is off", () => {
     render(<Controlled fields={["versions"]} initial={{ versions: false }} />);
     expect(
