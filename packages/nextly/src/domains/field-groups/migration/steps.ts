@@ -23,8 +23,22 @@ import {
 } from "../../schema/utils/resolve-catalog-name";
 
 import { type ManifestEntry } from "./manifest";
+import { findLostIndexes, refuseLostIndexes } from "./observer";
 import type { MigrationStep } from "./runner";
-import type { MigrationSession } from "./session";
+import type { MigrationDialect, MigrationSession } from "./session";
+
+/**
+ * Positional parameter markers for a dialect.
+ *
+ * node-postgres binds `$1`, `$2`; mysql2 and better-sqlite3 bind `?`. The
+ * transaction context hands the statement to the driver unchanged, so emitting
+ * one form everywhere makes every statement with parameters fail on the other.
+ */
+function placeholders(dialect: MigrationDialect, count: number): string[] {
+  return Array.from({ length: count }, (_, index) =>
+    dialect === "postgresql" ? `$${index + 1}` : "?"
+  );
+}
 
 /**
  * The registry column holding a row's physical table name.
@@ -64,6 +78,13 @@ export interface StorageObserver {
   ): Promise<ObservedColumn[] | undefined>;
   /** Every `table_name` the registry currently points at. */
   pointers(session: MigrationSession, registryTable: string): Promise<string[]>;
+  /**
+   * A table's index names, or `undefined` when they were not tracked.
+   *
+   * `undefined` is not "no indexes": a snapshot that never recorded index data
+   * would otherwise report every index intact.
+   */
+  indexNames(table: string): Promise<string[] | undefined>;
 }
 
 /**
@@ -156,17 +177,32 @@ function renameStep(
   // owner's `table_name`, so the owner's update already moves them. The registry
   // is not addressed by any row either.
   const movesPointer = entry.kind === "table";
+  // Captured by `run` while the source still exists, and read by `verify`.
+  // `undefined` means the source was already gone when this step ran, so there
+  // is nothing to compare against — reported as not comparable rather than as
+  // nothing lost.
+  let indexesBefore: string[] | undefined;
 
   return {
     id: `${entry.kind}:${entry.from}->${entry.to}`,
     async run(session) {
-      if (applied) return;
+      // Observed BEFORE the transaction opens. The observer reads through the
+      // adapter, which takes its own connection; asking it from inside the
+      // transaction would wait for a second checkout and deadlock a pool sized
+      // to one.
+      const present = await observer.tables(session);
+      const catalog = indexCatalog(present, identifierCase.tables);
+      const source = resolveCatalogName(catalog, entry.from);
+      // Captured while the source still exists, so `verify` can tell whether the
+      // rename carried the table's indexes with it.
+      indexesBefore =
+        source === undefined ? undefined : await observer.indexNames(source);
+
       await session.inTransaction(async ctx => {
-        const present = await observer.tables(session);
-        const catalog = indexCatalog(present, identifierCase.tables);
         // Re-runnable: on a resume the rename may already have committed, and
-        // issuing it again would fail on a source that is no longer there.
-        if (resolveCatalogName(catalog, entry.from) !== undefined) {
+        // issuing it again would fail on a source that is no longer there. A
+        // satisfied entry skips the DDL for the same reason.
+        if (!applied && source !== undefined) {
           await ctx.execute(
             generateSQL(
               { type: "rename_table", fromName: entry.from, toName: entry.to },
@@ -174,20 +210,21 @@ function renameStep(
             )
           );
         }
+        // Deliberately NOT skipped for a satisfied entry. MySQL commits DDL
+        // implicitly, so reconciliation can mark a rename satisfied while its
+        // pointer update never landed; skipping both would leave the pointer
+        // stale and fail verification on every resume, forever. The update is
+        // idempotent, so running it when it is already correct costs nothing.
         if (!movesPointer) return;
         // Values are bound; only the table name is interpolated, through
         // `quoteIdent`. The registry cannot be reached through Drizzle here: the
         // schema registry looks tables up exactly by the name their Drizzle
         // definition declares, so a table addressed under a migrated name is
         // unregistered as far as the ORM is concerned.
+        const [toMarker, fromMarker] = placeholders(session.dialect, 2);
+        const column = quoteIdent(REGISTRY_TABLE_NAME_COLUMN, session.dialect);
         await ctx.execute(
-          `UPDATE ${quoteIdent(registryTable, session.dialect)} SET ${quoteIdent(
-            REGISTRY_TABLE_NAME_COLUMN,
-            session.dialect
-          )} = ? WHERE ${quoteIdent(
-            REGISTRY_TABLE_NAME_COLUMN,
-            session.dialect
-          )} = ?`,
+          `UPDATE ${quoteIdent(registryTable, session.dialect)} SET ${column} = ${toMarker} WHERE ${column} = ${fromMarker}`,
           [entry.to, entry.from]
         );
       });
@@ -197,14 +234,31 @@ function renameStep(
         await observer.tables(session),
         identifierCase.tables
       );
-      if (resolveCatalogName(catalog, entry.to) === undefined) return false;
+      const target = resolveCatalogName(catalog, entry.to);
+      if (target === undefined) return false;
       if (resolveCatalogName(catalog, entry.from) !== undefined) return false;
+
+      // Renaming a table keeps its indexes on every supported dialect, so a name
+      // missing afterwards means one was dropped rather than moved. Refuses
+      // rather than returning false: a lost index is not "not yet done", and a
+      // retry cannot bring it back.
+      const lost = findLostIndexes(
+        indexesBefore,
+        await observer.indexNames(target)
+      );
+      if (lost.comparable && lost.lost.length > 0) {
+        throw refuseLostIndexes({ table: target, lost: lost.lost });
+      }
+
       if (!movesPointer) return true;
       // The pointer is checked as well as the rename, because a rename whose
       // pointer update did not land is exactly the state that leaves every row
       // addressing a table that is gone.
       const pointers = await observer.pointers(session, registryTable);
-      return pointers.includes(entry.to) && !pointers.includes(entry.from);
+      if (!pointers.includes(entry.to) || pointers.includes(entry.from)) {
+        return false;
+      }
+      return true;
     },
   };
 }

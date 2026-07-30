@@ -22,25 +22,10 @@ import type { ObservedColumn, StorageObserver } from "./steps";
 /** The registry column holding a row's physical table name. */
 const REGISTRY_TABLE_NAME_COLUMN = "table_name";
 
-/**
- * Observations a step needs that go beyond names, kept separate from
- * `StorageObserver` so the step contract stays the smaller of the two.
- */
-export interface IndexObserver {
-  /**
-   * A table's index names, or `undefined` when the snapshot did not track them.
-   *
-   * `undefined` is **not** "no indexes". Snapshots written before index data was
-   * recorded leave the field unset, and reading that as an empty list would
-   * report every index intact on a snapshot that never held any.
-   */
-  indexNames(table: string): Promise<string[] | undefined>;
-}
-
 /** Observe a live database through the schema pipeline's introspection. */
 export function createStorageObserver(
   adapter: DrizzleAdapter
-): StorageObserver & IndexObserver {
+): StorageObserver {
   const dialect = adapter.getCapabilities().dialect;
 
   async function snapshotOf(table: string) {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
+
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
 import { buildMigrationManifest, invertManifest } from "../manifest";
 import type { ManifestEntry, RegistryRow } from "../manifest";
@@ -29,6 +31,7 @@ function createWorld(initial: {
   tables: string[];
   columns?: Record<string, ObservedColumn[]>;
   pointers?: Record<string, string[]>;
+  indexes?: Record<string, string[]>;
 }) {
   const tables = new Set(initial.tables);
   const columns = new Map<string, ObservedColumn[]>(
@@ -36,6 +39,9 @@ function createWorld(initial: {
   );
   const pointers = new Map<string, string[]>(
     Object.entries(initial.pointers ?? {})
+  );
+  const indexes = new Map<string, string[]>(
+    Object.entries(initial.indexes ?? {})
   );
   const statements: string[] = [];
   let transactions = 0;
@@ -54,6 +60,12 @@ function createWorld(initial: {
         columns.delete(rename[1]);
         columns.set(rename[2], cols);
       }
+      // Indexes follow the table on every supported dialect.
+      const idx = indexes.get(rename[1]);
+      if (idx !== undefined) {
+        indexes.delete(rename[1]);
+        indexes.set(rename[2], idx);
+      }
       return;
     }
     const renameColumn =
@@ -71,7 +83,12 @@ function createWorld(initial: {
       target.name = renameColumn[3];
       return;
     }
-    const update = /^UPDATE "(.+?)" SET "table_name" = \? WHERE/.exec(sql);
+    // `$1`/`$2`, because this world stands in for node-postgres and that is what
+    // it binds. Accepting `?` here is what let a Postgres-breaking statement pass.
+    const update =
+      /^UPDATE "(.+?)" SET "table_name" = \$1 WHERE "table_name" = \$2$/.exec(
+        sql
+      );
     if (update?.[1] !== undefined) {
       if (!tables.has(update[1])) {
         throw new Error(`relation "${update[1]}" does not exist`);
@@ -108,6 +125,7 @@ function createWorld(initial: {
     pointers: async (_s, registryTable) => [
       ...(pointers.get(registryTable) ?? []),
     ],
+    indexNames: async table => indexes.get(table),
   };
 
   return {
@@ -118,6 +136,7 @@ function createWorld(initial: {
     tableNames: () => [...tables],
     pointersOf: (registry: string) => [...(pointers.get(registry) ?? [])],
     columnsOf: (table: string) => (columns.get(table) ?? []).map(c => c.name),
+    dropIndexes: (table: string) => indexes.set(table, []),
   };
 }
 
@@ -259,7 +278,11 @@ describe("rename steps", () => {
     );
     const [tableStep] = stepsFor(w, satisfied);
     await tableStep?.run(w.session);
-    expect(w.statements).toHaveLength(0);
+    // The DDL is skipped, but the pointer repair is not: reconciliation can mark
+    // a rename satisfied while its pointer update never landed, and skipping
+    // both would fail verification on every resume, forever.
+    expect(w.statements.filter(s => s.includes("RENAME TO"))).toHaveLength(0);
+    expect(w.statements.filter(s => s.startsWith("UPDATE"))).toHaveLength(1);
     await expect(tableStep?.verify(w.session)).resolves.toBe(true);
   });
 });
@@ -316,5 +339,65 @@ describe("column steps", () => {
     await expect(steps[columnIndex]?.run(w.session)).resolves.toBeUndefined();
     expect(w.statements).toHaveLength(0);
     await expect(steps[columnIndex]?.verify(w.session)).resolves.toBe(true);
+  });
+});
+
+describe("index survival across a rename", () => {
+  const entries = buildMigrationManifest([row()]).entries;
+
+  function stepFor(w: ReturnType<typeof createWorld>) {
+    return buildMigrationSteps({
+      entries,
+      identifierCase: PRESERVING,
+      observer: w.observer,
+    })[0];
+  }
+
+  it("accepts a rename that carried the table's indexes", async () => {
+    const w = createWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      columns: { comp_hero: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
+      indexes: { comp_hero: ["idx_hero_slug"] },
+    });
+    const step = stepFor(w);
+    await step?.run(w.session);
+    await expect(step?.verify(w.session)).resolves.toBe(true);
+  });
+
+  // A lost index is not "not yet done" — a retry cannot bring it back — so this
+  // refuses rather than returning false and letting the runner retry forever.
+  it("refuses a rename that dropped an index", async () => {
+    const w = createWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      columns: { comp_hero: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
+      indexes: { comp_hero: ["idx_hero_slug"] },
+    });
+    const step = stepFor(w);
+    await step?.run(w.session);
+    // The rename landed but the index did not come with it.
+    w.dropIndexes("fg_hero");
+
+    const error = await step?.verify(w.session).catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.lost).toEqual(["idx_hero_slug"]);
+      expect(error.logContext?.table).toBe("fg_hero");
+    }
+  });
+
+  // On a resumed step the source is already gone, so there is no before-state.
+  // Reported as not comparable rather than as nothing lost.
+  it("does not claim index survival when the source was already renamed", async () => {
+    const w = createWorld({
+      tables: [LEGACY_REGISTRY, "fg_hero"],
+      columns: { fg_hero: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
+      indexes: { fg_hero: [] },
+    });
+    const step = stepFor(w);
+    await step?.run(w.session);
+    await expect(step?.verify(w.session)).resolves.toBe(true);
   });
 });
