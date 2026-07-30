@@ -121,6 +121,12 @@ export type FieldValueDeclarationInput =
  * the field's type, then a plugin field type's own `validate`, then the field's
  * `validate`. Issue paths are absolute and index a row in brackets
  * (`rows[0].title`), so a value nested in a container reports where it sits.
+ *
+ * Every declared type must be a built-in or a registered plugin type, and one
+ * that is neither is reported instead of its values being checked. Plugin types
+ * register while the config loads, so call this from a write path rather than
+ * from a plugin's own `setup()`: called before registration, a plugin-typed
+ * declaration is not yet knowable and every one of them is reported.
  */
 export async function validateFieldValues(
   values: Record<string, unknown>,
