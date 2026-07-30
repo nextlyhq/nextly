@@ -444,7 +444,7 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedTypeInterface {
-    const recordedBefore = new Set(this.pluginExpressions.keys());
+    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(collection.slug);
     const lines: string[] = [];
 
@@ -491,7 +491,7 @@ export class TypeGenerator {
       collectionSlug: collection.slug,
       code: lines.join("\n"),
       interfaceName,
-      imports: this.importsAddedSince(recordedBefore),
+      imports: this.endOwnExpressions(outerExpressions, interfaceName),
     };
   }
 
@@ -522,7 +522,7 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedSingleTypeInterface {
-    const recordedBefore = new Set(this.pluginExpressions.keys());
+    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(single.slug);
     const lines: string[] = [];
 
@@ -566,7 +566,7 @@ export class TypeGenerator {
       singleSlug: single.slug,
       code: lines.join("\n"),
       interfaceName,
-      imports: this.importsAddedSince(recordedBefore),
+      imports: this.endOwnExpressions(outerExpressions, interfaceName),
     };
   }
 
@@ -599,7 +599,7 @@ export class TypeGenerator {
     allComponents: DynamicFieldGroupRecord[] = [],
     allCollections: DynamicCollectionRecord[] = []
   ): GeneratedComponentTypeInterface {
-    const recordedBefore = new Set(this.pluginExpressions.keys());
+    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toComponentInterfaceName(component.slug);
     const lines: string[] = [];
 
@@ -642,7 +642,7 @@ export class TypeGenerator {
       componentSlug: component.slug,
       code: lines.join("\n"),
       interfaceName,
-      imports: this.importsAddedSince(recordedBefore),
+      imports: this.endOwnExpressions(outerExpressions, interfaceName),
     };
   }
 
@@ -1417,16 +1417,6 @@ ${properties}
   }
 
   /**
-   * Every top-level name this run will declare.
-   *
-   * An import sharing one of these conflicts with the local declaration
-   * (TS2440), so the import scan is given them to refuse the clash before the
-   * file is written. `User` is always emitted, `Config` when the config
-   * interface is generated, and the rest are one interface per entity plus the
-   * input aliases when those are generated — a collection declares
-   * `<Name>CreateInput` and `<Name>UpdateInput`, a single `<Name>UpdateInput`.
-   */
-  /**
    * A plugin field retyped as the scalar its storage primitive writes.
    *
    * `hasMany` goes with it: the primitive maps to one column, so generating a
@@ -1434,27 +1424,42 @@ ${properties}
    * the Zod fallback both emit the scalar.
    */
   /**
-   * The imports the expressions recorded during one call rely on.
+   * Start recording plugin expressions for one interface, returning the map to
+   * restore afterwards.
    *
-   * Keyed off what was already recorded rather than by clearing, because
-   * `generateTypesFile` calls these same methods and needs the accumulated map
-   * to decide the file's imports — resetting here would leave it with only the
-   * last entity's expressions.
-   *
-   * No names are reserved: a single interface declares only itself, so there is
-   * nothing in it for an import to collide with.
+   * The recorder is swapped rather than diffed: the same generator can produce
+   * an interface twice, and two interfaces can share a field object, either of
+   * which makes "what was added since" report nothing for the later call.
    */
-  private importsAddedSince(before: ReadonlySet<object>): string[] {
-    const added = [...this.pluginExpressions.keys()].filter(
-      field => !before.has(field)
-    );
-    if (added.length === 0) return [];
-    return pluginCodegenImports(
-      [{ fields: added }],
-      new Set<string>(),
+  private beginOwnExpressions(): Map<object, string> {
+    const outer = this.pluginExpressions;
+    this.pluginExpressions = new Map();
+    return outer;
+  }
+
+  /**
+   * Finish that recording: the imports this interface's own expressions need,
+   * with its entries merged back so `generateTypesFile` keeps accumulating
+   * across entities — which it needs both for the file's imports and to tell
+   * its own use of a global utility apart from a plugin's.
+   *
+   * `declares` is the interface's own name, the one binding a lone interface
+   * introduces and one an import of that name would conflict with.
+   */
+  private endOwnExpressions(
+    outer: Map<object, string>,
+    declares: string
+  ): string[] {
+    const own = this.pluginExpressions;
+    const imports = pluginCodegenImports(
+      [{ fields: [...own.keys()] }],
+      new Set([declares]),
       "tsImports",
-      this.pluginExpressions
+      own
     );
+    for (const [field, expression] of own) outer.set(field, expression);
+    this.pluginExpressions = outer;
+    return imports;
   }
 
   private asScalarStorageField(
@@ -1471,6 +1476,16 @@ ${properties}
     ) as unknown as DataFieldConfig;
   }
 
+  /**
+   * Every top-level name this run will declare.
+   *
+   * An import sharing one of these conflicts with the local declaration
+   * (TS2440), so the import scan is given them to refuse the clash before the
+   * file is written. `User` is always emitted, `Config` when the config
+   * interface is generated, and the rest are one interface per entity plus the
+   * input aliases when those are generated — a collection declares
+   * `<Name>CreateInput` and `<Name>UpdateInput`, a single `<Name>UpdateInput`.
+   */
   private declaredInterfaceNames(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[],

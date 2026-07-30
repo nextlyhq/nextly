@@ -183,6 +183,53 @@ describe("standalone interface generation", () => {
     );
   });
 
+  it("returns the imports again when the same generator is reused", () => {
+    registerFieldType(RATING);
+    const generator = new TypeGenerator();
+    const field = {
+      name: "score",
+      type: "star-rating",
+      ratingScale: { max: 5 },
+    };
+
+    generator.generateInterface(collection([field]));
+    const second = generator.generateInterface(collection([field]));
+
+    // The field object is already recorded by the first call, so a check for
+    // "what was added since" would report nothing the second time.
+    expect(second.imports).toContain(
+      'import type { Rating } from "@acme/ratings";'
+    );
+  });
+
+  it("refuses an import that collides with the interface's own name", () => {
+    registerFieldType({
+      type: "self-named",
+      storage: "json",
+      component: "@acme/sn/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Posts"], from: "@acme/sn" }],
+        tsType: () => "Posts",
+      },
+    });
+
+    // `export interface Posts` is the one binding a lone interface declares.
+    let message = "";
+    try {
+      new TypeGenerator().generateInterface(
+        collection([{ name: "p", type: "self-named" }])
+      );
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'Posts'");
+  });
+
   it("returns none for an interface with no plugin fields", () => {
     registerFieldType(RATING);
     const iface = new TypeGenerator().generateInterface(

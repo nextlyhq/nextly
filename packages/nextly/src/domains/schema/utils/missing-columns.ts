@@ -27,6 +27,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "../../../collections/fields/types/index";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
+import { pluginStorageFieldType } from "../services/plugin-codegen";
 
 // Convert camelCase / PascalCase identifiers to snake_case column names.
 // Mirrors the original helper from SchemaPushService.
@@ -43,7 +44,10 @@ function toSnakeCase(name: string): string {
 //
 // Each branch is the day-one type mapping; do not change behavior here
 // without a migration story for existing user data.
-function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
+export function fieldToColumnDef(
+  field: FieldConfig,
+  dialect: string
+): string | null {
   if (!("name" in field) || !field.name) {
     return null;
   }
@@ -61,7 +65,14 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
   let columnType: string;
   let defaultValue: string | null = null;
 
-  switch (field.type) {
+  // A plugin-contributed type matches no case below and would fall to the TEXT
+  // fallback, so a field added to an existing table would get a text column
+  // while the same field on a fresh table gets its storage primitive. Resolved
+  // to that primitive first so both paths agree.
+  const storageType = pluginStorageFieldType(field);
+  const mappedType = storageType ?? field.type;
+
+  switch (mappedType) {
     case "text":
     case "email":
     case "code":

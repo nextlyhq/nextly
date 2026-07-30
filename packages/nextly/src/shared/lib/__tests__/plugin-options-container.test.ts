@@ -197,6 +197,8 @@ describe("the plugin options container", () => {
   });
 
   it("rejects a container that is an array or a class instance", () => {
+    // Only a plain record can be folded, and every reader has to agree on that
+    // or a field means different things on each side of a save.
     class Options {}
     expect(
       pluginOptionContainer({ type: "t", pluginOptions: ["ratingScale"] })
