@@ -85,7 +85,25 @@ export async function assertNoMigrationInFlight(args: {
  * half-renamed storage this exists to protect.
  */
 export async function withMigrationExcluded<T>(
-  args: { adapter: DrizzleAdapter; logger: Logger; label: string },
+  args: {
+    adapter: DrizzleAdapter;
+    logger: Logger;
+    label: string;
+    /**
+     * Whether this caller is allowed to issue schema changes.
+     *
+     * When it is, the lock table is created if missing, so the exclusion is
+     * real even on a database no migration has touched yet — otherwise a first
+     * migration could create the table and claim it while a sync was already
+     * running unprotected.
+     *
+     * When it is not (`--no-auto-sync`, or a role with DML but no DDL), the
+     * table cannot be created, and a database without one has never run a
+     * migration. The residual is a first-ever migration starting during that
+     * sync, which is narrower than refusing the command outright.
+     */
+    mayCreateLock: boolean;
+  },
   work: () => Promise<T>
 ): Promise<T> {
   return withMigrationSession(
@@ -93,10 +111,7 @@ export async function withMigrationExcluded<T>(
       adapter: args.adapter,
       dialect: args.adapter.getCapabilities().dialect,
       label: args.label,
-      // A sync neither owns the lock table nor may create one: `--no-auto-sync`
-      // promises no schema changes, and its absence already means no migration
-      // has ever run here.
-      requireExistingLock: true,
+      requireExistingLock: !args.mayCreateLock,
     },
     async () => {
       await assertNoMigrationInFlight({

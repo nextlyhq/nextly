@@ -257,10 +257,13 @@ describe("holding the exclusion for the whole sync", () => {
     const { adapter, ownerNow } = lockingAdapter({});
     let ownerDuringWork: string | null = null;
 
-    await withMigrationExcluded({ adapter, logger, label: "db:sync" }, () => {
-      ownerDuringWork = ownerNow();
-      return Promise.resolve();
-    });
+    await withMigrationExcluded(
+      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      () => {
+        ownerDuringWork = ownerNow();
+        return Promise.resolve();
+      }
+    );
 
     expect(ownerDuringWork).not.toBeNull();
     expect(ownerNow()).toBeNull();
@@ -271,7 +274,7 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     const error = await withMigrationExcluded(
-      { adapter, logger, label: "db:sync" },
+      { adapter, logger, label: "db:sync", mayCreateLock: true },
       work
     ).catch((caught: unknown) => caught);
 
@@ -282,10 +285,11 @@ describe("holding the exclusion for the whole sync", () => {
   // `--no-auto-sync` is chosen precisely to keep schema changes in migration
   // files, and a role granted DML but not DDL would be refused outright by a
   // CREATE TABLE. The sync therefore never creates the lock table.
-  it("issues no DDL while taking the exclusion", async () => {
+  it("issues no DDL when the caller may not change schema", async () => {
     const { adapter, ddlIssued } = lockingAdapter({});
-    await withMigrationExcluded({ adapter, logger, label: "db:sync" }, () =>
-      Promise.resolve()
+    await withMigrationExcluded(
+      { adapter, logger, label: "db:sync", mayCreateLock: false },
+      () => Promise.resolve()
     );
     expect(ddlIssued().filter(sql => /CREATE TABLE/i.test(sql))).toEqual([]);
   });
@@ -293,11 +297,14 @@ describe("holding the exclusion for the whole sync", () => {
   // Absence of the lock table means no run has ever been recorded here, so
   // there is nothing to be excluded from — and nothing worth creating a table
   // for on a database whose role may not be allowed to.
-  it("runs the work when no lock table exists", async () => {
+  it("runs the work when no lock table exists and it may not create one", async () => {
     const { adapter, ddlIssued } = lockingAdapter({ lockTableExists: false });
     const work = vi.fn(() => Promise.resolve());
 
-    await withMigrationExcluded({ adapter, logger, label: "db:sync" }, work);
+    await withMigrationExcluded(
+      { adapter, logger, label: "db:sync", mayCreateLock: false },
+      work
+    );
 
     expect(work).toHaveBeenCalledTimes(1);
     expect(ddlIssued()).toEqual([]);
@@ -318,7 +325,7 @@ describe("holding the exclusion for the whole sync", () => {
 
     let ownerWhileHeld: string | null = null;
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync watch" },
+      { adapter, logger, label: "db:sync watch", mayCreateLock: true },
       async () => {
         ownerWhileHeld = ownerNow();
         process.emit("SIGINT");
@@ -334,6 +341,27 @@ describe("holding the exclusion for the whole sync", () => {
     kill.mockRestore();
   });
 
+  // A sync allowed to change schema creates the lock table rather than running
+  // unprotected: otherwise a first-ever migration could create it and claim it
+  // while the sync was already in flight.
+  it("creates the lock table when it may, so the exclusion is real", async () => {
+    const { adapter, ddlIssued, ownerNow } = lockingAdapter({
+      lockTableExists: false,
+    });
+    let ownerDuringWork: string | null = null;
+
+    await withMigrationExcluded(
+      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      () => {
+        ownerDuringWork = ownerNow();
+        return Promise.resolve();
+      }
+    );
+
+    expect(ddlIssued().some(sql => /CREATE TABLE/i.test(sql))).toBe(true);
+    expect(ownerDuringWork).not.toBeNull();
+  });
+
   // Holding the lock is necessary and not sufficient. An operator who cleared a
   // dead run's lock row without settling its marker would otherwise be let
   // straight into half-renamed storage.
@@ -342,7 +370,7 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     const error = await withMigrationExcluded(
-      { adapter, logger, label: "db:sync" },
+      { adapter, logger, label: "db:sync", mayCreateLock: true },
       work
     ).catch((caught: unknown) => caught);
 

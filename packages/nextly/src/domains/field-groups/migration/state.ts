@@ -214,24 +214,14 @@ export async function readMigrationState(
 
   const marker = entry.value as unknown as StoredMarker;
 
-  if (marker.version !== MIGRATION_MARKER_VERSION) {
-    // Not reported as corruption: the bytes are intact and were written by a
-    // build whose step list this one may no longer reproduce, so a recorded
-    // position cannot be trusted to address the same work. The operator's remedy
-    // differs too — finish or roll back the run with the version that started
-    // it, rather than investigate a damaged marker.
-    throw NextlyError.serviceUnavailable({
-      logMessage:
-        "field-group migration marker was written by a different version of Nextly",
-      logContext: {
-        key: FIELD_GROUP_MIGRATION_KEY,
-        reason: "migration marker version is not this build's",
-        recordedVersion: marker.version,
-        supportedVersion: MIGRATION_MARKER_VERSION,
-      },
-    });
-  }
+  const writtenByThisBuild = marker.version === MIGRATION_MARKER_VERSION;
 
+  // A settled marker is read whatever wrote it. The version tracks how a
+  // recorded *step* is to be interpreted, and a settled marker has none — it
+  // states which generation the storage reached, which is the same fact in
+  // every build. Gating it would make the next version bump reject every marker
+  // left by the previous release, so every already-migrated installation would
+  // start refusing reads on upgrade.
   if (marker.status === "settled") {
     if (
       marker.generation !== "legacy" &&
@@ -243,10 +233,34 @@ export async function readMigrationState(
       status: "settled",
       generation: marker.generation,
       recorded: true,
-      ...(marker.appliedManifest === undefined
+      // The recorded plan is the one part that *is* version-bound: its entry
+      // format is what the version tracks, so a plan from another build cannot
+      // be executed. Omitted rather than parsed, which leaves a rollback to
+      // refuse on a plan it does not have instead of every read refusing on a
+      // plan it cannot parse.
+      ...(marker.appliedManifest === undefined || !writtenByThisBuild
         ? {}
         : { appliedManifest: parseAppliedManifest(marker.appliedManifest) }),
     };
+  }
+
+  // In flight, so `step` has to be interpreted against a step list, and only the
+  // build that produced that list can say what position N addressed.
+  if (!writtenByThisBuild) {
+    // Not reported as corruption: the bytes are intact and were written by a
+    // build whose step list this one may no longer reproduce. The operator's
+    // remedy differs too — finish or roll back the run with the version that
+    // started it, rather than investigate a damaged marker.
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration marker was written by a different version of Nextly",
+      logContext: {
+        key: FIELD_GROUP_MIGRATION_KEY,
+        reason: "migration marker version is not this build's",
+        recordedVersion: marker.version,
+        supportedVersion: MIGRATION_MARKER_VERSION,
+      },
+    });
   }
 
   if (marker.status === "migrating") {

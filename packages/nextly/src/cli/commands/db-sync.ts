@@ -315,6 +315,7 @@ export async function runDbSync(
         adapter: adapter as unknown as DrizzleAdapter,
         logger,
         label: "db:sync",
+        mayCreateLock: options.autoSync !== false,
       },
       async () =>
         await runWithFieldTypes(configResult.fieldTypes, async () => {

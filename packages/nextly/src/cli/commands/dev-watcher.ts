@@ -90,6 +90,7 @@ export function createDebouncedSync(
             adapter: adapter as unknown as DrizzleAdapter,
             logger,
             label: "db:sync watch",
+            mayCreateLock: options.autoSync !== false,
           },
           async () => {
             // Unconditional, so the orphan scan still runs when the config declares none of a

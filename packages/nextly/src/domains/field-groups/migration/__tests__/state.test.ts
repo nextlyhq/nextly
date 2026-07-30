@@ -613,6 +613,43 @@ describe("field-group migration marker", () => {
   // therefore refused — and refused as a version mismatch rather than as
   // corruption, because the bytes are intact and the operator's remedy is to
   // finish or roll back the run with the version that started it.
+  // The version says how a recorded *step* is read, and a settled marker has
+  // none. Gating it would make the next bump reject every marker the previous
+  // release settled, so every already-migrated installation would start
+  // refusing reads the moment it upgraded.
+  it("still reads a settled marker written by a different version", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION - 1,
+      status: "settled",
+      generation: "field-groups-v2",
+    });
+    await expect(readMigrationState(meta)).resolves.toEqual({
+      status: "settled",
+      generation: "field-groups-v2",
+      recorded: true,
+    });
+  });
+
+  // The plan is the version-bound part: its entry format is what the version
+  // tracks. Dropping it leaves a rollback to refuse on a plan it does not have,
+  // rather than every read refusing on a plan it cannot parse.
+  it("drops a recorded plan it cannot interpret rather than refusing the read", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION - 1,
+      status: "settled",
+      generation: "field-groups-v2",
+      // The previous build's shape, which this one no longer accepts.
+      appliedManifest: [
+        { kind: "companion", from: "comp_hero_locales", to: "fg_hero_locales" },
+      ],
+    });
+    const state = await readMigrationState(meta);
+    expect(state.status).toBe("settled");
+    expect(
+      (state as { appliedManifest?: unknown }).appliedManifest
+    ).toBeUndefined();
+  });
+
   it("refuses a marker written by a different version of Nextly", async () => {
     const { meta } = createMeta({
       version: MIGRATION_MARKER_VERSION - 1,
