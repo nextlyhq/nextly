@@ -17,6 +17,7 @@
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import type { PluginFieldValidationResult } from "../../../plugins/contributions";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { detachedField } from "../../../shared/lib/detached-field";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
@@ -134,13 +135,24 @@ export async function assertValidPluginDefault(
   if (!registered?.validate) return;
 
   const name = field.name ?? "";
-  const result = await registered.validate(value, {
-    data: {},
-    req: {},
-    field: detachedField({ name, type: field.type }),
-    path: name,
-    mode: "create",
-  });
+  let result: PluginFieldValidationResult;
+  try {
+    // The declaration as written, not a rebuilt identity: a rule that reads the
+    // field's own options — which kinds a document field accepts — would judge
+    // an unrestricted policy if it were handed only a name and a type.
+    result = await registered.validate(value, {
+      data: {},
+      req: {},
+      field: detachedField(field as { name?: string; type: string }),
+      path: name,
+      mode: "create",
+    });
+  } catch {
+    // A throwing validator is a refusal, as the contract says, not an internal
+    // failure. Escaping here would surface a plugin's exception from a READ as
+    // a server error instead of the validation envelope every caller expects.
+    result = `${name} default was refused by its field type.`;
+  }
 
   if (result === true) return;
 
@@ -207,9 +219,13 @@ export function getDefaultValue(field: FieldConfig): unknown {
 
   // A contributed type states what it holds when empty, the same declaration
   // the DDL backfill reads, so a structured type is seeded with its own shape
-  // rather than the primitive's `{}`.
+  // rather than the primitive's `{}`. Serialized only where the column stores
+  // JSON as text — a boolean-backed type's `false` must reach the driver as a
+  // boolean, not as the truthy string "false".
   const contributed = pluginEmptyValue(field);
-  if (contributed !== undefined) return contributed;
+  if (contributed !== undefined) {
+    return shouldTreatAsJson(field) ? JSON.stringify(contributed) : contributed;
+  }
 
   if (shouldTreatAsJson(field)) {
     if (field.type === "repeater" || ("hasMany" in field && field.hasMany)) {

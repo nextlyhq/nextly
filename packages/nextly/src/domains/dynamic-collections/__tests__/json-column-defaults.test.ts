@@ -62,8 +62,7 @@ describe("a required column of a type that declares an empty value", () => {
       type: "doc",
       storage: "json",
       component: "@acme/doc/admin#Input",
-      emptyValue: () =>
-        JSON.stringify({ formatVersion: 1, kind: "page", nodes: [] }),
+      emptyValue: () => ({ formatVersion: 1, kind: "page", nodes: [] }),
     });
 
     for (const dialect of [

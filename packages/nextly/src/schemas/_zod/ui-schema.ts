@@ -25,6 +25,7 @@ import { STORAGE_FORMAT } from "../../schemas/storage-format";
  * `field-column-descriptor.ts:classifyFieldKind` maps to a column, so the
  * manifest round-trips through `getColumnDescriptor` with no translation.
  */
+/** The tokens whose default shape core is able to judge. */
 export const UI_FIELD_TYPES = [
   "text",
   "textarea",
@@ -45,6 +46,8 @@ export const UI_FIELD_TYPES = [
   "json",
   "chips",
 ] as const;
+
+const BUILT_IN_UI_FIELD_TYPES = new Set<string>(UI_FIELD_TYPES);
 
 /** Field names the framework reserves (system columns). */
 // Universal system columns present on every entity table (collection, single,
@@ -362,7 +365,12 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["name"],
         });
       }
-      if (f.defaultValue !== undefined) {
+      // Only a built-in's default is shape-checked here. A contributed type
+      // stores whatever its own type says it stores — a document, a record —
+      // and core cannot know that shape; enumerating the built-ins would reject
+      // every valid contributed default. Its own `validateOptions` is the
+      // authority, and it already runs on this write.
+      if (f.defaultValue !== undefined && BUILT_IN_UI_FIELD_TYPES.has(f.type)) {
         const dv = f.defaultValue;
         const okType =
           (f.type === "number" && typeof dv === "number") ||

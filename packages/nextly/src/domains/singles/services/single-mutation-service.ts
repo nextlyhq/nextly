@@ -1378,7 +1378,12 @@ export class SingleMutationService extends BaseService {
                     componentFields.map(cf => ({
                       type: cf.type,
                       name: "name" in cf && cf.name ? cf.name : "",
-                      localized: "localized" in cf ? cf.localized : undefined,
+                      // A contributed declaration is open, so `localized` is
+                      // only usable when it really is the flag it names.
+                      localized:
+                        "localized" in cf && typeof cf.localized === "boolean"
+                          ? cf.localized
+                          : undefined,
                     })),
                     true
                   );

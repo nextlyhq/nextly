@@ -23,7 +23,7 @@ import type {
   PluginFieldType,
 } from "@nextlyhq/plugin-sdk";
 
-import { emptyBlockDocumentJson } from "./blocks-document";
+import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 
@@ -154,7 +154,7 @@ export const BLOCKS_FIELD_TYPE: PluginFieldType = {
    * The kind is read from the field's own policy: seeding a page into a field
    * that only accepts templates would store a value the same field rejects.
    */
-  emptyValue: field => emptyBlockDocumentJson(policyOf(field).kinds),
+  emptyValue: field => emptyBlockDocument(policyOf(field).kinds),
 
   codegen: {
     // Imported from this package rather than the engine directly: an app

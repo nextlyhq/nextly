@@ -59,7 +59,7 @@ export function storageTypeToken(field: TypedField): string | undefined {
  * receive, so a default can depend on the options the field declares rather
  * than only on the type.
  */
-export function pluginEmptyValue(field: TypedField): string | undefined {
+export function pluginEmptyValue(field: TypedField): unknown {
   if (typeof field.type !== "string") return undefined;
   const registered = getFieldType(field.type);
   if (!registered?.emptyValue) return undefined;

@@ -1081,7 +1081,13 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     // the contributed type is not registered and states nothing.
     const contributed = pluginEmptyValue(field ?? { type });
     if (contributed !== undefined) {
-      return quoteJsonSqlDefault(contributed, this.dialect);
+      // The type states a value, not SQL. A structured one is a JSON document
+      // and is quoted as such; a scalar is rendered as its own literal, since
+      // wrapping `false` as JSON text would seed a truthy string into a
+      // boolean column.
+      return typeof contributed === "object" && contributed !== null
+        ? quoteJsonSqlDefault(JSON.stringify(contributed), this.dialect)
+        : this.formatDefaultValue(contributed, type);
     }
 
     switch (type) {

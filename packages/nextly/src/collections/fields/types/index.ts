@@ -33,6 +33,7 @@ import type { TextareaFieldConfig } from "./textarea";
 import type { UploadFieldConfig } from "./upload";
 
 export * from "./base";
+export * from "./plugin-field";
 
 // Text field types
 export * from "./text";

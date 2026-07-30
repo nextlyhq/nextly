@@ -289,15 +289,18 @@ export interface PluginFieldType {
    * structured document: `{}` satisfies the column and then fails every read
    * that expects the structure.
    *
-   * Returns the serialized value, never SQL. The DDL path quotes and escapes
-   * it for the dialect being generated, so a type cannot get that wrong across
-   * three dialects. Returning nothing keeps the primitive's default.
+   * Returns the VALUE, never SQL and never a pre-serialized string. A
+   * `boolean`-backed type returning `"false"` would seed a truthy string into
+   * a boolean column, so the type states what it holds and each caller renders
+   * it: the DDL path quotes and escapes it for the dialect being generated,
+   * the runtime path serializes it only when the column stores JSON. Returning
+   * nothing keeps the primitive's default.
    *
    * The field is passed as declared, so the value can honour the options on it
    * — a document field restricted to one kind can seed a document of that kind
    * rather than a generic one.
    */
-  emptyValue?: (field: PluginFieldInstance) => string | undefined;
+  emptyValue?: (field: PluginFieldInstance) => unknown;
 }
 
 /** A type-only import a generated file needs for one field type's expressions. */
