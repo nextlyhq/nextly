@@ -813,6 +813,12 @@ export class SingleQueryService extends BaseService {
         // A target collection's read rule may filter on one of its own
         // localized fields, which is a companion lookup rather than a column.
         locale: readLocale,
+        // Only "read everything" propagates, and only when asked for: the
+        // admin sends it on every read, a public caller never does.
+        status:
+          options.status === "all" || options.overrideAccess === true
+            ? "all"
+            : undefined,
       },
       strict,
       // The read path threads a caller, so the target collection's field rules
@@ -849,6 +855,10 @@ export class SingleQueryService extends BaseService {
             targetCompanions: new Map(),
             authenticatedScope: options.authenticatedScope,
             locale: readLocale,
+            status:
+              options.status === "all" || options.overrideAccess === true
+                ? "all"
+                : undefined,
           },
           // Read errors otherwise become empty component values, which reads to a
           // rule exactly like a component that holds nothing.
@@ -2462,6 +2472,11 @@ export class SingleQueryService extends BaseService {
        * collection. Absent leaves such a rule withholding its rows.
        */
       locale?: string;
+      /**
+       * The caller's Draft/Published intent, when they asked to see everything.
+       * Only `"all"` propagates; see the relationship service for why.
+       */
+      status?: "all";
     } = {},
     /**
      * Propagate expansion failures instead of returning the document
@@ -2518,6 +2533,7 @@ export class SingleQueryService extends BaseService {
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
+          status: access.status,
         }
       );
       return expandedDoc as SingleDocument;

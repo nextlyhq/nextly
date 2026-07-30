@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { resolveStorageVerdict, type StorageProbe } from "../guard";
+import type { ManifestEntry } from "../manifest";
 import { MAX_MIGRATION_STEP } from "../state";
 import type { MigratingState, MigrationState } from "../state";
 
@@ -22,12 +23,16 @@ const MIGRATED: MigrationState = {
   generation: "field-groups-v2",
   recorded: true,
 };
+const IN_FLIGHT_PLAN: ManifestEntry[] = [
+  { kind: "registry", from: "dynamic_components", to: "dynamic_field_groups" },
+];
 const IN_FLIGHT: MigratingState = {
   status: "migrating",
   direction: "up",
   migrationId: "run-1",
   step: 4,
-  plan: { manifestHash: "hash-1", planHash: "plan-1" },
+  plan: { registryHash: "slugs-1", manifestHash: "hash-1" },
+  appliedManifest: IN_FLIGHT_PLAN,
 };
 
 function probe(over: Partial<StorageProbe> = {}): StorageProbe {
@@ -192,7 +197,8 @@ describe("field-group storage verdict", () => {
         step: 5,
         direction: "up",
         migrationId: "run-1",
-        plan: { manifestHash: "hash-1", planHash: "plan-1" },
+        plan: { registryHash: "slugs-1", manifestHash: "hash-1" },
+        appliedManifest: IN_FLIGHT_PLAN,
       }
     );
   });
@@ -234,23 +240,21 @@ describe("field-group storage verdict", () => {
     });
   });
 
-  // An in-flight rollback with no recorded plan cannot be resumed at all:
-  // guessing the reverse from the database would rename names this migration
-  // never created.
-  it("refuses to resume a rollback that recorded no plan", () => {
-    const down: MigratingState = { ...IN_FLIGHT, direction: "down" };
-    const refusal = captureRefusal(() =>
-      resolveStorageVerdict({ state: down, probe: probe() })
-    );
-    expect(refusal.logContext?.reason).toMatch(/recorded no plan to reverse/);
-  });
-
-  // An up run derives its plan from registry rows, so it carries none.
-  it("resumes an up run without a recorded plan", () => {
-    expect(
-      resolveStorageVerdict({ state: IN_FLIGHT, probe: probe() })
-    ).toMatchObject({ action: "resume", direction: "up" });
-  });
+  // The plan travels with the verdict in both directions, because neither can
+  // rebuild it: a rollback has no other source for the names this migration
+  // created, and an up resume cannot rebuild one once each rename has rewritten
+  // its registry pointer.
+  it.each(["up", "down"] as const)(
+    "carries the recorded plan into a %s resume",
+    direction => {
+      const state: MigratingState = { ...IN_FLIGHT, direction };
+      expect(resolveStorageVerdict({ state, probe: probe() })).toMatchObject({
+        action: "resume",
+        direction,
+        appliedManifest: IN_FLIGHT.appliedManifest,
+      });
+    }
+  );
 
   // An interrupted run is interpretable only by the step list, whatever the
   // objects currently look like. The probe must not override the marker here.

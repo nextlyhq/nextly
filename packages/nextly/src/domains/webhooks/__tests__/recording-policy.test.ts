@@ -3,6 +3,7 @@ import { afterEach, describe, it, expect } from "vitest";
 import {
   applyStoredRecordingDecisions,
   currentRecordingGeneration,
+  getWebhookEmitSpec,
   isRecordingDisabledByConfig,
   clearWebhookRecording,
   isWebhookRecordingEnabled,
@@ -37,6 +38,24 @@ describe("webhook recording policy", () => {
   it("records when explicitly enabled", () => {
     setWebhookRecording("collection", "posts", true);
     expect(isWebhookRecordingEnabled("collection", "posts")).toBe(true);
+  });
+
+  it("stores and returns a curated emit spec, and none for a plain opt-out", () => {
+    setWebhookRecording("collection", "form-submissions", false, "plugin", {
+      event: "form.submission.created",
+      kind: "form",
+      fields: ["form", "submittedAt"],
+    });
+    expect(getWebhookEmitSpec("collection", "form-submissions")).toEqual({
+      event: "form.submission.created",
+      kind: "form",
+      fields: ["form", "submittedAt"],
+    });
+    // A plain opt-out carries no curated event.
+    setWebhookRecording("collection", "leads", false);
+    expect(getWebhookEmitSpec("collection", "leads")).toBeUndefined();
+    // An unregistered slug has none.
+    expect(getWebhookEmitSpec("collection", "unknown")).toBeUndefined();
   });
 
   it("clears all entries on reset", () => {

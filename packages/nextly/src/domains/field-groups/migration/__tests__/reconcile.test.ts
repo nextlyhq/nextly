@@ -736,3 +736,62 @@ describe("ownership on a settled marker", () => {
     ).toEqual({ complete: true });
   });
 });
+
+describe("a registry row repointed at a target the run has not reached", () => {
+  // Two groups, so the plan has a table step well past the crash window.
+  const rows = [
+    row({ slug: "alpha", tableName: "comp_alpha" }),
+    row({ slug: "beta", tableName: "comp_beta" }),
+  ];
+  const entries = buildMigrationManifest(rows).entries;
+  // [table alpha, column alpha, table beta, column beta, registry]
+  const BETA_TABLE_POSITION = 3;
+
+  // The catalog has to agree with the recorded step, or the refusal under test
+  // is masked by a different one: a source still present at a position the
+  // marker calls verified is itself a refusal.
+  function reconcile(step: number, betaPointsAt: string) {
+    const alphaTable = step >= 1 ? "fg_alpha" : "comp_alpha";
+    const alphaColumn = step >= 2 ? TARGET_COLUMN : LEGACY_COLUMN;
+    const tables = ["dynamic_components", alphaTable, betaPointsAt];
+    return reconcilePlan({
+      entries,
+      rows: [
+        { ...rows[0]!, tableName: alphaTable },
+        { ...rows[1]!, tableName: betaPointsAt },
+      ],
+      tables,
+      columns: columnsFor(tables, { [alphaTable]: [alphaColumn] }),
+      run: { recorded: true, direction: "up", step },
+      direction: "up",
+      identifierCase: PRESERVING,
+    });
+  }
+
+  // Repointing a field group's storage leaves its id, slug and companion flag
+  // untouched, so the registry hash still matches and the resume proceeds. What
+  // stops the migration adopting the author's table is that no recorded progress
+  // reaches this position — the same test the catalog side already applies to
+  // objects, which is why no separate pointer check is needed for it.
+  it("refuses when the pointer moved before its step was reached", () => {
+    const refusal = capture(() => reconcile(0, "fg_beta"));
+    expect(refusal.logContext?.reason).toMatch(
+      /no recorded progress accounts for it/
+    );
+    expect(refusal.logContext?.to).toBe("fg_beta");
+    expect(refusal.logContext?.position).toBe(BETA_TABLE_POSITION);
+  });
+
+  // Inside the crash window the pointer having moved is exactly what a committed
+  // step looks like, so it must still resume.
+  it("accepts the pointer at its target once that step is reachable", () => {
+    expect(() => reconcile(BETA_TABLE_POSITION - 1, "fg_beta")).not.toThrow();
+  });
+
+  // MySQL commits DDL implicitly, so within the window a row may still address
+  // its source while the table has already moved. Refusing that would block the
+  // resume that repairs it.
+  it("accepts a pointer that has not moved yet", () => {
+    expect(() => reconcile(0, "comp_beta")).not.toThrow();
+  });
+});

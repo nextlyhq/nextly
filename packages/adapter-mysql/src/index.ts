@@ -63,7 +63,7 @@ import {
   type SslConfig,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
   Pool as CallbackPool,
@@ -778,6 +778,32 @@ export class MySqlAdapter extends DrizzleAdapter {
           params as unknown[]
         );
         return rows as T[];
+      },
+
+      // Run on the transaction-bound Drizzle instance rather than the pool, so
+      // the statement is part of this transaction and sees its uncommitted rows.
+      runStatement: async (statement: SQL): Promise<void> => {
+        await txDb().execute(statement);
+      },
+
+      // mysql2 answers a `[rows, fields]` tuple; the transaction-bound instance
+      // keeps the read inside this transaction so it sees its uncommitted writes.
+      queryStatement: async <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => {
+        const result = await txDb().execute(statement);
+        // A tuple's first element is the rows. Anything else was not understood,
+        // and must not reach a caller as "there is nothing there" — the same
+        // reason the pooled `queryStatement` refuses rather than answering
+        // empty.
+        if (!Array.isArray(result)) {
+          throw this.createDatabaseError(
+            "query",
+            "Drizzle statement returned a result shape this adapter does not recognise; refusing to report it as an empty result.",
+            undefined
+          );
+        }
+        return result[0] as unknown as T[];
       },
 
       lockRow: async (table: string, id: SqlParam): Promise<void> => {

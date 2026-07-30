@@ -34,6 +34,7 @@
 import type { HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
@@ -790,15 +791,39 @@ export interface CollectionConfig {
 
   /**
    * Webhook recording policy for this collection. When `false` (or
-   * `{ record: false }`), writes to this collection record NO event to the
-   * webhook outbox, so nothing is ever delivered to subscribed endpoints. Used
-   * to keep PII-bearing content — form submissions carry `ipAddress`/`userAgent`
-   * — out of the delivery path. The object form leaves room for finer policy
-   * later without a breaking change.
+   * `{ record: false }`), writes to this collection record NO `entry.*` event to
+   * the webhook outbox, so nothing is ever delivered to subscribed endpoints.
+   * Used to keep PII-bearing content — form submissions carry
+   * `ipAddress`/`userAgent` and free-form answers — out of the delivery path.
+   *
+   * `emit` replaces the suppressed default event with a curated, metadata-only
+   * one: pair `record: false` with `emit` on a PII collection so subscribers
+   * still learn a row was created, carrying only the allowlisted fields.
    *
    * @default true (writes are recorded)
    */
-  webhooks?: boolean | { record?: boolean };
+  webhooks?:
+    | boolean
+    | {
+        /** Whether the default `entry.*` events record. @default true */
+        record?: boolean;
+        /**
+         * Emit a curated event on create instead of relying on the default
+         * `entry.created`. The event carries only the allowlisted `fields`
+         * (default-deny), so a PII collection can notify subscribers of a new
+         * row without ever shipping the row's sensitive content.
+         */
+        emit?: {
+          /** A declared webhook event type, e.g. `"form.submission.created"`. */
+          event: WebhookEventType;
+          /**
+           * Allowlist of document keys copied into the event payload. Only
+           * these keys ship (default-deny); the created row's id is always
+           * included in the event resource. Omit to ship id only.
+           */
+          fields?: readonly string[];
+        };
+      };
 
   /**
    * Admin panel configuration options.

@@ -29,6 +29,7 @@ import type { MigratedObjectsVerification, StorageProbe } from "./guard";
 import {
   MIGRATION_TARGET,
   retargetName,
+  tableRenamesOf,
   type ManifestEntry,
   type RegistryRow,
 } from "./manifest";
@@ -510,56 +511,69 @@ function reconcileRename(
   position: number,
   run: RunRecord
 ): ManifestEntry {
-  const source = resolveCatalogName(catalog, entry.from);
-  const target = resolveCatalogName(catalog, entry.to);
+  // A table entry moves its companion as well as itself, and the two are not
+  // always in the same state: MySQL commits each rename separately, so a crash
+  // between them leaves the base migrated and the companion still under its old
+  // name. The entry only counts as done once every table it moves is done —
+  // marking it satisfied on the base alone would let the step skip a companion
+  // that is still sitting there.
+  let allApplied = true;
 
-  if (source !== undefined && target !== undefined) {
-    throw refuse("migration target name is already in use", {
-      from: entry.from,
-      to: entry.to,
-      occupiedBy: target,
+  for (const rename of tableRenamesOf(entry)) {
+    const source = resolveCatalogName(catalog, rename.from);
+    const target = resolveCatalogName(catalog, rename.to);
+
+    if (source !== undefined && target !== undefined) {
+      throw refuse("migration target name is already in use", {
+        from: rename.from,
+        to: rename.to,
+        occupiedBy: target,
+      });
+    }
+
+    if (source !== undefined) {
+      if (recordedAsDone(position, run)) {
+        throw refuse(
+          "a rename the marker records as verified has not been applied",
+          {
+            from: rename.from,
+            to: rename.to,
+            position,
+            recordedStep: run.recorded ? run.step : null,
+          }
+        );
+      }
+      allApplied = false;
+      continue;
+    }
+
+    if (target !== undefined) {
+      // Source gone, target present. Only progress that reached this position
+      // makes it our own finished work; otherwise it is an object belonging to
+      // something else, sitting on the name this migration wants, and adopting
+      // it would treat a stranger's table as migrated field-group storage.
+      if (!acceptsApplied(position, run)) {
+        throw refuse(
+          "an object using the migrated storage name exists but no recorded progress accounts for it",
+          {
+            from: rename.from,
+            to: rename.to,
+            occupiedBy: target,
+            position,
+            recordedStep: run.recorded ? run.step : null,
+          }
+        );
+      }
+      continue;
+    }
+
+    throw refuse("migration source object is missing", {
+      from: rename.from,
+      to: rename.to,
     });
   }
 
-  if (source !== undefined) {
-    if (recordedAsDone(position, run)) {
-      throw refuse(
-        "a rename the marker records as verified has not been applied",
-        {
-          from: entry.from,
-          to: entry.to,
-          position,
-          recordedStep: run.recorded ? run.step : null,
-        }
-      );
-    }
-    return entry;
-  }
-
-  if (target !== undefined) {
-    // Source gone, target present. Only progress that reached this position
-    // makes it our own finished work; otherwise it is an object belonging to
-    // something else, sitting on the name this migration wants, and adopting it
-    // would treat a stranger's table as migrated field-group storage.
-    if (!acceptsApplied(position, run)) {
-      throw refuse(
-        "an object using the migrated storage name exists but no recorded progress accounts for it",
-        {
-          from: entry.from,
-          to: entry.to,
-          occupiedBy: target,
-          position,
-          recordedStep: run.recorded ? run.step : null,
-        }
-      );
-    }
-    return { ...entry, satisfied: true };
-  }
-
-  throw refuse("migration source object is missing", {
-    from: entry.from,
-    to: entry.to,
-  });
+  return allApplied ? { ...entry, satisfied: true } : entry;
 }
 
 /**

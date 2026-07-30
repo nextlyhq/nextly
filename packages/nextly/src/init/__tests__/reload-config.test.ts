@@ -12,6 +12,8 @@
 import { getColumns } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
+
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 
@@ -111,8 +113,14 @@ describe("reloadNextlyConfig", () => {
     }>;
     /** Force the metadata-only collection sync to reject, so its scope is unsynced. */
     failCollectionMetaSync?: boolean;
+    /** Seed a `nextly_meta` migration marker the storage guard will read. */
+    migrationMarker?: unknown;
   }) {
     const withAdapter = opts?.withAdapter ?? true;
+    const lockDouble = createLockingAdapter({
+      lockTableExists: false,
+      marker: opts?.migrationMarker,
+    });
     const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
     const registerDynamicSchemaSpy = vi.fn();
     const updateCollectionMigrationStatusSpy = vi
@@ -124,13 +132,16 @@ describe("reloadNextlyConfig", () => {
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       // The DI key is "adapter" (renamed from "databaseAdapter" — see the
       // comment in reload-config.ts line ~205 for the history).
+      // The reload holds the migration lock for its duration, so the fake has
+      // to answer the whole exclusion rather than just the marker read. Shared
+      // with the session's own suite so the two cannot drift into disagreeing
+      // about what the lock does.
       adapter: withAdapter
-        ? {
-            // dialect is a readonly property on DrizzleAdapter, not a
-            // method. Fakes must match.
+        ? Object.assign(lockDouble.adapter, {
             dialect: "sqlite" as const,
-            getDrizzle: () => ({}),
-          }
+            getCapabilities: () => ({ dialect: "sqlite" }),
+            getDrizzle: lockDouble.adapter.getDrizzle.bind(lockDouble.adapter),
+          })
         : undefined,
       collectionRegistryService: {
         syncCodeFirstCollections: opts?.failCollectionMetaSync
@@ -228,6 +239,51 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver: buildResolver() });
     expect(clearConfigCacheSpy).toHaveBeenCalledTimes(1);
     expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // `next dev` routes config edits here rather than through the CLI watcher, so
+  // this is the schema-applying path most users are on. Mid-migration the
+  // database has some tables under pre-rename names and some under post-rename
+  // ones, and the apply below runs DDL plus a pre-cleanup that issues UPDATE and
+  // DELETE — work that cannot be reasoned about against half-renamed storage.
+  it("abandons the reload while a field-group migration is in flight", async () => {
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "body", type: "text" }],
+          },
+        ],
+      },
+    });
+    const resolver = buildResolver({
+      migrationMarker: {
+        version: 2,
+        status: "migrating",
+        direction: "up",
+        migrationId: "run-1",
+        step: 1,
+        registryHash: "r",
+        manifestHash: "m",
+        appliedManifest: [
+          {
+            kind: "registry",
+            from: "dynamic_components",
+            to: "dynamic_field_groups",
+          },
+        ],
+      },
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("schema reload skipped")
+    );
   });
 
   it("introspects all desired tables in ONE batched call", async () => {

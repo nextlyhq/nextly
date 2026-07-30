@@ -128,6 +128,18 @@ interface RelatedRowAccess {
    */
   targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
   /**
+   * The caller's Draft/Published intent, when they asked to see everything.
+   *
+   * Deliberately narrow: `"all"` is the only value that propagates into
+   * expansion. It is a statement about the caller's trust — the admin sends it
+   * on every read for exactly that reason — whereas a concrete `draft` or
+   * `published` names the lifecycle of the collection being read and says
+   * nothing about what that collection points at. Absent means a related row is
+   * filtered to the published default, which is what a direct read of it would
+   * do.
+   */
+  status?: "all";
+  /**
    * The language the surrounding read resolved to, used when a target
    * collection's read rule filters on a localized field.
    *
@@ -240,6 +252,18 @@ export interface RelationshipExpansionOptions {
    */
   authenticatedScope?: AuthenticatedScope;
 
+  /**
+   * The caller's Draft/Published intent, when they asked to see everything.
+   *
+   * Deliberately narrow: `"all"` is the only value that propagates into
+   * expansion. It is a statement about the caller's trust — the admin sends it
+   * on every read for exactly that reason — whereas a concrete `draft` or
+   * `published` names the lifecycle of the collection being read and says
+   * nothing about what that collection points at. Absent means a related row is
+   * filtered to the published default, which is what a direct read of it would
+   * do.
+   */
+  status?: "all";
   /**
    * The language this read resolved to, forwarded so a target collection's read
    * rule can be applied when it filters on a localized field.
@@ -1060,6 +1084,53 @@ export class CollectionRelationshipService extends BaseService {
    * one unreadable reference must not refuse the whole parent read — so callers
    * must not assume the result lines up with the ids they asked for.
    */
+  /**
+   * The Draft/Published predicate a read of this target resolves to, or
+   * undefined when none applies.
+   *
+   * What propagates from the surrounding read is not a status VALUE but whether
+   * the published-only default was deliberately bypassed. A concrete
+   * `?status=draft` names the lifecycle of the collection being listed, not of
+   * everything it points at — a draft page should still show its published
+   * author — so only "read everything" travels, and it travels because it is a
+   * statement about the caller's trust rather than about the query.
+   *
+   * System entities have no lifecycle and no collection record to ask.
+   */
+  private async resolveTargetStatusValue(
+    targetCollection: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
+    schema: any,
+    access: RelatedRowAccess
+  ): Promise<string | undefined> {
+    if (isSystemEntity(targetCollection)) return undefined;
+    // Guarded on the column, not only on the collection's flag: a collection
+    // whose status was switched off keeps the flag until its schema is
+    // reapplied, and naming a column the table lacks fails the whole read.
+    if (!schema.status) return undefined;
+
+    let hasStatus: boolean;
+    try {
+      const policy = await this.resolveTargetReadPolicy(
+        targetCollection,
+        this.resolveAccessService(),
+        access
+      );
+      hasStatus = policy.hasStatus;
+    } catch {
+      // The lifecycle could not be established, so the safe reading is that the
+      // collection has one and the caller gets the published-only default.
+      hasStatus = true;
+    }
+
+    const statusFilter = resolveStatusFilter({
+      collectionHasStatus: hasStatus,
+      overrideAccess: access.overrideAccess === true,
+      explicit: access.status,
+    });
+    return statusFilter?.value;
+  }
+
   private async readTargetRows(
     targetCollection: string,
     ids: string[],
@@ -1072,14 +1143,36 @@ export class CollectionRelationshipService extends BaseService {
       : await this.fileManager.loadDynamicSchema(targetCollection);
     if (!schema) return [];
 
+    // Draft/Published applies to a related row exactly as it applies to a direct
+    // read of it. Without this, a caller who is 404'd asking for an unpublished
+    // row is handed the whole thing — status column included — by populating a
+    // relationship that points at it.
+    const statusValue = await this.resolveTargetStatusValue(
+      targetCollection,
+      schema,
+      access
+    );
+
     const entries = (await this.db
       .select()
       .from(schema)
       .where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
-    const rows = entries.map(entry =>
+    const fetched = entries.map(entry =>
       convertTimestampsToCamelCase({ ...entry })
     );
+    // Filtered here rather than in the query above so the rows this removes are
+    // recorded as deliberately withheld. Narrowing the fetch would drop them
+    // before anything could distinguish "exists, wrong lifecycle" from "does
+    // not exist" — and a caller checking its expansion for completeness reads
+    // an unexplained absence as evidence lost and refuses the whole parent.
+    // A row that was never there stays unrecorded, because a dangling
+    // reference is a data problem and must not be dressed up as a refusal.
+    const rows = statusValue
+      ? fetched.filter(row => row.status === statusValue)
+      : fetched;
+    this.recordWithheld(targetCollection, fetched, rows, access);
+
     const readable = await this.filterRowsByCollectionAccess(
       targetCollection,
       rows,
@@ -1301,7 +1394,10 @@ export class CollectionRelationshipService extends BaseService {
       const statusFilter = resolveStatusFilter({
         collectionHasStatus: policy.hasStatus,
         overrideAccess: access.overrideAccess === true,
-        explicit: undefined,
+        // The same intent the fetch honoured. Re-resolving without it re-applies
+        // the published-only default here, so a caller who asked to read
+        // everything loses a draft row that the fetch above admitted.
+        explicit: access.status,
       });
 
       const localizedCtx = await this.buildTargetLocalizedContext(
@@ -1718,6 +1814,7 @@ export class CollectionRelationshipService extends BaseService {
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
+      status: options.status,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
@@ -2308,6 +2405,7 @@ export class CollectionRelationshipService extends BaseService {
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
+      status: options.status,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
