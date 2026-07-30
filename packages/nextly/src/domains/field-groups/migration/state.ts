@@ -16,9 +16,10 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { MetaService } from "../../meta/services/meta-service";
 
-import type { ManifestEntry } from "./manifest";
+import { MIGRATION_TARGET, type ManifestEntry } from "./manifest";
 
 /** `nextly_meta` key holding the marker. */
 export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
@@ -492,10 +493,26 @@ function parseAppliedManifest(value: unknown): ManifestEntry[] {
   // a state no direction can then interpret. An empty list fails here too.
   const registryEntries = value.filter(
     raw => isRecord(raw) && raw.kind === "registry"
-  ).length;
-  if (registryEntries !== 1) {
+  );
+  if (registryEntries.length !== 1) {
     throw markerCorrupt(
-      `recorded plan renames the registry ${String(registryEntries)} times, not once`
+      `recorded plan renames the registry ${String(registryEntries.length)} times, not once`
+    );
+  }
+  // Counting the entry is not enough: it has to be the registry rename. An
+  // entry naming anything else satisfies a count check while leaving a rollback
+  // unable to restore the registry, which is the state this validation exists to
+  // rule out. Only the two canonical directions are legal.
+  const registry = registryEntries[0] as Record<string, unknown>;
+  const legacyToTarget =
+    registry.from === STORAGE_FORMAT.registryTable &&
+    registry.to === MIGRATION_TARGET.registryTable;
+  const targetToLegacy =
+    registry.from === MIGRATION_TARGET.registryTable &&
+    registry.to === STORAGE_FORMAT.registryTable;
+  if (!legacyToTarget && !targetToLegacy) {
+    throw markerCorrupt(
+      "recorded plan's registry entry does not rename the registry table"
     );
   }
   return value.map(raw => {

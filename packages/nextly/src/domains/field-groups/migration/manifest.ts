@@ -267,12 +267,20 @@ function assertNoAliasedCompanion(rows: readonly RegistryRow[]): void {
   // damage is specific: the row is left unrenamed, so its discriminator rename
   // would be issued against the registry itself, and the registry's own rename
   // puts that name among the plan's sources so nothing flags the overlap.
-  const systemTables = new Set([
-    fold(STORAGE_FORMAT.registryTable),
-    fold(MIGRATION_TARGET.registryTable),
+  //
+  // Compared exactly, not folded. This asks whether a row *is* the system table,
+  // which is an identity question, and folding an identity question is
+  // permanently destructive here: on Postgres a legitimate custom table quoted
+  // as `DYNAMIC_COMPONENTS` is a different table, and refusing it would block
+  // that installation's upgrade for good. The case-insensitive variant, where
+  // MySQL really does resolve the two to one table, needs the dialect and so
+  // belongs to catalog reconciliation.
+  const systemTables = new Set<string>([
+    STORAGE_FORMAT.registryTable,
+    MIGRATION_TARGET.registryTable,
   ]);
   for (const row of rows) {
-    if (!systemTables.has(fold(row.tableName))) continue;
+    if (!systemTables.has(row.tableName)) continue;
     throw NextlyError.serviceUnavailable({
       logMessage: `field-group migration cannot plan: ${row.tableName} is a system table, not field group storage`,
       logContext: {

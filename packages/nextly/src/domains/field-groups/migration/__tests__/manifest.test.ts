@@ -283,6 +283,17 @@ describe("field-group migration manifest", () => {
     }
   );
 
+  // The system-table check asks whether a row IS the registry, which is an
+  // identity question. Folding it would refuse a legitimate Postgres table
+  // quoted as DYNAMIC_COMPONENTS and block that installation permanently.
+  it("does not refuse a custom table that differs from the registry only in case", () => {
+    expect(() =>
+      buildMigrationManifest([
+        row({ slug: "x", tableName: "DYNAMIC_COMPONENTS" }),
+      ])
+    ).not.toThrow();
+  });
+
   // Renaming a table away frees its name, so two rows swapping prefixes is not
   // a conflict.
   it("allows a target whose occupant is itself renamed away", () => {

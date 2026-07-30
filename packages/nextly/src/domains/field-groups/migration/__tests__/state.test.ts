@@ -261,10 +261,22 @@ describe("field-group migration marker", () => {
       [{ kind: "table" as const, from: "fg_a", to: "comp_a" }],
     ],
     [
+      "a registry entry that renames something else",
+      [{ kind: "registry" as const, from: "x", to: "y" }],
+    ],
+    [
       "a list renaming the registry twice",
       [
-        { kind: "registry" as const, from: "a", to: "b" },
-        { kind: "registry" as const, from: "c", to: "d" },
+        {
+          kind: "registry" as const,
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+        {
+          kind: "registry" as const,
+          from: "dynamic_field_groups",
+          to: "dynamic_components",
+        },
       ],
     ],
   ])("refuses a recorded plan that is %s", async (_label, appliedManifest) => {
