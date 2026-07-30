@@ -78,14 +78,21 @@ describe("resolveWebhookRecording", () => {
     ).toEqual({ event: "user.created", kind: "user" });
   });
 
-  it("drops an entry-family curated event (it would be suppressed by the same opt-out)", () => {
-    // `entry.*` derives kind `entry`, which is gated by this very collection's
-    // `record: false` — so a curated entry event could never emit. It is
-    // rejected at normalization rather than silently suppressed at the seam.
+  it("drops entry- and single-family curated events (both are per-slug gated)", () => {
+    // `entry.*`/`single.*` derive a kind gated by a per-entity policy keyed by
+    // slug, so a curated event of that kind would be suppressed (by this
+    // collection's own opt-out, or by an unrelated Single sharing the slug). It
+    // is rejected at normalization rather than silently suppressed at the seam.
     expect(
       resolveWebhookRecording({
         record: false,
         emit: { event: "entry.created", fields: ["title"] },
+      })
+    ).toEqual({ record: false });
+    expect(
+      resolveWebhookRecording({
+        record: false,
+        emit: { event: "single.updated" },
       })
     ).toEqual({ record: false });
   });

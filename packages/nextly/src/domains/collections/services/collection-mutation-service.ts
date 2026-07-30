@@ -462,21 +462,29 @@ export class CollectionMutationService extends BaseService {
     // Expand the field tree so a password/hidden value nested inside an
     // allowlisted group/component/repeater is still stripped from the
     // (default-deny) projection: the curated event ships data, so it needs the
-    // same sensitive-field stripping the raw entry.* events get.
-    const sensitiveFields = await this.webhookFieldTree(
-      fields,
-      tx.getDrizzle()
-    );
-    return recordMutationEvent(tx, {
-      type: emitSpec.event,
-      resource,
-      // Default-deny projection: only the allowlisted keys ship, so a PII
-      // collection's sensitive columns never reach the payload.
-      data: projectFields(createdDocument, emitSpec.fields),
-      previous: null,
-      fields: sensitiveFields,
-      actor,
-    });
+    // same sensitive-field stripping the raw entry.* events get. The recording is
+    // a write-integrity operation — a failure (component expansion or the outbox
+    // insert) must roll the write back, never commit the row without its promised
+    // event — so mark it for the bulk/transaction create loops, which otherwise
+    // convert an error into a soft per-item failure and continue.
+    try {
+      const sensitiveFields = await this.webhookFieldTree(
+        fields,
+        tx.getDrizzle()
+      );
+      return await recordMutationEvent(tx, {
+        type: emitSpec.event,
+        resource,
+        // Default-deny projection: only the allowlisted keys ship, so a PII
+        // collection's sensitive columns never reach the payload.
+        data: projectFields(createdDocument, emitSpec.fields),
+        previous: null,
+        fields: sensitiveFields,
+        actor,
+      });
+    } catch (err) {
+      throw markWriteIntegrityFailure(err);
+    }
   }
 
   /**
@@ -6559,11 +6567,7 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName) ||
-        // A curated `webhooks.emit` consumes the assembled document too — its
-        // allowlist may include a component/m2m field — so assemble relations
-        // even when the raw entry.* recording is opted out for this collection.
-        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
+        !isRecordingDisabledByConfig("collection", params.collectionName);
       // The `previous` document is carried ONLY by the outbox event, never by the
       // version snapshot, so gate its relation read on webhook recording alone: a
       // version-only update (versioning on, recording disabled by config) skips it
@@ -8034,11 +8038,7 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName) ||
-        // A curated `webhooks.emit` consumes the assembled document too — its
-        // allowlist may include a component/m2m field — so assemble relations
-        // even when the raw entry.* recording is opted out for this collection.
-        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
+        !isRecordingDisabledByConfig("collection", params.collectionName);
       // The `previous` document is carried ONLY by the outbox event, never by the
       // version snapshot, so gate its relation read on webhook recording alone: a
       // version-only update (versioning on, recording disabled by config) skips it

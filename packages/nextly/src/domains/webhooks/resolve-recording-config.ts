@@ -27,10 +27,13 @@ export interface ResolvedWebhookEmit {
   event: WebhookEventType;
   /**
    * Resource family, derived from the event's first segment (`form.*` → `form`).
-   * Never `entry`: an entry-family curated event would hit the same
-   * per-collection opt-out and be suppressed, so those are rejected upstream.
+   * Never `entry` or `single`: those kinds are gated by a per-entity recording
+   * policy keyed by slug, so a curated event of that kind on a collection would
+   * be suppressed — by this collection's own opt-out (`entry`) or by an
+   * unrelated Single that shares the slug (`single`). Rejected upstream, leaving
+   * the ungated families (`media`/`user`/`form`).
    */
-  kind: Exclude<WebhookResourceKind, "entry">;
+  kind: Exclude<WebhookResourceKind, "entry" | "single">;
   /** Allowlist of document keys copied into the payload; default-deny. */
   fields?: readonly string[];
 }
@@ -59,11 +62,17 @@ function isWebhookEventType(value: unknown): value is WebhookEventType {
   );
 }
 
-function isNonEntryResourceKind(
+function isCuratedResourceKind(
   value: string
-): value is Exclude<WebhookResourceKind, "entry"> {
+): value is Exclude<WebhookResourceKind, "entry" | "single"> {
+  // Only the ungated families (media/user/form) are valid for a curated
+  // collection event: `entry` and `single` are gated by a per-entity recording
+  // policy keyed by slug, so a curated `entry.*`/`single.*` would be suppressed
+  // by this collection's own opt-out (entry) or by an unrelated Single that
+  // shares the slug (single).
   return (
     value !== "entry" &&
+    value !== "single" &&
     (WEBHOOK_RESOURCE_KINDS as readonly string[]).includes(value)
   );
 }
@@ -75,17 +84,19 @@ function isNonEntryResourceKind(
  * lands in the right resource family without the author restating it. A
  * malformed emit (unknown event, non-string field names) is dropped rather than
  * throwing at boot: the default-deny stance keeps a bad config from emitting a
- * bogus or unfiltered event. An `entry.*`-family event is dropped for the same
- * reason it cannot work: a curated event exists to REPLACE the suppressed
- * `entry.*` events with one the per-collection opt-out does not gate, so an
- * entry-family event would be suppressed by that same opt-out and never emit.
+ * bogus or unfiltered event. An `entry.*`/`single.*`-family event is dropped for
+ * the same reason it cannot work: a curated event exists to REPLACE the
+ * suppressed default events with one that no per-entity opt-out gates, but an
+ * entry- or single-kind event is gated by a per-slug policy (this collection's
+ * own opt-out, or an unrelated Single sharing the slug) and so would be
+ * suppressed and never emit.
  */
 function resolveEmit(emit: unknown): ResolvedWebhookEmit | undefined {
   if (typeof emit !== "object" || emit === null) return undefined;
   const { event, fields } = emit as { event?: unknown; fields?: unknown };
   if (!isWebhookEventType(event)) return undefined;
   const derivedKind = event.split(".")[0];
-  if (!isNonEntryResourceKind(derivedKind)) return undefined;
+  if (!isCuratedResourceKind(derivedKind)) return undefined;
   const safeFields =
     Array.isArray(fields) && fields.every(f => typeof f === "string")
       ? (fields as readonly string[])
