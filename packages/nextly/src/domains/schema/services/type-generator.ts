@@ -71,6 +71,15 @@ export interface GeneratedTypeInterface {
 
   /** Interface name (e.g., "Post", "User") */
   interfaceName: string;
+  /**
+   * `import type` lines the code needs, when a plugin field type declared them.
+   *
+   * A bare interface cannot carry its own imports without becoming
+   * unconcatenable, so they are returned alongside for a caller assembling a
+   * file itself. `generateTypesFile` collects and dedupes these across every
+   * entity and emits them once, so it ignores this.
+   */
+  imports: string[];
 }
 
 /**
@@ -85,6 +94,15 @@ export interface GeneratedSingleTypeInterface {
 
   /** Interface name (e.g., "SiteSettings", "Header") */
   interfaceName: string;
+  /**
+   * `import type` lines the code needs, when a plugin field type declared them.
+   *
+   * A bare interface cannot carry its own imports without becoming
+   * unconcatenable, so they are returned alongside for a caller assembling a
+   * file itself. `generateTypesFile` collects and dedupes these across every
+   * entity and emits them once, so it ignores this.
+   */
+  imports: string[];
 }
 
 /**
@@ -99,6 +117,15 @@ export interface GeneratedComponentTypeInterface {
 
   /** Interface name (e.g., "SeoComponent", "HeroComponent") */
   interfaceName: string;
+  /**
+   * `import type` lines the code needs, when a plugin field type declared them.
+   *
+   * A bare interface cannot carry its own imports without becoming
+   * unconcatenable, so they are returned alongside for a caller assembling a
+   * file itself. `generateTypesFile` collects and dedupes these across every
+   * entity and emits them once, so it ignores this.
+   */
+  imports: string[];
 }
 
 /**
@@ -417,6 +444,7 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedTypeInterface {
+    const recordedBefore = new Set(this.pluginExpressions.keys());
     const interfaceName = this.toPascalCase(collection.slug);
     const lines: string[] = [];
 
@@ -463,6 +491,7 @@ export class TypeGenerator {
       collectionSlug: collection.slug,
       code: lines.join("\n"),
       interfaceName,
+      imports: this.importsAddedSince(recordedBefore),
     };
   }
 
@@ -493,6 +522,7 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedSingleTypeInterface {
+    const recordedBefore = new Set(this.pluginExpressions.keys());
     const interfaceName = this.toPascalCase(single.slug);
     const lines: string[] = [];
 
@@ -536,6 +566,7 @@ export class TypeGenerator {
       singleSlug: single.slug,
       code: lines.join("\n"),
       interfaceName,
+      imports: this.importsAddedSince(recordedBefore),
     };
   }
 
@@ -568,6 +599,7 @@ export class TypeGenerator {
     allComponents: DynamicFieldGroupRecord[] = [],
     allCollections: DynamicCollectionRecord[] = []
   ): GeneratedComponentTypeInterface {
+    const recordedBefore = new Set(this.pluginExpressions.keys());
     const interfaceName = this.toComponentInterfaceName(component.slug);
     const lines: string[] = [];
 
@@ -610,6 +642,7 @@ export class TypeGenerator {
       componentSlug: component.slug,
       code: lines.join("\n"),
       interfaceName,
+      imports: this.importsAddedSince(recordedBefore),
     };
   }
 
@@ -1400,6 +1433,30 @@ ${properties}
    * list would promise a shape the table cannot hold — the column mapper and
    * the Zod fallback both emit the scalar.
    */
+  /**
+   * The imports the expressions recorded during one call rely on.
+   *
+   * Keyed off what was already recorded rather than by clearing, because
+   * `generateTypesFile` calls these same methods and needs the accumulated map
+   * to decide the file's imports — resetting here would leave it with only the
+   * last entity's expressions.
+   *
+   * No names are reserved: a single interface declares only itself, so there is
+   * nothing in it for an import to collide with.
+   */
+  private importsAddedSince(before: ReadonlySet<object>): string[] {
+    const added = [...this.pluginExpressions.keys()].filter(
+      field => !before.has(field)
+    );
+    if (added.length === 0) return [];
+    return pluginCodegenImports(
+      [{ fields: added }],
+      new Set<string>(),
+      "tsImports",
+      this.pluginExpressions
+    );
+  }
+
   private asScalarStorageField(
     field: DataFieldConfig,
     storageType: Parameters<typeof asStorageEquivalentField>[1]

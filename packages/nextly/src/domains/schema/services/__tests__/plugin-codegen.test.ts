@@ -166,6 +166,58 @@ describe("plugin field types in the TypeScript generator", () => {
   });
 });
 
+describe("standalone interface generation", () => {
+  it("returns the imports its plugin fields rely on", () => {
+    registerFieldType(RATING);
+    const iface = new TypeGenerator().generateInterface(
+      collection([
+        { name: "score", type: "star-rating", ratingScale: { max: 5 } },
+      ])
+    );
+
+    // A bare interface cannot carry its own imports without becoming
+    // unconcatenable, so a caller assembling a file gets them alongside.
+    expect(iface.code).toContain("Rating<5>");
+    expect(iface.imports).toContain(
+      'import type { Rating } from "@acme/ratings";'
+    );
+  });
+
+  it("returns none for an interface with no plugin fields", () => {
+    registerFieldType(RATING);
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "title", type: "text" }])
+    );
+
+    expect(iface.imports).toEqual([]);
+  });
+
+  it("collects across every entity for the whole file", () => {
+    registerFieldType(RATING);
+    // The file generator drives the same per-interface methods, so this pins
+    // that going through them entity by entity still yields one import block
+    // covering all of them.
+    const file = new TypeGenerator().generateTypesFile(
+      [
+        collection([
+          { name: "a", type: "star-rating", ratingScale: { max: 2 } },
+        ]),
+        {
+          ...collection([
+            { name: "b", type: "star-rating", ratingScale: { max: 3 } },
+          ]),
+          slug: "notes",
+          labels: { singular: "Note", plural: "Notes" },
+        },
+      ].map(c => c)
+    );
+
+    expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
+    expect(file.code).toContain("Rating<2>");
+    expect(file.code).toContain("Rating<3>");
+  });
+});
+
 describe("plugin field types on user fields", () => {
   const userField = (extra: Record<string, unknown>) =>
     ({
