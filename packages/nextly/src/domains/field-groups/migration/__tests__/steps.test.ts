@@ -453,3 +453,65 @@ describe("a companion moves with its owner", () => {
     await expect(steps[companionIndex]?.verify(w.session)).resolves.toBe(true);
   });
 });
+
+describe("observation never happens inside a step transaction", () => {
+  const entries = buildMigrationManifest([row()]).entries;
+
+  // The observer reads through the adapter, which checks out its own
+  // connection. Asking it from inside a transaction waits for a second checkout
+  // and hangs a pool sized to one, so every step must gather what it needs
+  // first. This asserts it for both step kinds, because the table path was fixed
+  // while the column path was left behind once already.
+  it.each([
+    ["table", 0],
+    // 0 = the table rename, 1 = the discriminator column, 2 = the registry.
+    ["column", 1],
+  ])(
+    "gathers observations before opening the transaction (%s)",
+    async (_k, i) => {
+      // Both names present, so each step finds the table its entry addresses:
+      // the table entry names `comp_hero`, the column entry `fg_hero`.
+      const w = createWorld({
+        tables: [LEGACY_REGISTRY, "comp_hero", "fg_hero"],
+        columns: { comp_hero: [...TYPE_COLUMN], fg_hero: [...TYPE_COLUMN] },
+        pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
+      });
+      let inTransaction = false;
+      let observedInside = false;
+      const guarded = {
+        ...w.observer,
+        tables: async (...a: Parameters<typeof w.observer.tables>) => {
+          if (inTransaction) observedInside = true;
+          return w.observer.tables(...a);
+        },
+        columns: async (...a: Parameters<typeof w.observer.columns>) => {
+          if (inTransaction) observedInside = true;
+          return w.observer.columns(...a);
+        },
+        indexNames: async (...a: Parameters<typeof w.observer.indexNames>) => {
+          if (inTransaction) observedInside = true;
+          return w.observer.indexNames(...a);
+        },
+      };
+      const session = {
+        dialect: "postgresql",
+        inTransaction: async (work: (ctx: unknown) => Promise<unknown>) => {
+          inTransaction = true;
+          try {
+            return await w.session.inTransaction(work as never);
+          } finally {
+            inTransaction = false;
+          }
+        },
+      } as unknown as typeof w.session;
+
+      const steps = buildMigrationSteps({
+        entries,
+        identifierCase: PRESERVING,
+        observer: guarded,
+      });
+      await steps[i]?.run(session);
+      expect(observedInside).toBe(false);
+    }
+  );
+});

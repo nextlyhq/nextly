@@ -315,8 +315,12 @@ function columnStep(entry: ManifestEntry, context: StepContext): MigrationStep {
     id: `column:${table}.${entry.from}->${entry.to}`,
     async run(session) {
       if (applied) return;
+      // Observed BEFORE the transaction, for the same reason the table path is:
+      // the observer reads through the adapter, which checks out its own
+      // connection, so asking from inside would wait for a second checkout and
+      // hang a pool sized to one.
+      const columns = await observer.columns(session, table);
       await session.inTransaction(async ctx => {
-        const columns = await observer.columns(session, table);
         if (columns === undefined) {
           throw NextlyError.serviceUnavailable({
             logMessage: `field-group migration cannot rename a column on a missing table: ${table}`,
