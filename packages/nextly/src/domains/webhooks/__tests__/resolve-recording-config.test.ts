@@ -90,6 +90,21 @@ describe("resolveWebhookRecording", () => {
     ).toEqual({ record: false });
   });
 
+  it("ignores a curated emit unless recording is opted out", () => {
+    // `emit` REPLACES the default events, so it only applies with record:false.
+    // record:true (or omitted, which defaults to record) must not emit both the
+    // full entry.* document and the curated event.
+    expect(
+      resolveWebhookRecording({
+        record: true,
+        emit: { event: "form.submission.created", fields: ["form"] },
+      })
+    ).toEqual({ record: true });
+    expect(
+      resolveWebhookRecording({ emit: { event: "form.submission.created" } })
+    ).toEqual({ record: true });
+  });
+
   it("drops a malformed emit rather than throwing", () => {
     const asInput = (v: unknown) =>
       v as boolean | { record?: boolean } | undefined;

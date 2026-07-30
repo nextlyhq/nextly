@@ -115,7 +115,12 @@ export function resolveWebhookRecording(
   if (webhooks === false) return { record: false };
   if (typeof webhooks === "object" && webhooks !== null) {
     const record = webhooks.record === false ? false : true;
-    const emit = resolveEmit(webhooks.emit);
+    // A curated `emit` REPLACES the default events, so it only applies when they
+    // are suppressed. With `record: true` (or omitted, which defaults to record),
+    // honoring `emit` would record BOTH the full `entry.*` document and the
+    // curated event — double delivery, and PII shipped via `entry.*` to any
+    // endpoint subscribed to it or `*`. So `emit` requires `record: false`.
+    const emit = record ? undefined : resolveEmit(webhooks.emit);
     return emit ? { record, emit } : { record };
   }
   return { record: true };

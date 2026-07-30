@@ -444,6 +444,7 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     createdDocument: Record<string, unknown>,
     actor: RequestActor,
+    fields: readonly SensitiveFieldSource[],
     writeLocale?: string
   ): Promise<boolean> {
     const emitSpec = getWebhookEmitSpec("collection", collectionName);
@@ -458,6 +459,14 @@ export class CollectionMutationService extends BaseService {
       id: entryId,
       ...locale,
     };
+    // Expand the field tree so a password/hidden value nested inside an
+    // allowlisted group/component/repeater is still stripped from the
+    // (default-deny) projection: the curated event ships data, so it needs the
+    // same sensitive-field stripping the raw entry.* events get.
+    const sensitiveFields = await this.webhookFieldTree(
+      fields,
+      tx.getDrizzle()
+    );
     return recordMutationEvent(tx, {
       type: emitSpec.event,
       resource,
@@ -465,8 +474,7 @@ export class CollectionMutationService extends BaseService {
       // collection's sensitive columns never reach the payload.
       data: projectFields(createdDocument, emitSpec.fields),
       previous: null,
-      // The data is already a curated allowlist; nothing further to strip.
-      fields: [],
+      fields: sensitiveFields,
       actor,
     });
   }
@@ -2519,6 +2527,7 @@ export class CollectionMutationService extends BaseService {
           entry.id as string,
           createdDocument,
           actorForWrite(params.actor, params.user),
+          fields,
           localizedWrite ? localizedWrite.writeLocale : undefined
         );
         recorded = recorded || curatedRecorded;
@@ -6077,7 +6086,8 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         (entry as Record<string, unknown>).id as string,
         createdDocument,
-        eventActor
+        eventActor,
+        fields
       );
       eventRecorded = eventRecorded || curatedCreateRecorded;
       // A create landing directly on `published` is also a publish lifecycle
@@ -7479,7 +7489,8 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         (entry as Record<string, unknown>).id as string,
         createdDocument,
-        eventActor
+        eventActor,
+        fields
       );
       eventRecorded = eventRecorded || curatedCreateRecorded;
       // A create landing directly on `published` is also a publish lifecycle
