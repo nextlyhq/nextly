@@ -21,7 +21,11 @@ import { NextlyError } from "../../../errors/nextly-error";
 
 import type { ManifestEntry } from "./manifest";
 import { MAX_MIGRATION_STEP } from "./state";
-import type { MigrationPlanIdentity, MigrationState } from "./state";
+import type {
+  MigrationDirection,
+  MigrationPlanIdentity,
+  MigrationState,
+} from "./state";
 
 /**
  * Whether every object the migrated registry points at is actually there and
@@ -68,22 +72,19 @@ export type StorageVerdict =
   | {
       action: "resume";
       step: number;
-      direction: "up";
+      direction: MigrationDirection;
       migrationId: string;
       plan: MigrationPlanIdentity;
-    }
-  | {
       /**
-       * Resuming a rollback. The plan being reversed travels with the verdict
-       * because it cannot be derived: nothing in the database says which names
-       * this migration created, so a restarted process has no other source for
-       * the steps it still has to undo.
+       * The canonical plan the interrupted run was executing.
+       *
+       * Travels with the verdict in both directions because it cannot be
+       * rebuilt: nothing in the database says which names this migration
+       * created, and once each rename rewrites its registry pointer a rebuilt
+       * plan omits the work already done, so its step positions no longer mean
+       * what the recorded position means. An `up` resume applies it from
+       * `step + 1`; a `down` resume reverses it.
        */
-      action: "resume";
-      step: number;
-      direction: "down";
-      migrationId: string;
-      plan: MigrationPlanIdentity;
       appliedManifest: readonly ManifestEntry[];
     };
 
@@ -115,31 +116,13 @@ export function resolveStorageVerdict(args: {
     // a state only the step list can interpret. The run's own identity travels
     // with the step so the resumed run picks the right list, keeps the same id,
     // and can refuse a plan that moved underneath it.
-    if (state.direction === "down") {
-      // A rollback reverses a recorded plan. An in-flight `down` marker without
-      // one cannot be resumed at all, and guessing the reverse from the database
-      // would rename names this migration never created.
-      if (state.appliedManifest === undefined) {
-        throw refuse("an interrupted rollback recorded no plan to reverse", {
-          step: state.step,
-          migrationId: state.migrationId,
-        });
-      }
-      return {
-        action: "resume",
-        step: state.step + 1,
-        direction: "down",
-        migrationId: state.migrationId,
-        plan: state.plan,
-        appliedManifest: state.appliedManifest,
-      };
-    }
     return {
       action: "resume",
       step: state.step + 1,
-      direction: "up",
+      direction: state.direction,
       migrationId: state.migrationId,
       plan: state.plan,
+      appliedManifest: state.appliedManifest,
     };
   }
 

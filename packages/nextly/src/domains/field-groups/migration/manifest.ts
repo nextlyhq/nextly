@@ -206,6 +206,24 @@ export function buildMigrationManifest(
 }
 
 /**
+ * Hash the set of field groups a run was planned against.
+ *
+ * Slugs, not table names. A slug is a field group's identity and does not change
+ * for the life of a run, while `table_name` is rewritten as each rename commits —
+ * so a hash over table names would stop matching partway through a run and
+ * refuse the resume it exists to protect. This is what answers "did the set of
+ * field groups move underneath the interrupted run", which is the question a
+ * recorded step position depends on: a group created or deleted mid-run would
+ * otherwise be left behind at the legacy prefix while everything else moved.
+ *
+ * Sorted so the hash is a property of the set rather than of row order.
+ */
+export function hashSlugSet(rows: readonly { slug: string }[]): string {
+  const canonical = JSON.stringify([...rows.map(row => row.slug)].sort());
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
  * Hash the plan's object map.
  *
  * Covers what will be renamed and in what order, so a schema change between an

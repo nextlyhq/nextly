@@ -19,7 +19,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { MetaService } from "../../meta/services/meta-service";
 
-import { MIGRATION_TARGET, type ManifestEntry } from "./manifest";
+import { hashManifest, MIGRATION_TARGET, type ManifestEntry } from "./manifest";
 
 /** `nextly_meta` key holding the marker. */
 export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
@@ -91,18 +91,33 @@ export interface SettledState {
  * independent things can change that plan out from under an interrupted run,
  * and either one makes the recorded step mean something different:
  *
- * - `manifestHash` covers the object map: which tables, columns and stored keys
- *   this database's field groups resolve to. It moves when the application's
- *   schema changes.
- * - `planHash` covers the ordered step list the running build produces. It
- *   moves when Nextly itself is upgraded and steps are added, removed or
- *   reordered, which can happen while the application's schema is untouched.
+ * The plan is **persisted and read back**, never rebuilt, so the identity does
+ * not have to survive a rebuild producing the same bytes. What it must still
+ * catch is the world moving underneath a recorded position:
  *
- * Neither subsumes the other, so both are recorded and both are compared.
+ * - `slugsHash` covers which field groups exist. A group created or deleted
+ *   mid-run would leave storage the plan never mentions.
+ * - `manifestHash` covers the stored plan's own integrity.
  */
 export interface MigrationPlanIdentity {
+  /**
+   * Hash over the sorted slug set the run was planned against.
+   *
+   * Answers "did the set of field groups move underneath this run". Slugs are
+   * used rather than table names because a slug is stable for the whole run
+   * while `table_name` is rewritten as each rename commits — a hash over table
+   * names would stop matching partway through and refuse the resume it exists
+   * to protect.
+   */
+  slugsHash: string;
+  /**
+   * Hash of the persisted plan itself.
+   *
+   * A corruption check on the stored blob, not a comparison against anything
+   * rebuilt: the plan is read back rather than recomputed, so the only question
+   * left is whether what was read is what was written.
+   */
   manifestHash: string;
-  planHash: string;
 }
 
 /**
@@ -120,19 +135,21 @@ export interface MigratingState {
   step: number;
   plan: MigrationPlanIdentity;
   /**
-   * The plan being applied, carried for the whole run.
+   * The plan this run is executing, carried for the whole run.
    *
-   * Always the plan that was applied to reach migrated storage, never its
-   * inverse. A rollback reverses it at execution time; storing it pre-inverted
-   * would let a resume invert it twice and migrate forward while believing it
-   * was rolling back.
+   * Required in both directions, and always in the canonical form: the work
+   * that takes storage from legacy to migrated, never its inverse. An `up` run
+   * applies it; a `down` run reverses it at execution time. Storing it
+   * pre-inverted would let a resume invert it twice and migrate forward while
+   * believing it was rolling back.
    *
-   * A `down` run reverses what an earlier `up` recorded, so the record has to
-   * survive the transition out of `settled` and every step after it. Writing it
-   * only at settlement would lose it the moment a rollback started, leaving a
-   * crashed run with a step position and no plan to index into.
+   * This is what a resume executes. Rebuilding it instead cannot work once the
+   * registry's own pointers are rewritten with each rename: a rebuilt plan then
+   * omits every row already renamed, so it has fewer entries, different step
+   * positions, and a different hash from the one the marker recorded — and the
+   * resume would refuse the very plan it is resuming.
    */
-  appliedManifest?: ManifestEntry[];
+  appliedManifest: ManifestEntry[];
 }
 
 export type MigrationState = SettledState | MigratingState;
@@ -145,8 +162,8 @@ interface StoredMarker {
   direction?: MigrationDirection;
   migrationId?: string;
   step?: number;
+  slugsHash?: string;
   manifestHash?: string;
-  planHash?: string;
   appliedManifest?: unknown;
 }
 
@@ -208,7 +225,7 @@ export async function readMigrationState(
   }
 
   if (marker.status === "migrating") {
-    const { direction, migrationId, step, manifestHash, planHash } = marker;
+    const { direction, migrationId, step, slugsHash, manifestHash } = marker;
     if (direction !== "up" && direction !== "down") {
       throw markerCorrupt("in-flight marker carries no known direction");
     }
@@ -229,21 +246,32 @@ export async function readMigrationState(
     ) {
       throw markerCorrupt("in-flight marker carries no valid step");
     }
+    if (typeof slugsHash !== "string" || slugsHash.length === 0) {
+      throw markerCorrupt("in-flight marker carries no slug-set hash");
+    }
     if (typeof manifestHash !== "string" || manifestHash.length === 0) {
       throw markerCorrupt("in-flight marker carries no manifest hash");
     }
-    if (typeof planHash !== "string" || planHash.length === 0) {
-      throw markerCorrupt("in-flight marker carries no plan hash");
+    // A run in flight cannot proceed without the plan it is executing, so an
+    // absent one is corruption rather than an optional field.
+    if (marker.appliedManifest === undefined) {
+      throw markerCorrupt("in-flight marker carries no plan");
+    }
+    const appliedManifest = parseAppliedManifest(marker.appliedManifest);
+    // The plan is read back rather than recomputed, so this is the one check
+    // that it is still what was written. Without it a truncated or edited blob
+    // would be executed as though it were the recorded plan.
+    const actualHash = hashManifest(appliedManifest);
+    if (actualHash !== manifestHash) {
+      throw markerCorrupt("recorded plan does not match its recorded hash");
     }
     return {
       status: "migrating",
       direction,
       migrationId,
       step,
-      plan: { manifestHash, planHash },
-      ...(marker.appliedManifest === undefined
-        ? {}
-        : { appliedManifest: parseAppliedManifest(marker.appliedManifest) }),
+      plan: { slugsHash, manifestHash },
+      appliedManifest,
     };
   }
 
@@ -258,28 +286,24 @@ export async function readMigrationState(
  * step is idempotent precisely so that re-run is safe.
  */
 /**
- * Starting a run, with the plan required exactly where a run cannot do without it.
+ * Starting a run, with the plan it will execute.
  *
- * A `down` run reverses a recorded plan; it cannot derive one, because nothing in
- * the database says which names this migration created. An `up` run builds its
- * plan from registry rows, so it has none to carry in. Expressing that as a union
- * rather than an optional field with a comment means the unsafe call does not
- * typecheck — a comment saying "required" while the type says otherwise is the
- * kind of claim that goes unenforced.
+ * Required in both directions. A `down` run reverses a recorded plan and cannot
+ * derive one, because nothing in the database says which names this migration
+ * created. An `up` run cannot rely on rebuilding one either: once each rename
+ * rewrites its registry pointer, a rebuild omits the work already done and no
+ * longer matches the recorded step positions.
  */
-export type BeginMigrationArgs =
-  | {
-      direction: "up";
-      migrationId: string;
-      plan: MigrationPlanIdentity;
-      appliedManifest?: undefined;
-    }
-  | {
-      direction: "down";
-      migrationId: string;
-      plan: MigrationPlanIdentity;
-      appliedManifest: readonly ManifestEntry[];
-    };
+export interface BeginMigrationArgs {
+  direction: MigrationDirection;
+  migrationId: string;
+  plan: MigrationPlanIdentity;
+  /**
+   * The canonical legacy-to-migrated plan, required in both directions: an `up`
+   * run applies it and a `down` run reverses it, and neither can rebuild it.
+   */
+  appliedManifest: readonly ManifestEntry[];
+}
 
 export async function beginMigration(
   meta: MetaService,
@@ -289,8 +313,25 @@ export async function beginMigration(
   // next read would reject leaves the database unavailable with no way forward,
   // and an empty identifier is the easiest way to do that by accident.
   requireIdentifier(args.migrationId, "migrationId");
+  requireIdentifier(args.plan.slugsHash, "slugsHash");
   requireIdentifier(args.plan.manifestHash, "manifestHash");
-  requireIdentifier(args.plan.planHash, "planHash");
+
+  // Validated through the same function the read uses, so a write cannot
+  // produce a marker its own reader refuses -- which would strand a run after
+  // its first step had committed.
+  const appliedManifest = parseAppliedManifest(args.appliedManifest);
+  // The recorded hash has to describe the plan actually being stored, or the
+  // integrity check on read would compare against a number nothing produced.
+  const actualHash = hashManifest(appliedManifest);
+  if (actualHash !== args.plan.manifestHash) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "recorded manifest hash does not describe the recorded plan",
+        recorded: args.plan.manifestHash,
+        actual: actualHash,
+      },
+    });
+  }
 
   const marker: StoredMarker = {
     version: MIGRATION_MARKER_VERSION,
@@ -298,15 +339,9 @@ export async function beginMigration(
     direction: args.direction,
     migrationId: args.migrationId,
     step: 0,
+    slugsHash: args.plan.slugsHash,
     manifestHash: args.plan.manifestHash,
-    planHash: args.plan.planHash,
-    // Carried from the settled marker rather than dropped: a rollback has no
-    // other source for the plan it is reversing. Validated through the same
-    // function the read uses, so a write cannot produce a marker its own reader
-    // refuses -- which would strand a run after its first step had committed.
-    ...(args.appliedManifest === undefined
-      ? {}
-      : { appliedManifest: parseAppliedManifest(args.appliedManifest) }),
+    appliedManifest,
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
@@ -379,51 +414,43 @@ export async function advanceStep(
     direction: current.direction,
     migrationId: current.migrationId,
     step: args.step,
+    slugsHash: current.plan.slugsHash,
     manifestHash: current.plan.manifestHash,
-    planHash: current.plan.planHash,
     // Preserved on every step. Losing it mid-run would leave a crash with a
     // step position and no plan to index into.
-    ...(current.appliedManifest === undefined
-      ? {}
-      : { appliedManifest: current.appliedManifest }),
+    appliedManifest: current.appliedManifest,
   };
   await meta.set(FIELD_GROUP_MIGRATION_KEY, marker);
 }
 
 /**
- * Refuse to resume a run whose plan is no longer the plan that was interrupted.
+ * Refuse to resume a run whose world is no longer the world it was planned in.
  *
- * Steps are identified by position, and a position only means something
- * relative to the plan it was checked off under. Two different changes can
- * invalidate it, and they are reported separately because they point an
- * operator at different causes:
+ * The plan itself is read back from the marker rather than rebuilt, so it cannot
+ * have drifted; its integrity is checked on read against the recorded hash. What
+ * remains is whether the *set of field groups* still matches. A group created or
+ * deleted while a run was interrupted is storage the recorded plan never
+ * mentions, and continuing would leave it behind at the legacy prefix while
+ * everything else moved.
  *
- * - The object map moved: the application's schema changed between the
- *   interrupted run and this one, so step N now names different objects.
- * - The step list moved: Nextly was upgraded and its steps were added, removed
- *   or reordered, so step N is a different operation even though the database's
- *   own objects are untouched.
+ * Compared by slug rather than by table name because the pointer rewrite that
+ * accompanies each rename changes table names as the run progresses; a
+ * name-based comparison would refuse every resume past the first step, since the
+ * rows the comparison reads have themselves been rewritten by the work already
+ * done.
  *
- * Neither is reconcilable, so both refuse. Callers invoke this once they have
- * rebuilt the plan and can supply its identity, which is necessarily after the
- * resume decision itself is made.
+ * Not reconcilable, so it refuses. Callers invoke it once they have read the
+ * current registry rows and can hash their slugs.
  */
 export function assertPlanUnchanged(args: {
   recorded: MigrationPlanIdentity;
   current: MigrationPlanIdentity;
 }): void {
-  if (args.recorded.manifestHash !== args.current.manifestHash) {
+  if (args.recorded.slugsHash !== args.current.slugsHash) {
     throw planMoved(
-      "migration object map changed since the interrupted run",
-      args.recorded.manifestHash,
-      args.current.manifestHash
-    );
-  }
-  if (args.recorded.planHash !== args.current.planHash) {
-    throw planMoved(
-      "migration step list changed since the interrupted run",
-      args.recorded.planHash,
-      args.current.planHash
+      "the set of field groups changed since the interrupted run",
+      args.recorded.slugsHash,
+      args.current.slugsHash
     );
   }
 }

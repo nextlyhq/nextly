@@ -4,6 +4,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import {
   buildMigrationManifest,
+  hashSlugSet,
   hashManifest,
   invertManifest,
   MIGRATION_TARGET,
@@ -393,5 +394,43 @@ describe("field-group migration manifest", () => {
     expect(MIGRATION_TARGET.tablePrefix.length).toBeLessThanOrEqual(
       STORAGE_FORMAT.tablePrefix.length
     );
+  });
+});
+
+describe("hashSlugSet", () => {
+  // Identity of the *set*, so row order from the registry must not change it.
+  it("does not depend on row order", () => {
+    expect(hashSlugSet([{ slug: "a" }, { slug: "b" }])).toBe(
+      hashSlugSet([{ slug: "b" }, { slug: "a" }])
+    );
+  });
+
+  // The question it answers: did a field group appear or disappear underneath an
+  // interrupted run? Either leaves storage the recorded plan never mentions.
+  it("changes when a field group is added or removed", () => {
+    const base = hashSlugSet([{ slug: "a" }, { slug: "b" }]);
+    expect(hashSlugSet([{ slug: "a" }, { slug: "b" }, { slug: "c" }])).not.toBe(
+      base
+    );
+    expect(hashSlugSet([{ slug: "a" }])).not.toBe(base);
+  });
+
+  // The core property: which slugs, not how many. A group deleted and another
+  // created between runs leaves the count identical while the set is different,
+  // and the recorded plan mentions storage that is now absent.
+  it("distinguishes different sets of the same size", () => {
+    expect(hashSlugSet([{ slug: "a" }])).not.toBe(hashSlugSet([{ slug: "b" }]));
+    expect(hashSlugSet([{ slug: "a" }, { slug: "b" }])).not.toBe(
+      hashSlugSet([{ slug: "a" }, { slug: "c" }])
+    );
+  });
+
+  // Slugs rather than table names, because `table_name` is rewritten as each
+  // rename commits: a name-based hash would stop matching partway through a run
+  // and refuse the resume it exists to protect.
+  it("ignores everything except the slugs", () => {
+    const rows = [{ slug: "a", tableName: "comp_a" }];
+    const renamed = [{ slug: "a", tableName: "fg_a" }];
+    expect(hashSlugSet(renamed)).toBe(hashSlugSet(rows));
   });
 });
