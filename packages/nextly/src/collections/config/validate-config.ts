@@ -34,8 +34,6 @@ import {
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
-  validateBlocksDefaultShared,
-  validateBlocksPolicyShared,
   validatePluginFieldOptionsShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -400,8 +398,6 @@ function validateField(
 
     case "blocks":
       // A blocks default must satisfy the same field policy the write applies.
-      validateBlocksPolicyShared(f, path, errsBase);
-      validateBlocksDefaultShared(f, path, errsBase);
       break;
 
     case "relationship":

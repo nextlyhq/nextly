@@ -54,8 +54,6 @@ export type FieldType =
   | "json"
   // Component types
   | "component"
-  // Page-builder document
-  | "blocks"
   // Array-like types
   | "chips";
 

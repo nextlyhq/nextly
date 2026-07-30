@@ -139,7 +139,6 @@ export function fieldToColumnDef(
     case "repeater":
     case "group":
     case "chips":
-    case "blocks":
       columnType =
         dialect === "postgresql"
           ? "JSONB"

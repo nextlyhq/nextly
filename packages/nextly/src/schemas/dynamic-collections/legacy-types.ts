@@ -1,5 +1,3 @@
-import type { DocumentKind } from "@nextlyhq/blocks-engine";
-
 /**
  * Legacy UI-collection field-definition types.
  *
@@ -58,8 +56,7 @@ export type DynamicFieldType =
   | "group"
   | "json"
   | "component"
-  | "chips"
-  | "blocks";
+  | "chips";
 
 export type FieldDefinition = {
   name: string;
@@ -98,8 +95,6 @@ export type FieldDefinition = {
     label: string;
     value: string;
   }>;
-  /** A blocks field's accepted block names and document kinds. */
-  blocks?: { allow?: string[]; kinds?: DocumentKind[] };
   /** Allow multiple values (for text, number, select, upload, relationship) */
   hasMany?: boolean;
   /** Target collection slug(s) for relationship fields */

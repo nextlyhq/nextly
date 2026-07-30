@@ -13,8 +13,6 @@
  * @since 1.0.0
  */
 
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
-
 import type { FieldConfig, DataFieldConfig } from "@nextly/collections";
 
 import {
@@ -35,7 +33,6 @@ import {
   isGroupField,
   isJSONField,
   isChipsField,
-  isBlocksField,
   isDataField,
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
@@ -50,9 +47,6 @@ import {
   reserveAppliedGlobals,
 } from "./plugin-codegen";
 import type { PluginEmission } from "./plugin-codegen";
-
-/** What a blocks field accepts when it declares no kinds of its own. */
-const DEFAULT_BLOCKS_DOCUMENT_KIND = "page";
 
 // ============================================================
 // Types
@@ -506,13 +500,6 @@ export class ZodGenerator {
     else if (isChipsField(field)) {
       zodSchema = this.buildChipsSchema(field);
     }
-    // Blocks fields — a whole page document. The node tree is validated in
-    // depth by the engine on write; the generated schema asserts the envelope,
-    // pinned to the format version and the kinds this field actually accepts
-    // so a value it admits is one the server will also admit.
-    else if (isBlocksField(field)) {
-      zodSchema = this.buildBlocksSchema(field);
-    }
     // A plugin-contributed type that states its own schema. Asked after the
     // built-ins, so a plugin cannot change how a core type is generated, and a
     // type that stays silent still yields no schema rather than a loose one.
@@ -763,23 +750,6 @@ export class ZodGenerator {
   }
 
   /**
-   * Builds Zod schema for a blocks field's document envelope.
-   */
-  private buildBlocksSchema(field: DataFieldConfig): string {
-    const kinds = (field as { blocks?: { kinds?: string[] } }).blocks?.kinds;
-    // Omitting `kinds` means the field takes its entry's own page; declaring
-    // an empty list means it takes nothing, which the write validator already
-    // enforces. Collapsing the two here would generate a schema that admits
-    // documents the server refuses.
-    const accepted = kinds ?? [DEFAULT_BLOCKS_DOCUMENT_KIND];
-    const kindSchema =
-      accepted.length > 0
-        ? `z.enum([${accepted.map(kind => `"${this.escapeString(kind)}"`).join(", ")}])`
-        : "z.never()";
-    return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: ${kindSchema}, nodes: z.array(z.unknown()) }).passthrough()`;
-  }
-
-  /**
    * Builds Zod schema for chips fields.
    */
   private buildChipsSchema(field: DataFieldConfig): string {
@@ -847,10 +817,6 @@ export class ZodGenerator {
         zodSchema = "z.any()";
       } else if (isChipsField(field)) {
         zodSchema = this.buildChipsSchema(field);
-      } else if (isBlocksField(field)) {
-        // A nested blocks field is emitted like a top-level one: omitted, the
-        // generated schema would strip the document from a group or row.
-        zodSchema = this.buildBlocksSchema(field);
       } else {
         // Same for a nested plugin type: skipping it would drop the value from
         // the row's schema even though it is stored.

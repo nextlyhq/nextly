@@ -95,7 +95,6 @@ import type {
 import type { SingleRegistryService } from "./single-registry-service";
 import {
   assertNoPasswordDefault,
-  assertValidBlocksDefault,
   buildSingleErrorResult,
   collectAllMediaIds,
   deserializeJsonFields,
@@ -2007,13 +2006,6 @@ export class SingleQueryService extends BaseService {
           typeof defaultSource.defaultValue === "function"
             ? defaultSource.defaultValue(logicalDefaults)
             : defaultSource.defaultValue;
-        // A blocks default is checked here rather than only at config load,
-        // because a function default can only be resolved against real data.
-        // This row is inserted directly on first read, without going through
-        // the write path, so nothing downstream would catch a document the
-        // field's own policy rejects — and the admin control is read-only, so
-        // the stored value could not be corrected from the UI.
-        assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
         // Same direct-insert reasoning for passwords: this path never runs
         // `hashPasswordFieldValues`, so a resolved password default would persist
         // in plaintext. Refuse it (a password must be set explicitly to be hashed).

@@ -111,12 +111,10 @@ export {
   json,
   fieldGroup,
   chips,
-  blocks,
   option,
 } from "./collections/fields/helpers";
 
 export {
-  isBlocksField,
   isTextField,
   isTextareaField,
   isRichTextField,
@@ -141,17 +139,3 @@ export {
 } from "./collections/fields/guards";
 
 export type * from "./collections/fields/types";
-
-// The stored page-builder document, re-exported so app and admin code can name
-// what a blocks field holds without depending on the engine package directly.
-export type {
-  BlockDocument,
-  BlockNode,
-  DocumentKind,
-} from "@nextlyhq/blocks-engine";
-
-// A starting document for a blocks field with no declared default.
-export {
-  emptyBlockDocument,
-  emptyBlockDocumentJson,
-} from "./collections/fields/blocks-document";

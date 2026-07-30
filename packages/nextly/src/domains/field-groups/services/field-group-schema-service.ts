@@ -36,7 +36,6 @@ import {
   index as sqliteIndex,
 } from "drizzle-orm/sqlite-core";
 
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import {
   isTextField,
   isTextareaField,
@@ -54,7 +53,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isBlocksField,
   isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
@@ -65,6 +63,7 @@ import type {
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { pluginEmptyValue } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   DEFAULT_DECIMAL_PRECISION,
@@ -780,7 +779,7 @@ export class FieldGroupSchemaService {
     if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
     }
-    if (isJSONField(field) || isBlocksField(field)) {
+    if (isJSONField(field)) {
       return types.json;
     }
 
@@ -826,12 +825,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return pgText(colName);
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
     }
 
@@ -883,12 +877,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return mysqlVarchar(colName, { length: 36 });
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
     }
 
@@ -935,12 +924,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return sqliteText(colName);
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
     }
 
@@ -1018,6 +1002,14 @@ export class FieldGroupSchemaService {
 
   // Used when adding NOT NULL columns to existing tables.
   private getDefaultValueForType(type: string, field?: FieldConfig): string {
+    // A contributed type states its own backfill before the primitive's is
+    // derived: `{}` satisfies a json column and then fails every read that
+    // expects the structure the type actually stores.
+    const contributed = pluginEmptyValue({ ...field, type });
+    if (contributed !== undefined) {
+      return quoteJsonSqlDefault(contributed, this.dialect);
+    }
+
     switch (type) {
       case "text":
       case "textarea":
@@ -1028,13 +1020,6 @@ export class FieldGroupSchemaService {
       case "select":
       case "radio":
         return "''";
-      case "blocks":
-        return quoteJsonSqlDefault(
-          emptyBlockDocumentJson(
-            field && isBlocksField(field) ? field.blocks?.kinds : undefined
-          ),
-          this.dialect
-        );
       case "number":
         return "0";
       case "checkbox":

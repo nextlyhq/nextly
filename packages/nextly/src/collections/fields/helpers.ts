@@ -52,7 +52,6 @@ import type {
   // Structured field types
   RepeaterFieldConfig,
   GroupFieldConfig,
-  BlocksFieldConfig,
   JSONFieldConfig,
   // Component field types
   FieldGroupFieldConfig,
@@ -578,52 +577,6 @@ export const group = (
 ): GroupFieldConfig => ({
   ...config,
   type: "group",
-});
-
-/**
- * Creates a JSON field configuration.
- *
- * JSON fields store arbitrary JSON data with optional schema validation.
- * Provides a Monaco-based JSON editor in the Admin UI.
- *
- * @param config - Field configuration without the `type` property
- * @returns Complete JSON field configuration
- *
- * @example
- * ```typescript
- * // Basic JSON field
- * json({ name: 'metadata' })
- *
- * // JSON with schema validation
- * json({
- *   name: 'config',
- *   jsonSchema: {
- *     type: 'object',
- *     properties: {
- *       theme: { type: 'string', enum: ['light', 'dark'] },
- *       maxItems: { type: 'number', minimum: 1 },
- *     },
- *     required: ['theme'],
- *   },
- * })
- * ```
- */
-/**
- * Creates a blocks field configuration.
- *
- * Holds one page-builder document. The block types it accepts are whichever
- * are registered for the app, optionally narrowed by `blocks.allow`.
- *
- * @example
- * ```typescript
- * blocks({ name: 'content', blocks: { allow: ['core/*'] } })
- * ```
- */
-export const blocks = (
-  config: Omit<BlocksFieldConfig, "type">
-): BlocksFieldConfig => ({
-  ...config,
-  type: "blocks",
 });
 
 export const json = (

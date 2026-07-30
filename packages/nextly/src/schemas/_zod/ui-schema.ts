@@ -12,11 +12,8 @@
  * @module schemas/_zod/ui-schema
  * @since v0.0.3-alpha (Plan D1)
  */
-import type { DocumentKind } from "@nextlyhq/blocks-engine";
-import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
-import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
 import {
   isPluginOptionContainer,
   RESERVED_PLUGIN_OPTION_KEYS,
@@ -47,32 +44,7 @@ export const UI_FIELD_TYPES = [
   "component",
   "json",
   "chips",
-  "blocks",
 ] as const;
-
-/**
- * Whether a default is a document this field would accept on write.
- *
- * It runs the field's own validator rather than a shape check of its own, so
- * the two cannot disagree. That matters twice over: a default carrying a
- * malformed node, or one of a kind the field excludes, would otherwise seed
- * the read-only control on a create form and then be rejected on submit with
- * nothing the user could do about it.
- */
-function isValidDocumentDefault(
-  value: unknown,
-  policy: { allow?: string[]; kinds?: DocumentKind[] } | undefined
-): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const doc = value as { formatVersion?: unknown };
-  if (typeof doc.formatVersion !== "number") return false;
-  return (
-    validateBlocksValue(value, "defaultValue", "defaultValue", policy ?? {})
-      .length === 0
-  );
-}
 
 /** Field names the framework reserves (system columns). */
 // Universal system columns present on every entity table (collection, single,
@@ -175,13 +147,6 @@ export type FieldNode = {
   hasMany?: boolean;
   relationTo?: string | string[];
   options?: { id?: string; label: string; value: string }[];
-  /**
-   * A blocks field's policy. Declared here as well as in the schema so the
-   * parsed result carries it statically — the runtime parser preserves it
-   * either way, and a type that erased it would make every consumer cast, and
-   * would let a mapper drop it without the compiler noticing.
-   */
-  blocks?: { allow?: string[]; kinds?: DocumentKind[] };
   defaultValue?: unknown;
   validation?: {
     minLength?: number;
@@ -281,24 +246,6 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       hasMany: z.boolean().optional(),
       relationTo: z.union([z.string(), z.array(z.string())]).optional(),
       options: z.array(selectOption).optional(),
-      // A blocks field's policy: which registered blocks it accepts and which
-      // document kinds. Undeclared, Zod would strip it and persist a field
-      // that accepts everything the submitted schema meant to exclude.
-      blocks: z
-        .object({
-          allow: z.array(z.string()).optional(),
-          // An empty list would accept no document at all, while required-field
-          // seeding still has to synthesize one — leaving a stored value the
-          // same field's validator rejects. Omit the key to accept a page.
-          kinds: z
-            .array(z.enum(DOCUMENT_KINDS))
-            .min(
-              1,
-              "blocks.kinds cannot be empty: the field would accept no document at all. Omit it to accept a page."
-            )
-            .optional(),
-        })
-        .optional(),
       defaultValue: z.unknown().optional(),
       validation: validation.optional(),
       admin: fieldAdmin.optional(),
@@ -420,11 +367,6 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
         const okType =
           (f.type === "number" && typeof dv === "number") ||
           (f.type === "checkbox" && typeof dv === "boolean") ||
-          // A blocks default is a whole document. Checking only that it is an
-          // object would let a malformed default seed the read-only control on
-          // a create form, leaving a value the user cannot correct and the
-          // write-time validator rejects.
-          (f.type === "blocks" && isValidDocumentDefault(dv, f.blocks)) ||
           ([
             "text",
             "textarea",

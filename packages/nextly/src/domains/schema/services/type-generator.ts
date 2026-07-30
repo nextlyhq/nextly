@@ -35,7 +35,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isBlocksField,
   isChipsField,
   isFieldGroupField,
   isDataField,
@@ -865,10 +864,6 @@ export class TypeGenerator {
     // Chips fields (array of strings)
     else if (isChipsField(field)) {
       tsType = "string[]";
-    }
-    // Blocks fields (one page-builder document)
-    else if (isBlocksField(field)) {
-      tsType = "BlockDocument";
     }
     // Component fields
     else if (isFieldGroupField(field)) {

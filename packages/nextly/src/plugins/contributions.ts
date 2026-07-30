@@ -277,6 +277,27 @@ export interface PluginFieldType {
    * diff.
    */
   codegen?: PluginFieldCodegen;
+
+  /**
+   * What a field of this type holds when nothing has been written to it.
+   *
+   * Two paths need it and must agree: backfilling a NOT NULL column added to a
+   * table that already has rows, and seeding a required field on a record
+   * created without one — a single auto-created on first read. Core derives
+   * both from the storage primitive (`{}` for `json`, `0` for `number`), which
+   * is right for a type that stores a bag and wrong for one that stores a
+   * structured document: `{}` satisfies the column and then fails every read
+   * that expects the structure.
+   *
+   * Returns the serialized value, never SQL. The DDL path quotes and escapes
+   * it for the dialect being generated, so a type cannot get that wrong across
+   * three dialects. Returning nothing keeps the primitive's default.
+   *
+   * The field is passed as declared, so the value can honour the options on it
+   * — a document field restricted to one kind can seed a document of that kind
+   * rather than a generic one.
+   */
+  emptyValue?: (field: PluginFieldInstance) => string | undefined;
 }
 
 /** A type-only import a generated file needs for one field type's expressions. */

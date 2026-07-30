@@ -8,7 +8,3 @@
  */
 
 export * from "./code-validators";
-export {
-  validateBlocksValue,
-  type BlocksValidationOptions,
-} from "./blocks-validator";

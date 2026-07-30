@@ -22,9 +22,9 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
+import { pluginEmptyValue } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
@@ -1065,8 +1065,16 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    */
   private getDefaultValueForType(
     type: string,
-    field?: Pick<FieldDefinition, "blocks">
+    field?: Partial<FieldDefinition>
   ): string {
+    // A contributed type states its own backfill before the primitive's is
+    // derived: `{}` satisfies a json column and then fails every read that
+    // expects the structure the type actually stores.
+    const contributed = pluginEmptyValue({ ...field, type });
+    if (contributed !== undefined) {
+      return quoteJsonSqlDefault(contributed, this.dialect);
+    }
+
     switch (type) {
       case "text":
       case "textarea":
@@ -1088,13 +1096,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "repeater":
       case "group":
         return quoteJsonSqlDefault("{}", this.dialect);
-      case "blocks":
-        // A required blocks column needs a document, not an empty object: the
-        // generic `{}` has no formatVersion, kind, or nodes.
-        return quoteJsonSqlDefault(
-          emptyBlockDocumentJson(field?.blocks?.kinds),
-          this.dialect
-        );
       case "chips":
         return quoteJsonSqlDefault("[]", this.dialect);
       case "relationship":
