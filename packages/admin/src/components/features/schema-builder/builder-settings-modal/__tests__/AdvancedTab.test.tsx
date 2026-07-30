@@ -104,6 +104,50 @@ describe("AdvancedTab -- version history", () => {
     render(<Controlled fields={["versions"]} />);
     expect(screen.getByText(/does not add drafts/i)).toBeInTheDocument();
   });
+
+  it("shows the retention count only for a custom cap", () => {
+    // A stored number is the "keep last N" mode, so the count field is visible.
+    render(
+      <Controlled
+        fields={["versions"]}
+        initial={{ versions: true, versionsMaxPerDoc: 20 }}
+      />
+    );
+    expect(
+      screen.getByRole("spinbutton", { name: /versions to keep per document/i })
+    ).toHaveValue(20);
+  });
+
+  it("commits the default when a custom retention count is cleared", async () => {
+    // Clearing the field must not leave the previous number persisted on save;
+    // it commits undefined (the default) while the input stays visible.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["versions"]}
+        initial={{ versions: true, versionsMaxPerDoc: 20 }}
+        onChange={onChange}
+      />
+    );
+    const input = screen.getByRole("spinbutton", {
+      name: /versions to keep per document/i,
+    });
+    await user.clear(input);
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.versionsMaxPerDoc).toBeUndefined();
+    // The field is still on screen so a replacement can be typed.
+    expect(input).toBeInTheDocument();
+  });
+
+  it("does not show a retention count when versioning is off", () => {
+    render(<Controlled fields={["versions"]} initial={{ versions: false }} />);
+    expect(
+      screen.queryByRole("spinbutton", {
+        name: /versions to keep per document/i,
+      })
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("AdvancedTab -- cache revalidation", () => {

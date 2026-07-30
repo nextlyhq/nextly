@@ -135,8 +135,12 @@ function RetentionField({
   value: number | false | undefined;
   onChange: (v: number | false | undefined) => void;
 }) {
-  const mode: "all" | "default" | "custom" =
-    value === false ? "all" : typeof value === "number" ? "custom" : "default";
+  // Mode is explicit state, not derived from `value`: a blank custom field
+  // commits the default (undefined), and deriving the mode from that would snap
+  // the select back to "Keep default" and hide the input the user is typing in.
+  const [mode, setMode] = useState<"all" | "default" | "custom">(
+    value === false ? "all" : typeof value === "number" ? "custom" : "default"
+  );
 
   const [customText, setCustomText] = useState(
     typeof value === "number" ? String(value) : "50"
@@ -148,6 +152,7 @@ function RetentionField({
   }, [value]);
 
   const onMode = (next: "all" | "default" | "custom") => {
+    setMode(next);
     if (next === "all") onChange(false);
     else if (next === "default") onChange(undefined);
     else {
@@ -158,8 +163,13 @@ function RetentionField({
 
   const onCount = (text: string) => {
     setCustomText(text);
-    // Empty is allowed while typing; the value is only committed once it parses.
-    if (text === "") return;
+    // A blank field commits the default rather than leaving the previous number
+    // persisted if the user saves before typing a replacement; the mode stays
+    // "custom" (explicit state) so the input remains visible meanwhile.
+    if (text === "") {
+      onChange(undefined);
+      return;
+    }
     const n = Number(text);
     if (Number.isInteger(n) && n >= 0) onChange(n);
   };

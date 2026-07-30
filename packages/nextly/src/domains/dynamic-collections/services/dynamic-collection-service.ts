@@ -531,6 +531,24 @@ export class DynamicCollectionService extends BaseService {
     // off writes null. `status` is deliberately not passed to the resolver —
     // it aliases to a versioned config for back-compat, which would stop the
     // toggle from ever turning versioning off on a Draft/Published entity.
+    // Retention without the on/off switch is ambiguous — the resolver needs the
+    // enabled state — so a retention-only update is rejected rather than
+    // silently dropped. This is the chokepoint every collection-update caller
+    // reaches (the dispatcher forwards its raw body here).
+    if (
+      updates.versionsMaxPerDoc !== undefined &&
+      updates.versions === undefined
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "versionsMaxPerDoc",
+            code: "MISSING_DEPENDENCY",
+            message: "versionsMaxPerDoc requires versions to be set.",
+          },
+        ],
+      });
+    }
     if (updates.versions !== undefined) {
       metadataUpdates.versions = resolveBuilderVersions(
         updates.versions,

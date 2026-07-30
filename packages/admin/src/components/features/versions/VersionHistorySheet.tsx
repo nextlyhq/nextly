@@ -193,6 +193,14 @@ export function VersionHistorySheet({
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
 
+  // Whether THIS document is localized, not just whether the app is. A localized
+  // entity stamps a locale on every version and a non-localized one never does,
+  // so the presence of any locale in its own history is the reliable per-entity
+  // signal — `useLocalization().enabled` alone would show the filter on a
+  // non-localized document in an app that has other localized ones, where
+  // picking a locale could only ever match its NULL-locale versions (nothing).
+  const isLocalizedDocument = versions.some(v => v.locale !== null);
+
   // Compare targets for the version being previewed. A comparison must stay
   // within one locale (the server rejects a cross-locale pair), so both the
   // "current" and "previous" targets are drawn only from versions sharing the
@@ -338,9 +346,10 @@ export function VersionHistorySheet({
                   : `Version ${selected}`}
             </SheetTitle>
             {/* Locale filter, only while browsing the list (a chosen version or
-                a compare pair is already locale-fixed). Renders nothing for a
-                non-localized document. */}
-            {comparing === null && selected === null && (
+                a compare pair is already locale-fixed) and only for a document
+                whose own history carries locales — so it never appears on a
+                non-localized document in an otherwise localized app. */}
+            {comparing === null && selected === null && isLocalizedDocument && (
               <VersionLocaleFilter
                 value={localeFilter}
                 onChange={locale => {

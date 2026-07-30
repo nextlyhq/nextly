@@ -37,6 +37,16 @@ describe("resolveBuilderVersions", () => {
     expect(resolveBuilderVersions(true, false)?.maxPerDoc).toBe(false);
   });
 
+  it("clamps an invalid retention to the default at the chokepoint", () => {
+    // An unvalidated dispatcher path can forward a negative the cast typed as a
+    // number; retention would clamp it to zero and prune all but protected
+    // history, so the resolver coerces it back to the default here.
+    const negative = -1 as unknown as number;
+    expect(resolveBuilderVersions(true, negative)?.maxPerDoc).toBe(50);
+    const fractional = 2.5 as unknown as number;
+    expect(resolveBuilderVersions(true, fractional)?.maxPerDoc).toBe(50);
+  });
+
   it("ignores retention when the switch is off", () => {
     expect(resolveBuilderVersions(false, 10)).toBeNull();
   });

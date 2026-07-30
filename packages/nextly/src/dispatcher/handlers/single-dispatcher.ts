@@ -1069,6 +1069,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // stored; off writes null. `status` is deliberately not passed to the
       // resolver: it aliases to a versioned config for back-compat, which would
       // stop the toggle from turning versioning off on a Draft/Published single.
+      // Retention without the on/off switch is ambiguous — the resolver needs
+      // the enabled state — so a retention-only patch is rejected rather than
+      // silently ignored. Mirrors the schema-detail routes.
+      if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "versionsMaxPerDoc",
+              code: "MISSING_DEPENDENCY",
+              message: "versionsMaxPerDoc requires versions to be set.",
+            },
+          ],
+        });
+      }
       if (b.versions !== undefined) {
         updateData.versions = resolveBuilderVersions(
           b.versions,

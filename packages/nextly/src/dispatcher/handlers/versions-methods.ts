@@ -153,7 +153,10 @@ export async function listVersionsForDocument(
     {
       limit: limit + 1,
       ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
-      ...(args.locale !== undefined ? { locale: args.locale } : {}),
+      // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
+      // it); treat that as absent so both list surfaces list every locale rather
+      // than matching a non-existent empty-string locale and returning nothing.
+      ...(args.locale ? { locale: args.locale } : {}),
     }
   );
   const hasNext = window.length > limit;

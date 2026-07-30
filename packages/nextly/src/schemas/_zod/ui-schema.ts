@@ -489,6 +489,19 @@ function entity(kind?: "collection" | "single" | "component") {
           path: ["versions"],
         });
       }
+      // Retention rides with version history, which components do not have, so
+      // it is rejected for the same reason as `versions` above rather than
+      // round-tripping a setting no component metadata path reads.
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.versionsMaxPerDoc !== undefined
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'versionsMaxPerDoc' is not supported on components",
+          path: ["versionsMaxPerDoc"],
+        });
+      }
       // Components have no entries and no registry row of their own, so a
       // revalidation switch would persist a setting nothing reads and the
       // Builder never offers (same rationale as `versions` above).

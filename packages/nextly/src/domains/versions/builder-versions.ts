@@ -53,8 +53,13 @@ export function resolveBuilderVersions(
   maxPerDoc?: number | false
 ): ResolvedVersionsConfig | null {
   if (enabled !== true) return null;
+  // Coerce at this single chokepoint so an unvalidated path (the dispatcher
+  // casts its JSON body rather than Zod-parsing it) cannot persist a negative
+  // or non-integer cap: retention clamps a negative to zero and would prune all
+  // but the protected history. An invalid value falls back to the default.
+  const safe = coerceBuilderMaxPerDoc(maxPerDoc);
   return resolveVersionsConfig({
     drafts: false,
-    ...(maxPerDoc !== undefined ? { maxPerDoc } : {}),
+    ...(safe !== undefined ? { maxPerDoc: safe } : {}),
   });
 }
