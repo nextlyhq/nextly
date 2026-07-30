@@ -497,6 +497,43 @@ export async function localizedColumnsOnMain(
 }
 
 /**
+ * Whether creating a companion here would hide anything.
+ *
+ * Content is what makes it unsafe, not shape. A table that does not exist, or exists with no rows,
+ * has nothing to mask — and that is the ordinary case for a new entity, which must be free to get
+ * its companion from any caller or its localized writes are refused forever.
+ *
+ * With rows present, either of two things is enough to defer: translatable columns on the main
+ * table hold values an empty companion would mask, and a Draft/Published entity needs a
+ * default-locale row carrying each row's status or its published rows drop out of locale-aware
+ * reads. The seeding plan treats both as work.
+ *
+ * The row probe is a raw statement, like the existence probe above it and for the same reason:
+ * there is no table object to query through here. Both go when readiness moves to load time.
+ */
+async function creatingWouldHideContent(
+  adapter: CompanionIntrospectAdapter,
+  args: { tableName: string; status?: boolean },
+  localized: readonly CompanionFieldLike[]
+): Promise<boolean> {
+  if (!(await mainTableExists(adapter, args.tableName))) return false;
+
+  const columnsAtRisk = await localizedColumnsOnMain(
+    adapter,
+    args.tableName,
+    localized
+  );
+  if (args.status !== true && columnsAtRisk.length === 0) return false;
+
+  const q = (id: string) =>
+    adapter.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+  const rows = await adapter.executeQuery(
+    `SELECT 1 FROM ${q(args.tableName)} LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
+/**
  * Finish a copy that an earlier run started and did not complete.
  *
  * The companion already exists, so its CREATE is not reissued — only the copy is, and only for the
@@ -740,16 +777,18 @@ export async function ensureCompanionTable(
     // win decides. Boot-time provisioning has no locale to offer, so it defers here and leaves the
     // entity to the path that does; #382's write guard keeps a non-default write from doing damage
     // in the meantime.
-    // `args.status` counts as something to seed even with no column to copy: a Draft/Published
-    // entity needs a default-locale companion row carrying the main row's status, or its published
-    // rows drop out of locale-aware published reads. The seeding plan already treats status that
-    // way, so this guard has to agree or a locale-less caller creates the very companion the plan
-    // would have populated.
+    // What makes creating here unsafe is CONTENT, not shape. An entity with no rows has nothing to
+    // hide, so a locale-less caller may create its companion freely — which is the ordinary case
+    // for a new entity, and refusing it would leave every such entity without a companion and its
+    // localized writes refused.
+    //
+    // With rows present, two things are at stake and either is enough to defer: translatable
+    // columns on main hold values that an empty companion would mask, and a Draft/Published entity
+    // needs a default-locale row carrying each main row's status or its published rows drop out of
+    // locale-aware reads. The seeding plan treats both as work, so this guard has to agree.
     if (
       !args.sourceLocale &&
-      (args.status === true ||
-        (await localizedColumnsOnMain(adapter, args.tableName, newLocalized))
-          .length > 0)
+      (await creatingWouldHideContent(adapter, args, newLocalized))
     ) {
       onError?.(
         new Error(
