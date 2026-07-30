@@ -29,7 +29,7 @@ import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
   companionTableExists,
-  mainTableHasColumn,
+  mainTableHasColumns,
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
@@ -228,10 +228,10 @@ export class FieldGroupMutationService extends BaseService {
       // the same question before that transaction opened.
       const fallbackPossible =
         tx !== undefined ||
-        (await mainTableHasColumn(
+        (await mainTableHasColumns(
           this.adapter,
           meta.tableName,
-          schema.localizedFields[0]?.column
+          schema.localizedFields.map(f => f.column)
         ));
       if (!fallbackPossible) {
         throw NextlyError.conflict({

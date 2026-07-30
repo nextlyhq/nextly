@@ -91,7 +91,7 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   companionTableExists as sharedCompanionTableExists,
-  mainTableHasColumn,
+  mainTableHasColumns,
 } from "../../i18n/runtime/companion-io";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -987,11 +987,11 @@ export class CollectionMutationService extends BaseService {
       // that has no columns for them. That write cannot land: it reaches the driver
       // and fails as a 500. Refusing here says the same thing in terms the caller can
       // act on, and says it before anything is attempted.
-      const fallbackPossible = await mainTableHasColumn(
+      const fallbackPossible = await mainTableHasColumns(
         this.adapter,
         // The companion is always `<main>_locales`, so the main table is its stem.
         companion.companionTableName.replace(/_locales$/, ""),
-        companion.localizedFields[0]?.column
+        companion.localizedFields.map(f => f.column)
       );
       if (!fallbackPossible) {
         throw NextlyError.conflict({

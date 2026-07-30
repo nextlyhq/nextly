@@ -81,7 +81,7 @@ import {
 import {
   buildCompanionSchema,
   companionTableExists,
-  mainTableHasColumn,
+  mainTableHasColumns,
   splitLocalizedWrite,
   upsertCompanionRow,
   type CompanionSchema,
@@ -905,10 +905,10 @@ export class SingleMutationService extends BaseService {
         if (writeLocale !== undefined && writeLocale !== defaultLocale) {
           refuse();
         }
-        const fallbackPossible = await mainTableHasColumn(
+        const fallbackPossible = await mainTableHasColumns(
           this.adapter,
           singleMeta.tableName,
-          companion.localizedFields[0]?.column
+          companion.localizedFields.map(f => f.column)
         );
         if (!fallbackPossible) refuse();
       }

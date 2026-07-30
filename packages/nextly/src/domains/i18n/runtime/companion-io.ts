@@ -214,13 +214,11 @@ export async function reconcileCompanionColumns(
   onError?: (error: unknown) => void
 ): Promise<void> {
   const companionTableName = `${args.tableName}_locales`;
+  // Hoisted so the concurrency recheck in the catch can reuse it.
+  const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
+  const desired = args.fields.filter(f => localizedNames.has(f.name));
   try {
     if (!(await companionTableExists(adapter, companionTableName))) return;
-
-    const localizedNames = new Set(
-      resolveLocalizedFieldNames(args.fields, true)
-    );
-    const desired = args.fields.filter(f => localizedNames.has(f.name));
     if (desired.length === 0) return;
 
     const { introspectLiveSnapshot } = await import(
@@ -252,6 +250,26 @@ export async function reconcileCompanionColumns(
     // every run, so a partial apply simply finishes on the next one.
     const hasStatus = present.has("_status");
 
+    // Draft/Published was switched on after this companion was created, so `_status` is now
+    // required and absent. Reconciling it is unsafe for the reasons above — but returning
+    // quietly is worse than either: the caller persists `status: true`, reports success, and
+    // every later per-locale status read or write hits a column that is not there. Report it
+    // so `db:sync` exits non-zero and the operator learns now rather than at the next publish.
+    //
+    // Only this direction is a problem. Status switched OFF while the column remains is
+    // harmless: the column is simply unused, and the additive policy keeps it.
+    if (args.status === true && !hasStatus) {
+      onError?.(
+        new Error(
+          `The translations table ${companionTableName} predates Draft/Published being enabled ` +
+            `for "${args.slug}", so it has no _status column. Run \`nextly migrate\` to add it: ` +
+            `an unattended sync cannot, because adding the column and back-filling the ` +
+            `default locale's status cannot be retried safely if only the first half lands.`
+        )
+      );
+      return;
+    }
+
     // Nothing missing — the overwhelmingly common case, and worth leaving before the statement
     // builder runs.
     if (desired.every(f => present.has(toColumn(f.name)))) return;
@@ -278,12 +296,32 @@ export async function reconcileCompanionColumns(
       await adapter.executeQuery(stmt);
     }
   } catch (error) {
+    // Same check-then-act window as the create path: a concurrent sync or reload may have added
+    // the very columns this run was adding, and `ADD COLUMN` is not idempotent. Re-introspect
+    // and treat "the shape we wanted is now present" as success, whoever produced it.
+    try {
+      const { introspectLiveSnapshot: reread } = await import(
+        "../../schema/pipeline/diff/introspect-live"
+      );
+      const after = await reread(adapter.getDrizzle(), adapter.dialect, [
+        companionTableName,
+      ]);
+      const now = new Set(
+        after.tables
+          .find(t => t.name === companionTableName)
+          ?.columns.map(c => c.name) ?? []
+      );
+      if (desired.every(f => now.has(toColumn(f.name)))) return;
+    } catch {
+      // Fall through to reporting the original error: if we cannot even re-read the table,
+      // the reconcile genuinely did not succeed.
+    }
     onError?.(error);
   }
 }
 
 /**
- * Whether the main table still physically carries `columnName`.
+ * Whether the main table still physically carries ALL of `columnNames`.
  *
  * This answers one question for every entity type: **can the pre-companion fallback actually
  * persist anything?** While the companion is missing, a write in the default language is meant
@@ -306,12 +344,13 @@ export async function reconcileCompanionColumns(
  * raised: errors leaving a transaction callback pass through the adapter's error classification,
  * which rewraps anything that is not already a `DatabaseError`.
  */
-export async function mainTableHasColumn(
+export async function mainTableHasColumns(
   adapter: CompanionIntrospectAdapter,
   tableName: string,
-  columnName: string | undefined
+  columnNames: readonly (string | undefined)[]
 ): Promise<boolean> {
-  if (!columnName) return false;
+  const wanted = columnNames.filter((c): c is string => Boolean(c));
+  if (wanted.length === 0) return false;
   const { introspectLiveSnapshot } = await import(
     "../../schema/pipeline/diff/introspect-live"
   );
@@ -321,7 +360,13 @@ export async function mainTableHasColumn(
     [tableName]
   );
   const table = snapshot.tables.find(t => t.name === tableName);
-  return table?.columns.some(c => c.name === columnName) === true;
+  if (!table) return false;
+  const present = new Set(table.columns.map(c => c.name));
+  // EVERY column, not just one. A partially migrated main table — an older field keeping its
+  // legacy column while a newer localized field never had one — would otherwise pass on the
+  // first column and then fail at the driver on a later one, which is the opaque 500 this
+  // check exists to replace with an actionable refusal.
+  return wanted.every(c => present.has(c));
 }
 
 // Whether a probe error is a verified "this TABLE does not exist" for the
@@ -439,6 +484,16 @@ export async function ensureCompanionTable(
       await adapter.executeQuery(stmt);
     }
   } catch (error) {
+    // Another process may have created it between the probe and the CREATE — `db:sync` and a
+    // dev boot/HMR reload provision the same companions, and `CREATE TABLE` is not idempotent
+    // here. Losing that race is a success: the table the caller wanted now exists. Confirmed by
+    // re-checking rather than by reading the error text, so this cannot swallow a real failure
+    // that happens to mention the table.
+    if (
+      await companionTableExists(adapter, companionTableName).catch(() => false)
+    ) {
+      return;
+    }
     // Best-effort: the main table may not exist yet on a very first boot, where the
     // companion is created on the next boot (or by `nextly migrate`). That case is
     // expected and self-healing. Anything else is NOT — a persistent failure here

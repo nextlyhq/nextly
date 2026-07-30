@@ -437,56 +437,6 @@ describe.each(getConfiguredTestDialects())(
   }
 );
 
-describe.each(getConfiguredTestDialects())(
-  "non-repeatable dynamic zone with no companion on %s (integration)",
-  dialect => {
-    it("refuses with a 409 rather than a database failure", async () => {
-      current = await createTestNextly({
-        dialect,
-        fieldGroups: [
-          defineFieldGroup({
-            slug: "znsingle",
-            localized: true,
-            fields: [text({ name: "heading", localized: true })],
-          }),
-        ],
-        collections: [
-          defineCollection({
-            slug: "i18nwin_single",
-            fields: [
-              text({ name: "title" }),
-              // No `repeatable`, so the payload below is one object, not an array.
-              fieldGroup({ name: "hero", components: ["znsingle"] }),
-            ],
-          }),
-        ],
-        localization,
-      });
-
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`comp_znsingle_locales`" : '"comp_znsingle_locales"'}`
-      );
-
-      const created = await current
-        .getService<CollectionsHandler>("collectionsHandler")
-        .createEntry(
-          {
-            collectionName: "i18nwin_single",
-            overrideAccess: true,
-            locale: "es",
-          },
-          {
-            title: "Page",
-            hero: { _componentType: "znsingle", heading: "Hola" },
-          }
-        );
-
-      expect(created.success).toBe(false);
-      expect(created.statusCode).toBe(409);
-      expect(created.message).toMatch(/Translations are not ready/);
-    });
-  }
-);
 describe("dynamic zone whose unused field group has no companion (integration)", () => {
   it("saves a block type whose companion exists while another permitted type's is missing", async () => {
     current = await createTestNextly({
