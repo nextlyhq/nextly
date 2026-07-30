@@ -453,6 +453,32 @@ export async function companionHasStatusColumn(
  * would attach today's default to content written under some earlier one.
  */
 /**
+ * Whether an entity's MAIN table is physically present.
+ *
+ * Asked through the canonical introspection helper rather than by running a probe query and
+ * catching the failure: that shape is valid on SQLite and MySQL and poisons a transaction on
+ * PostgreSQL, and it is the pattern the integration harness now fails tests for.
+ *
+ * Provisioning uses it to tell an entity that may hold content from one the schema apply has not
+ * created yet — only the first can be seeded, and only the second has to wait for its main table
+ * before a companion can carry a foreign key to it.
+ */
+export async function mainTableExists(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string
+): Promise<boolean> {
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  return snapshot.tables.some(t => t.name === tableName);
+}
+
+/**
  * The create-plus-seed plan, or null when a plain create is what this entity needs.
  *
  * The Schema Builder's localization toggle has always copied the main table's values into the

@@ -108,6 +108,9 @@ async function runSync(config: LoadConfigResult["config"]): Promise<void> {
   await ensureCoreTables(cli, options, context);
 
   const configResult = { config } as LoadConfigResult;
+  // Mirrors `runDbSync`: the transition copy runs BEFORE the pushes, while an entity gaining
+  // localization still has the translatable columns on its main table for the copy to read.
+  await ensureLocalizedCompanions(config, cli, context, "beforeApply");
   await syncCollections(configResult, cli, options, context);
   await syncSingles(configResult, cli, options, context);
   await syncComponents(configResult, cli, options, context);

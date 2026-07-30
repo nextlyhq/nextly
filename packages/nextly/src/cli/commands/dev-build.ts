@@ -798,7 +798,18 @@ async function handleRemovedComponents(
 export async function ensureLocalizedCompanions(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
-  context: CommandContext
+  context: CommandContext,
+  /**
+   * Which side of the schema push this pass runs on.
+   *
+   * `beforeApply` copies an entity's existing content into its companion while the main table
+   * still carries the translatable columns. Enabling localization removes those columns from the
+   * desired schema, so the push wants to drop them; running only afterwards means the copy either
+   * never happens or happens after the values are gone. Restricted to entities whose main table
+   * already exists, since only those can hold content and a companion's foreign key needs a main
+   * table the push has not yet created for anything newer.
+   */
+  phase: "beforeApply" | "afterApply" = "afterApply"
 ): Promise<void> {
   const { logger } = context;
   // Same policy `performAutoSync` applies: production never gets unattended schema
@@ -808,9 +819,8 @@ export async function ensureLocalizedCompanions(
   // write from destroying content until it runs.
   if (process.env.NODE_ENV === "production") return;
   const dialect = adapter.getCapabilities().dialect;
-  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
-    "../../domains/i18n/runtime/companion-io"
-  );
+  const { ensureCompanionTable, reconcileCompanionColumns, mainTableExists } =
+    await import("../../domains/i18n/runtime/companion-io");
   // Where a newly created companion's transition gets recorded, and the locale it
   // gets recorded with. Undefined when the app configures no default locale, in
   // which case no entity can be localized and nothing reaches the write below.
@@ -872,6 +882,17 @@ export async function ensureLocalizedCompanions(
     for (const entity of group) {
       if (!entity.slug || entity.localized !== true) continue;
       const tableName = resolveTableName(entity);
+      if (
+        phase === "beforeApply" &&
+        !(await mainTableExists(
+          adapter as unknown as DrizzleAdapter,
+          tableName
+        ))
+      ) {
+        // Nothing to preserve, and no main table to reference yet. The pass after the push
+        // creates this entity's companion once its table exists.
+        continue;
+      }
       // `ensureCompanionTable` resolves even on failure (a first boot may not have
       // the main table yet), so the reporter — not a try/catch — is what surfaces
       // a real problem.
@@ -913,6 +934,8 @@ export async function ensureLocalizedCompanions(
           sourceLocale: transitions.defaultLocale,
         });
       }
+      // Skipped before the push, which is what creates the columns a reconcile looks for.
+      if (phase === "beforeApply") continue;
       // Creating the companion is not enough on its own. `ensureCompanionTable` returns
       // immediately once the table is there, so marking a FURTHER field localized on an
       // entity that is already localized leaves the companion a column short — while the

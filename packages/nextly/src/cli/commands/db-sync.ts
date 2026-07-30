@@ -299,6 +299,18 @@ export async function runDbSync(
     // refuse a schema that syncs fine today.
     assertPluginFieldDeclarations(configResult.config);
 
+    // Before the pushes, so an entity gaining localization has its existing content copied into
+    // the companion while the main table still carries it. The drop that the push then applies is
+    // a cleanup rather than a loss.
+    if (options.autoSync !== false) {
+      await ensureLocalizedCompanions(
+        configResult.config,
+        adapter,
+        context,
+        "beforeApply"
+      );
+    }
+
     await syncCollections(configResult, adapter, options, context);
     await syncSingles(configResult, adapter, options, context);
     await syncComponents(configResult, adapter, options, context);

@@ -575,28 +575,6 @@ function republishRecordingPolicies(
  * Never throws: a companion that cannot be provisioned must not take down a config reload. The
  * write guard in the mutation services is what protects content in the meantime.
  */
-/**
- * Whether an entity's MAIN table is physically present.
- *
- * Asked through the canonical introspection helper rather than by running a probe query and
- * catching the failure: that shape is valid on SQLite and MySQL and poisons a transaction on
- * PostgreSQL, and it is the exact pattern the integration harness now fails tests for.
- */
-async function mainTableExists(
-  adapter: AdapterLike,
-  tableName: string
-): Promise<boolean> {
-  const { introspectLiveSnapshot } = await import(
-    "../domains/schema/pipeline/diff/introspect-live"
-  );
-  const snapshot = await introspectLiveSnapshot(
-    adapter.getDrizzle(),
-    adapter.dialect,
-    [tableName]
-  );
-  return snapshot.tables.some(t => t.name === tableName);
-}
-
 async function ensureLocalizedCompanionsForReload(
   adapter: AdapterLike,
   config: {
@@ -637,9 +615,8 @@ async function ensureLocalizedCompanionsForReload(
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
   if (process.env.NODE_ENV === "production") return;
 
-  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
-    "../domains/i18n/runtime/companion-io"
-  );
+  const { ensureCompanionTable, reconcileCompanionColumns, mainTableExists } =
+    await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
