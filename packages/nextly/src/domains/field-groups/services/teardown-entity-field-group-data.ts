@@ -35,6 +35,10 @@ import { NextlyError } from "../../../errors";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { q } from "../../i18n/migration/ddl-types";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
+import {
+  indexCatalog,
+  resolveCatalogName,
+} from "../../schema/utils/resolve-catalog-name";
 
 /** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
 const DEFAULT_MAX_DEPTH = 10;
@@ -221,24 +225,9 @@ async function listRegisteredComponentTables(
     {}
   );
 
-  // Resolved exactly first, then case-insensitively. MySQL with
-  // `lower_case_table_names` reports a verbatim `SEO_META` as `seo_meta`, so an
-  // exact-only match would discard the registered table and orphan its rows.
-  // Folding unconditionally is equally wrong: PostgreSQL, and MySQL with
-  // `lower_case_table_names=0`, can hold `SEO_META` and `seo_meta` as distinct
-  // quoted tables, and collapsing them would sweep only one. Preferring the
-  // exact hit keeps those distinct, while the fallback still finds a folded
-  // catalog entry — and either way the resolved value is the name the catalog
-  // reported, which is what later statements must address.
-  const catalog = new Set(discovered);
-  const foldedCatalog = new Map<string, string>();
-  for (const name of discovered) {
-    const key = name.toLowerCase();
-    // First writer wins so an ambiguous fold cannot silently retarget a table.
-    if (!foldedCatalog.has(key)) foldedCatalog.set(key, name);
-  }
-  const resolveCatalogName = (name: string): string | undefined =>
-    catalog.has(name) ? name : foldedCatalog.get(name.toLowerCase());
+  // Exact-first, then case-insensitive. The reasoning, and the reason both halves
+  // are needed, lives with the shared resolver.
+  const catalog = indexCatalog(discovered);
   return (
     rows
       .map(row => row.table_name ?? row.tableName)
@@ -247,7 +236,7 @@ async function listRegisteredComponentTables(
       // whose migration is pending or failed. Probing one raises a missing-table
       // error, and because this sweep precedes every entity delete, a single
       // unmaterialized component would block all of them.
-      .map(name => resolveCatalogName(name))
+      .map(name => resolveCatalogName(catalog, name))
       .filter((name): name is string => name !== undefined)
   );
 }
