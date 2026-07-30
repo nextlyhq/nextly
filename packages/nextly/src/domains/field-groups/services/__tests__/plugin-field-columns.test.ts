@@ -58,8 +58,11 @@ describe("plugin field types on a field group", () => {
       ratingField
     );
 
-    // Resolving no type here would skip the ALTER and leave the column text.
-    expect(sql).toMatch(/ALTER COLUMN "score" TYPE/i);
+    // The type as well as the statement: an ALTER to TEXT would satisfy a check
+    // that only looked for the keyword while leaving the column unchanged.
+    expect(sql).toMatch(
+      /ALTER COLUMN "score" TYPE\s+(?:INTEGER|BIGINT|REAL|DOUBLE PRECISION|NUMERIC)/i
+    );
   });
 
   it("omits it when the type is not registered", () => {

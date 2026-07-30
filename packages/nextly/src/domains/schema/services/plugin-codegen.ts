@@ -131,13 +131,26 @@ export function pluginZodSchema(field: CodegenField): string | undefined {
   return emit?.(optionView(field));
 }
 
-/** Every field in a tree, container children included. */
+/**
+ * Every field in a tree, container children included.
+ *
+ * Only a `repeater` or a `group` holds nested fields, matching where the
+ * generators recurse. A plugin type is free to call one of its own options
+ * `fields`, and descending into that would treat configuration objects as
+ * declarations: one carrying the `type` of another registered type would have
+ * its imports collected for an expression that was never emitted.
+ */
 function* walkFields(fields: readonly unknown[]): Generator<CodegenField> {
   for (const entry of fields) {
     if (entry === null || typeof entry !== "object") continue;
     const field = entry as CodegenField;
     yield field;
-    if (Array.isArray(field.fields)) yield* walkFields(field.fields);
+    if (
+      (field.type === "repeater" || field.type === "group") &&
+      Array.isArray(field.fields)
+    ) {
+      yield* walkFields(field.fields);
+    }
   }
 }
 
@@ -200,6 +213,11 @@ export function pluginCodegenImports(
       // `z.object({ Rating: z.string() })` use the binding on the value side or
       // not at all. Only the key is removed, so `{ a: Rating }` still counts.
       .replace(/([{,]\s*)[A-Za-z_$][\w$]*\s*:/g, "$1")
+      // The member half of a qualified access is a name on the object, not the
+      // binding: `Models.Rating` uses `Models`. Dropping the member keeps the
+      // object it was read from, so what the expression really references is
+      // still counted. A decimal is untouched, as a digit cannot start a name.
+      .replace(/\.\s*[A-Za-z_$][\w$]*/g, "")
       // A template's literal text is text, but its `${...}` interpolations hold
       // real references — a template-literal type is a plausible thing for a
       // type to emit — so only the parts between them are dropped.

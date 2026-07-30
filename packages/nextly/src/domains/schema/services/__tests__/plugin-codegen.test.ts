@@ -973,6 +973,40 @@ describe("plugin field types in the Zod generator", () => {
     ).toContain('import type { Prefix } from "@acme/tp";');
   });
 
+  it("does not descend into an option a plugin type happens to call fields", () => {
+    registerFieldType({
+      type: "layout",
+      storage: "json",
+      component: "@acme/ly/admin#Layout",
+      codegen: { zodSchema: () => "z.unknown()" },
+    });
+    registerFieldType({
+      type: "tally",
+      storage: "number",
+      component: "@acme/tl/admin#Tally",
+      codegen: {
+        zodImports: [{ names: ["Tally"], from: "@acme/tl" }],
+        zodSchema: () => "z.custom<Tally>()",
+      },
+    });
+
+    // `fields` here is the layout type's own configuration, not a declaration
+    // list. Walking into it would collect imports for an entry whose expression
+    // was never emitted, and an unrecorded entry is treated as using all of
+    // them.
+    const code = new ZodGenerator().generateSchema(
+      collection([
+        {
+          name: "layout",
+          type: "layout",
+          fields: [{ name: "slot", type: "tally" }],
+        },
+      ])
+    ).code;
+
+    expect(code).not.toContain("@acme/tl");
+  });
+
   it("does not make a validator for a list out of a hasMany plugin field", () => {
     registerFieldType({
       type: "tagish",
@@ -990,6 +1024,30 @@ describe("plugin field types in the Zod generator", () => {
 
     expect(code).toMatch(/tags:\s*z\.string\(\)/);
     expect(code).not.toMatch(/tags:\s*z\.array/);
+  });
+
+  it("does not count a name used only after a dot", () => {
+    registerFieldType({
+      type: "qualified",
+      storage: "json",
+      component: "@acme/ql/admin#Input",
+      codegen: {
+        zodImports: [
+          { names: ["Models"], from: "@acme/ql" },
+          { names: ["Rating"], from: "@acme/ql-rating" },
+        ],
+        zodSchema: () => "z.custom<Models.Rating>()",
+      },
+    });
+
+    const code = new ZodGenerator().generateSchema(
+      collection([{ name: "q", type: "qualified" }])
+    ).code;
+
+    // `Models.Rating` reads a member off `Models`; the standalone `Rating`
+    // binding is never referenced, and importing it fails `noUnusedLocals`.
+    expect(code).toContain('import type { Models } from "@acme/ql";');
+    expect(code).not.toContain("@acme/ql-rating");
   });
 
   it("does not count a name used only as a property key", () => {
