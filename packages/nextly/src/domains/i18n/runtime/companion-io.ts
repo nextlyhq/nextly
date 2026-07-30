@@ -513,7 +513,11 @@ async function buildSeedingCreateStatements(
   const columnsOnMain = spec.columns
     .map(c => c.name)
     .filter(name => present.has(name));
-  if (columnsOnMain.length === 0) return null;
+  // No columns to copy is not the same as nothing to seed. A Draft/Published entity still needs a
+  // default-locale companion row carrying the main row's status, or every published row drops out
+  // of locale-aware published reads. `buildLocalizationUpStatements` handles the empty column set
+  // for exactly that case, so only bail when there is no status either.
+  if (columnsOnMain.length === 0 && !spec.status) return null;
 
   const { buildLocalizationUpStatements } = await import(
     "../migration/generate-up"

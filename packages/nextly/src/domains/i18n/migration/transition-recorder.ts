@@ -31,7 +31,18 @@ export type TransitionRecorder = TransitionStateStore & {
   defaultLocale: string;
 };
 
-/** The adapter surface `MetaService` needs, which every caller here already holds. */
+/**
+ * The handle callers must supply. Narrower than what `MetaService` ultimately uses, and
+ * deliberately so.
+ *
+ * `MetaService` extends `BaseService`, which also resolves its dialect through
+ * `getCapabilities()`, so the cast below is not cosmetic — it asserts a real adapter, not just an
+ * object with this one method. Widening this type to match would mean reproducing
+ * `DatabaseCapabilities` (a dozen members) in every duck-typed caller, and the callers that reach
+ * here are modules which deliberately avoid depending on the adapter package. The assertion is
+ * sound because every caller holds a genuine adapter and is merely viewing it through a narrower
+ * local interface; it is kept in this one place rather than repeated at each call site.
+ */
 type MetaCapableAdapter = Pick<DrizzleAdapter, "getDrizzle">;
 
 /** Swallows everything. `MetaService` logs nothing on the paths used here. */
