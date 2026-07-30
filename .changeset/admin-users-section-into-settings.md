@@ -14,6 +14,8 @@
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-page-builder": patch
 "@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/blocks-engine": patch
 "@nextlyhq/eslint-config": patch
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
