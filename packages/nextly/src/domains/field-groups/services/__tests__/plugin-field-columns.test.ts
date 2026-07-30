@@ -34,14 +34,32 @@ function registerRating(): void {
 }
 
 describe("plugin field types on a field group", () => {
-  it("emits a column for the type's storage primitive", () => {
+  it("emits a column of the type's storage primitive", () => {
     registerRating();
     const sql = new FieldGroupSchemaService("postgresql").generateMigrationSQL(
       "comp_hero",
       ratingField
     );
 
-    expect(sql).toContain("score");
+    // The SQL type, not just the name: a column mapped to text would satisfy a
+    // presence check while storing the wrong thing.
+    expect(sql).toMatch(
+      /"score"\s+(?:INTEGER|BIGINT|REAL|DOUBLE PRECISION|NUMERIC)/i
+    );
+  });
+
+  it("alters an existing column when a field changes to a plugin type", () => {
+    registerRating();
+    const sql = new FieldGroupSchemaService(
+      "postgresql"
+    ).generateAlterTableMigration(
+      "comp_hero",
+      [{ name: "score", type: "text" }] as unknown as FieldConfig[],
+      ratingField
+    );
+
+    // Resolving no type here would skip the ALTER and leave the column text.
+    expect(sql).toMatch(/ALTER COLUMN "score" TYPE/i);
   });
 
   it("omits it when the type is not registered", () => {

@@ -39,10 +39,14 @@ import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+// Reserved-option refusals are reported through the canonical error shape, so
+// the CLI renders them like any other declaration failure.
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
+// The option names the field identity would overwrite, refused here because a
+// code-defined user field never passes through the manifest schema.
 import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";

@@ -349,7 +349,11 @@ export class FieldGroupSchemaService {
     for (const [name, field] of newFieldMap) {
       if (oldFieldMap.has(name)) continue;
 
-      const columnType = this.getColumnType(this.asMappableField(field));
+      // Mapped once and reused: the default formatting and the type default
+      // both switch on `type`, so reading the raw plugin token there would
+      // produce a literal for a type the column does not have.
+      const mapped = this.asMappableField(field);
+      const columnType = this.getColumnType(mapped);
       if (!columnType) continue;
 
       const columnName = this.toSnakeCase(name);
@@ -366,9 +370,9 @@ export class FieldGroupSchemaService {
         field.defaultValue !== undefined &&
         typeof field.defaultValue !== "function";
       if (hasConstantDefault) {
-        defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, field.type)}`;
+        defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, mapped.type)}`;
       } else if ("required" in field && field.required) {
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
+        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, mapped)}`;
       }
 
       statements.push(
@@ -411,7 +415,10 @@ export class FieldGroupSchemaService {
         if (!this.isFieldModified(oldField, newField)) continue;
 
         const columnName = this.toSnakeCase(name);
-        const newType = this.getColumnType(newField);
+        // Mapped like the added-column path: a field changed to a plugin type
+        // would otherwise resolve no type here and the ALTER would be skipped,
+        // leaving the column as whatever it was.
+        const newType = this.getColumnType(this.asMappableField(newField));
         if (!newType) continue;
 
         statements.push(
