@@ -78,12 +78,24 @@ describe("readIdentifierCaseRules", () => {
     );
   });
 
-  it("refuses when the value cannot be read", async () => {
+  it.each([["unknown"], [""], [3]])(
+    "refuses when the value cannot be read (%p)",
+    async value => {
+      const db = adapter("mysql", TUPLE(value));
+      await expect(readIdentifierCaseRules(db)).rejects.toSatisfy(
+        error =>
+          NextlyError.is(error) &&
+          /not 0, 1 or 2/.test(String(error.logContext?.reason))
+      );
+    }
+  );
+
+  it("refuses when the value is a non-numeric string", async () => {
     const db = adapter("mysql", TUPLE("unknown"));
     await expect(readIdentifierCaseRules(db)).rejects.toSatisfy(
       error =>
         NextlyError.is(error) &&
-        /not a non-negative integer/.test(String(error.logContext?.reason))
+        /not 0, 1 or 2/.test(String(error.logContext?.reason))
     );
   });
 });

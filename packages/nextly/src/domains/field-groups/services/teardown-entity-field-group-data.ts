@@ -211,7 +211,22 @@ async function listRegisteredComponentTables(
   adapter: TeardownComponentDataAdapter,
   discovered: string[]
 ): Promise<string[]> {
-  if (!discovered.includes(REGISTRY_TABLE)) return [];
+  // Exact-first, then case-insensitive only where the server folds. Deleting
+  // rows from a table resolved by folding a name the server treats as distinct
+  // would delete another table's rows, so the comparison rules come from the
+  // server rather than being assumed. The reasoning lives with the resolver.
+  //
+  // Built before the registry itself is looked up, so the registry is found by
+  // the same rules as the tables it names. Gating on an exact match while
+  // resolving its rows case-insensitively would skip registry discovery on a
+  // server that reports the registry in another case, and every custom-named
+  // component would then be left out of the sweep.
+  const catalog = indexCatalog(
+    discovered,
+    (await readIdentifierCaseRules(adapter)).tables
+  );
+  const registryTable = resolveCatalogName(catalog, REGISTRY_TABLE);
+  if (registryTable === undefined) return [];
 
   // Consulted only when the ORM can address it. An executor with no schema
   // registered for the registry — a hand-built adapter carrying just its own
@@ -220,21 +235,10 @@ async function listRegisteredComponentTables(
   // stays complete for everything such an executor can reach. Probing rather
   // than catching keeps genuine read failures propagating instead of being
   // mistaken for "nothing registered".
-  if (!(await isResolvable(adapter, REGISTRY_TABLE))) return [];
+  if (!(await isResolvable(adapter, registryTable))) return [];
 
-  const rows = await adapter.select<Record<string, unknown>>(
-    REGISTRY_TABLE,
-    {}
-  );
+  const rows = await adapter.select<Record<string, unknown>>(registryTable, {});
 
-  // Exact-first, then case-insensitive only where the server folds. Deleting
-  // rows from a table resolved by folding a name the server treats as distinct
-  // would delete another table's rows, so the comparison rules come from the
-  // server rather than being assumed. The reasoning lives with the resolver.
-  const catalog = indexCatalog(
-    discovered,
-    (await readIdentifierCaseRules(adapter)).tables
-  );
   return (
     rows
       .map(row => row.table_name ?? row.tableName)

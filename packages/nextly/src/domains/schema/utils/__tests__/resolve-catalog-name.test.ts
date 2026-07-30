@@ -152,25 +152,41 @@ describe("parseLowerCaseTableNames", () => {
     expect(parseLowerCaseTableNames("2")).toBe(2);
   });
 
+  it("accepts the case-insensitive-comparison setting", () => {
+    expect(parseLowerCaseTableNames(0)).toBe(0);
+  });
+
   // Refusing rather than defaulting is the point: both defaults are wrong on
   // some server, so a guess here silently picks one.
-  it.each([[null], [undefined], ["abc"], [1.5], [-1], [{}]])(
-    "refuses an unreadable value (%p)",
-    value => {
-      try {
-        parseLowerCaseTableNames(value);
-      } catch (error) {
-        expect(NextlyError.is(error)).toBe(true);
-        if (NextlyError.is(error)) {
-          expect(error.logContext?.reason).toMatch(
-            /not a non-negative integer/
-          );
-        }
-        return;
+  //
+  // The blank cases are the sharp ones. `Number("")` and `Number("  ")` are both
+  // `0`, so a server that answers with nothing would otherwise be read as the
+  // case-sensitive setting — a definite answer invented from an absent one.
+  // Values outside 0/1/2 are refused for the same reason: sorting an
+  // unrecognised setting into one behaviour or the other is a guess.
+  it.each([
+    [null],
+    [undefined],
+    [""],
+    ["  "],
+    ["abc"],
+    [3],
+    ["3"],
+    [1.5],
+    [-1],
+    [{}],
+  ])("refuses an unreadable value (%p)", value => {
+    try {
+      parseLowerCaseTableNames(value);
+    } catch (error) {
+      expect(NextlyError.is(error)).toBe(true);
+      if (NextlyError.is(error)) {
+        expect(error.logContext?.reason).toMatch(/not 0, 1 or 2/);
       }
-      expect.fail("expected a refusal");
+      return;
     }
-  );
+    expect.fail("expected a refusal");
+  });
 });
 
 describe("dialect-specific fold width", () => {
@@ -196,5 +212,23 @@ describe("dialect-specific fold width", () => {
   it("still folds ASCII case under an ASCII fold", () => {
     const catalog = indexCatalog(["comp_hero"], "fold-ascii");
     expect(resolveCatalogName(catalog, "COMP_HERO")).toBe("comp_hero");
+  });
+});
+
+describe("simple versus full case mapping", () => {
+  // A server maps one character to one character. JavaScript's full Unicode
+  // mapping turns `İ` into `i` plus a combining dot, so keying on it would look
+  // for `i̇tem` while the catalog reports `item`, and a custom table would be
+  // read as missing.
+  it("folds a character whose full lowercase mapping expands", () => {
+    const catalog = indexCatalog(["item"], "fold-unicode");
+    expect(resolveCatalogName(catalog, "\u0130TEM")).toBe("item");
+  });
+
+  // The same character under ASCII rules is left alone, because a server that
+  // folds ASCII only does not touch it.
+  it("leaves an expanding character alone under an ASCII fold", () => {
+    const catalog = indexCatalog(["item"], "fold-ascii");
+    expect(resolveCatalogName(catalog, "\u0130TEM")).toBeUndefined();
   });
 });

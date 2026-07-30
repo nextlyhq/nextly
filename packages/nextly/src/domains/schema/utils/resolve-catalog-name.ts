@@ -1,11 +1,10 @@
 /**
  * Resolves a name Nextly stored to the name the database actually reports.
  *
- * Two callers need this and both get it wrong in a different direction if they
- * guess. Extracted here so there is one implementation rather than a copy per
- * call site, for the same reason `resolveCollectionTableName` was consolidated:
- * independent versions of a naming rule drift, and the drift is invisible until
- * it reaches a database that exercises the difference.
+ * Every caller that maps a stored name onto a live object routes through here, so
+ * one rule governs the question. Independent versions of a naming rule drift, and
+ * the drift stays invisible until it reaches a database whose comparison
+ * behaviour exercises the difference.
  *
  * Whether two spellings name one object is **not** a property of the name. It is
  * a property of the server, so it is an input here rather than a constant, and
@@ -45,10 +44,24 @@ export type IdentifierCase = "preserve" | "fold-ascii" | "fold-unicode";
  * the two folding modes are the whole domain.
  */
 function foldName(name: string, mode: "fold-ascii" | "fold-unicode"): string {
-  if (mode === "fold-unicode") return name.toLowerCase();
-  // Deliberately not `toLowerCase()`, which maps `Ä` to `ä` and would merge two
-  // names SQLite keeps apart.
-  return name.replace(/[A-Z]/g, character => character.toLowerCase());
+  // ASCII rules fold `A`-`Z` and nothing else. `toLowerCase()` would also map
+  // `Ä` to `ä`, merging two names SQLite keeps apart.
+  if (mode === "fold-ascii") {
+    return name.replace(/[A-Z]/g, character => character.toLowerCase());
+  }
+
+  // A server's case table maps one character to one character. JavaScript
+  // applies Unicode's *full* mapping, which for `İ` (U+0130) produces `i` plus a
+  // combining dot where a server produces `i` alone — so a folded lookup would
+  // key `İTEM` as `i̇tem` while the catalog reports `item`. Taking the first code
+  // point of the mapping is the simple mapping for every character whose full
+  // mapping expands, so the two agree.
+  let folded = "";
+  for (const character of name) {
+    const lowered = character.toLowerCase();
+    folded += [...lowered][0] ?? character;
+  }
+  return folded;
 }
 
 /**
@@ -212,16 +225,28 @@ export function findCaseVariant(
  * because both defaults are wrong on some server. Refusing keeps the guess out.
  */
 export function parseLowerCaseTableNames(value: unknown): number {
-  const parsed = typeof value === "string" ? Number(value) : value;
-  if (typeof parsed !== "number" || !Number.isInteger(parsed) || parsed < 0) {
+  const parsed = typeof value === "string" ? parseSetting(value) : value;
+  // Constrained to the values MySQL defines rather than to "any non-negative
+  // integer". `Number("")` is `0`, so a blank value would otherwise read as the
+  // case-sensitive setting, and an unrecognised number would be sorted into one
+  // behaviour or the other — both are guesses about how the server compares
+  // names, which is the one thing this must not do.
+  if (parsed !== 0 && parsed !== 1 && parsed !== 2) {
     throw NextlyError.serviceUnavailable({
       logMessage:
         "cannot determine how this MySQL server compares table names: lower_case_table_names is unreadable",
       logContext: {
-        reason: "lower_case_table_names is not a non-negative integer",
+        reason: "lower_case_table_names is not 0, 1 or 2",
         value,
       },
     });
   }
   return parsed;
+}
+
+/** `undefined` for anything that is not a plain integer literal. */
+function parseSetting(value: string): number | undefined {
+  if (value.trim() === "") return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : undefined;
 }

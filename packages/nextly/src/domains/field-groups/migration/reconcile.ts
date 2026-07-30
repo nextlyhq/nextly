@@ -93,7 +93,7 @@ export function reconcilePlan(args: {
   }
 
   const catalog = indexCatalog(args.tables, identifierCase.tables);
-  const columns = indexColumns(args.columns, identifierCase);
+  const columns = indexColumns(args.columns, catalog, identifierCase);
 
   assertEveryRowHasStorage(rows, catalog);
 
@@ -149,7 +149,7 @@ export function probeStorage(args: {
       ? MIGRATION_TARGET.columnType
       : STORAGE_FORMAT.columns.type;
   const catalog = indexCatalog(args.tables, identifierCase.tables);
-  const columns = indexColumns(args.columns, identifierCase);
+  const columns = indexColumns(args.columns, catalog, identifierCase);
   const missing: string[] = [];
 
   for (const row of args.rows) {
@@ -206,10 +206,10 @@ type StorageNaming = "either" | StorageGeneration;
 /**
  * Every object a registry row requires to exist.
  *
- * The single definition of that question. Two callers ask it — the up-front
- * check and the probe — and when they each answered it separately the up-front
- * one omitted companions, so a row whose companion had been dropped passed the
- * check that runs *before* any rename and failed only the probe that runs after.
+ * The single definition of that question, shared by the up-front check and the
+ * probe so the two cannot diverge: a check that ran before any rename while
+ * omitting companions would pass a row whose companion is already gone, and the
+ * loss would surface only after other objects had moved.
  *
  * A companion is included whenever one is physically present per the registry,
  * including for a row this plan leaves alone: `buildMigrationManifest` emits a
@@ -279,14 +279,21 @@ function resolveAny(
  */
 function indexColumns(
   tables: readonly TableColumns[],
+  catalog: CatalogIndex,
   identifierCase: IdentifierCaseRules
 ): Map<string, CatalogIndex> {
   const byTable = new Map<string, CatalogIndex>();
   for (const entry of tables) {
-    byTable.set(
-      entry.table,
-      indexCatalog(entry.columns, identifierCase.columns)
-    );
+    // Keyed by the catalog's spelling, because that is the spelling every lookup
+    // here arrives with: callers resolve a table before asking for its columns.
+    // Keying by the caller's spelling instead would miss on any server that
+    // reports a name in a different case, and reconciliation would then refuse
+    // storage that is present.
+    const table = resolveCatalogName(catalog, entry.table);
+    // Columns for a table the catalog does not list describe nothing that can be
+    // renamed or verified.
+    if (table === undefined) continue;
+    byTable.set(table, indexCatalog(entry.columns, identifierCase.columns));
   }
   return byTable;
 }
@@ -305,16 +312,37 @@ function assertEveryRowHasStorage(
 ): void {
   const missing: string[] = [];
   const caseVariants: Record<string, string> = {};
+  // Which row already claimed each physical object. Claims are tracked by the
+  // *resolved* catalog name, which is the only level where two spellings are
+  // known to be one object: the plan compares names exactly because it has no
+  // dialect, so on a folding server a row named `COMP_HERO_LOCALES` and another
+  // row's derived `comp_hero_locales` companion pass every check the plan can
+  // make while addressing the same table.
+  const claims = new Map<string, string>();
 
   for (const row of rows) {
     for (const object of expectedStorage(row, "either")) {
-      if (resolveAny(catalog, object.names) !== undefined) continue;
-      missing.push(object.names[0]);
-      // A name present under a different case is a different object on this
-      // server, and saying so turns "a table is missing" into a row an operator
-      // can correct.
-      const variant = findCaseVariant(catalog, object.names[0]);
-      if (variant !== undefined) caseVariants[object.names[0]] = variant;
+      const found = resolveAny(catalog, object.names);
+      if (found === undefined) {
+        missing.push(object.names[0]);
+        // A name present under a different case is a different object on this
+        // server, and saying so turns "a table is missing" into a row an operator
+        // can correct.
+        const variant = findCaseVariant(catalog, object.names[0]);
+        if (variant !== undefined) caseVariants[object.names[0]] = variant;
+        continue;
+      }
+
+      const claimant = `${row.slug}${object.isBase ? "" : " companion"}`;
+      const previous = claims.get(found);
+      if (previous !== undefined) {
+        throw refuse("one physical object is claimed by two field groups", {
+          table: found,
+          claimedBy: previous,
+          alsoClaimedBy: claimant,
+        });
+      }
+      claims.set(found, claimant);
     }
   }
 

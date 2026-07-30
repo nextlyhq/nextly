@@ -574,3 +574,78 @@ describe("probing a settled generation", () => {
     ).toEqual({ complete: true });
   });
 });
+
+describe("two rows resolving to one physical object", () => {
+  // The plan compares names exactly because it has no dialect, so this alias is
+  // invisible to it: `comp_hero`'s derived companion and a custom row named
+  // `COMP_HERO_LOCALES` are one table only on a folding server. Left unchecked the
+  // plan renames the shared table as the first row's companion and the second
+  // row's loss surfaces only after earlier renames have committed.
+  const rows = [
+    row({ slug: "hero", tableName: "comp_hero", hasCompanion: true }),
+    row({ slug: "seo", tableName: "COMP_HERO_LOCALES" }),
+  ];
+
+  function reconcile(
+    identifierCase: typeof PRESERVING,
+    tables: readonly string[]
+  ) {
+    return reconcilePlan({
+      entries: buildMigrationManifest(rows).entries,
+      rows,
+      tables,
+      columns: columnsFor(tables),
+      run: { recorded: false },
+      direction: "up",
+      identifierCase,
+    });
+  }
+
+  // One physical table, which both rows resolve to because the server folds.
+  it("refuses the alias on a folding server", () => {
+    const refusal = capture(() =>
+      reconcile(FOLDING, [
+        "dynamic_components",
+        "comp_hero",
+        "COMP_HERO_LOCALES",
+      ])
+    );
+    expect(refusal.logContext?.reason).toMatch(/claimed by two field groups/);
+    expect(refusal.logContext?.table).toBe("COMP_HERO_LOCALES");
+  });
+
+  // Two physical tables. A case-preserving server keeps them apart, so each row
+  // claims its own and the same registry is legitimate — the alias check must not
+  // fire on spelling alone.
+  it("accepts both rows where the server keeps the names apart", () => {
+    expect(() =>
+      reconcile(PRESERVING, [
+        "dynamic_components",
+        "comp_hero",
+        "comp_hero_locales",
+        "COMP_HERO_LOCALES",
+      ])
+    ).not.toThrow();
+  });
+});
+
+describe("column metadata keyed in another case", () => {
+  // Callers resolve a table before asking for its columns, so lookups arrive with
+  // the catalog's spelling. Keying the column index by the caller's spelling
+  // instead would miss on a folding server and refuse storage that is present.
+  it("finds a table's columns when the catalog reports another case", () => {
+    const rows = [row()];
+    expect(() =>
+      reconcilePlan({
+        entries: buildMigrationManifest(rows).entries,
+        rows,
+        tables: ["DYNAMIC_COMPONENTS", "COMP_HERO"],
+        // Keyed as Nextly stored them, not as the catalog reports them.
+        columns: columnsFor(["dynamic_components", "comp_hero"]),
+        run: { recorded: false },
+        direction: "up",
+        identifierCase: FOLDING,
+      })
+    ).not.toThrow();
+  });
+});
