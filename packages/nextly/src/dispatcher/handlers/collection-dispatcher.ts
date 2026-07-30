@@ -32,7 +32,10 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
@@ -791,6 +794,15 @@ const COLLECTIONS_METHODS: Record<
             newFields,
             companionExists,
             companionHasStatus,
+            // Which translatable columns the main table still carries. A disable must not re-add
+            // one that is already there, and must still restore it: presence says the column
+            // exists, never that its value is current, because every localized write went to the
+            // companion alone.
+            existingMainColumns: await localizedColumnsOnMain(
+              adapter,
+              tableName,
+              oldFields
+            ),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is

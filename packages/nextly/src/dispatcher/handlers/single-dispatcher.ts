@@ -41,7 +41,10 @@ import { teardownEntityComponentData } from "../../domains/field-groups/services
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -281,6 +284,14 @@ async function reconcileSingleCompanion(args: {
     newFields,
     companionExists,
     companionHasStatus,
+    // Which translatable columns the main table still carries. A disable must not re-add one that
+    // is already there, and must still restore it: presence says the column exists, never that its
+    // value is current, because every localized write went to the companion alone.
+    existingMainColumns: await localizedColumnsOnMain(
+      adapter,
+      tableName,
+      oldFields
+    ),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first

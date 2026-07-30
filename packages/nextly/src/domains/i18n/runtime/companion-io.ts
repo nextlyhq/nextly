@@ -453,32 +453,35 @@ export async function companionHasStatusColumn(
  * would attach today's default to content written under some earlier one.
  */
 /**
- * Whether the main table physically carries any of the entity's translatable columns.
+ * The entity's translatable columns that the MAIN table physically carries.
  *
- * The question behind it is "would creating an empty companion here hide something". Columns on
- * main mean content may already be there, and once a companion exists every read resolves through
- * it — so an empty one makes that content invisible whether or not any row is populated.
+ * Two callers, one question. Creation asks "would an empty companion here hide something" —
+ * columns on main mean content may already be there, and once a companion exists every read
+ * resolves through it. Disabling asks which columns it must not re-add but must still restore.
+ * Both are the same physical fact, so they read it the same way rather than each introspecting
+ * to its own shape.
  */
-async function mainHasLocalizedColumns(
+export async function localizedColumnsOnMain(
   adapter: CompanionIntrospectAdapter,
-  args: { tableName: string; dialect: SupportedDialect },
-  localized: CompanionFieldLike[]
-): Promise<boolean> {
-  if (localized.length === 0) return false;
+  tableName: string,
+  localized: readonly CompanionFieldLike[]
+): Promise<string[]> {
+  if (localized.length === 0) return [];
   const { introspectLiveSnapshot } = await import(
     "../../schema/pipeline/diff/introspect-live"
   );
   const snapshot = await introspectLiveSnapshot(
     adapter.getDrizzle(),
     adapter.dialect,
-    [args.tableName]
+    [tableName]
   );
   const present = new Set(
-    snapshot.tables
-      .find(t => t.name === args.tableName)
-      ?.columns.map(c => c.name) ?? []
+    snapshot.tables.find(t => t.name === tableName)?.columns.map(c => c.name) ??
+      []
   );
-  return localized.some(f => present.has(toColumn(f.name)));
+  return localized
+    .map(f => toColumn(f.name))
+    .filter(column => present.has(column));
 }
 
 /**
@@ -537,18 +540,8 @@ async function buildSeedingCreateStatements(
 ): Promise<string[] | null> {
   if (!args.sourceLocale) return null;
 
-  const { introspectLiveSnapshot } = await import(
-    "../../schema/pipeline/diff/introspect-live"
-  );
-  const snapshot = await introspectLiveSnapshot(
-    adapter.getDrizzle(),
-    adapter.dialect,
-    [args.tableName]
-  );
   const present = new Set(
-    snapshot.tables
-      .find(t => t.name === args.tableName)
-      ?.columns.map(c => c.name) ?? []
+    await localizedColumnsOnMain(adapter, args.tableName, newLocalized)
   );
 
   const { deriveCompanionSpec } = await import(
@@ -649,7 +642,8 @@ export async function ensureCompanionTable(
     // in the meantime.
     if (
       !args.sourceLocale &&
-      (await mainHasLocalizedColumns(adapter, args, newLocalized))
+      (await localizedColumnsOnMain(adapter, args.tableName, newLocalized))
+        .length > 0
     ) {
       onError?.(
         new Error(
