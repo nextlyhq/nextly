@@ -1731,6 +1731,37 @@ describe("plugin field types in the Zod generator", () => {
     expect(schema.code).toContain('import type { Record } from "@acme/zsr";');
   });
 
+  it("does not reserve a generic application inside a string literal", () => {
+    registerFieldType({
+      type: "literal-generic",
+      storage: "json",
+      component: "@acme/lg/admin#Input",
+      // The angle brackets are characters in a string, not a type application.
+      codegen: { zodSchema: () => 'z.literal("Result<Model>")' },
+    });
+    registerFieldType({
+      type: "imports-result",
+      storage: "json",
+      component: "@acme/ir2/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Result"], from: "@acme/ir2" }],
+        zodSchema: () => "z.custom<Result<string>>()",
+      },
+    });
+
+    // Reading the string as a use would make the count exceed what the
+    // importing field wrote, reserve `Result`, and refuse an import that
+    // shadows nothing — failing generation outright rather than degrading.
+    const schema = new ZodGenerator({ generateTypes: false }).generateSchema(
+      collection([
+        { name: "l", type: "literal-generic" },
+        { name: "i", type: "imports-result" },
+      ])
+    );
+
+    expect(schema.code).toContain('import type { Result } from "@acme/ir2";');
+  });
+
   it("emits only the import list belonging to this file's expression", () => {
     // Both expressions exist, but each names its own imports, so the type used
     // by only one of them appears in only that file.

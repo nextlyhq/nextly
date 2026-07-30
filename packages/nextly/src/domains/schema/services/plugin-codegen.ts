@@ -460,6 +460,18 @@ export function reserveAppliedGlobals(
   const occurrences = (haystack: string, name: string): number =>
     haystack.match(new RegExp(`(?<![$\\w])${name}<`, "g"))?.length ?? 0;
 
+  // Read from code only, on both sides of the comparison. A name inside a
+  // string, a comment or a template's literal text applies no type arguments
+  // and shadows nothing — `z.literal("Result<Model>")` names no binding, and a
+  // JSDoc line mentioning `Partial<Post>` writes no code. Counting either would
+  // reserve a name the output never applied and refuse a plugin's legitimate
+  // import of it, which fails the build outright rather than degrading.
+  const code = codeOnly(body);
+  const emitted = emissions.map(emission => ({
+    imported: emission.imported,
+    code: codeOnly(emission.expression),
+  }));
+
   // Every name the output applies type arguments to, rather than a list of the
   // ones that happened to come up. `Partial` is not special: `Readonly`,
   // `Required`, `Exclude` and the rest shadow just as badly, and a standard
@@ -467,7 +479,7 @@ export function reserveAppliedGlobals(
   // Matching requires the `<` to follow immediately, as a generic application
   // does, so a comparison never reads as one.
   const applied = new Set(
-    Array.from(body.matchAll(/(?<![$\w])([A-Za-z_$][\w$]*)</g), m => m[1])
+    Array.from(code.matchAll(/(?<![$\w])([A-Za-z_$][\w$]*)</g), m => m[1])
   );
 
   for (const global of applied) {
@@ -476,14 +488,14 @@ export function reserveAppliedGlobals(
     // `Partial` means the standard global, exactly as core's own use is, so its
     // use has to be protected from another plugin's same-named import rather
     // than counted as that plugin's own.
-    const byPlugins = emissions.reduce(
+    const byPlugins = emitted.reduce(
       (total, emission) =>
         emission.imported.has(global)
-          ? total + occurrences(emission.expression, global)
+          ? total + occurrences(emission.code, global)
           : total,
       0
     );
-    if (occurrences(body, global) > byPlugins) reserved.add(global);
+    if (occurrences(code, global) > byPlugins) reserved.add(global);
   }
 }
 
