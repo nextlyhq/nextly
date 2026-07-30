@@ -497,6 +497,63 @@ export async function localizedColumnsOnMain(
 }
 
 /**
+ * Finish a copy that an earlier run started and did not complete.
+ *
+ * The companion already exists, so its CREATE is not reissued — only the copy is, and only for the
+ * rows that have no default-locale companion row yet. That `WHERE NOT EXISTS` is what makes this
+ * safe to run repeatedly: a partially seeded companion keeps the rows it already has, and a fully
+ * seeded one is a no-op. Re-copying instead would either collide on the composite primary key or
+ * overwrite translations written since the transition.
+ *
+ * Nothing is dropped from the main table here. The interrupted run may or may not have relaxed or
+ * removed its source columns, and the next schema apply reconciles that; this call is responsible
+ * for the content, not the shape.
+ */
+async function resumeInterruptedSeed(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    dialect: SupportedDialect;
+    status?: boolean;
+    sourceLocale?: string;
+  },
+  newLocalized: CompanionFieldLike[],
+  companionTableName: string,
+  onError?: (error: unknown) => void
+): Promise<boolean> {
+  const plan = await buildSeedingCreateStatements(adapter, args, newLocalized);
+  if (!plan) return false;
+
+  // Everything the plan emits except the CREATE, which the interrupted run already ran.
+  const copy = plan.filter(statement => !statement.startsWith("CREATE TABLE"));
+  if (copy.length === 0) return false;
+
+  const q = (id: string) =>
+    args.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+  const companion = q(companionTableName);
+  const main = q(args.tableName);
+  const guard =
+    ` WHERE NOT EXISTS (SELECT 1 FROM ${companion} ` +
+    `WHERE ${companion}.${q("_parent")} = ${main}.${q("id")} ` +
+    `AND ${companion}.${q("_locale")} = '${args.sourceLocale ?? ""}')`;
+
+  try {
+    for (const statement of copy) {
+      // Only the INSERT ... SELECT is row-producing and therefore needs the guard; anything else
+      // the plan carries (a nullability relax, for instance) is already idempotent.
+      await adapter.executeQuery(
+        statement.startsWith("INSERT INTO") ? `${statement}${guard}` : statement
+      );
+    }
+    return true;
+  } catch (error) {
+    onError?.(error);
+    return false;
+  }
+}
+
+/**
  * Whether an entity's MAIN table is physically present.
  *
  * Asked through the canonical introspection helper rather than by running a probe query and
@@ -631,6 +688,18 @@ export async function ensureCompanionTable(
      * run free to try again from a clean position.
      */
     recordTransition?: () => Promise<void>;
+    /**
+     * Whether a transition was recorded for this entity but never finished.
+     *
+     * Consulted only when the companion already exists. `CREATE TABLE` and the copy that follows
+     * are separate statements, and MySQL commits DDL implicitly, so a failure between them leaves
+     * a real companion holding none of the entity's content. Every later run would take the early
+     * return and the content would stay hidden for good.
+     *
+     * Returning true makes this call finish what the interrupted one started, so a reported
+     * failure is fixed by running `db:sync` again rather than by hand-editing `nextly_meta`.
+     */
+    seedIncomplete?: () => Promise<boolean>;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -644,16 +713,27 @@ export async function ensureCompanionTable(
   // treating that as a lost race would suppress the error and leave the content uncopied, with
   // every later run returning early because the table now exists.
   let created = false;
+  const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
+  const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
   try {
-    if (await companionTableExists(adapter, companionTableName)) return false;
+    if (await companionTableExists(adapter, companionTableName)) {
+      // An existing companion normally means there is nothing to do. It means the opposite when a
+      // transition was recorded and never settled: the table is real and its content is not.
+      if (args.sourceLocale && (await args.seedIncomplete?.()) === true) {
+        return await resumeInterruptedSeed(
+          adapter,
+          args,
+          newLocalized,
+          companionTableName,
+          onError
+        );
+      }
+      return false;
+    }
     // Lazy import avoids a cycle (reconcile-companion → migration helpers).
     const { buildCompanionReconcileStatements } = await import(
       "../migration/reconcile-companion"
     );
-    const localizedNames = new Set(
-      resolveLocalizedFieldNames(args.fields, true)
-    );
-    const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
     // A caller that cannot say which language the main table's content is in must not create the
     // companion over that content. Reads resolve through the companion once it exists, so an empty
     // one hides everything already written — and because creation is a race, the first caller to

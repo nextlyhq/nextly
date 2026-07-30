@@ -660,7 +660,7 @@ async function ensureLocalizedCompanionsForReload(
   const { resolveTransitionRecorder } = await import(
     "../domains/i18n/migration/transition-recorder"
   );
-  const { beginI18nTransition } = await import(
+  const { beginI18nTransition, readI18nTransitionState } = await import(
     "../domains/i18n/migration/transition-state"
   );
   const transitions = await resolveTransitionRecorder(config, adapter);
@@ -700,6 +700,13 @@ async function ensureLocalizedCompanionsForReload(
                   slug: entity.slug!,
                   sourceLocale: transitions.defaultLocale,
                 })
+            : undefined,
+          // Lets an existing companion be finished rather than skipped. A record still reading
+          // `enabling` means an earlier run created the table and did not complete the copy.
+          seedIncomplete: transitions
+            ? async () =>
+                (await readI18nTransitionState(transitions, kind, entity.slug!))
+                  .status === "enabling"
             : undefined,
         },
         error => {

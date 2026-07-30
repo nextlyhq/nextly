@@ -378,6 +378,52 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(reported).toHaveLength(1);
   });
 
+  it("finishes a copy an earlier run started and abandoned", async () => {
+    // `CREATE TABLE` and the copy are separate statements, and MySQL commits DDL implicitly, so a
+    // failure between them leaves a real companion holding none of the entity's content. Without a
+    // resume every later run returns early because the table exists, and the content stays hidden
+    // permanently — the marker is written before the DDL precisely so this is recoverable.
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_resume",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_resume",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_resume" ("id", "slug", "title") VALUES ('row1', 'r1', 'Survives')`
+    );
+    await runSync(localized);
+
+    // Reproduce the interrupted state: the companion exists and the transition is recorded, but
+    // the copy left nothing behind.
+    await adapter?.executeQuery(`DELETE FROM "dc_dbsync_resume_locales"`);
+    expect(
+      await adapter?.executeQuery(`SELECT * FROM "dc_dbsync_resume_locales"`)
+    ).toEqual([]);
+
+    await runSync(localized);
+
+    const rows = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_resume_locales" WHERE "_locale" = 'en'`
+    );
+    expect(rows).toEqual([{ title: "Survives" }]);
+  });
+
   it("leaves a non-localized collection with no companion", async () => {
     await runSync(
       defineConfig({

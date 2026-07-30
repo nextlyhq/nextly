@@ -17,6 +17,7 @@ import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity
 import { resolveTransitionRecorder } from "../../domains/i18n/migration/transition-recorder";
 import {
   beginI18nTransition,
+  readI18nTransitionState,
   type I18nTransitionKind,
 } from "../../domains/i18n/migration/transition-state";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
@@ -922,6 +923,13 @@ export async function ensureLocalizedCompanions(
                   slug: entity.slug!,
                   sourceLocale: transitions.defaultLocale,
                 })
+            : undefined,
+          // Lets an existing companion be finished rather than skipped. A record still reading
+          // `enabling` means an earlier run created the table and did not complete the copy.
+          seedIncomplete: transitions
+            ? async () =>
+                (await readI18nTransitionState(transitions, kind, entity.slug!))
+                  .status === "enabling"
             : undefined,
         },
         error => {
