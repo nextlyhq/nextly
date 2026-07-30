@@ -275,18 +275,6 @@ export async function runDbSync(
     // schema definitions, guaranteeing they match 100%.
     await ensureCoreTables(adapter, options, context);
 
-    // Step 3.6: Register the runtime schema of every component in the database. The registry
-    // built above holds STATIC system tables only, so `comp_` tables are unaddressable by
-    // the ORM until this runs — and the orphan cleanup below has to delete rows from them.
-    // Reads from `dynamic_components` rather than the config so components already removed
-    // from code are still reachable.
-    await registerComponentSchemas({
-      adapter: adapter as unknown as DrizzleAdapter,
-      registry: schemaRegistry,
-      dialect: (adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
-      logger,
-    });
-
     // Step 4-5.5: Sync collections, singles and components.
     //
     // These run even when the config declares none of that entity type: removing the LAST
@@ -301,8 +289,24 @@ export async function runDbSync(
     // mode `loadConfig` starts the file watcher before returning, so a save
     // during connection, core-table setup, or this first sync would rebuild the
     // live registry while these calls are still materializing the config they
-    // started from.
+    // started from. Component registration is inside the scope because it
+    // builds the `comp_` runtime tables from the same storage mappings: left
+    // outside, it would shape them from a newer config than the sync that then
+    // addresses them.
     await runWithFieldTypes(configResult.fieldTypes, async () => {
+      // Step 3.6: Register the runtime schema of every component in the database. The registry
+      // built above holds STATIC system tables only, so `comp_` tables are unaddressable by
+      // the ORM until this runs — and the orphan cleanup below has to delete rows from them.
+      // Reads from `dynamic_components` rather than the config so components already removed
+      // from code are still reachable.
+      await registerComponentSchemas({
+        adapter: adapter as unknown as DrizzleAdapter,
+        registry: schemaRegistry,
+        dialect: (adapter as unknown as DrizzleAdapter).getCapabilities()
+          .dialect,
+        logger,
+      });
+
       assertPluginFieldDeclarations(configResult.config);
 
       await syncCollections(configResult, adapter, options, context);

@@ -1065,6 +1065,26 @@ describe("plugin field types in the Zod generator", () => {
     expect(iface.imports).toEqual([]);
   });
 
+  it("does not count a name used only as an optional property key", () => {
+    registerFieldType({
+      type: "optkey",
+      storage: "json",
+      component: "@acme/ok/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/ok" }],
+        tsType: () => "{ Rating?: string }",
+      },
+    });
+
+    // The `?` belongs to the key, not to a reference, so the binding is never
+    // used and importing it fails the generated file under `noUnusedLocals`.
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "o", type: "optkey" }])
+    );
+
+    expect(iface.imports).toEqual([]);
+  });
+
   it("does not count a name used only after a dot", () => {
     registerFieldType({
       type: "qualified",

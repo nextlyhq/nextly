@@ -245,7 +245,8 @@ export function pluginCodegenImports(
       // A property key is a name, not a reference: `{ Rating: string }` and
       // `z.object({ Rating: z.string() })` use the binding on the value side or
       // not at all. Only the key is removed, so `{ a: Rating }` still counts.
-      .replace(/([{,]\s*)[A-Za-z_$][\w$]*\s*:/g, "$1")
+      // The `?` of an optional key belongs to the key, not to a reference.
+      .replace(/([{,]\s*)[A-Za-z_$][\w$]*\s*\??\s*:/g, "$1")
       // The member half of a qualified access is a name on the object, not the
       // binding: `Models.Rating` uses `Models`. Dropping the member keeps the
       // object it was read from, so what the expression really references is

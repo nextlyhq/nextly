@@ -176,15 +176,27 @@ export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
  */
 export function coerceUserExtValue(
   value: unknown,
-  field: { type?: unknown }
+  field: { name?: unknown; type?: unknown }
 ): unknown {
   if (typeof value !== "string") return value;
   if (storageTypeToken(field) !== "date") return value;
   const parsed = new Date(value);
-  // An unparseable string is left as it was: reporting it belongs to
-  // validation, and substituting an Invalid Date would store a null-ish value
-  // for something the caller did supply.
-  return Number.isNaN(parsed.getTime()) ? value : parsed;
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+
+  // Refused rather than forwarded. Nothing upstream rejects it — a `date`
+  // field validates as `z.union([z.date(), z.string()])` and a plugin type
+  // falls to `z.unknown()` — so passing it on reaches the driver, and the
+  // caller is told the value was stored when it was not.
+  const name = typeof field.name === "string" ? field.name : "input";
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: name,
+        code: "INVALID_DATE",
+        message: `${name} is not a valid date.`,
+      },
+    ],
+  });
 }
 
 export class UserMutationService extends BaseService {
@@ -369,7 +381,9 @@ export class UserMutationService extends BaseService {
     for (const fieldName of fieldNames) {
       const raw = fieldName in input ? (input[fieldName] ?? null) : null;
       const field = byName.get(fieldName);
-      values[fieldName] = field ? coerceUserExtValue(raw, field) : raw;
+      values[fieldName] = field
+        ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
+        : raw;
     }
     return values;
   }

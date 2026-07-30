@@ -10,6 +10,7 @@ import {
   clearFieldTypes,
   registerFieldType,
 } from "../../../schema/field-types/field-type-registry";
+import { NextlyError } from "../../../../errors/nextly-error";
 import { coerceUserExtValue } from "../user-mutation-service";
 
 afterEach(() => clearFieldTypes());
@@ -52,12 +53,37 @@ describe("coerceUserExtValue", () => {
     expect(coerceUserExtValue("hello", { type: "slugish" })).toBe("hello");
   });
 
-  it("leaves an unparseable string as it was given", () => {
-    // Reporting a bad value belongs to validation; substituting an Invalid
-    // Date would store a null-ish value for something the caller supplied.
-    expect(coerceUserExtValue("not a date", { type: "date" })).toBe(
-      "not a date"
-    );
+  it("refuses an unparseable string instead of forwarding it", () => {
+    // Nothing upstream rejects it: `date` validates as
+    // `z.union([z.date(), z.string()])` and a plugin type falls to
+    // `z.unknown()`. Forwarding it reaches the driver, whose failure the create
+    // path reads as a missing table — so the caller would be told the value was
+    // stored when it was dropped.
+    let thrown: unknown;
+    try {
+      coerceUserExtValue("not a date", { name: "birthday", type: "date" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(NextlyError.isValidation(thrown)).toBe(true);
+    const data = (thrown as NextlyError).publicData as
+      | { errors?: Array<{ path: string }> }
+      | undefined;
+    expect(data?.errors?.[0]?.path).toBe("birthday");
+  });
+
+  it("refuses an unparseable value for a timestamp-backed plugin type too", () => {
+    registerFieldType({
+      type: "occurred2",
+      storage: "timestamp",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    expect(() =>
+      coerceUserExtValue("nonsense", { name: "at", type: "occurred2" })
+    ).toThrow(NextlyError);
   });
 
   it("passes through what is not a string", () => {
