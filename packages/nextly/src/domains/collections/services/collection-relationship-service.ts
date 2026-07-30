@@ -1112,9 +1112,13 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess
   ): void {
     if (!access.withheldByAccess || before.length === after.length) return;
-    const kept = new Set(after);
+    // Compared by id, not by object identity: narrowing re-reads the rows it
+    // admits, so what comes back describes the same row without being the same
+    // object. Identity would find none of them and record every row as refused,
+    // which then excuses a genuine load failure on that id elsewhere.
+    const kept = new Set(after.map(row => row.id));
     for (const row of before) {
-      if (kept.has(row)) continue;
+      if (kept.has(row.id)) continue;
       if (typeof row.id === "string") {
         access.withheldByAccess.add(relationKey(targetCollection, row.id));
       }
