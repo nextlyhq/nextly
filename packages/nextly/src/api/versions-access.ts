@@ -22,6 +22,8 @@ import { checkSingleAccess } from "../domains/singles";
 import type { UserContext } from "../domains/singles/types";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
+import { hydrateDiffReferences } from "../domains/versions/diff-references";
+import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -48,7 +50,7 @@ export async function requireRouteVersionReadAccess(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string
-): Promise<UserContext> {
+): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
   await getCachedNextly();
 
   const auth = await requireRouteCollectionAccess(request, "read", slug);
@@ -83,7 +85,7 @@ export async function requireRouteVersionReadAccess(
     authenticatedScope
   );
 
-  return user;
+  return { user, authenticatedScope };
 }
 
 /**
@@ -483,6 +485,37 @@ export function assertDiffVersionPair(from: number, to: number): void {
 }
 
 /**
+ * Resolve the relationship and upload references in a version snapshot to the
+ * value kit's display shape, in place, for the caller.
+ *
+ * Runs AFTER redaction, on the same enriched schema the diff walks, so a
+ * preview renders labels through the one value kit and a field the caller may
+ * not read is dropped before its references are ever resolved. The dispatcher
+ * read and the standalone route both call this, so the fields-resolution and
+ * hydration are defined once rather than duplicated between them.
+ */
+export async function hydrateVersionSnapshot(
+  snapshot: unknown,
+  scopeKind: VersionScopeKind,
+  slug: string,
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope,
+  // The version's locale, so a localized display column on a referenced target
+  // resolves in the language the snapshot was captured in.
+  locale?: string | null
+): Promise<void> {
+  const lookupKind = scopeKind === "single" ? "single" : "collection";
+  const fields = await resolveEnrichedFields(lookupKind, slug);
+  await hydrateSnapshotReferences(
+    snapshot,
+    fields,
+    user,
+    authenticatedScope,
+    locale
+  );
+}
+
+/**
  * Compute a diff of two versions AFTER the caller has confirmed read access to
  * the document. The dispatcher method and the standalone route both call this,
  * so the get/redact/walk logic has exactly one definition and each surface
@@ -502,6 +535,7 @@ export async function diffDocumentVersions(args: {
   from: number;
   to: number;
   modifiedOnly?: boolean;
+  authenticatedScope?: AuthenticatedScope;
 }): Promise<VersionDiff> {
   const versions = getService("versionsService");
   const ref = {
@@ -558,6 +592,19 @@ export async function diffDocumentVersions(args: {
     snapshotObject(toRow.snapshot),
     fields,
     { modifiedOnly: args.modifiedOnly }
+  );
+
+  // Resolve relationship and upload ids in the diff to display labels through
+  // the same access-checked path a read uses: an unreadable target stays a bare
+  // id. Labels attach beside the ids rather than replacing them, so the diff
+  // wire stays id-stable for any non-admin consumer of this surface. Both
+  // versions share a locale (asserted above), so the target reads resolve in
+  // that language.
+  await hydrateDiffReferences(
+    body.fields,
+    args.user,
+    args.authenticatedScope,
+    fromRow.locale
   );
 
   return {

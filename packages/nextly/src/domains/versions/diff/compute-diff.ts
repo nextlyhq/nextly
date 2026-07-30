@@ -132,17 +132,34 @@ function pickFieldDisplay(field: FieldConfig): FieldDisplay | undefined {
   const f = field as {
     hasMany?: boolean;
     relationTo?: string | string[];
-    options?: { label?: string; value?: unknown }[];
+    targetLabelField?: unknown;
+    options?: unknown;
     admin?: { date?: { pickerAppearance?: string } };
   };
   const display: FieldDisplay = {};
   if (f.hasMany === true) display.hasMany = true;
-  if (f.relationTo !== undefined) display.relationTo = f.relationTo;
+
+  // A relationship's target is usually `relationTo`; dynamic and many-to-many
+  // definitions instead nest it (and the display column) under `options`. Fall
+  // back to those so the diff's set/value node still names a collection to
+  // resolve against and can honor the configured label field.
+  const relOptions =
+    f.options && typeof f.options === "object" && !Array.isArray(f.options)
+      ? (f.options as { target?: unknown; targetLabelField?: unknown })
+      : undefined;
+  const relationTo =
+    f.relationTo ??
+    (typeof relOptions?.target === "string" ? relOptions.target : undefined);
+  if (relationTo !== undefined) display.relationTo = relationTo;
+
+  const labelField = f.targetLabelField ?? relOptions?.targetLabelField;
+  if (typeof labelField === "string") display.labelField = labelField;
+
+  // Select/radio option labels live in an array-shaped `options`.
   if (Array.isArray(f.options)) {
-    display.options = f.options.map(o => ({
-      label: o?.label,
-      value: o?.value,
-    }));
+    display.options = (f.options as { label?: string; value?: unknown }[]).map(
+      o => ({ label: o?.label, value: o?.value })
+    );
   }
   const pickerAppearance = f.admin?.date?.pickerAppearance;
   if (typeof pickerAppearance === "string") {
@@ -386,7 +403,12 @@ function jsonPresenceStatus(
   return dequal(before, after) ? "unchanged" : "changed";
 }
 
-function setNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
+function setNode(
+  meta: NodeMeta,
+  before: unknown,
+  after: unknown,
+  display?: FieldDisplay
+): FieldDiff {
   const beforeTargets = toTargets(before);
   const afterTargets = toTargets(after);
   const beforeKeys = new Set(beforeTargets.map(targetKey));
@@ -407,7 +429,14 @@ function setNode(meta: NodeMeta, before: unknown, after: unknown): FieldDiff {
           ? "removed"
           : "changed";
   }
-  return { ...meta, kind: "set", status, added, removed };
+  return {
+    ...meta,
+    kind: "set",
+    status,
+    added,
+    removed,
+    ...(display ? { display } : {}),
+  };
 }
 function dedupeTargets(targets: RelationTarget[]): RelationTarget[] {
   const seen = new Set<string>();
@@ -674,7 +703,9 @@ function diffField(
       componentCtx
     );
   }
-  if (isSetField(field, before, after)) return setNode(meta, before, after);
+  if (isSetField(field, before, after)) {
+    return setNode(meta, before, after, pickFieldDisplay(field));
+  }
   // A hasMany text field stores an ARRAY, not a single string, so it cannot be
   // word-diffed; fall through to a value comparison.
   if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {

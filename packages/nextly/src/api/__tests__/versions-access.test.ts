@@ -209,7 +209,7 @@ describe("requireRouteVersionReadAccess", () => {
     selectOneSpy.mockResolvedValue({ id: "single-1" });
     singleGetSpy.mockResolvedValue({ success: true, statusCode: 200 });
 
-    const user = await requireRouteVersionReadAccess(
+    const { user } = await requireRouteVersionReadAccess(
       new Request("http://localhost/x"),
       "single",
       "settings",

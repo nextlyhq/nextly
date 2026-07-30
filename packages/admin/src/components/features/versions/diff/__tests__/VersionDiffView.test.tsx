@@ -122,4 +122,108 @@ describe("VersionDiffView", () => {
       screen.getByRole("button", { name: /Try again/ })
     ).toBeInTheDocument();
   });
+
+  it("renders a relationship by its resolved label, not its id", () => {
+    // The server resolves the id to the value kit's { id, label } shape, so the
+    // one kit shows the title rather than the bare id it used to leak.
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "value",
+            name: "author",
+            label: "Author",
+            type: "relationship",
+            status: "changed",
+            before: { id: "a1", label: "Ada" },
+            after: { id: "a2", label: "Grace" },
+            display: { relationTo: "authors" },
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByText("Ada")).toBeInTheDocument();
+    expect(screen.getByText("Grace")).toBeInTheDocument();
+    expect(screen.queryByText("a1")).not.toBeInTheDocument();
+  });
+
+  it("renders many-relationship targets by their resolved labels", () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "set",
+            name: "tags",
+            label: "Tags",
+            type: "relationship",
+            status: "changed",
+            added: [{ id: "t2", label: "Engineering" }],
+            removed: [{ id: "t1", label: "Design" }],
+            display: { relationTo: "tags", hasMany: true },
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByText("Engineering")).toBeInTheDocument();
+    expect(screen.getByText("Design")).toBeInTheDocument();
+  });
+
+  it("renders an upload by its filename", () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "value",
+            name: "cover",
+            label: "Cover",
+            type: "upload",
+            status: "added",
+            before: null,
+            after: {
+              id: "m1",
+              originalFilename: "hero.png",
+              filename: "abc.png",
+              url: "/u",
+              thumbnailUrl: "/t",
+              mimeType: "image/png",
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByText("hero.png")).toBeInTheDocument();
+  });
 });

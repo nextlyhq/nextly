@@ -97,7 +97,7 @@ export const GET = withErrorHandler(
       query.get("modifiedOnly") === "1" || query.get("modifiedOnly") === "true";
     assertDiffVersionPair(from, to);
 
-    const user = await requireRouteVersionReadAccess(
+    const { user, authenticatedScope } = await requireRouteVersionReadAccess(
       request,
       scopeKind,
       slug,
@@ -112,6 +112,7 @@ export const GET = withErrorHandler(
       from,
       to,
       modifiedOnly,
+      authenticatedScope,
     });
 
     return respondDoc(diff);
