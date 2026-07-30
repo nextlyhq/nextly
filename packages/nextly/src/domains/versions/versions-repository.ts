@@ -232,11 +232,22 @@ export class VersionsRepository {
    */
   async listByDoc(
     ref: VersionRef,
-    opts: { limit?: number; includeAutosave?: boolean; cursor?: number } = {}
+    opts: {
+      limit?: number;
+      includeAutosave?: boolean;
+      cursor?: number;
+      locale?: string;
+    } = {}
   ): Promise<VersionMeta[]> {
     const and = [...this.docWhere(ref)];
     if (!opts.includeAutosave) {
       and.push({ column: "isAutosave", op: "=", value: false });
+    }
+    // Scope to one locale's history when asked. A localized document captures a
+    // version per locale, so the list can be narrowed to the language an editor
+    // is working in; absent, every locale's versions are returned.
+    if (opts.locale !== undefined) {
+      and.push({ column: "locale", op: "=", value: opts.locale });
     }
     // Keyset pagination: return versions strictly older than the cursor, which
     // is the last versionNo the caller already has. Stable under concurrent

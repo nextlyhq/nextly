@@ -5,7 +5,16 @@
 // with a neutral "Coming Soon" chip. Show system fields switch mirrors
 // Group + Order from the Advanced tab; server-side admin.group / admin.order
 // still work for code-first config.
-import { Input, Label, Switch } from "@nextlyhq/ui";
+import {
+  Input,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
+} from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
 
 import type { AdvancedField } from "../builder-config";
@@ -60,13 +69,23 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
       )}
 
       {fields.includes("versions") && (
-        <SwitchRow
-          ariaLabel="Version history"
-          label="Version history"
-          help="Record every save so earlier versions can be previewed and restored. Turning it off keeps the versions already recorded but stops new ones; it does not add drafts."
-          checked={values.versions ?? false}
-          onChange={v => set("versions", v)}
-        />
+        <div className="space-y-3">
+          <SwitchRow
+            ariaLabel="Version history"
+            label="Version history"
+            help="Record every save so earlier versions can be previewed and restored. Turning it off keeps the versions already recorded but stops new ones; it does not add drafts."
+            checked={values.versions ?? false}
+            onChange={v => set("versions", v)}
+          />
+          {/* Retention, shown only when history is on: how many durable versions
+              to keep per document. */}
+          {values.versions === true && (
+            <RetentionField
+              value={values.versionsMaxPerDoc}
+              onChange={v => set("versionsMaxPerDoc", v)}
+            />
+          )}
+        </div>
       )}
 
       {fields.includes("revalidate") && (
@@ -96,6 +115,91 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
       )}
 
       {fields.includes("showSystemFields") && <ShowSystemFieldsSwitch />}
+    </div>
+  );
+}
+
+/**
+ * Version retention control. The stored value is a tri-state — `false`
+ * (unlimited), a number (keep that many), or undefined (the default, 50) — so
+ * the mode is a named select and the count only appears for "Keep last N".
+ *
+ * A local text mirror lets the number field be emptied mid-edit without the
+ * mode snapping back; a blank field commits as the default 50 rather than an
+ * invalid count.
+ */
+function RetentionField({
+  value,
+  onChange,
+}: {
+  value: number | false | undefined;
+  onChange: (v: number | false | undefined) => void;
+}) {
+  const mode: "all" | "default" | "custom" =
+    value === false ? "all" : typeof value === "number" ? "custom" : "default";
+
+  const [customText, setCustomText] = useState(
+    typeof value === "number" ? String(value) : "50"
+  );
+  // Keep the field in sync when a concrete count arrives from outside, e.g.
+  // loading an existing schema into the dialog.
+  useEffect(() => {
+    if (typeof value === "number") setCustomText(String(value));
+  }, [value]);
+
+  const onMode = (next: "all" | "default" | "custom") => {
+    if (next === "all") onChange(false);
+    else if (next === "default") onChange(undefined);
+    else {
+      const n = customText === "" ? 50 : Number(customText);
+      onChange(Number.isInteger(n) && n >= 0 ? n : 50);
+    }
+  };
+
+  const onCount = (text: string) => {
+    setCustomText(text);
+    // Empty is allowed while typing; the value is only committed once it parses.
+    if (text === "") return;
+    const n = Number(text);
+    if (Number.isInteger(n) && n >= 0) onChange(n);
+  };
+
+  return (
+    <div className="ml-9 space-y-2">
+      <Label htmlFor="versions-retention" className="text-xs font-medium">
+        Retention
+      </Label>
+      <Select
+        value={mode}
+        onValueChange={(next: "all" | "default" | "custom") => onMode(next)}
+      >
+        <SelectTrigger id="versions-retention" className="h-8 text-sm">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="default">Keep default (50)</SelectItem>
+          <SelectItem value="all">Keep all history</SelectItem>
+          <SelectItem value="custom">Keep last N…</SelectItem>
+        </SelectContent>
+      </Select>
+      {mode === "custom" && (
+        <div className="space-y-1">
+          <Input
+            type="number"
+            min={0}
+            step={1}
+            inputMode="numeric"
+            value={customText}
+            onChange={e => onCount(e.target.value)}
+            className="h-8 text-sm"
+            aria-label="Versions to keep per document"
+          />
+          <p className="text-xs text-muted-foreground">
+            Older versions are pruned beyond this count. 0 keeps only protected
+            versions (the current one and the latest published).
+          </p>
+        </div>
+      )}
     </div>
   );
 }

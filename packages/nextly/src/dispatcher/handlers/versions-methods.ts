@@ -79,6 +79,8 @@ export interface VersionMethodArgs {
   authenticatedScope?: AuthenticatedScope;
   limit?: number;
   cursor?: number;
+  /** Scope the history listing to one locale's versions. */
+  locale?: string;
 }
 
 /**
@@ -151,6 +153,7 @@ export async function listVersionsForDocument(
     {
       limit: limit + 1,
       ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+      ...(args.locale !== undefined ? { locale: args.locale } : {}),
     }
   );
   const hasNext = window.length > limit;

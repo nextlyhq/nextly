@@ -80,9 +80,10 @@ function jsonLiteral(value: unknown, dialect: Dialect): string {
  */
 function versionsLiteral(
   versions: boolean | undefined,
+  maxPerDoc: number | false | undefined,
   dialect: Dialect
 ): string {
-  const resolved = resolveBuilderVersions(versions);
+  const resolved = resolveBuilderVersions(versions, maxPerDoc);
   return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 
@@ -237,7 +238,11 @@ export function buildCollectionMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(entity.versions, dialect),
+      value: versionsLiteral(
+        entity.versions,
+        entity.versionsMaxPerDoc,
+        dialect
+      ),
       update: true,
     },
     {
@@ -305,7 +310,11 @@ export function buildSingleMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(entity.versions, dialect),
+      value: versionsLiteral(
+        entity.versions,
+        entity.versionsMaxPerDoc,
+        dialect
+      ),
       update: true,
     },
     {

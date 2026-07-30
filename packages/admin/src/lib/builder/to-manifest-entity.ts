@@ -91,6 +91,9 @@ export interface BuilderSettingsInput {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Whether writes bust cache tags. Defaults on; false opts out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Defaults on; false opts out. */
@@ -154,6 +157,9 @@ export interface ManifestEntity {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Whether writes bust cache tags. Defaults on; false opts out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Defaults on; false opts out. */
@@ -234,6 +240,7 @@ export function applyCommonSettings(
     status,
     localized,
     versions,
+    versionsMaxPerDoc,
     revalidate,
     webhooks,
   } = settings;
@@ -247,6 +254,9 @@ export function applyCommonSettings(
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;
   if (versions !== undefined) entity.versions = versions;
+  if (versionsMaxPerDoc !== undefined) {
+    entity.versionsMaxPerDoc = versionsMaxPerDoc;
+  }
   if (revalidate !== undefined) entity.revalidate = revalidate;
   if (webhooks !== undefined) entity.webhooks = webhooks;
 }

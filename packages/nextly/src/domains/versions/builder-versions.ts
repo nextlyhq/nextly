@@ -27,8 +27,34 @@ import { resolveVersionsConfig } from "./resolve-config";
  * code-first back-compat, which would leave the switch unable to turn
  * versioning off on any entity that has Draft/Published enabled.
  */
+/**
+ * Coerce an untrusted retention value from a loosely-typed request body into
+ * the `number | false | undefined` the resolver takes. `false` is unlimited; a
+ * non-negative integer is a keep-count; anything else (absent, or malformed)
+ * becomes undefined so the default (50) applies rather than a rejected request,
+ * matching how these routes coerce their other optional switches.
+ */
+export function coerceBuilderMaxPerDoc(
+  value: unknown
+): number | false | undefined {
+  if (value === false) return false;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  return undefined;
+}
+
 export function resolveBuilderVersions(
-  enabled: boolean | undefined
+  enabled: boolean | undefined,
+  // Retention: how many durable versions to keep per document. `false` =
+  // unlimited; a number = keep that many; undefined = the default (50), so a
+  // caller that only knows the on/off switch keeps today's behavior. Ignored
+  // when the switch is off.
+  maxPerDoc?: number | false
 ): ResolvedVersionsConfig | null {
-  return enabled === true ? resolveVersionsConfig({ drafts: false }) : null;
+  if (enabled !== true) return null;
+  return resolveVersionsConfig({
+    drafts: false,
+    ...(maxPerDoc !== undefined ? { maxPerDoc } : {}),
+  });
 }

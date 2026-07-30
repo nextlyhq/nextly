@@ -68,8 +68,15 @@ function isAddressable(scope: VersionScope): boolean {
 export const versionKeys = {
   all: () => ["versions"] as const,
   lists: () => [...versionKeys.all(), "list"] as const,
-  list: (scope: VersionScope) =>
-    [...versionKeys.lists(), ...scopeKey(scope)] as const,
+  // The optional locale is appended, so a locale-filtered list is its own cache
+  // entry while `list(scope)` (no locale) stays the prefix every mutation
+  // invalidates — that prefix match still clears every locale variant.
+  list: (scope: VersionScope, locale?: string) =>
+    [
+      ...versionKeys.lists(),
+      ...scopeKey(scope),
+      ...(locale !== undefined ? [locale] : []),
+    ] as const,
   details: () => [...versionKeys.all(), "detail"] as const,
   detail: (scope: VersionScope, versionNo: number) =>
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
@@ -100,6 +107,8 @@ export const versionKeys = {
 export interface UseVersionsOptions {
   scope: VersionScope;
   enabled?: boolean;
+  /** Scope the listing to one locale's versions. Absent lists every locale. */
+  locale?: string;
 }
 
 /**
@@ -114,13 +123,18 @@ export interface UseVersionsOptions {
  * list, so returning to the panel must revalidate the head or it would label a
  * stale version as current.
  */
-export function useVersions({ scope, enabled = true }: UseVersionsOptions) {
+export function useVersions({
+  scope,
+  enabled = true,
+  locale,
+}: UseVersionsOptions) {
   return useInfiniteQuery<VersionListResponse, Error>({
-    queryKey: versionKeys.list(scope),
+    queryKey: versionKeys.list(scope, locale),
     queryFn: ({ pageParam }) =>
       versionApi.list(scope, {
         limit: PAGE_SIZE,
         ...(typeof pageParam === "number" ? { cursor: pageParam } : {}),
+        ...(locale !== undefined ? { locale } : {}),
       }),
     initialPageParam: undefined,
     getNextPageParam: lastPage => {
