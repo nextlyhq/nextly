@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
@@ -9,6 +10,7 @@ import type { FieldGroupRegistryService } from "../../../services/field-groups/f
 import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import type { TargetReadPolicy } from "../../collections/services/collection-relationship-service";
 import {
   isMissingCompanionTableError,
   populateCompanionFields,
@@ -41,6 +43,32 @@ export interface ComponentReadAccess {
   enforceFieldAccess?: boolean;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
+  /**
+   * The caller's authenticated scope, forwarded to relationship expansion.
+   *
+   * A relationship reached through a field group is populated by the same
+   * service a top-level one is, and a scoped API key must not inherit its
+   * owner's super-admin bypass there either.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /**
+   * Ids withheld because a target collection refused the caller, so a
+   * completeness check can tell a refusal from a load that failed.
+   */
+  withheldByAccess?: Set<string>;
+  /**
+   * Evaluate the target collection's own read rules even when field redaction
+   * is off, so an authorization view is not shown a row the response withholds.
+   */
+  enforceCollectionAccess?: boolean;
+  /**
+   * Target read policies resolved during this population.
+   *
+   * Component rows are expanded concurrently, and rows pointing at the same
+   * target would otherwise each resolve its policy — so one map is shared
+   * across them all rather than created per row.
+   */
+  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
 }
 
 export interface PopulateComponentDataParams {
@@ -1095,8 +1123,12 @@ export class FieldGroupQueryService extends BaseService {
           // The related row belongs to another collection, so it is judged by
           // that collection's field rules for this caller.
           enforceFieldAccess: access.enforceFieldAccess,
+          enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
           overrideAccess: access.overrideAccess,
+          authenticatedScope: access.authenticatedScope,
+          targetPolicies: access.targetPolicies,
+          withheldByAccess: access.withheldByAccess,
         }
       );
 

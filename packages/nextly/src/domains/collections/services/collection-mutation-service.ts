@@ -2605,6 +2605,7 @@ export class CollectionMutationService extends BaseService {
               enforceFieldAccess: true,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
             }
           );
         } catch (expansionError) {
@@ -5148,6 +5149,7 @@ export class CollectionMutationService extends BaseService {
               enforceFieldAccess: true,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
             }
           );
         } catch (expansionError) {
