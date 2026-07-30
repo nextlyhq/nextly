@@ -31,7 +31,7 @@ const IN_FLIGHT: MigratingState = {
   direction: "up",
   migrationId: "run-1",
   step: 4,
-  plan: { slugsHash: "slugs-1", manifestHash: "hash-1" },
+  plan: { registryHash: "slugs-1", manifestHash: "hash-1" },
   appliedManifest: IN_FLIGHT_PLAN,
 };
 
@@ -197,7 +197,7 @@ describe("field-group storage verdict", () => {
         step: 5,
         direction: "up",
         migrationId: "run-1",
-        plan: { slugsHash: "slugs-1", manifestHash: "hash-1" },
+        plan: { registryHash: "slugs-1", manifestHash: "hash-1" },
         appliedManifest: IN_FLIGHT_PLAN,
       }
     );

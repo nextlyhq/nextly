@@ -95,21 +95,20 @@ export interface SettledState {
  * not have to survive a rebuild producing the same bytes. What it must still
  * catch is the world moving underneath a recorded position:
  *
- * - `slugsHash` covers which field groups exist. A group created or deleted
- *   mid-run would leave storage the plan never mentions.
+ * - `registryHash` covers which field group rows exist, by id. A group created,
+ *   deleted, or replaced mid-run would leave storage the plan never mentions.
  * - `manifestHash` covers the stored plan's own integrity.
  */
 export interface MigrationPlanIdentity {
   /**
-   * Hash over the sorted slug set the run was planned against.
+   * Hash over the registry rows the run was planned against, by id and slug.
    *
-   * Answers "did the set of field groups move underneath this run". Slugs are
-   * used rather than table names because a slug is stable for the whole run
-   * while `table_name` is rewritten as each rename commits — a hash over table
-   * names would stop matching partway through and refuse the resume it exists
-   * to protect.
+   * Answers "is this still the same set of field groups". Row ids rather than
+   * table names because `table_name` is rewritten as each rename commits, and
+   * rather than slugs alone because a slug cannot tell a group that survived
+   * from one deleted and recreated under the same name.
    */
-  slugsHash: string;
+  registryHash: string;
   /**
    * Hash of the persisted plan itself.
    *
@@ -162,7 +161,7 @@ interface StoredMarker {
   direction?: MigrationDirection;
   migrationId?: string;
   step?: number;
-  slugsHash?: string;
+  registryHash?: string;
   manifestHash?: string;
   appliedManifest?: unknown;
 }
@@ -225,7 +224,7 @@ export async function readMigrationState(
   }
 
   if (marker.status === "migrating") {
-    const { direction, migrationId, step, slugsHash, manifestHash } = marker;
+    const { direction, migrationId, step, registryHash, manifestHash } = marker;
     if (direction !== "up" && direction !== "down") {
       throw markerCorrupt("in-flight marker carries no known direction");
     }
@@ -246,8 +245,8 @@ export async function readMigrationState(
     ) {
       throw markerCorrupt("in-flight marker carries no valid step");
     }
-    if (typeof slugsHash !== "string" || slugsHash.length === 0) {
-      throw markerCorrupt("in-flight marker carries no slug-set hash");
+    if (typeof registryHash !== "string" || registryHash.length === 0) {
+      throw markerCorrupt("in-flight marker carries no registry identity hash");
     }
     if (typeof manifestHash !== "string" || manifestHash.length === 0) {
       throw markerCorrupt("in-flight marker carries no manifest hash");
@@ -270,7 +269,7 @@ export async function readMigrationState(
       direction,
       migrationId,
       step,
-      plan: { slugsHash, manifestHash },
+      plan: { registryHash, manifestHash },
       appliedManifest,
     };
   }
@@ -313,7 +312,7 @@ export async function beginMigration(
   // next read would reject leaves the database unavailable with no way forward,
   // and an empty identifier is the easiest way to do that by accident.
   requireIdentifier(args.migrationId, "migrationId");
-  requireIdentifier(args.plan.slugsHash, "slugsHash");
+  requireIdentifier(args.plan.registryHash, "registryHash");
   requireIdentifier(args.plan.manifestHash, "manifestHash");
 
   // Validated through the same function the read uses, so a write cannot
@@ -339,7 +338,7 @@ export async function beginMigration(
     direction: args.direction,
     migrationId: args.migrationId,
     step: 0,
-    slugsHash: args.plan.slugsHash,
+    registryHash: args.plan.registryHash,
     manifestHash: args.plan.manifestHash,
     appliedManifest,
   };
@@ -414,7 +413,7 @@ export async function advanceStep(
     direction: current.direction,
     migrationId: current.migrationId,
     step: args.step,
-    slugsHash: current.plan.slugsHash,
+    registryHash: current.plan.registryHash,
     manifestHash: current.plan.manifestHash,
     // Preserved on every step. Losing it mid-run would leave a crash with a
     // step position and no plan to index into.
@@ -446,11 +445,11 @@ export function assertPlanUnchanged(args: {
   recorded: MigrationPlanIdentity;
   current: MigrationPlanIdentity;
 }): void {
-  if (args.recorded.slugsHash !== args.current.slugsHash) {
+  if (args.recorded.registryHash !== args.current.registryHash) {
     throw planMoved(
       "the set of field groups changed since the interrupted run",
-      args.recorded.slugsHash,
-      args.current.slugsHash
+      args.recorded.registryHash,
+      args.current.registryHash
     );
   }
 }

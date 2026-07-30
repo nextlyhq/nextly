@@ -3,7 +3,7 @@ import { expectTypeOf } from "vitest";
 import type { ManifestEntry } from "../manifest";
 import type { BeginMigrationArgs, SettleArgs } from "../state";
 
-const PLAN = { slugsHash: "s", manifestHash: "h" };
+const PLAN = { registryHash: "s", manifestHash: "h" };
 const APPLIED: ManifestEntry[] = [
   { kind: "table", from: "comp_hero", to: "fg_hero" },
 ];

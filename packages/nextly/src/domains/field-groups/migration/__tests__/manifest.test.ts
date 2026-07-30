@@ -4,7 +4,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import {
   buildMigrationManifest,
-  hashSlugSet,
+  hashRegistryIdentity,
   hashManifest,
   invertManifest,
   MIGRATION_TARGET,
@@ -397,40 +397,47 @@ describe("field-group migration manifest", () => {
   });
 });
 
-describe("hashSlugSet", () => {
-  // Identity of the *set*, so row order from the registry must not change it.
+describe("hashRegistryIdentity", () => {
+  const rows = [
+    { id: "1", slug: "a" },
+    { id: "2", slug: "b" },
+  ];
+
   it("does not depend on row order", () => {
-    expect(hashSlugSet([{ slug: "a" }, { slug: "b" }])).toBe(
-      hashSlugSet([{ slug: "b" }, { slug: "a" }])
+    expect(hashRegistryIdentity(rows)).toBe(
+      hashRegistryIdentity([...rows].reverse())
     );
   });
 
-  // The question it answers: did a field group appear or disappear underneath an
-  // interrupted run? Either leaves storage the recorded plan never mentions.
   it("changes when a field group is added or removed", () => {
-    const base = hashSlugSet([{ slug: "a" }, { slug: "b" }]);
-    expect(hashSlugSet([{ slug: "a" }, { slug: "b" }, { slug: "c" }])).not.toBe(
+    const base = hashRegistryIdentity(rows);
+    expect(hashRegistryIdentity([...rows, { id: "3", slug: "c" }])).not.toBe(
       base
     );
-    expect(hashSlugSet([{ slug: "a" }])).not.toBe(base);
+    expect(hashRegistryIdentity([rows[0]!])).not.toBe(base);
   });
 
-  // The core property: which slugs, not how many. A group deleted and another
-  // created between runs leaves the count identical while the set is different,
-  // and the recorded plan mentions storage that is now absent.
   it("distinguishes different sets of the same size", () => {
-    expect(hashSlugSet([{ slug: "a" }])).not.toBe(hashSlugSet([{ slug: "b" }]));
-    expect(hashSlugSet([{ slug: "a" }, { slug: "b" }])).not.toBe(
-      hashSlugSet([{ slug: "a" }, { slug: "c" }])
+    expect(hashRegistryIdentity([{ id: "1", slug: "a" }])).not.toBe(
+      hashRegistryIdentity([{ id: "1", slug: "b" }])
     );
   });
 
-  // Slugs rather than table names, because `table_name` is rewritten as each
-  // rename commits: a name-based hash would stop matching partway through a run
-  // and refuse the resume it exists to protect.
-  it("ignores everything except the slugs", () => {
-    const rows = [{ slug: "a", tableName: "comp_a" }];
-    const renamed = [{ slug: "a", tableName: "fg_a" }];
-    expect(hashSlugSet(renamed)).toBe(hashSlugSet(rows));
+  // The whole reason the id is in here. A group deleted and recreated under the
+  // same slug is a different row, and a resume that cannot see that would adopt
+  // the new row's table as its own completed work — then rename it away on a
+  // rollback, destroying an identifier the author chose.
+  it("distinguishes a row recreated under the same slug", () => {
+    expect(hashRegistryIdentity([{ id: "1", slug: "hero" }])).not.toBe(
+      hashRegistryIdentity([{ id: "2", slug: "hero" }])
+    );
+  });
+
+  // `table_name` is rewritten as each rename commits, so anything derived from
+  // it would stop matching partway through the run it protects.
+  it("ignores everything except the id and slug", () => {
+    expect(
+      hashRegistryIdentity([{ id: "1", slug: "a", tableName: "fg_a" }] as never)
+    ).toBe(hashRegistryIdentity([{ id: "1", slug: "a" }]));
   });
 });

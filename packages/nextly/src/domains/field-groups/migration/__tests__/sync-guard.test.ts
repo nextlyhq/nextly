@@ -49,7 +49,7 @@ function migrating(over: Record<string, unknown> = {}) {
     direction: "up",
     migrationId: "run-1",
     step: 2,
-    slugsHash: "slugs-1",
+    registryHash: "slugs-1",
     manifestHash: hashManifest(PLAN),
     appliedManifest: PLAN,
     ...over,

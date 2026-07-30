@@ -48,7 +48,7 @@ function markerMeta(events: string[], migrationId: string) {
     direction: "up",
     migrationId,
     step: 0,
-    slugsHash: "s",
+    registryHash: "s",
     manifestHash: MARKER_PLAN_HASH,
     appliedManifest: MARKER_PLAN,
   };
@@ -152,7 +152,7 @@ describe("field-group migration runner", () => {
       direction: "up",
       migrationId: "run-1",
       step: 1,
-      slugsHash: "s",
+      registryHash: "s",
       manifestHash: MARKER_PLAN_HASH,
       appliedManifest: MARKER_PLAN,
     });

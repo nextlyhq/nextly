@@ -38,6 +38,14 @@ export const MIGRATION_TARGET = {
 
 /** A registry row, as far as the migration is concerned. */
 export interface RegistryRow {
+  /**
+   * The registry row's own primary key.
+   *
+   * Stable across the run — renames rewrite `table_name`, never this — and not
+   * reusable by a row recreated under the same slug, which is what lets a resume
+   * tell a surviving field group from a replaced one.
+   */
+  id: string;
   slug: string;
   /** Read from `table_name`. Never recomputed from the slug. */
   tableName: string;
@@ -208,18 +216,23 @@ export function buildMigrationManifest(
 /**
  * Hash the set of field groups a run was planned against.
  *
- * Slugs, not table names. A slug is a field group's identity and does not change
- * for the life of a run, while `table_name` is rewritten as each rename commits —
- * so a hash over table names would stop matching partway through a run and
- * refuse the resume it exists to protect. This is what answers "did the set of
- * field groups move underneath the interrupted run", which is the question a
- * recorded step position depends on: a group created or deleted mid-run would
- * otherwise be left behind at the legacy prefix while everything else moved.
+ * Row id **and** slug, not table names. `table_name` is rewritten as each rename
+ * commits, so hashing it would stop matching partway through a run and refuse
+ * the resume it exists to protect. The id is what makes this an identity rather
+ * than a census: a slug alone cannot tell a group that survived from one that
+ * was deleted and recreated under the same name, and a recreated row carrying an
+ * author-chosen `dbName` of `fg_hero` would otherwise look exactly like the
+ * migration's own completed work — letting a resume adopt the author's table and
+ * a later rollback rename it away.
  *
- * Sorted so the hash is a property of the set rather than of row order.
+ * Sorted by id so the hash is a property of the set rather than of row order.
  */
-export function hashSlugSet(rows: readonly { slug: string }[]): string {
-  const canonical = JSON.stringify([...rows.map(row => row.slug)].sort());
+export function hashRegistryIdentity(
+  rows: readonly { id: string; slug: string }[]
+): string {
+  const canonical = JSON.stringify(
+    rows.map(row => [row.id, row.slug]).sort((a, b) => (a[0] < b[0] ? -1 : 1))
+  );
   return createHash("sha256").update(canonical).digest("hex");
 }
 

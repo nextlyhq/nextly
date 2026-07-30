@@ -56,7 +56,7 @@ const PLAN_ENTRIES: ManifestEntry[] = [
 ];
 /** The hash has to describe the plan actually stored, so it is computed. */
 const PLAN_IDENTITY = {
-  slugsHash: "slugs-1",
+  registryHash: "slugs-1",
   manifestHash: hashManifest(PLAN_ENTRIES),
 };
 
@@ -109,9 +109,9 @@ describe("field-group migration marker", () => {
   // identifier would succeed and then be rejected by the very next read,
   // turning a successful begin into an unavailable database.
   it.each([
-    ["migrationId", { migrationId: "", slugsHash: "s", manifestHash: "h" }],
-    ["slugsHash", { migrationId: "r", slugsHash: "", manifestHash: "h" }],
-    ["manifestHash", { migrationId: "r", slugsHash: "s", manifestHash: "" }],
+    ["migrationId", { migrationId: "", registryHash: "s", manifestHash: "h" }],
+    ["registryHash", { migrationId: "r", registryHash: "", manifestHash: "h" }],
+    ["manifestHash", { migrationId: "r", registryHash: "s", manifestHash: "" }],
   ])("refuses to begin a run with an empty %s", async (_label, fields) => {
     const { meta, read } = createMeta();
     await expect(
@@ -119,7 +119,7 @@ describe("field-group migration marker", () => {
         direction: "up",
         migrationId: fields.migrationId,
         plan: {
-          slugsHash: fields.slugsHash,
+          registryHash: fields.registryHash,
           manifestHash: fields.manifestHash,
         },
         appliedManifest: PLAN_ENTRIES,
@@ -192,7 +192,7 @@ describe("field-group migration marker", () => {
       direction: "up",
       migrationId: "run-1",
       step: MAX_MIGRATION_STEP,
-      slugsHash: "slugs-1",
+      registryHash: "slugs-1",
       manifestHash: PLAN_IDENTITY.manifestHash,
       appliedManifest: PLAN_ENTRIES,
     });
@@ -269,7 +269,7 @@ describe("field-group migration marker", () => {
       migrationId: "run-1",
       // The recorded hash has to describe the plan being stored, so it is
       // computed from that plan rather than reused from another fixture.
-      plan: { slugsHash: "slugs-1", manifestHash: hashManifest(applied) },
+      plan: { registryHash: "slugs-1", manifestHash: hashManifest(applied) },
       appliedManifest: applied,
     });
     await expect(readMigrationState(meta)).resolves.toMatchObject({
@@ -372,7 +372,7 @@ describe("field-group migration marker", () => {
         migrationId: "run-1",
         // A valid identity, so the refusal is attributable to the bad entry
         // rather than to the identity check that runs before it.
-        plan: { slugsHash: "s", manifestHash: "h" },
+        plan: { registryHash: "s", manifestHash: "h" },
         // Otherwise valid: the registry entry is present, so the refusal is
         // attributable to the bad entry rather than to a missing registry.
         appliedManifest: [
@@ -539,11 +539,11 @@ describe("field-group migration marker", () => {
         direction: "up",
         migrationId: "r",
         step: 0,
-        slugsHash: "s",
+        registryHash: "s",
       },
     ],
     [
-      "in-flight without a slug-set hash",
+      "in-flight without a registry identity hash",
       {
         version: 1,
         status: "migrating",
@@ -655,7 +655,7 @@ describe("field-group migration plan guard", () => {
 
   // The application's schema moved: step N now names different objects.
   it("refuses a resume whose field group set changed", () => {
-    const refusal = refusalFrom({ ...PLAN, slugsHash: "slugs-2" });
+    const refusal = refusalFrom({ ...PLAN, registryHash: "slugs-2" });
     expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
     expect(refusal.logContext?.reason).toMatch(/set of field groups changed/);
   });
@@ -691,7 +691,7 @@ describe("the persisted plan is the resume's authority", () => {
       direction: "up",
       migrationId: "run-1",
       step: 0,
-      slugsHash: "slugs-1",
+      registryHash: "slugs-1",
       manifestHash: "a-hash-of-something-else",
       appliedManifest: PLAN_ENTRIES,
     });
@@ -715,7 +715,7 @@ describe("the persisted plan is the resume's authority", () => {
         direction,
         migrationId: "run-1",
         step: 0,
-        slugsHash: "slugs-1",
+        registryHash: "slugs-1",
         manifestHash: PLAN_IDENTITY.manifestHash,
       });
       await expect(readMigrationState(meta)).rejects.toSatisfy(
@@ -735,7 +735,7 @@ describe("the persisted plan is the resume's authority", () => {
       beginMigration(meta, {
         direction: "up",
         migrationId: "run-1",
-        plan: { slugsHash: "slugs-1", manifestHash: "not-this-plan" },
+        plan: { registryHash: "slugs-1", manifestHash: "not-this-plan" },
         appliedManifest: PLAN_ENTRIES,
       })
     ).rejects.toThrowError(NextlyError);
