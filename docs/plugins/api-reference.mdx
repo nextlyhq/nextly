@@ -144,6 +144,7 @@ interface PluginFieldType {
   surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
   layout?: "takeover";
   validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
+  validateOptions?: (field) => true | string | PluginFieldIssue[];              // see below
 }
 ```
 
@@ -178,7 +179,7 @@ fieldTypes: [
 | Key | What it is |
 |---|---|
 | `data` | The write payload, for rules spanning fields. On update this is the patch, not the merged stored entry. Always the top-level payload, even for a field nested in a repeater row. |
-| `req` | Request context; carries `user` when authenticated. Empty for a field inside a component instance. |
+| `req` | Request context; carries `user` when authenticated. Empty for a field inside a field group instance. |
 | `field` | The instance, so you can read the options your type declares. A detached copy: records, arrays, dates, sets and maps are rebuilt, so editing them changes nothing. Functions and class instances stay shared — treat it as read-only. |
 | `path` | Where this field sits in the write (`"stars"`, `"rows[1].stars"`). |
 | `mode` | `"create"` or `"update"`. |
@@ -207,11 +208,88 @@ Anything you return outside `true | string | PluginFieldIssue[]` is a refusal,
 as is throwing — a validator that forgets to return fails the write rather than
 silently accepting everything.
 
-**Where it runs.** The entry, single, and component write paths. A type offered
+**Where it runs.** The entry, single, and field group write paths. A type offered
 on the `users`, `forms`, or `blocks` surface does **not** run it yet: those
 surfaces validate through their own paths. A disabled plugin keeps its field
 types registered (its collections are retained) but its `validate` does not
 run — that is behavior, and a disabled plugin contributes none.
+
+### `validateOptions` — rules about the declaration
+
+`validate` answers "is this value allowed in this field". `validateOptions`
+answers "is this field declared coherently at all". It runs when a schema is
+registered, not when a value is written.
+
+The distinction matters because a schema defect reported per write is reported
+to the wrong person: the writer cannot fix it, and it fails every write until
+whoever declared the field notices.
+
+```ts
+validateOptions(field) {
+  const policy = field.policy;
+  if (policy === undefined) return true;
+  if (policy === null || typeof policy !== "object") {
+    return [{ path: "policy", message: "policy must be an object" }];
+  }
+  const { kinds } = policy as { kinds?: unknown };
+  if (Array.isArray(kinds) && kinds.length === 0) {
+    // Nothing could ever be stored in this field. That is a contradiction in
+    // the declaration, not a problem with any particular value.
+    return [{ path: "policy.kinds", message: "policy.kinds cannot be empty" }];
+  }
+  return true;
+}
+```
+
+Synchronous on purpose: a declaration is checked against itself, and a
+config-time rule that needed I/O would make startup depend on something that can
+be down. Issue paths are **relative** and get appended to the field's own, so
+`"policy.kinds"` reports against `fields[2].policy.kinds` — unlike `validate`,
+whose paths are absolute, because this one only ever names an option it already
+knows and has no way to learn its own index. Throwing is a rejected declaration,
+not a crash. A returned `code` is **not** carried: config errors report through
+closed, public code unions, so the canonical member is used and your message
+carries the detail.
+
+**Where it runs.** Every path a declaration reaches storage by:
+
+| Path | When |
+|---|---|
+| boot | over the resolved config and a plugin's own raw contributions, once the registry is populated |
+| `db:sync` and its watcher | before anything is serialized or materialized |
+| Schema Builder writes | before the payload is stored, and again before the manifest is written |
+| direct collection/single/field-group create and update | before the definition is persisted and its DDL runs |
+| `nextly build` | over collections, singles and field groups |
+| `migrate:create` | over the merged set the migration is generated from |
+| HMR reload | after the reload repopulates the registry |
+
+**Not** the `define*` calls, despite their being where a code-first config is
+validated. The config bundle is evaluated before `contributes.fieldTypes` is
+registered, so a custom type is not yet known at that point and the define call
+rejects it as an unknown field type before any option check could run. Do not
+reach for `defineCollection` to get your declaration checked — that ordering is
+why every gate above sits after registration.
+
+Your check always sees the declaration **as written**. On the Builder path that
+is the submitted payload, not the parsed copy: the manifest schema drops keys it
+does not declare, while the write persists the original, so your options are
+present in what gets stored and absent from what was parsed.
+
+A disabled plugin runs neither hook. Its field types stay registered, because its
+collections are retained and their fields still have to map to a column and
+render, but `validate` and `validateOptions` are both dropped at registration —
+they are behavior, and a disabled plugin contributes none.
+
+**Naming your options.** An option key must not collide with one the field
+schema already declares — `options`, `fields`, `admin`, `label` and the rest of
+the built-in field surface. The manifest applies the built-in shape to every
+field whatever its type, so a colliding key is judged against the core meaning
+(`options` as a select's choice array) and rejected before your check runs.
+Namespace anything that might clash, e.g. `policy` rather than `options`.
+
+Fields nested in a `repeater` or `group` are covered. A type offered only on the
+`users`, `forms`, or `blocks` surface is **not**: those surfaces have their own
+config validators, which do not consult this registry.
 
 ## Secrets
 

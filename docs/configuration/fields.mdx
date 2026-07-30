@@ -3,7 +3,7 @@ title: Fields
 description: Complete reference for every field type, their options, and usage patterns.
 ---
 
-Fields define the shape of your content. Every [collection](/docs/configuration/collections), [single](/docs/configuration/singles), and [component](/docs/configuration/components) is composed of fields.
+Fields define the shape of your content. Every [collection](/docs/configuration/collections), [single](/docs/configuration/singles), and [field group](/docs/configuration/field-groups) is composed of fields.
 
 Nextly exports field-helper functions from `nextly`. They eliminate the need to set the `type` property manually and give you full TypeScript autocomplete.
 
@@ -653,7 +653,7 @@ repeater({
 
 > **Note:** Use `repeater()` to define this field. The internal `type` is `"repeater"`. (Some other CMSes call this concept "array".)
 
-**Cross-links:** [Components](/docs/configuration/components#repeatable-single-component) covers the alternative repeatable-component pattern when you want a typed schema instead of inline fields.
+**Cross-links:** [Field Groups](/docs/configuration/field-groups#repeatable-single-field-group) covers the alternative repeatable field-group pattern when you want a typed schema instead of inline fields.
 
 ---
 
@@ -702,7 +702,7 @@ group({
 
 ### component
 
-Embed reusable [components](/docs/configuration/components) inside collections, singles, or other components. Three usage modes are supported.
+Embed reusable [field groups](/docs/configuration/field-groups) inside collections, singles, or other field groups. Three usage modes are supported.
 
 ```typescript
 // Single fixed type
@@ -737,7 +737,7 @@ fieldGroup({
 
 **Gotchas:** `component` and `components` are mutually exclusive; you'll get a startup error if both are set. Component nesting is capped at depth 3.
 
-**Cross-links:** see [Components](/docs/configuration/components) for the `defineFieldGroup()` reference and [the three modes](/docs/configuration/components#using-components-in-collections-and-singles) explained side-by-side.
+**Cross-links:** see [Field Groups](/docs/configuration/field-groups) for the `defineFieldGroup()` reference and [the three modes](/docs/configuration/field-groups#using-field-groups-in-collections-and-singles) explained side-by-side.
 
 ---
 
@@ -972,5 +972,5 @@ option("Active", "active");
 
 - [Collections](/docs/configuration/collections) — define content types using fields
 - [Singles](/docs/configuration/singles) — define single-document content using fields
-- [Components](/docs/configuration/components) — create reusable field groups
-- [Visual Schema Builder](/docs/admin/builder) — build collections, singles, and components visually
+- [Field Groups](/docs/configuration/field-groups) — create reusable field groups
+- [Visual Schema Builder](/docs/admin/builder) — build collections, singles, and field groups visually

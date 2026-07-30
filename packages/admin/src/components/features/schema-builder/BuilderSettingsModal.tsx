@@ -75,7 +75,7 @@ type Props = {
 const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
   collection: "collection",
   single: "single",
-  component: "component",
+  "field-group": "field group",
 };
 
 const EMPTY_VALUES: BuilderSettingsValues = {

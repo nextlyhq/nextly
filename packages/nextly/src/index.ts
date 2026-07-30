@@ -606,7 +606,7 @@ export {
   type FieldGroupConfig,
   type FieldGroupLabel,
   type FieldGroupAdminOptions,
-} from "./components";
+} from "./field-groups";
 
 // Component configuration validation
 export {
@@ -617,7 +617,7 @@ export {
   type FieldGroupValidationErrorCode,
   RESERVED_FIELD_GROUP_SLUGS,
   MAX_FIELD_GROUP_NESTING_DEPTH,
-} from "./components";
+} from "./field-groups";
 
 // Component field type (also exported from ./collections/fields via barrel export)
 export type { FieldGroupFieldConfig } from "./collections/fields/types/component";

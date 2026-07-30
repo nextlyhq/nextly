@@ -22,6 +22,7 @@ import type { VersionScopeKind } from "../schemas/versions/types";
 
 import { respondDoc } from "./response-shapes";
 import {
+  hydrateVersionSnapshot,
   redactSnapshotForUser,
   requireRouteVersionReadAccess,
 } from "./versions-access";
@@ -85,7 +86,7 @@ export const GET = withErrorHandler(
       });
     }
 
-    const user = await requireRouteVersionReadAccess(
+    const { user, authenticatedScope } = await requireRouteVersionReadAccess(
       request,
       scopeKind,
       slug,
@@ -99,6 +100,17 @@ export const GET = withErrorHandler(
     );
 
     await redactSnapshotForUser(row.snapshot, scopeKind, slug, user);
+
+    // Resolve relationship and upload ids to display labels (access-checked),
+    // after redaction, so the preview shows labels rather than ids.
+    await hydrateVersionSnapshot(
+      row.snapshot,
+      scopeKind,
+      slug,
+      user,
+      authenticatedScope,
+      row.locale
+    );
 
     return respondDoc(row);
   }

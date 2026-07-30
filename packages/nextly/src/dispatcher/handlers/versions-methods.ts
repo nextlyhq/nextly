@@ -11,8 +11,11 @@
 
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
+  assertDiffVersionPair,
   assertVersionDocumentReadable,
   assertVersionDocumentUpdatable,
+  diffDocumentVersions,
+  hydrateVersionSnapshot,
   redactSnapshotForUser,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
@@ -27,6 +30,7 @@ import {
   attachVersionAuthors,
   type VersionMetaWithAuthor,
 } from "../../domains/versions/author-hydration";
+import type { VersionDiff } from "../../domains/versions/diff";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
@@ -209,7 +213,48 @@ export async function getVersionForDocument(
     args.user
   );
 
+  // Resolve relationship and upload ids in the snapshot to display labels
+  // through the access-checked path, so a preview renders labels rather than
+  // ids. Runs after redaction, so a dropped field is never resolved.
+  await hydrateVersionSnapshot(
+    row.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user,
+    args.authenticatedScope,
+    row.locale
+  );
+
   return row;
+}
+
+/**
+ * A typed diff of two versions of one document over the dispatcher, gated
+ * exactly like a single-version read.
+ */
+export async function getVersionDiffForDocument(
+  args: VersionMethodArgs & { from: number; to: number; modifiedOnly?: boolean }
+): Promise<VersionDiff> {
+  assertDiffVersionPair(args.from, args.to);
+
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope
+  );
+
+  return diffDocumentVersions({
+    scopeKind: args.scopeKind,
+    slug: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    from: args.from,
+    to: args.to,
+    modifiedOnly: args.modifiedOnly,
+    authenticatedScope: args.authenticatedScope,
+  });
 }
 
 /**

@@ -142,6 +142,92 @@ describe("VersionHistorySheet", () => {
     expect(screen.queryByText(/No versions recorded/)).not.toBeInTheDocument();
   });
 
+  it("offers a retry when a background refresh fails after history has loaded", async () => {
+    // A focus or mount head revalidation can fail with rows already on screen.
+    // They stay (possibly stale), so the freshness gate holds compare + load
+    // more; without this control the only recovery is reopening the panel.
+    const refetch = vi.fn();
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(2), version(1)], meta: { hasNext: false } },
+          ],
+        },
+        isError: true,
+        isRefetchError: true,
+        refetch,
+      })
+    );
+
+    renderSheet();
+
+    // The loaded rows are kept, not replaced by the full-panel load error.
+    expect(screen.getByText("Version 2")).toBeInTheDocument();
+    expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Couldn't refresh this history/)
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the retry while a refresh is already in flight", () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(2)], meta: { hasNext: false } }] },
+        isRefetchError: true,
+        isRefetching: true,
+      })
+    );
+
+    renderSheet();
+
+    expect(screen.getByRole("button", { name: /Retrying/ })).toBeDisabled();
+  });
+
+  it("shows the full-panel error, not the stale-history banner, when nothing loaded", () => {
+    // With no rows the failure is a load error, not a stale refresh: the
+    // full-panel message owns that state and the banner must stay out of it.
+    useVersionsMock.mockReturnValue(
+      listState({ isError: true, isRefetchError: true })
+    );
+
+    renderSheet();
+
+    expect(screen.getByText(/could not be loaded/)).toBeInTheDocument();
+    expect(screen.queryByText(/may be out of date/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a retry reachable from a preview when the head refresh fails", async () => {
+    // In preview the freshness gate hides "Compare with current"; the retry has
+    // to remain reachable or the comparison cannot recover without a reopen.
+    const refetch = vi.fn();
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+        isError: true,
+        isRefetchError: true,
+        refetch,
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    renderSheet();
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+
+    expect(
+      screen.queryByRole("button", { name: /Compare with current/ })
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(refetch).toHaveBeenCalled();
+  });
+
   it("offers more only when another page exists", () => {
     useVersionsMock.mockReturnValue(
       listState({

@@ -33,7 +33,6 @@ import type {
   SecurityConfig,
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
-import type { FieldGroupConfig } from "../components/config/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
@@ -73,6 +72,7 @@ import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/w
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import { getEventBus } from "../events/event-bus";
+import type { FieldGroupConfig } from "../field-groups/config/types";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
@@ -115,18 +115,18 @@ import type {
 import type { CollectionRelationshipService } from "../services/collections/collection-relationship-service";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { CollectionsHandler } from "../services/collections-handler";
-import type {
-  ComponentRegistryService,
-  CodeFirstComponentConfig,
-  ComponentDataService,
-  ComponentSchemaService,
-} from "../services/components";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 import type { EmailService } from "../services/email/email-service";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 import type { EmailConfig } from "../services/email/types";
+import type {
+  FieldGroupRegistryService,
+  CodeFirstComponentConfig,
+  FieldGroupDataService,
+  FieldGroupSchemaService,
+} from "../services/field-groups";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 import type { MediaService as UnifiedMediaService } from "../services/media/media-service";
 import { consoleLogger } from "../services/shared";
@@ -135,6 +135,7 @@ import type { UserExtSchemaService } from "../services/users/user-ext-schema-ser
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
+import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { registerFieldFunctions } from "../shared/lib/field-level-registry";
 import type { AdminConfig, AuthConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
@@ -303,9 +304,9 @@ export interface ServiceMap {
   mediaService: UnifiedMediaService;
   singleRegistryService: SingleRegistryService;
   singleEntryService: SingleEntryService;
-  componentRegistryService: ComponentRegistryService;
-  componentSchemaService: ComponentSchemaService;
-  componentDataService: ComponentDataService;
+  fieldGroupRegistryService: FieldGroupRegistryService;
+  fieldGroupSchemaService: FieldGroupSchemaService;
+  fieldGroupDataService: FieldGroupDataService;
   relationshipService: CollectionRelationshipService;
   userExtSchemaService: UserExtSchemaService;
   emailProviderService: EmailProviderService;
@@ -430,6 +431,17 @@ export async function registerServices(
       registerFieldType(withoutDisabledBehavior(fieldType, fieldTypePlugin));
     }
   }
+
+  // Now that the registry is populated, each plugin field type gets to check the
+  // declarations that use it. A plugin's own contributions are raw configs — its
+  // type is not registered when its module is evaluated, so they cannot go
+  // through `defineCollection` — and nothing else on this path validates them.
+  //
+  // Only the type's own rules run, never the general config validators: those
+  // would newly refuse pre-existing declarations that boot fine today, whereas a
+  // rule that can fire here has to have been written against a field type in
+  // this same process.
+  assertPluginFieldDeclarations(transformedConfig);
 
   const {
     adapter: providedAdapter,
@@ -561,6 +573,18 @@ export async function registerServices(
       handleUnresolvedExtends(unresolved, transformedConfig, resolvedLogger);
     }
 
+    // A field extended onto a Builder-owned entity is not in the transformed
+    // config — it was deferred until the Builder set could be read — so the
+    // earlier pass never saw it. Checked here, before the columns below are
+    // materialized and persisted. Mapped key by key rather than passed whole:
+    // the reconciled shape still calls its field groups `components`, and a
+    // structural mismatch would silently skip them.
+    assertPluginFieldDeclarations({
+      collections: entities.collections,
+      singles: entities.singles,
+      fieldGroups: entities.components,
+    });
+
     // Only touch the DB for entities whose merged field set actually differs
     // from what's persisted — keeps an unchanged/plugin-free boot write-free and
     // skips the apply-helper imports entirely.
@@ -684,14 +708,14 @@ export async function registerServices(
       }
 
       if (compChanged.length > 0) {
-        const { ComponentRegistryService } = await import(
-          "../domains/components/services/component-registry-service"
+        const { FieldGroupRegistryService } = await import(
+          "../domains/field-groups/services/field-group-registry-service"
         );
-        const { ComponentSchemaService } = await import(
-          "../domains/components/services/component-schema-service"
+        const { FieldGroupSchemaService } = await import(
+          "../domains/field-groups/services/field-group-schema-service"
         );
-        const reg = new ComponentRegistryService(adapter, resolvedLogger);
-        const compSchema = new ComponentSchemaService(dialect);
+        const reg = new FieldGroupRegistryService(adapter, resolvedLogger);
+        const compSchema = new FieldGroupSchemaService(dialect);
         await materializeKind(
           "component",
           compChanged,
@@ -1099,10 +1123,10 @@ async function initializeSchemaRegistry(
       adapter,
       STORAGE_FORMAT.registryTable,
       async (tableName, fields, _hasStatus, localized) => {
-        const { ComponentSchemaService } = await import(
-          "../services/components/component-schema-service"
+        const { FieldGroupSchemaService } = await import(
+          "../services/field-groups/field-group-schema-service"
         );
-        const compSchemaService = new ComponentSchemaService(dialect);
+        const compSchemaService = new FieldGroupSchemaService(dialect);
         const runtimeTable = compSchemaService.generateRuntimeSchema(
           tableName,
           fields as FieldConfig[],
@@ -1737,8 +1761,8 @@ async function syncCodeFirstComponents(
     return;
   }
 
-  const componentRegistry = container.get<ComponentRegistryService>(
-    "componentRegistryService"
+  const componentRegistry = container.get<FieldGroupRegistryService>(
+    "fieldGroupRegistryService"
   );
 
   const codeFirstComponentConfigs: CodeFirstComponentConfig[] =
@@ -1806,8 +1830,8 @@ async function syncCodeFirstComponents(
   );
 
   try {
-    const { ComponentSchemaService: CompSchemaService } = await import(
-      "../services/components/component-schema-service"
+    const { FieldGroupSchemaService: CompSchemaService } = await import(
+      "../services/field-groups/field-group-schema-service"
     );
     const dialect = adapter.getCapabilities().dialect;
     const compSchemaService = new CompSchemaService(dialect);

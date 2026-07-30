@@ -1,7 +1,7 @@
 /**
  * Components (reusable field group) dispatch handlers.
  *
- * Routes 5 operations against `ComponentRegistryService`:
+ * Routes 5 operations against `FieldGroupRegistryService`:
  * list / create / get / update / delete. The create/update flows run
  * `comp_*` table migrations directly against the DI-registered adapter
  * so UI-edited components have a usable backing table immediately.
@@ -13,7 +13,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -55,8 +58,8 @@ import {
   getI18nArchiveIndexRepairDdl,
 } from "../../schemas/nextly-i18n-archive";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import type { ComponentRegistryService } from "../../services/components/component-registry-service";
-import { ComponentSchemaService } from "../../services/components/component-schema-service";
+import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
+import { FieldGroupSchemaService } from "../../services/field-groups/field-group-schema-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -71,7 +74,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
-  registry: ComponentRegistryService;
+  registry: FieldGroupRegistryService;
 }
 
 // ============================================================
@@ -141,10 +144,10 @@ function registerComponentRuntimeSchema(
   localized = false
 ): void {
   try {
-    const componentSchemaService = new ComponentSchemaService(
-      dialect as ConstructorParameters<typeof ComponentSchemaService>[0]
+    const fieldGroupSchemaService = new FieldGroupSchemaService(
+      dialect as ConstructorParameters<typeof FieldGroupSchemaService>[0]
     );
-    const runtimeTable = componentSchemaService.generateRuntimeSchema(
+    const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
       tableName,
       fields,
       { localized }
@@ -310,20 +313,26 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         throw new Error("Component slug and fields are required");
       }
 
+      // These direct create/update handlers persist and run DDL without the
+      // preview/apply handlers below. Their own rules cover names and shapes;
+      // what none of them can judge is a plugin type's own options, so an
+      // unsatisfiable declaration would be stored and fail on every write.
+      assertValidPluginFieldOptions(b.fields);
+
       const isLocalized = b.localized === true;
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical name derivation, shared with the registry sync and
       // migrate:create paths, so the created table and the registry row agree.
       const tableName = resolveComponentTableName(b.slug);
 
-      // Use ComponentSchemaService to generate tables with parent
+      // Use FieldGroupSchemaService to generate tables with parent
       // reference columns (_parent_id, _parent_table, _parent_field,
       // _order, _component_type).
       const adapter = getAdapterFromDI();
       const dialect = adapter?.dialect || "postgresql";
-      const componentSchemaService = new ComponentSchemaService(dialect);
+      const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
 
-      const migrationSQL = componentSchemaService.generateMigrationSQL(
+      const migrationSQL = fieldGroupSchemaService.generateMigrationSQL(
         tableName,
         b.fields,
         // i18n: omit translatable columns from the main comp_ table when localized — they live
@@ -476,6 +485,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         b?.localized !== undefined ? b.localized === true : wasLocalized;
 
       if (b?.fields) {
+        assertValidPluginFieldOptions(b.fields);
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
       }

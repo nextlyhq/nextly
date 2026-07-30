@@ -18,7 +18,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam, WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 
 // PR 4 of unified-error-system migration: ServiceError → NextlyError.
-// Subclasses (collection/single/component-registry-service) still throw
+// Subclasses (collection/single/field-group-registry-service) still throw
 // ServiceError directly and check `instanceof ServiceError`; those are out
 // of scope for this PR but inherit the throw-based contract automatically
 // for all `getRecordOrThrow` / `updateRecordMigrationStatus` paths.

@@ -19,7 +19,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -27,11 +30,14 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
-import { resolveSingleDocumentId } from "../../api/versions-access";
+import {
+  assertDiffVersionPair,
+  resolveSingleDocumentId,
+} from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
@@ -109,6 +115,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   setVersionLabelForDocument,
@@ -392,6 +399,29 @@ export const SINGLE_VERSION_METHODS: Record<
       return respondDoc(row);
     },
   },
+  getSingleVersionDiff: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const from = Number(p.from);
+      const to = Number(p.to);
+      // Validate the version pair before resolving the live Single, so a
+      // malformed comparison fails as a validation error whether or not the
+      // Single has been materialized.
+      assertDiffVersionPair(from, to);
+      const entryId = await requireLiveSingleId(slug);
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from,
+        to,
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
+    },
+  },
   setSingleVersionLabel: {
     execute: async (_svc, p, body) => {
       const slug = String(p.slug ?? "");
@@ -543,6 +573,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
+
+      // This create path persists and runs DDL without the schema
+      // preview/apply handlers. It keeps its own field rules, but nothing here
+      // can judge a plugin type's own options, so an unsatisfiable declaration
+      // would be stored and then fail on every write to the single.
+      assertValidPluginFieldOptions(b.fields);
 
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry

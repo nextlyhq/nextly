@@ -54,10 +54,14 @@ export type MultiRelationshipValue = string[] | null | undefined;
 
 /**
  * Value format for polymorphic relationship (single item).
+ *
+ * `value` is the target's id when nothing was populated, and the target row
+ * itself when the entry was read at a depth that populates relationships — the
+ * edit page asks for one, so both arrive here.
  */
 export interface PolymorphicRelationshipValue {
   relationTo: string;
-  value: string;
+  value: string | { id: string; [key: string]: unknown };
 }
 
 /**
@@ -126,6 +130,47 @@ function getCollections(relationTo: string | string[]): string[] {
 }
 
 /**
+ * Reads a polymorphic entry as the item to display.
+ *
+ * Its `value` is the target's id, or the whole target row when the entry was
+ * read at a populating depth. Passing the row through as the id would put an
+ * object where a string is expected and render it as a React child; taking the
+ * row's own fields also gives the card something to show besides the id.
+ */
+function polymorphicEntryToItem(entry: {
+  relationTo: string;
+  value: string | { id: string; [key: string]: unknown };
+}): RelatedItem {
+  const { relationTo, value } = entry;
+  if (typeof value === "string") {
+    return { id: value, relationTo };
+  }
+  return { ...value, relationTo };
+}
+
+/**
+ * The document id a stored form value refers to, whatever shape it is in.
+ *
+ * A value may be a bare id, a populated row, or a `{ relationTo, value }` pair
+ * whose `value` is either of those — the pair carries the row once the entry
+ * was read at a populating depth. Comparing the raw value against an id
+ * silently matches nothing in that last case, which is how a removal or a
+ * quick-edit update can appear to succeed and change nothing.
+ */
+function referenceIdOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (value === null || typeof value !== "object") return undefined;
+  const record = value as { id?: unknown; value?: unknown };
+  if (typeof record.id === "string") return record.id;
+  if (typeof record.value === "string") return record.value;
+  if (record.value !== null && typeof record.value === "object") {
+    const nested = record.value as { id?: unknown };
+    if (typeof nested.id === "string") return nested.id;
+  }
+  return undefined;
+}
+
+/**
  * Converts the form value to an array of selected items for display.
  * Handles all value formats (simple IDs, objects, polymorphic).
  */
@@ -140,12 +185,9 @@ function valueToSelectedItems(
   // Handle array values (hasMany: true)
   if (Array.isArray(value)) {
     return value.map(item => {
-      // Polymorphic array item: { relationTo: string, value: string }
+      // Polymorphic array item: { relationTo, value: id | populated row }
       if (typeof item === "object" && "value" in item && "relationTo" in item) {
-        return {
-          id: item.value,
-          relationTo: item.relationTo,
-        };
+        return polymorphicEntryToItem(item);
       }
       // Simple string ID
       if (typeof item === "string") {
@@ -160,9 +202,9 @@ function valueToSelectedItems(
     });
   }
 
-  // Handle single polymorphic value: { relationTo: string, value: string }
+  // Handle single polymorphic value: { relationTo, value: id | populated row }
   if (typeof value === "object" && "value" in value && "relationTo" in value) {
-    return [{ id: value.value, relationTo: value.relationTo }];
+    return [polymorphicEntryToItem(value)];
   }
 
   // Handle single object (populated relationship)
@@ -296,13 +338,12 @@ export function RelationshipInput<
       if (hasMany) {
         const currentValues = Array.isArray(value) ? [...value] : [];
 
-        // Check if already selected
-        const isAlreadySelected = currentValues.some(v => {
-          if (typeof v === "string") return v === item.id;
-          if (typeof v === "object" && "id" in v) return v.id === item.id;
-          if (typeof v === "object" && "value" in v) return v.value === item.id;
-          return false;
-        });
+        // Check if already selected. Read the same way removal and quick-edit
+        // read it, or a value whose target was populated compares an object
+        // against an id, matches nothing, and the guard admits a duplicate.
+        const isAlreadySelected = currentValues.some(
+          v => referenceIdOf(v) === item.id
+        );
 
         if (!isAlreadySelected) {
           if (isPolymorphicField) {
@@ -348,14 +389,7 @@ export function RelationshipInput<
     (itemId: string) => {
       if (hasMany) {
         const currentValues = Array.isArray(value) ? (value as unknown[]) : [];
-        const filtered = currentValues.filter(v => {
-          if (typeof v === "string") return v !== itemId;
-          if (typeof v === "object" && v !== null && "id" in v)
-            return (v as { id: string }).id !== itemId;
-          if (typeof v === "object" && v !== null && "value" in v)
-            return (v as { value: string }).value !== itemId;
-          return true;
-        });
+        const filtered = currentValues.filter(v => referenceIdOf(v) !== itemId);
         onChange(filtered);
       } else {
         onChange(null);
@@ -441,7 +475,7 @@ export function RelationshipInput<
         const currentValues = Array.isArray(value) ? [...value] : [];
         const updatedValues = currentValues.map(v => {
           // Match by ID (handle both string and object values)
-          const itemId = typeof v === "string" ? v : v?.id || v?.value;
+          const itemId = referenceIdOf(v);
           if (itemId === editingItem.id) {
             if (isPolymorphicField) {
               return {

@@ -37,6 +37,7 @@ const serverEntries = [
   "src/api/singles-schema-detail.ts",
   "src/api/versions.ts",
   "src/api/versions-detail.ts",
+  "src/api/versions-diff.ts",
   "src/api/email-providers.ts",
   "src/api/email-providers-detail.ts",
   "src/api/email-providers-test.ts",

@@ -4,24 +4,39 @@
  * is the part worth pinning: getting it wrong either stops paging early or
  * queries against a null anchor.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  focusManager,
+} from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
-const { listSpy, getSpy, restoreSpy } = vi.hoisted(() => ({
+const { listSpy, getSpy, restoreSpy, diffSpy } = vi.hoisted(() => ({
   listSpy: vi.fn(),
   getSpy: vi.fn(),
   restoreSpy: vi.fn(),
+  diffSpy: vi.fn(),
 }));
 
 // The API client is replaced so these tests drive query and mutation outcomes
 // directly — including a failing restore — without a network round trip.
 vi.mock("@admin/services/versionApi", () => ({
-  versionApi: { list: listSpy, get: getSpy, restore: restoreSpy },
+  versionApi: {
+    list: listSpy,
+    get: getSpy,
+    restore: restoreSpy,
+    diff: diffSpy,
+  },
 }));
 
-import { useRestoreVersion, useVersion, useVersions } from "../useVersions";
+import {
+  useRestoreVersion,
+  useVersion,
+  useVersionDiff,
+  useVersions,
+} from "../useVersions";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
 
@@ -39,8 +54,27 @@ function page(items: unknown[], hasNext: boolean) {
   return { items, meta: { hasNext } };
 }
 
+/**
+ * Mirrors the app's QueryProvider, which turns focus refetch off for every
+ * query. The shared wrapper leaves the library default (on) in place, so a
+ * focus-refetch test against it would pass whether or not the hook opts back
+ * in — the same trap the restore-retry test avoids.
+ */
+function providerFocusWrapper({ children }: { children: ReactNode }) {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
+      mutations: { retry: false },
+    },
+  });
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
 describe("useVersions", () => {
   beforeEach(() => vi.clearAllMocks());
+  // Focus state lives on a global singleton; reset it so a simulated focus in
+  // one test does not carry into the next.
+  afterEach(() => focusManager.setFocused(undefined));
 
   it("requests the first page without a cursor", async () => {
     listSpy.mockResolvedValue(page([{ versionNo: 3 }], false));
@@ -128,6 +162,25 @@ describe("useVersions", () => {
     expect(listSpy).toHaveBeenCalledWith(scope, expect.anything());
     expect(listSpy).toHaveBeenCalledWith(other, expect.anything());
   });
+
+  it("revalidates the history when the window regains focus", async () => {
+    // A save in another tab adds a version, and "Compare with current" reads
+    // the newest row from this list, so returning to the panel must revalidate
+    // the head. The provider disables focus refetch app-wide, so the hook opts
+    // back in; the mirrored wrapper proves it is the opt-in, not the default.
+    listSpy.mockResolvedValue(page([{ versionNo: 3 }], false));
+
+    const { result } = renderHook(() => useVersions({ scope }), {
+      wrapper: providerFocusWrapper,
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(listSpy).toHaveBeenCalledTimes(1);
+
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+
+    await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe("useVersion", () => {
@@ -186,5 +239,36 @@ describe("useRestoreVersion", () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(restoreSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useVersionDiff", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => focusManager.setFocused(undefined));
+
+  it("revalidates the diff when the window regains focus", async () => {
+    // The server classifies snapshots against the live schema, so a schema
+    // edited in another tab must reclassify on return rather than keep showing
+    // an obsolete diff. The provider disables focus refetch app-wide, so the
+    // hook opts back in; the mirrored wrapper proves it is the opt-in at work.
+    diffSpy.mockResolvedValue({
+      from: 1,
+      to: 2,
+      locale: null,
+      hasChanges: false,
+      fields: [],
+    });
+
+    const { result } = renderHook(
+      () => useVersionDiff({ scope, from: 1, to: 2 }),
+      { wrapper: providerFocusWrapper }
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(diffSpy).toHaveBeenCalledTimes(1);
+
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+
+    await waitFor(() => expect(diffSpy).toHaveBeenCalledTimes(2));
   });
 });

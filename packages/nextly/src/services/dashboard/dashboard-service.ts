@@ -118,7 +118,7 @@ export class DashboardService extends BaseService {
       this.countTable("users"),
       this.countTable("roles"),
       this.countTable("permissions"),
-      this.countRegistryItems("componentRegistryService"),
+      this.countRegistryItems("fieldGroupRegistryService"),
       this.countActiveApiKeys(),
       this.getContentStatusBreakdown(collections),
     ]);
@@ -406,7 +406,7 @@ export class DashboardService extends BaseService {
       }>(serviceName);
 
       const listFn =
-        serviceName === "componentRegistryService"
+        serviceName === "fieldGroupRegistryService"
           ? service.listComponents
           : service.listSingles;
 

@@ -21,7 +21,7 @@ import type { Command } from "commander";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
-import { registerComponentSchemas } from "../../domains/components/services/register-component-schemas";
+import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import {
   teardownEntityI18n,
   type TeardownI18nAdapter,

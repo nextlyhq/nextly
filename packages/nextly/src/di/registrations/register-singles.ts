@@ -18,7 +18,7 @@ import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-dra
 import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { CacheRevalidator } from "../../revalidation/types";
-import type { ComponentDataService } from "../../services/components";
+import type { FieldGroupDataService } from "../../services/field-groups";
 import { container } from "../container";
 
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
@@ -51,8 +51,8 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       "singleRegistryService"
     );
 
-    const componentDataService = container.get<ComponentDataService>(
-      "componentDataService"
+    const fieldGroupDataService = container.get<FieldGroupDataService>(
+      "fieldGroupDataService"
     );
 
     const rbacAccessControlService = container.get<RBACAccessControlService>(
@@ -64,7 +64,7 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       logger,
       singleRegistryService,
       hookRegistry ?? createNoOpHookRegistry(),
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       // i18n: forward the normalized localization config so localized singles resolve
       // and write translatable fields via their companion table (mirrors collections).

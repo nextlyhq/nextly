@@ -18,7 +18,10 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondBulk,
@@ -109,6 +112,7 @@ import type { MethodHandler, Params } from "../types";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   listVersionsForDocument,
@@ -221,6 +225,21 @@ export const COLLECTION_VERSION_METHODS: Record<
       return respondDoc(row);
     },
   },
+  getEntryVersionDiff: {
+    execute: async (_svc, p) => {
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from: Number(p.from),
+        to: Number(p.to),
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
+    },
+  },
 };
 
 const COLLECTIONS_METHODS: Record<
@@ -234,9 +253,18 @@ const COLLECTIONS_METHODS: Record<
     // as the toast string so admin UIs see the same copy ("Collection
     // created! Restart the app...").
     execute: async (svc, _, body) => {
-      const result = await svc.createCollection(
-        requireBody(body, "Collection data is required")
+      const created = requireBody<Parameters<typeof svc.createCollection>[0]>(
+        body,
+        "Collection data is required"
       );
+      // Metadata generation validates field names and shapes downstream, but
+      // it has no way to judge a plugin type's own options, so a declaration no
+      // value could satisfy would reach the registry and fail per write.
+      const createdFields = (created as { fields?: unknown }).fields;
+      if (createdFields !== undefined) {
+        assertValidPluginFieldOptions(createdFields);
+      }
+      const result = await svc.createCollection(created);
       const collection = unwrapServiceResult(result);
       return respondMutation(
         result.message ?? "Collection created.",
@@ -359,6 +387,10 @@ const COLLECTIONS_METHODS: Record<
     execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and update data are required");
+      const updatedFields = (body as { fields?: unknown }).fields;
+      if (updatedFields !== undefined) {
+        assertValidPluginFieldOptions(updatedFields);
+      }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
         body

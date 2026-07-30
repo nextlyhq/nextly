@@ -14,8 +14,8 @@ import type { CollectionFileManager } from "../../../services/collection-file-ma
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
-import { teardownEntityComponentData } from "../../components/services/teardown-entity-component-data";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 
 /** Result shape returned by metadata service methods. */

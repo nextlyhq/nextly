@@ -2,7 +2,7 @@
  * Proof that a component-save failure rolls back a Single's scalar update.
  *
  * `SingleMutationService.update()` used to run the scalar `adapter.update`
- * and `ComponentDataService.saveComponentDataInTransaction` as separate
+ * and `FieldGroupDataService.saveComponentDataInTransaction` as separate
  * operations — a component-save failure left the scalar change committed
  * with no way to undo it. The fix wraps both in one `adapter.transaction(...)`
  * so a component failure aborts the scalar update too.

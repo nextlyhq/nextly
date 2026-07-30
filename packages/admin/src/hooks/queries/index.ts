@@ -102,15 +102,15 @@ export {
 
 // Component query and mutation hooks
 export {
-  componentKeys, // Query key factory for stable caching
-  useComponent,
-  useComponents,
-  useCreateComponent,
-  useDeleteComponent,
-  useUpdateComponent,
+  fieldGroupKeys, // Query key factory for stable caching
+  useFieldGroup,
+  useFieldGroups,
+  useCreateFieldGroup,
+  useDeleteFieldGroup,
+  useUpdateFieldGroup,
   // Bulk Component mutation hooks
-  useBulkDeleteComponents,
-} from "./useComponents";
+  useBulkDeleteFieldGroups,
+} from "./useFieldGroups";
 
 // Dashboard query hooks
 export { useDashboardStats } from "./useDashboardStats";

@@ -35,7 +35,7 @@ export type DynamicTableRow = {
  * Read every row of `sourceTable` and call `register` for each. The
  * callback decides how to translate the row into a runtime Drizzle table
  * (Collections / Singles use `generateRuntimeSchema`; Components use
- * `ComponentSchemaService.generateRuntimeSchema`).
+ * `FieldGroupSchemaService.generateRuntimeSchema`).
  *
  * Why an empty-field row still calls register: a freshly-created UI
  * Single is committed with `fields: []` and the user adds fields one

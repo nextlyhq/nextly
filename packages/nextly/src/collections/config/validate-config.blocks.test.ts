@@ -8,8 +8,8 @@ import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import type { FieldGroupConfig } from "../../components/config/define-field-group";
-import { validateFieldGroupConfig } from "../../components/config/validate-field-group";
+import type { FieldGroupConfig } from "../../field-groups/config/define-field-group";
+import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/define-single";
 import { validateSingleConfig } from "../../singles/config/validate-single";
 import { blocks, text } from "../fields/helpers";

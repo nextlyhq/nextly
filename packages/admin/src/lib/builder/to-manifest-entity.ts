@@ -10,6 +10,7 @@
  * @module lib/builder/to-manifest-entity
  * @since v0.0.3-alpha (Plan D4)
  */
+import { applyCarriedOptions } from "./field-transformers";
 import { type UiSchemaFieldType } from "./ui-schema-mode";
 
 /** Validation shape carried by builder fields (superset of FieldDefinition's). */
@@ -74,6 +75,12 @@ export interface BuilderFieldInput {
   repeatable?: boolean;
   /** Nested fields for container types (repeater/group/component). */
   fields?: BuilderFieldInput[];
+  /**
+   * Options declared by the field's own type. Open-ended because a
+   * plugin-contributed type names them, so they are carried rather than
+   * modelled.
+   */
+  pluginOptions?: Record<string, unknown>;
 }
 
 export interface BuilderSettingsInput {
@@ -209,6 +216,9 @@ export function mapBuilderFieldToManifest(f: BuilderFieldInput): ManifestField {
   if (f.fields !== undefined) {
     out.fields = f.fields.map(mapBuilderFieldToManifest);
   }
+  // A plugin field type names its own options, so no fixed allowlist can carry
+  // them. Applied last, leaving every modelled key above authoritative.
+  applyCarriedOptions(out, f.pluginOptions);
   return out;
 }
 

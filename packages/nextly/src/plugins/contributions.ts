@@ -5,9 +5,9 @@ import type {
   FieldTypeCategory,
 } from "../collections/fields/catalog";
 import type { FieldConfig } from "../collections/fields/types";
-import type { FieldGroupConfig } from "../components/config/types";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { EmailProviderAdapter } from "../domains/email/types";
+import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
 import type {
@@ -193,6 +193,63 @@ export interface PluginFieldType {
     value: unknown,
     args: PluginFieldValidateArgs
   ) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>;
+  /**
+   * Checks on the field's own DECLARATION, run when a schema is registered
+   * rather than when a value is written.
+   *
+   * `validate` answers "is this value allowed in this field". This answers "is
+   * this field declared coherently at all" — a policy option that is not the
+   * shape the type reads, or one whose settings contradict each other so no
+   * value could ever satisfy them. Those are defects in the schema, and a
+   * schema defect that surfaces per write is reported to the wrong person: the
+   * writer cannot fix it, and it fails every write until whoever declared the
+   * field notices.
+   *
+   * Runs on every path a declaration reaches storage by: boot, `db:sync` and
+   * its watcher, a Schema Builder write, `nextly build`, `migrate:create`, and
+   * an HMR reload. Each sits after the field-type registry is populated,
+   * because the config bundle is evaluated before `contributes.fieldTypes` is
+   * registered — so the `define*` calls, where a code-first config is otherwise
+   * validated, reject a custom type as unknown before any option check of it
+   * could run.
+   *
+   * Checks the declaration as WRITTEN. On the Builder path that means the
+   * submitted payload rather than the parsed copy, because the manifest schema
+   * drops keys it does not declare while the write persists the original — so
+   * the options a type reads are present in what is stored and absent from what
+   * was parsed.
+   *
+   * Runs for fields on collections, singles and components, including nested
+   * ones. A type offered only on the `users`, `forms`, or `blocks` surface does
+   * NOT get its declarations checked: those surfaces have their own config
+   * validators, which do not consult this registry.
+   *
+   * Synchronous on purpose: a declaration is checked against itself, and a
+   * config-time rule that needed I/O would make startup depend on something
+   * that can be down.
+   *
+   * Return `true` to accept, a string for one problem, or an array to point at
+   * individual options — a path is appended to the field's own, so `"allow"`
+   * reports against `fields[2].allow`. A `code` is not carried: these are
+   * reported through error-code unions that are closed and public, so the
+   * canonical member is used and the message carries the detail. Throwing is
+   * treated as a refusal.
+   *
+   * One constraint on the options themselves: an option key must not collide
+   * with a key the field schema already declares (`options`, `fields`, `admin`,
+   * `label`, and the rest of the built-in field surface). The manifest applies
+   * the built-in shape to every field regardless of type, so a colliding key is
+   * judged against the core meaning — `options` as a select's choice array, for
+   * instance — and is rejected before this ever runs. Namespace anything that
+   * might clash.
+   *
+   * Paths here are RELATIVE, where `validate`'s are absolute. The difference is
+   * deliberate: a value validator may address a position deep inside a stored
+   * document and is told where the field sits so it can build that, while this
+   * one only ever names an option it already knows by name and has no way to
+   * learn its own index.
+   */
+  validateOptions?: (field: PluginFieldInstance) => PluginFieldValidationResult;
 }
 
 /** What a plugin field type's `validate` is given. */

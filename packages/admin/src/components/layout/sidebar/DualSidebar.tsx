@@ -359,7 +359,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       // to go instead of an empty sidebar.
       if (pathname.includes("/admin/builder/collections")) return "collections";
       if (pathname.includes("/admin/builder/singles")) return "singles";
-      if (pathname.includes("/admin/builder/components")) return "collections";
+      if (pathname.includes("/admin/builder/field-groups"))
+        return "collections";
     }
     if (pathname.includes("/admin/collections/")) return "collections";
     if (pathname.includes("/admin/singles/")) return "singles";

@@ -42,7 +42,7 @@ import {
 } from "../../../collections/fields/guards";
 import { NextlyError } from "../../../errors";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
-import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
