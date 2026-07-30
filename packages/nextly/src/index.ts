@@ -245,6 +245,7 @@ export type {
   TypeGeneratorOptions,
   GeneratedTypeInterface,
   GeneratedSingleTypeInterface,
+  GeneratedUserInterface,
   GeneratedTypesFile,
 } from "./domains/schema/services/type-generator";
 
@@ -642,9 +643,16 @@ export type { FieldGroupFieldConfig } from "./collections/fields/types/component
 export type {
   UserConfig,
   UserFieldConfig,
+  UserPluginFieldConfig,
+  UserPluginFieldInput,
   UserFieldType,
   UserAdminOptions,
 } from "./users";
+
+// Declares a user field whose type a plugin contributed, which the built-in
+// arms of `UserFieldConfig` cannot be widened to admit without losing their
+// own errors.
+export { pluginUserField } from "./users";
 
 // User config validation
 export {

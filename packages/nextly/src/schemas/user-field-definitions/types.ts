@@ -194,6 +194,11 @@ export interface UserFieldDefinitionRecord extends UserFieldDefinitionInsert {
    * The record is otherwise built from a fixed list of core properties, which
    * drops anything a plugin type declared for itself — leaving codegen to emit
    * the broad fallback for a type whose options would have narrowed it.
+   *
+   * Set only on the record `generate-types` builds from a code-defined config,
+   * and read only while generating: the user-field tables have no column for
+   * it, so a record loaded from the database never carries one. Optional for
+   * that reason rather than because a type may omit its options.
    */
   pluginOptions?: Record<string, unknown> | null;
 

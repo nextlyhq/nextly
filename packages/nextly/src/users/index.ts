@@ -1,9 +1,13 @@
 export type {
   UserFieldType,
   UserFieldConfig,
+  UserPluginFieldConfig,
+  UserPluginFieldInput,
   UserAdminOptions,
   UserConfig,
 } from "./config";
+
+export { pluginUserField } from "./config";
 
 export {
   validateUserConfig,

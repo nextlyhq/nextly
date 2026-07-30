@@ -100,6 +100,29 @@ describe("plugin field types in the TypeScript generator", () => {
     expect(file.code).toContain("Scaled<3>");
   });
 
+  it("returns the imports the User interface on its own relies on", () => {
+    registerFieldType({
+      type: "badge",
+      storage: "json",
+      component: "@acme/bg/admin#Badge",
+      surfaces: ["users"],
+      codegen: {
+        tsImports: [{ names: ["Badge"], from: "@acme/bg" }],
+        tsType: () => "Badge",
+      },
+    });
+
+    // Called on its own, the caller assembles the file itself and has nowhere
+    // else to learn that `Badge` has to be brought into scope.
+    const records = convertToUserFieldRecords([
+      { name: "badge", type: "badge" },
+    ] as unknown as Parameters<typeof convertToUserFieldRecords>[0]);
+    const iface = new TypeGenerator().generateUserInterface(records);
+
+    expect(iface.code).toContain("Badge");
+    expect(iface.imports).toContain('import type { Badge } from "@acme/bg";');
+  });
+
   it("falls back to what the type stores when it renders nothing", () => {
     registerFieldType(TALLY);
     const file = new TypeGenerator().generateTypesFile([
@@ -228,6 +251,63 @@ describe("standalone interface generation", () => {
     }
 
     expect(message).toContain("'Posts'");
+  });
+
+  it("refuses a global the standalone interface itself relies on", () => {
+    registerFieldType({
+      type: "shadows-array",
+      storage: "json",
+      component: "@acme/sa/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Array"], from: "@acme/sa" }],
+        tsType: () => "Array<string>",
+      },
+    });
+
+    // A lone interface writes `Array<...>` for a non-empty repeater, and an
+    // import landing beside it shadows the global for that source just as it
+    // would in the whole file.
+    let message = "";
+    try {
+      new TypeGenerator().generateInterface(
+        collection([
+          {
+            name: "rows",
+            type: "repeater",
+            fields: [{ name: "t", type: "text" }],
+          },
+          { name: "s", type: "shadows-array" },
+        ])
+      );
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'Array'");
+  });
+
+  it("leaves a global only the plugin itself writes free", () => {
+    registerFieldType({
+      type: "own-array",
+      storage: "json",
+      component: "@acme/oa/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Array"], from: "@acme/oa" }],
+        tsType: () => "Array<string>",
+      },
+    });
+
+    // Every `Array<` in this interface came from the plugin's own expression,
+    // so nothing of the generator's would be shadowed by its import.
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "s", type: "own-array" }])
+    );
+
+    expect(iface.imports).toContain('import type { Array } from "@acme/oa";');
   });
 
   it("returns none for an interface with no plugin fields", () => {

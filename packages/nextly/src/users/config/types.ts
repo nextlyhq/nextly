@@ -51,6 +51,19 @@ export interface UserPhoneFieldConfig extends UserSurfaceFieldBase {
 }
 
 /**
+ * Marks a declaration as belonging to a plugin type rather than a built-in.
+ *
+ * `string & {}` accepts every literal, so an open arm in the union has nothing
+ * structural to tell it apart from the built-in arms: a malformed
+ * `{ type: "select" }` missing its `options` would satisfy the open arm and
+ * lose the error its own shape raises. A symbol nothing else can name is what
+ * keeps the two apart, and `pluginUserField()` is the only thing that sets it,
+ * so reaching the open arm is deliberate rather than a shape falling through
+ * to it.
+ */
+declare const pluginUserFieldBrand: unique symbol;
+
+/**
  * A field whose type a plugin contributed and opted into the `users` surface.
  *
  * The type id is not knowable here — it belongs to whichever plugin is
@@ -58,19 +71,48 @@ export interface UserPhoneFieldConfig extends UserSurfaceFieldBase {
  * declares for itself. Runtime validation already accepts these; without an arm
  * for them the authoring type did not, so a code-defined plugin user field
  * failed the app's type check unless it was cast.
+ *
+ * Written with `pluginUserField()` rather than as a bare object literal.
  */
-export interface UserPluginFieldConfig extends UserSurfaceFieldBase {
+export interface UserPluginFieldInput extends UserSurfaceFieldBase {
   type: string & {};
   /**
-   * Required, and that is what keeps this arm from swallowing the built-ins.
+   * Options belonging to the field's own plugin type.
    *
-   * `string & {}` accepts every literal, so without something structural to
-   * tell the arms apart a malformed `{ type: "select" }` would satisfy this one
-   * and lose the error its own shape would have raised. The container is where
-   * a plugin type's options belong anyway.
+   * Optional, because a type may take none, and one whose option names collide
+   * with nothing the built-in shape declares may write them directly on the
+   * field instead. Requiring an empty container to satisfy the type would make
+   * this narrower than what the runtime accepts.
    */
-  pluginOptions: Record<string, unknown>;
+  pluginOptions?: Record<string, unknown>;
   [option: string]: unknown;
+}
+
+/** The same declaration once `pluginUserField()` has marked it. */
+export interface UserPluginFieldConfig extends UserPluginFieldInput {
+  readonly [pluginUserFieldBrand]: true;
+}
+
+/**
+ * Declare a user field whose type a plugin contributed.
+ *
+ * @example
+ * ```ts
+ * users: {
+ *   fields: [
+ *     { name: "company", type: "text" },
+ *     pluginUserField({ name: "score", type: "star-rating" }),
+ *   ],
+ * }
+ * ```
+ */
+export function pluginUserField(
+  field: UserPluginFieldInput
+): UserPluginFieldConfig {
+  // Built rather than asserted, so the value really carries what its type says.
+  // A symbol key is invisible to `JSON.stringify` and to `Object.keys`, so the
+  // declaration serializes and enumerates exactly as it was written.
+  return { ...field, [pluginUserFieldBrand]: true };
 }
 
 /**

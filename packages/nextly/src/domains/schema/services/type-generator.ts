@@ -107,6 +107,25 @@ export interface GeneratedSingleTypeInterface {
 }
 
 /**
+ * Result of generating the `User` interface.
+ *
+ * Carries no slug or interface name: there is exactly one User type and its
+ * name is fixed, so only the code and what it has to import vary.
+ */
+export interface GeneratedUserInterface {
+  /** Generated TypeScript interface code */
+  code: string;
+
+  /**
+   * `import type` lines the code needs, when a plugin user field type
+   * declared them. Returned rather than inlined for the same reason the
+   * entity interfaces do it: a bare interface carrying imports cannot be
+   * concatenated into a file.
+   */
+  imports: string[];
+}
+
+/**
  * Result of generating TypeScript types for a single Component.
  */
 export interface GeneratedComponentTypeInterface {
@@ -336,7 +355,7 @@ export class TypeGenerator {
 
     // Generate User interface
     const userInterface = this.generateUserInterface(userFields);
-    lines.push(userInterface);
+    lines.push(userInterface.code);
     lines.push("");
 
     // Generate input types if enabled
@@ -394,17 +413,7 @@ export class TypeGenerator {
     // naming `Partial<Model>` is the plugin using its own import, so its uses
     // are subtracted rather than removed from the text — deleting them would
     // also erase core's own `Partial<Post>` and reserve nothing.
-    const body = lines.slice(importSlot).join("\n");
-    const occurrences = (haystack: string, needle: string): number =>
-      haystack.split(needle).length - 1;
-    for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
-      const token = `${global}<`;
-      const byPlugins = [...this.pluginExpressions.values()].reduce(
-        (total, expression) => total + occurrences(expression, token),
-        0
-      );
-      if (occurrences(body, token) > byPlugins) reserved.add(global);
-    }
+    this.reserveGlobalsWritten(lines.slice(importSlot).join("\n"), reserved);
 
     const imports: string[] = [];
     // A blocks field is typed as the engine's document, imported from `nextly`
@@ -497,7 +506,11 @@ export class TypeGenerator {
       collectionSlug: collection.slug,
       code: lines.join("\n"),
       interfaceName,
-      imports: this.endOwnExpressions(outerExpressions, interfaceName),
+      imports: this.endOwnExpressions(
+        outerExpressions,
+        interfaceName,
+        lines.join("\n")
+      ),
     };
   }
 
@@ -572,7 +585,11 @@ export class TypeGenerator {
       singleSlug: single.slug,
       code: lines.join("\n"),
       interfaceName,
-      imports: this.endOwnExpressions(outerExpressions, interfaceName),
+      imports: this.endOwnExpressions(
+        outerExpressions,
+        interfaceName,
+        lines.join("\n")
+      ),
     };
   }
 
@@ -648,7 +665,11 @@ export class TypeGenerator {
       componentSlug: component.slug,
       code: lines.join("\n"),
       interfaceName,
-      imports: this.endOwnExpressions(outerExpressions, interfaceName),
+      imports: this.endOwnExpressions(
+        outerExpressions,
+        interfaceName,
+        lines.join("\n")
+      ),
     };
   }
 
@@ -674,10 +695,18 @@ export class TypeGenerator {
    * Includes hardcoded base fields (id, email, name, etc.) plus any
    * custom fields from user field definitions.
    *
+   * Returns the imports beside the code, as the collection, single and
+   * component methods do: a plugin user field's type can name something only
+   * an import brings into scope, and a caller given the code alone would hold
+   * a interface referring to identifiers it has no way to resolve.
+   *
    * @param userFields - Array of custom user field definition records
-   * @returns Generated User interface code
+   * @returns Generated User interface code and the imports it relies on
    */
-  generateUserInterface(userFields: UserFieldDefinitionRecord[] = []): string {
+  generateUserInterface(
+    userFields: UserFieldDefinitionRecord[] = []
+  ): GeneratedUserInterface {
+    const outerExpressions = this.beginOwnExpressions();
     const lines: string[] = [];
 
     if (this.includeComments) {
@@ -718,7 +747,11 @@ export class TypeGenerator {
 
     lines.push("}");
 
-    return lines.join("\n");
+    const code = lines.join("\n");
+    return {
+      code,
+      imports: this.endOwnExpressions(outerExpressions, "User", code),
+    };
   }
 
   // ============================================================
@@ -1450,22 +1483,54 @@ ${properties}
    * its own use of a global utility apart from a plugin's.
    *
    * `declares` is the interface's own name, the one binding a lone interface
-   * introduces and one an import of that name would conflict with.
+   * introduces and one an import of that name would conflict with. `body` is
+   * the emitted source, read for the globals it relies on.
    */
   private endOwnExpressions(
     outer: Map<object, string>,
-    declares: string
+    declares: string,
+    body: string
   ): string[] {
     const own = this.pluginExpressions;
+    // The globals this one interface wrote, on the same terms the whole-file
+    // path uses: an import landing beside it shadows them just as surely.
+    const reserved = new Set([declares]);
+    this.reserveGlobalsWritten(body, reserved);
     const imports = pluginCodegenImports(
       [{ fields: [...own.keys()] }],
-      new Set([declares]),
+      reserved,
       "tsImports",
       own
     );
     for (const [field, expression] of own) outer.set(field, expression);
     this.pluginExpressions = outer;
     return imports;
+  }
+
+  /**
+   * Reserve the globals `body` relies on resolving, so no import shadows them.
+   *
+   * An import of one shadows it for the whole scope it lands in — a non-generic
+   * `Partial` makes every `Partial<Post>` fail to compile — but only the ones
+   * this output actually wrote are worth reserving, so a name no construct here
+   * uses stays free.
+   *
+   * A plugin expression naming `Partial<Model>` is the plugin using its own
+   * import, so its uses are subtracted rather than removed from the text:
+   * deleting them would also erase core's own `Partial<Post>` and reserve
+   * nothing.
+   */
+  private reserveGlobalsWritten(body: string, reserved: Set<string>): void {
+    const occurrences = (haystack: string, needle: string): number =>
+      haystack.split(needle).length - 1;
+    for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
+      const token = `${global}<`;
+      const byPlugins = [...this.pluginExpressions.values()].reduce(
+        (total, expression) => total + occurrences(expression, token),
+        0
+      );
+      if (occurrences(body, token) > byPlugins) reserved.add(global);
+    }
   }
 
   private asScalarStorageField(

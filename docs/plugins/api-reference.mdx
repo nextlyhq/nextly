@@ -316,6 +316,31 @@ Fields nested in a `repeater` or `group` are covered. A type offered only on the
 `users`, `forms`, or `blocks` surface is **not**: those surfaces have their own
 config validators, which do not consult this registry.
 
+**Declaring one on the `users` surface from code.** `UserFieldConfig` is a union
+of the built-in field shapes, so a `select` missing its `options` fails on its
+own shape. A plugin type's token is not knowable there, and an arm open enough
+to accept it would accept that malformed `select` too and lose the error. Wrap
+the declaration in `pluginUserField()` instead, which marks it as belonging to
+the open arm:
+
+```ts
+import { defineConfig, pluginUserField } from "nextly";
+
+export default defineConfig({
+  users: {
+    fields: [
+      { name: "company", type: "text" },
+      pluginUserField({ name: "score", type: "star-rating" }),
+    ],
+  },
+});
+```
+
+Options are optional there: pass `pluginOptions`, write them directly on the
+field, or pass none at all. Note that these options reach type generation but
+are not persisted, so a field read back from the database after boot carries
+none of them.
+
 ## Secrets
 
 ```ts
