@@ -296,10 +296,14 @@ describe("teardownEntityComponentData registry read failures", () => {
 });
 
 describe("teardownEntityComponentData catalog case folding", () => {
-  it("matches a registered name against a differently-cased catalog entry", async () => {
-    // MySQL with lower_case_table_names reports the folded name.
-    const deleted: string[] = [];
-    const adapter = {
+  /**
+   * A MySQL server that reports `lowerCaseTableNames` for the variable query and
+   * a zero count for every other one. Whether the stored `SEO_META` and the
+   * catalog's `seo_meta` are one table is decided by that setting, so the mock
+   * has to answer it rather than leaving the code to assume.
+   */
+  function mysqlAdapter(lowerCaseTableNames: number, deleted: string[]) {
+    return {
       dialect: "mysql" as const,
       listTables: vi.fn().mockResolvedValue(["seo_meta", "dynamic_components"]),
       tableExists: vi.fn().mockResolvedValue(false),
@@ -307,7 +311,11 @@ describe("teardownEntityComponentData catalog case folding", () => {
         deleted.push(table);
         return 1;
       }),
-      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      executeQuery: vi.fn(async (sql: string) =>
+        sql.includes("lower_case_table_names")
+          ? [{ lower_case_table_names: lowerCaseTableNames }]
+          : [{ n: 0 }]
+      ),
       select: vi.fn(async (table: string) => {
         if (table === "dynamic_components") {
           return [{ slug: "seo", table_name: "SEO_META" }];
@@ -315,14 +323,33 @@ describe("teardownEntityComponentData catalog case folding", () => {
         return [{ id: `${table}-1` }];
       }),
     };
+  }
 
+  it("matches a registered name against a differently-cased catalog entry", async () => {
+    // lower_case_table_names=1 lowercases names on creation, so the catalog's
+    // `seo_meta` is the table the registry recorded as `SEO_META`.
+    const deleted: string[] = [];
     const result = await teardownEntityComponentData({
-      adapter: adapter as never,
+      adapter: mysqlAdapter(1, deleted) as never,
       parentTable: "dc_posts",
     });
 
     expect(result.tablesTouched).toContain("seo_meta");
     expect(deleted).toContain("seo_meta");
+  });
+
+  // The same catalog on a case-sensitive server: `seo_meta` is a different table
+  // from the registered `SEO_META`, and deleting its rows would delete another
+  // table's data.
+  it("leaves a differently-cased table alone on a case-sensitive server", async () => {
+    const deleted: string[] = [];
+    const result = await teardownEntityComponentData({
+      adapter: mysqlAdapter(0, deleted) as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).not.toContain("seo_meta");
+    expect(deleted).not.toContain("seo_meta");
   });
 });
 

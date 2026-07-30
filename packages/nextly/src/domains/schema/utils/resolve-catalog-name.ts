@@ -7,58 +7,183 @@
  * independent versions of a naming rule drift, and the drift is invisible until
  * it reaches a database that exercises the difference.
  *
+ * Whether two spellings name one object is **not** a property of the name. It is
+ * a property of the server, so it is an input here rather than a constant, and
+ * `identifierCaseRules` is the only place that maps a server to it.
+ *
  * @module domains/schema/utils/resolve-catalog-name
  */
+
+import { NextlyError } from "../../../errors/nextly-error";
+
+/**
+ * How a server decides whether two spellings name the same object.
+ *
+ * - `preserve` — case is significant. `SEO_META` and `seo_meta` are two
+ *   different objects, and a stored name absent from the catalog is genuinely
+ *   absent no matter what else the catalog holds.
+ * - `fold` — case is not significant. The two spellings are one object, so a
+ *   stored name is found under whatever case the catalog reports it in.
+ */
+export type IdentifierCase = "preserve" | "fold";
+
+/**
+ * A server's rules, which differ between tables and columns on MySQL.
+ *
+ * Kept as two fields rather than one because collapsing them is wrong on the
+ * dialect that matters most here: MySQL compares column names case-insensitively
+ * on every server, while its table names follow `lower_case_table_names`. A
+ * single value would have to be wrong for one of the two.
+ */
+export interface IdentifierCaseRules {
+  readonly tables: IdentifierCase;
+  readonly columns: IdentifierCase;
+}
+
+/**
+ * The server whose rules are being described.
+ *
+ * MySQL requires `lowerCaseTableNames` because its table-name behaviour is
+ * server configuration, not a dialect property, and no static default is safe:
+ * assuming `fold` makes a missing table look present on a case-sensitive server,
+ * and assuming `preserve` refuses a legitimate upgrade on a folding one. Making
+ * it a required field means a caller cannot reach that guess by omission.
+ */
+export type IdentifierCaseServer =
+  | { dialect: "postgresql" }
+  | { dialect: "sqlite" }
+  | { dialect: "mysql"; lowerCaseTableNames: number };
+
+/**
+ * Map a server to its identifier-comparison rules.
+ *
+ * - **Postgres** preserves both. Every identifier Nextly emits is quoted
+ *   (`quoteIdent`), so the server stores exactly the name it was given and never
+ *   folds it. Comparing folded here would merge two genuinely distinct tables.
+ * - **SQLite** folds both: table and column names match case-insensitively, so
+ *   two names differing only in case cannot coexist and folding is exact.
+ * - **MySQL** folds columns always. Its tables follow `lower_case_table_names`:
+ *   `0` stores and compares case-sensitively, `1` lowercases names on creation,
+ *   and `2` stores them as given but compares case-insensitively. Only `0`
+ *   preserves. Under `1` the catalog reports a lowercased name for a table
+ *   created with capitals, which is exactly the case a folded lookup must find.
+ */
+export function identifierCaseRules(
+  server: IdentifierCaseServer
+): IdentifierCaseRules {
+  if (server.dialect === "postgresql") {
+    return { tables: "preserve", columns: "preserve" };
+  }
+  if (server.dialect === "sqlite") {
+    return { tables: "fold", columns: "fold" };
+  }
+  return {
+    tables: server.lowerCaseTableNames === 0 ? "preserve" : "fold",
+    columns: "fold",
+  };
+}
 
 /**
  * A catalog listing, prepared once for repeated lookups.
  *
- * Built from `adapter.listTables()`. Holding both an exact set and a folded
- * index is what lets a lookup prefer an exact hit and still find a
- * case-different one.
+ * Built from `adapter.listTables()` for tables, or a table's column names for
+ * columns. The folded index is kept even when the server preserves case: it is
+ * not used to resolve then, but it is what lets a refusal say "the name you
+ * stored is absent and one differing only in case is present", which is the
+ * difference between an operator fixing a row and an operator guessing.
  */
 export interface CatalogIndex {
   /** Names exactly as the database reported them. */
   readonly exact: ReadonlySet<string>;
   /** Lower-cased name to the first catalog entry that folded to it. */
   readonly folded: ReadonlyMap<string, string>;
+  /** How this catalog's server compares the names it reported. */
+  readonly identifierCase: IdentifierCase;
 }
 
-/** Index a catalog listing for lookup. */
-export function indexCatalog(tables: readonly string[]): CatalogIndex {
-  const exact = new Set(tables);
+/** Index a catalog listing for lookup under a server's comparison rules. */
+export function indexCatalog(
+  names: readonly string[],
+  identifierCase: IdentifierCase
+): CatalogIndex {
+  const exact = new Set(names);
   const folded = new Map<string, string>();
-  for (const name of tables) {
+  for (const name of names) {
     const key = name.toLowerCase();
-    // First writer wins, so an ambiguous fold cannot silently retarget a table:
-    // if a database holds both `SEO_META` and `seo_meta`, a folded lookup keeps
-    // pointing at whichever the catalog listed first rather than alternating.
+    // First writer wins, so an ambiguous fold cannot silently retarget an
+    // object: if a case-preserving server holds both `SEO_META` and `seo_meta`,
+    // a folded lookup keeps pointing at whichever the catalog listed first
+    // rather than alternating between two real objects.
     if (!folded.has(key)) folded.set(key, name);
   }
-  return { exact, folded };
+  return { exact, folded, identifierCase };
 }
 
 /**
  * Resolve a stored name to the catalog's spelling of it, or `undefined`.
  *
- * Exact match first, then case-insensitive. Both halves are necessary and
- * neither is sufficient:
+ * An exact hit always wins, on every server. The folded fallback runs only where
+ * the server folds, because there and only there do the two spellings name one
+ * object:
  *
- * - MySQL with `lower_case_table_names` reports a verbatim `SEO_META` as
- *   `seo_meta`, so an exact-only lookup discards a table that genuinely exists.
- * - Postgres, and MySQL with `lower_case_table_names=0`, hold `SEO_META` and
- *   `seo_meta` as distinct quoted tables, so folding unconditionally collapses
- *   two tables into one and lets an operation touch the wrong one.
+ * - On a **folding** server the fallback is necessary. MySQL under
+ *   `lower_case_table_names=1` reports a table created as `SEO_META` as
+ *   `seo_meta`, so an exact-only lookup would call a table that exists missing
+ *   and orphan its rows.
+ * - On a **preserving** server the fallback is unsound. Postgres, and MySQL with
+ *   `lower_case_table_names=0`, hold `SEO_META` and `seo_meta` as distinct
+ *   objects, so folding would report a missing object as present and let the
+ *   caller address one that is not there — or, worse, a different application's.
  *
- * Preferring the exact hit keeps those distinct while the fallback still finds a
- * folded entry. The value returned is always the name the catalog reported,
- * because that is the spelling later statements have to address — not the
- * spelling Nextly happened to store.
+ * The value returned is always the name the catalog reported, because that is
+ * the spelling later statements have to address, not the spelling Nextly
+ * happened to store.
  */
 export function resolveCatalogName(
   catalog: CatalogIndex,
   storedName: string
 ): string | undefined {
   if (catalog.exact.has(storedName)) return storedName;
+  if (catalog.identifierCase === "preserve") return undefined;
   return catalog.folded.get(storedName.toLowerCase());
+}
+
+/**
+ * The catalog entry differing from `storedName` only by case, if there is one
+ * and it is not the resolved answer.
+ *
+ * Only ever non-empty on a case-preserving server, where such an entry is a
+ * *different* object. It exists for refusal messages: "`comp_hero` is missing"
+ * sends an operator looking for a dropped table, while "`comp_hero` is missing
+ * and `COMP_HERO` is present" names the actual problem.
+ */
+export function findCaseVariant(
+  catalog: CatalogIndex,
+  storedName: string
+): string | undefined {
+  if (catalog.exact.has(storedName)) return undefined;
+  const variant = catalog.folded.get(storedName.toLowerCase());
+  return variant === storedName ? undefined : variant;
+}
+
+/**
+ * Read a MySQL server's `lower_case_table_names` from a raw value.
+ *
+ * Drivers disagree about the type of a server variable — some return the number,
+ * some the string — and an unparseable value must not fall back to a default,
+ * because both defaults are wrong on some server. Refusing keeps the guess out.
+ */
+export function parseLowerCaseTableNames(value: unknown): number {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  if (typeof parsed !== "number" || !Number.isInteger(parsed) || parsed < 0) {
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "cannot determine how this MySQL server compares table names: lower_case_table_names is unreadable",
+      logContext: {
+        reason: "lower_case_table_names is not a non-negative integer",
+        value,
+      },
+    });
+  }
+  return parsed;
 }

@@ -35,6 +35,7 @@ import { NextlyError } from "../../../errors";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { q } from "../../i18n/migration/ddl-types";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
+import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
   indexCatalog,
   resolveCatalogName,
@@ -225,9 +226,14 @@ async function listRegisteredComponentTables(
     {}
   );
 
-  // Exact-first, then case-insensitive. The reasoning, and the reason both halves
-  // are needed, lives with the shared resolver.
-  const catalog = indexCatalog(discovered);
+  // Exact-first, then case-insensitive only where the server folds. Deleting
+  // rows from a table resolved by folding a name the server treats as distinct
+  // would delete another table's rows, so the comparison rules come from the
+  // server rather than being assumed. The reasoning lives with the resolver.
+  const catalog = indexCatalog(
+    discovered,
+    (await readIdentifierCaseRules(adapter)).tables
+  );
   return (
     rows
       .map(row => row.table_name ?? row.tableName)
