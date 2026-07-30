@@ -1202,6 +1202,66 @@ describe("plugin field types in the Zod generator", () => {
     ).toContain('import type { Prefix } from "@acme/qi";');
   });
 
+  it("keeps a reference after a braced comment in an interpolation", () => {
+    registerFieldType({
+      type: "commented-brace",
+      storage: "json",
+      component: "@acme/cb2/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Prefix"], from: "@acme/cb2" }],
+        zodSchema: () => "z.custom<`${/* } */ Prefix}`>()",
+      },
+    });
+
+    // The brace is comment text, so the interpolation does not end there.
+    // Counting it closes the body before the reference and the schema is left
+    // naming an identifier it never imported.
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "c", type: "commented-brace" }])
+      ).code
+    ).toContain('import type { Prefix } from "@acme/cb2";');
+  });
+
+  it("keeps a reference after a braced regex in an interpolation", () => {
+    registerFieldType({
+      type: "regex-brace",
+      storage: "json",
+      component: "@acme/rb/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Prefix"], from: "@acme/rb" }],
+        zodSchema: () => 'z.custom<`${"".replace(/}/g, "") as Prefix}`>()',
+      },
+    });
+
+    // Likewise for a brace inside a regex literal, which is why finding the end
+    // of an interpolation has to recognise the same spans reading it does.
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "r", type: "regex-brace" }])
+      ).code
+    ).toContain('import type { Prefix } from "@acme/rb";');
+  });
+
+  it("still drops a name appearing only in an interpolation's comment", () => {
+    registerFieldType({
+      type: "comment-only",
+      storage: "json",
+      component: "@acme/co/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Prefix"], from: "@acme/co" }],
+        zodSchema: () => "z.custom<`${/* Prefix */ String}`>()",
+      },
+    });
+
+    // Skipping the comment must not mean reading through it: the name is text.
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "o", type: "comment-only" }])
+      ).code
+    ).not.toContain("@acme/co");
+  });
+
   it("does not descend into an option a plugin type happens to call fields", () => {
     registerFieldType({
       type: "layout",

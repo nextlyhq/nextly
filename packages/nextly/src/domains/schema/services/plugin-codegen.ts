@@ -211,33 +211,69 @@ function closingBacktick(source: string, open: number): number {
 /**
  * The index of the `}` closing the interpolation opened at `open`, or `-1`.
  *
- * Braces are counted rather than matched, and the quoted forms are skipped
- * whole, because an interpolation may hold braces of its own — an object type,
- * a mapped type, or a brace inside a string, as in
- * `${"}" extends R ? A : B}` — and stopping at the first `}` would end the
- * body inside its own expression and discard every reference after it.
+ * Braces are counted rather than matched, and every span that is text rather
+ * than code is skipped whole, because an interpolation may hold braces of its
+ * own — an object type, a mapped type, or a brace inside a string, a comment or
+ * a regex, as in `${"}" extends R ? A : B}`. Counting one of those ends the
+ * body inside its own expression and discards every reference after it, which
+ * is how an import the expression needs goes missing.
+ *
+ * The same spans `codeOnly` recognises, for the same reason: a body found by
+ * one set of rules and then read by another disagree exactly where the text is
+ * unusual.
  */
 function interpolationEnd(source: string, open: number): number {
   let depth = 1;
+  // The last character that was code, which is what tells a regex literal from
+  // a division — the same test `codeOnly` makes.
+  let previous = "";
+
   for (let i = open + 2; i < source.length; i++) {
     const ch = source[i];
     if (ch === "\\") {
       i++;
       continue;
     }
-    if (ch === '"' || ch === "'" || ch === "`") {
+
+    if (ch === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i + 2);
+      // A line comment running to the end means no `}` follows it.
+      if (end === -1) return -1;
+      i = end;
+      continue;
+    }
+
+    if (ch === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2);
+      if (end !== -1) {
+        i = end + 1;
+        continue;
+      }
+    } else if (ch === '"' || ch === "'" || ch === "`") {
       const end =
         ch === "`" ? closingBacktick(source, i) : closingQuote(source, i);
       // Unterminated, so the character opened nothing: read on from the next
       // one rather than swallowing the remainder of the interpolation.
-      if (end !== -1) i = end;
-      continue;
+      if (end !== -1) {
+        i = end;
+        previous = ch;
+        continue;
+      }
+    } else if (ch === "/" && opensRegex(previous)) {
+      const end = closingSlash(source, i);
+      if (end !== -1) {
+        i = end;
+        previous = ch;
+        continue;
+      }
     }
+
     if (ch === "{") depth++;
     else if (ch === "}") {
       depth--;
       if (depth === 0) return i;
     }
+    if (!WHITESPACE.test(ch)) previous = ch;
   }
   return -1;
 }
@@ -288,6 +324,9 @@ function opensRegex(before: string): boolean {
 
 /** The flags that may trail a regex literal's closing slash. */
 const REGEX_FLAGS = /[dgimsuvy]/;
+
+/** Characters that separate code without being any of it. */
+const WHITESPACE = /\s/;
 
 /**
  * `source` with every span that is text rather than code blanked out.
