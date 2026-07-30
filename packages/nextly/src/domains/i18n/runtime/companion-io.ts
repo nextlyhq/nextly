@@ -556,6 +556,11 @@ export async function ensureCompanionTable(
   onError?: (error: unknown) => void
 ): Promise<boolean> {
   const companionTableName = `${args.tableName}_locales`;
+  // Tracked because only a failure of the CREATE itself can be explained away by a concurrent
+  // winner. The plan may also carry a seed, and a seed that fails leaves a table this call made —
+  // treating that as a lost race would suppress the error and leave the content uncopied, with
+  // every later run returning early because the table now exists.
+  let created = false;
   try {
     if (await companionTableExists(adapter, companionTableName)) return false;
     // Lazy import avoids a cycle (reconcile-companion → migration helpers).
@@ -579,6 +584,7 @@ export async function ensureCompanionTable(
       });
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
+      created = true;
     }
     return true;
   } catch (error) {
@@ -588,7 +594,10 @@ export async function ensureCompanionTable(
     // re-checking rather than by reading the error text, so this cannot swallow a real failure
     // that happens to mention the table.
     if (
-      await companionTableExists(adapter, companionTableName).catch(() => false)
+      !created &&
+      (await companionTableExists(adapter, companionTableName).catch(
+        () => false
+      ))
     ) {
       // Reported as not-created on purpose: whoever won the race owns recording why
       // the companion exists, and a second record of the same transition could name
