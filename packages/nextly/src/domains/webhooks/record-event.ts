@@ -13,7 +13,12 @@
  * @module domains/webhooks/record-event
  */
 
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
+
+import { webhookTables } from "../../schemas/webhooks";
 
 import type { WebhookEvent } from "./types";
 
@@ -68,4 +73,55 @@ export async function recordEvent(
   await tx.insert("nextly_events", eventRow(params.envelope, new Date()), {
     returning: ["id"],
   });
+}
+
+/**
+ * The Drizzle table row for one event (camelCase properties). Unlike
+ * {@link eventRow}, the `payload` is passed as an OBJECT: the Drizzle
+ * json/jsonb codec serializes it per dialect, and `createdAt`/`retentionClass`
+ * are left to the column defaults the Drizzle insert applies.
+ */
+function eventRowForDrizzle(envelope: WebhookEvent): Record<string, unknown> {
+  return {
+    id: envelope.id,
+    type: envelope.type,
+    resourceKind: envelope.resource.kind,
+    resourceCollection:
+      "collection" in envelope.resource
+        ? envelope.resource.collection
+        : "slug" in envelope.resource
+          ? (envelope.resource.slug ?? null)
+          : null,
+    resourceId: envelope.resource.id ?? null,
+    payload: envelope,
+    actorType: envelope.actor?.type ?? null,
+    actorId: envelope.actor?.id ?? null,
+  };
+}
+
+/**
+ * Minimal Drizzle-transaction surface: append one row. `BaseService.
+ * withTransaction` yields a dialect-specific Drizzle handle whose fluent insert
+ * matches this, so a service recording through it stays free of the adapter's
+ * positional context.
+ */
+export interface DrizzleEventTx {
+  insert(table: unknown): { values(data: unknown): Promise<unknown> };
+}
+
+/**
+ * Drizzle-transaction variant of {@link recordEvent}, for services that run
+ * their writes through `BaseService.withTransaction` (a Drizzle transaction)
+ * rather than the adapter's positional `TransactionContext` — the auth/user
+ * service and plugin write paths. It appends the same `nextly_events` row
+ * through the standardized Drizzle query API, so the event still commits
+ * atomically with the write and the drain fans it out afterwards.
+ */
+export async function recordEventInTx(
+  tx: DrizzleEventTx,
+  dialect: SupportedDialect,
+  params: { envelope: WebhookEvent }
+): Promise<void> {
+  const { nextlyEvents } = webhookTables(dialect);
+  await tx.insert(nextlyEvents).values(eventRowForDrizzle(params.envelope));
 }

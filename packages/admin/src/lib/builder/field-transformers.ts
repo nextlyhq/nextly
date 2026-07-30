@@ -393,6 +393,15 @@ const BUILDER_MODELLED_FIELD_KEYS: ReadonlySet<string> = new Set([
   "pluginOptions",
 ]);
 
+/** Whether a value is a `{}` literal, matching what core accepts as a container. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 /**
  * Gather the properties the builder does not model into one bag.
  *
@@ -403,11 +412,40 @@ function collectUnmodelledOptions(
   field: object
 ): Record<string, unknown> | undefined {
   const carried: Record<string, unknown> = {};
+
+  // Defined rather than assigned, for the same reason the write below defines:
+  // a manifest deserialized from JSON can hold an own `__proto__` key, and
+  // assigning it would set this object's prototype instead of collecting the
+  // option — which would drop it on the next save, from the very container that
+  // promises any name is legal.
+  const collect = (key: string, value: unknown): void => {
+    if (value === undefined) return;
+    Object.defineProperty(carried, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+
   for (const [key, value] of Object.entries(field)) {
     if (BUILDER_MODELLED_FIELD_KEYS.has(key)) continue;
-    if (value === undefined) continue;
-    carried[key] = value;
+    collect(key, value);
   }
+
+  // The container's entries win over any of the same name sitting directly on
+  // the field: a type that moved an option into the container did so to escape
+  // the meaning the surrounding schema gives that name.
+  // Own, and a plain object: `typeof x === "object"` also admits arrays and
+  // class instances, which the core reader rejects — the two have to agree on
+  // what counts as a container or a field round-trips differently through each.
+  if (Object.prototype.hasOwnProperty.call(field, "pluginOptions")) {
+    const container = (field as { pluginOptions?: unknown }).pluginOptions;
+    if (isPlainRecord(container)) {
+      for (const [key, value] of Object.entries(container)) collect(key, value);
+    }
+  }
+
   return Object.keys(carried).length > 0 ? carried : undefined;
 }
 
@@ -423,15 +461,17 @@ export function applyCarriedOptions(
   carried: Record<string, unknown> | undefined
 ): void {
   if (!carried) return;
-  for (const [key, value] of Object.entries(carried)) {
-    if (Object.prototype.hasOwnProperty.call(target, key)) continue;
-    Object.defineProperty(target, key, {
-      value,
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
-  }
+  // Written into the container rather than onto the field. Directly on the
+  // field an option is legal only while its name differs from every key the
+  // field schema declares, and the writer cannot know which names a future
+  // core version will add. Both locations are still read, so a field stored
+  // the old way keeps working until something saves it.
+  Object.defineProperty(target, "pluginOptions", {
+    value: { ...carried },
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 /**

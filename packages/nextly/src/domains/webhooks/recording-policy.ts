@@ -14,6 +14,8 @@
  * @module domains/webhooks/recording-policy
  */
 
+import type { ResolvedWebhookEmit } from "./resolve-recording-config";
+
 /** The entity kinds that can carry a per-entity recording opt-out. */
 export type WebhookRecordingScope = "collection" | "single";
 
@@ -31,6 +33,11 @@ export type WebhookRecordingSource = "code" | "plugin" | "db";
 interface PolicyEntry {
   record: boolean;
   source: WebhookRecordingSource;
+  /**
+   * A curated event this entity emits on create instead of the default
+   * `entry.created` — set only for a code/plugin entity that configured one.
+   */
+  emit?: ResolvedWebhookEmit;
 }
 
 // Keyed by `${scope}:${slug}`; absence means "record" (the default), so only
@@ -184,9 +191,13 @@ export function setWebhookRecording(
   scope: WebhookRecordingScope,
   slug: string,
   record: boolean,
-  source: WebhookRecordingSource = "code"
+  source: WebhookRecordingSource = "code",
+  emit?: ResolvedWebhookEmit
 ): void {
-  policy.set(keyFor(scope, slug), { record, source });
+  policy.set(
+    keyFor(scope, slug),
+    emit ? { record, source, emit } : { record, source }
+  );
   storedRefresh.generation += 1;
 }
 
@@ -220,6 +231,21 @@ export function isWebhookRecordingEnabled(
     scheduleStoredRefresh();
   }
   return policy.get(keyFor(scope, slug))?.record ?? true;
+}
+
+/**
+ * The curated event this collection/single emits on create instead of the
+ * default `entry.created`, or undefined when none is configured. Read at the
+ * create seam from the same registry as the recording gate, so a PII collection
+ * ships a metadata-only event while its raw `entry.*` events stay suppressed. No
+ * database read: like {@link isWebhookRecordingEnabled} this runs inside the
+ * content write transaction.
+ */
+export function getWebhookEmitSpec(
+  scope: WebhookRecordingScope,
+  slug: string
+): ResolvedWebhookEmit | undefined {
+  return policy.get(keyFor(scope, slug))?.emit;
 }
 
 /**

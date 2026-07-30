@@ -75,12 +75,16 @@ export type WebhookEventSubscription =
   | typeof WEBHOOK_EVENT_WILDCARD;
 
 /** Resource families an event can be about. */
-export type WebhookResourceKind =
-  | "entry"
-  | "single"
-  | "media"
-  | "user"
-  | "form";
+export const WEBHOOK_RESOURCE_KINDS = [
+  "entry",
+  "single",
+  "media",
+  "user",
+  "form",
+] as const;
+
+/** Resource families an event can be about. */
+export type WebhookResourceKind = (typeof WEBHOOK_RESOURCE_KINDS)[number];
 
 /** What triggered an event; feeds the audit trail. */
 export type WebhookActorType = "user" | "apiKey" | "system";

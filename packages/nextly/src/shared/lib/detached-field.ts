@@ -10,6 +10,12 @@
  * @module shared/lib/detached-field
  */
 import type { PluginFieldInstance } from "../../plugins/contributions";
+import {
+  PLUGIN_OPTIONS_KEY,
+  pluginOptionContainer,
+} from "../../plugins/plugin-options";
+
+import { defineOwnProperty } from "./own-property";
 
 /** Whether a value is a `{}` literal, as opposed to a Date, class instance, or null. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -42,7 +48,7 @@ function detachValue(value: unknown): unknown {
   if (isPlainObject(value)) {
     const copy: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value)) {
-      copy[key] = detachValue(nested);
+      defineOwnProperty(copy, key, detachValue(nested));
     }
     return copy;
   }
@@ -64,7 +70,25 @@ export function detachedField(field: {
 }): PluginFieldInstance {
   const copy: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(field)) {
-    copy[key] = detachValue(value);
+    // The container is folded below rather than carried, so a type reads one
+    // flat set of options and never has to look in two places for them.
+    if (key === PLUGIN_OPTIONS_KEY) continue;
+    defineOwnProperty(copy, key, detachValue(value));
   }
+
+  // Folded after the field's own keys, so an option stored in the container
+  // wins. That is the point of the container: it is the only place a name the
+  // field schema already declares can be used for something else.
+  const container = pluginOptionContainer(field);
+  if (container) {
+    for (const [key, value] of Object.entries(container)) {
+      defineOwnProperty(copy, key, detachValue(value));
+    }
+  }
+
+  // Spread defines rather than assigns, so an own `__proto__` carried by the
+  // copy survives this step; `type` and `name` are restated because they are
+  // the two the instance contract guarantees, and so neither can be displaced
+  // by a container entry.
   return { ...copy, type: field.type, name: field.name };
 }

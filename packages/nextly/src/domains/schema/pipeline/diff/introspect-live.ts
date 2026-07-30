@@ -176,14 +176,23 @@ export async function introspectLiveSnapshot(
     // Index query: join pg_index/pg_class/pg_attribute. Exclude primary keys
     // (indisprimary) and partial indexes (indpred). Expression indexes yield no
     // pg_attribute row and are naturally excluded.
+    //
+    // Scoped to `public` like the column query above. `pg_class.relname` is
+    // unique per schema, not per database, so without the namespace join a
+    // same-named table in another schema contributes its indexes to these rows
+    // and `attachIndexes` groups them under the same name — reporting indexes
+    // that are not on the table being introspected, and masking the absence of
+    // ones that should be.
     const idxResult = (await dbTyped.execute(
       sql`SELECT t.relname AS table, i.relname AS index, ix.indisunique AS unique,
                  a.attname AS column, array_position(ix.indkey, a.attnum) AS ord
           FROM pg_class t
+          JOIN pg_namespace n ON n.oid = t.relnamespace
           JOIN pg_index ix ON ix.indrelid = t.oid
           JOIN pg_class i ON i.oid = ix.indexrelid
           JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-          WHERE t.relname IN (${tableNamesIn})
+          WHERE n.nspname = 'public'
+            AND t.relname IN (${tableNamesIn})
             AND ix.indisprimary = false
             AND ix.indpred IS NULL
             AND a.attnum > 0

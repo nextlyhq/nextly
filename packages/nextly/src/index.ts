@@ -245,6 +245,7 @@ export type {
   TypeGeneratorOptions,
   GeneratedTypeInterface,
   GeneratedSingleTypeInterface,
+  GeneratedUserInterface,
   GeneratedTypesFile,
 } from "./domains/schema/services/type-generator";
 
@@ -357,6 +358,16 @@ export type {
 } from "./services/shared";
 export { SYSTEM_CONTEXT, consoleLogger } from "./services/shared";
 
+// Validating loose values against field declarations, for plugins that store
+// structured content of their own and must apply the same rules a write does.
+export {
+  validateFieldValues,
+  type ValidateFieldValuesOptions,
+  type FieldValueDeclaration,
+  type FieldValueDeclarationInput,
+  type ValidationIssue,
+} from "./plugins/validate-field-values";
+
 // Plugin System - Types and helpers for creating plugins
 export {
   AdminPlacement,
@@ -377,6 +388,8 @@ export {
   type PluginFieldInstance,
   type PluginFieldIssue,
   type PluginFieldValidationResult,
+  type PluginFieldCodegen,
+  type PluginFieldCodegenImport,
   type FieldSurface,
   type ScheduledTask,
   type PermissionSlug,
@@ -630,9 +643,16 @@ export type { FieldGroupFieldConfig } from "./collections/fields/types/component
 export type {
   UserConfig,
   UserFieldConfig,
+  UserPluginFieldConfig,
+  UserPluginFieldInput,
   UserFieldType,
   UserAdminOptions,
 } from "./users";
+
+// Declares a user field whose type a plugin contributed, which the built-in
+// arms of `UserFieldConfig` cannot be widened to admit without losing their
+// own errors.
+export { pluginUserField, pluginUserFieldBrand } from "./users";
 
 // User config validation
 export {

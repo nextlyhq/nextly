@@ -4,10 +4,10 @@
  * A block declares its editable props as a record of field-type declarations
  * (`{ heading: { type: "text", maxLength: 80 } }`). This module turns that
  * record into ordinary `FieldConfig`s so one declaration drives everything
- * downstream: server-side value validation runs through the same
- * `validateEntryData` pass entries use, and later the inspector controls and
- * the generated manifest read the same configs. Nothing about block props gets
- * its own parallel validation rules.
+ * downstream: server-side value validation runs the same rules entries do, via
+ * the `validateFieldValues` entry point plugins use, and later the inspector
+ * controls and the generated manifest read the same configs. Nothing about
+ * block props gets its own parallel validation rules.
  *
  * The input shape is described structurally rather than imported, so core does
  * not depend on the blocks engine to know what a prop declaration looks like.
@@ -40,8 +40,8 @@ import {
 } from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ValidationPublicData } from "../../errors/public-data";
+import { validateFieldValues } from "../../plugins/validate-field-values";
 import { SLUG_PATTERN } from "../../shared/base-validator";
-import { validateEntryData } from "../../shared/lib/entry-validation";
 
 import type { BlockFieldCatalogType } from "./catalog";
 import {
@@ -163,7 +163,9 @@ export async function validateBlockPropValues(
   const own = ownProperties(values);
   // Block props are always written whole: a stored node carries every prop it
   // has, so absent means unset rather than untouched, which is create mode.
-  const issues = await validateEntryData(own, fields, { mode: "create" });
+  // The same entry point a plugin gets, so the checks here cannot drift from
+  // the ones a relocated block-props implementation would run.
+  const issues = await validateFieldValues(own, fields, { mode: "create" });
   collectSerializationIssues(fields, own, issues);
   collectEmptyListIssues(fields, own, "", issues);
   return issues;

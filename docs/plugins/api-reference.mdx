@@ -280,16 +280,66 @@ collections are retained and their fields still have to map to a column and
 render, but `validate` and `validateOptions` are both dropped at registration —
 they are behavior, and a disabled plugin contributes none.
 
-**Naming your options.** An option key must not collide with one the field
-schema already declares — `options`, `fields`, `admin`, `label` and the rest of
+**Where your options live.** An option written directly on the field is read as
+written, and that is the ergonomic choice while its name differs from every key
+the field schema declares — `options`, `fields`, `admin`, `label` and the rest of
 the built-in field surface. The manifest applies the built-in shape to every
-field whatever its type, so a colliding key is judged against the core meaning
-(`options` as a select's choice array) and rejected before your check runs.
-Namespace anything that might clash, e.g. `policy` rather than `options`.
+field whatever its type, so a name that does collide is judged against the core
+meaning (`options` as a select's choice array) and rejected before your check
+runs.
+
+For a name core already uses, or to be safe against names core may add later,
+put the option in the `pluginOptions` container. Core never looks inside it, so
+any name is legal there:
+
+```json
+{
+  "name": "rating",
+  "type": "star-rating",
+  "pluginOptions": { "options": { "presets": ["a", "b"] } }
+}
+```
+
+Both are read, and your type is handed **one flat view** either way, so
+`field.options` above resolves to your object without your having to know where
+it was stored. The container wins when the same name appears in both. Writes
+from the Schema Builder go to the container, so a field stored the older way
+moves there the next time it is saved; nothing you read changes when it does.
+
+Two names are reserved inside the container: **`type` and `name`**. The instance
+you are handed states which field it is under those keys, restated after your
+options are folded in, so an option using either would be shadowed and never
+reach you. A manifest write declaring one is refused rather than silently
+losing it.
 
 Fields nested in a `repeater` or `group` are covered. A type offered only on the
 `users`, `forms`, or `blocks` surface is **not**: those surfaces have their own
 config validators, which do not consult this registry.
+
+**Declaring one on the `users` surface from code.** `UserFieldConfig` is a union
+of the built-in field shapes, so a `select` missing its `options` fails on its
+own shape. A plugin type's token is not knowable there, and an arm open enough
+to accept it would accept that malformed `select` too and lose the error. Wrap
+the declaration in `pluginUserField()` instead, which marks it as belonging to
+the open arm:
+
+```ts
+import { defineConfig, pluginUserField } from "nextly";
+
+export default defineConfig({
+  users: {
+    fields: [
+      { name: "company", type: "text" },
+      pluginUserField({ name: "score", type: "star-rating" }),
+    ],
+  },
+});
+```
+
+Options are optional there: pass `pluginOptions`, write them directly on the
+field, or pass none at all. Note that these options reach type generation but
+are not persisted, so a field read back from the database after boot carries
+none of them.
 
 ## Secrets
 

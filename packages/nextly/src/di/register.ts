@@ -1212,13 +1212,24 @@ function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
   for (const collection of config.collections ?? []) {
     const slug = (collection as { slug?: string }).slug;
     if (!slug) continue;
+    const resolved = resolveWebhookRecording(
+      (
+        collection as {
+          webhooks?:
+            | boolean
+            | {
+                record?: boolean;
+                emit?: { event?: unknown; fields?: unknown };
+              };
+        }
+      ).webhooks
+    );
     setWebhookRecording(
       "collection",
       slug,
-      resolveWebhookRecording(
-        (collection as { webhooks?: boolean | { record?: boolean } }).webhooks
-      ).record,
-      pluginCollections.has(slug) ? "plugin" : "code"
+      resolved.record,
+      pluginCollections.has(slug) ? "plugin" : "code",
+      resolved.emit
     );
   }
   for (const single of config.singles ?? []) {

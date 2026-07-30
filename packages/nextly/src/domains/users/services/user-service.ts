@@ -42,6 +42,7 @@
 // PR 4 of unified-error-system migration: ServiceError → NextlyError. The
 // inner services now throw NextlyError directly and return data without an
 // envelope, so this façade just propagates errors and shapes the response.
+import { actorForWrite } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
 import type {
   RequestContext,
@@ -183,15 +184,21 @@ export class UserService {
     // and throws NextlyError on validation/duplicate/DB failures. The façade
     // just logs around the call and lets the error propagate to callers.
     try {
-      const created = await this.mutationService.createLocalUser({
-        email,
-        name,
-        password: password ?? null,
-        image,
-        roles,
-        isActive,
-        ...customFields,
-      });
+      const created = await this.mutationService.createLocalUser(
+        {
+          email,
+          name,
+          password: password ?? null,
+          image,
+          roles,
+          isActive,
+          ...customFields,
+        },
+        // Attribute the write to the authenticated caller so the emitted
+        // `user.created` event records who created the account; falls back to
+        // `system` only for a genuinely uninitiated write.
+        actorForWrite(undefined, context.user)
+      );
 
       this.logger.info("User created", {
         email: input.email,
@@ -357,12 +364,16 @@ export class UserService {
    * @param context - Request context
    * @throws NextlyError if deletion fails
    */
-  async delete(userId: string, _context: RequestContext): Promise<void> {
+  async delete(userId: string, context: RequestContext): Promise<void> {
     this.logger.debug("Deleting user", { userId });
 
     // mutationService.deleteUser now returns void and throws NextlyError on
-    // not-found / DB errors. Just propagate.
-    await this.mutationService.deleteUser(userId);
+    // not-found / DB errors. The authenticated caller is threaded through so the
+    // emitted `user.deleted` event records who removed the account.
+    await this.mutationService.deleteUser(
+      userId,
+      actorForWrite(undefined, context.user)
+    );
     this.logger.info("User deleted", { userId });
   }
 

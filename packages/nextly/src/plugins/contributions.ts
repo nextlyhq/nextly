@@ -235,13 +235,17 @@ export interface PluginFieldType {
    * canonical member is used and the message carries the detail. Throwing is
    * treated as a refusal.
    *
-   * One constraint on the options themselves: an option key must not collide
-   * with a key the field schema already declares (`options`, `fields`, `admin`,
-   * `label`, and the rest of the built-in field surface). The manifest applies
-   * the built-in shape to every field regardless of type, so a colliding key is
-   * judged against the core meaning — `options` as a select's choice array, for
-   * instance — and is rejected before this ever runs. Namespace anything that
-   * might clash.
+   * Options are read from the field itself and from its `pluginOptions`
+   * container, merged into one flat view with the container winning, so where
+   * an option was stored is not something this has to know. Directly on the
+   * field is legal only while the name differs from every key the field schema
+   * declares (`options`, `fields`, `admin`, `label`, and the rest of the
+   * built-in field surface): the manifest applies that shape to every field
+   * regardless of type, so a colliding name is judged against the core meaning
+   * and refused before this runs. The container is where such a name can mean
+   * something else, because core never looks inside it — except for `type` and
+   * `name`, which the instance restates as its own identity and so cannot carry
+   * an option; a manifest write using either inside the container is refused.
    *
    * Paths here are RELATIVE, where `validate`'s are absolute. The difference is
    * deliberate: a value validator may address a position deep inside a stored
@@ -250,6 +254,69 @@ export interface PluginFieldType {
    * learn its own index.
    */
   validateOptions?: (field: PluginFieldInstance) => PluginFieldValidationResult;
+
+  /**
+   * What `nextly build` emits for a field of this type.
+   *
+   * Without it a custom type is generated as its storage primitive's default —
+   * `string` for the TypeScript types, an unconstrained value for the Zod
+   * schemas — because the generators know the built-in types and nothing else.
+   * That is the difference between a type an app can consume and one it has to
+   * cast at every use, and it is the reason a structured type is worth
+   * contributing rather than storing as opaque JSON.
+   *
+   * Both callbacks receive the field as DECLARED, so a type whose options
+   * narrow what it stores can narrow what it generates: a field restricted to
+   * two kinds can emit a union of those two rather than the whole set.
+   *
+   * The strings are written verbatim into the generated file, which is source
+   * the app compiles. A malformed expression breaks that app's build rather
+   * than anything here, so a type is expected to emit something it has checked;
+   * the generators do not parse it. Keep the output deterministic — the file is
+   * committed, and a value that varies between runs shows up as a spurious
+   * diff.
+   */
+  codegen?: PluginFieldCodegen;
+}
+
+/** A type-only import a generated file needs for one field type's expressions. */
+export interface PluginFieldCodegenImport {
+  /** Names to import, e.g. `["BlockDocument"]`. */
+  names: readonly string[];
+  /**
+   * Module to import them from.
+   *
+   * Name a package the app already depends on. The generated file sits in the
+   * app, not in the plugin, so it resolves against the app's dependency tree —
+   * an import of a plugin's own transitive dependency may not resolve there.
+   */
+  from: string;
+}
+
+/** How a plugin field type is rendered by the code generators. */
+export interface PluginFieldCodegen {
+  /**
+   * The TypeScript type of a stored value, e.g. `"BlockDocument"` or
+   * `'"draft" | "live"'`. Omitted falls back to the storage primitive's type.
+   */
+  tsType?: (field: PluginFieldInstance) => string;
+  /**
+   * Type-only imports `tsType` relies on.
+   *
+   * Declared per expression rather than once for both, because the two are
+   * emitted into different files. A name listed here appears only in the
+   * TypeScript output, so an app compiled with `noUnusedLocals` does not fail on
+   * an import the other file never uses.
+   */
+  tsImports?: readonly PluginFieldCodegenImport[];
+  /**
+   * A Zod expression validating a stored value, e.g.
+   * `"z.object({ kind: z.enum([\"page\"]) })"`. Omitted falls back to the
+   * storage primitive's schema.
+   */
+  zodSchema?: (field: PluginFieldInstance) => string;
+  /** Type-only imports `zodSchema` relies on, e.g. for `z.custom<Rating>()`. */
+  zodImports?: readonly PluginFieldCodegenImport[];
 }
 
 /** What a plugin field type's `validate` is given. */

@@ -35,6 +35,8 @@ export type {
   PluginFieldInstance,
   PluginFieldIssue,
   PluginFieldValidationResult,
+  PluginFieldCodegen,
+  PluginFieldCodegenImport,
   FieldSurface,
   ScheduledTask,
   PermissionSlug,

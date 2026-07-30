@@ -93,6 +93,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "EventHandler (type)",
   "EventName (type)",
   "FieldConfig (type)",
+  "FieldValueDeclaration (type)",
+  "FieldValueDeclarationInput (type)",
   "Filter (type)",
   "FilterSeams (value)",
   "HookContext (type)",
@@ -119,6 +121,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginDefinition (type)",
   "PluginEmailProvider (type)",
   "PluginEmailTemplate (type)",
+  "PluginFieldCodegen (type)",
+  "PluginFieldCodegenImport (type)",
   "PluginFieldInstance (type)",
   "PluginFieldIssue (type)",
   "PluginFieldType (type)",
@@ -137,6 +141,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "ScheduledTask (type)",
   "Secret (value)",
   "ServiceOpts (type)",
+  "ValidateFieldValuesOptions (type)",
+  "ValidationIssue (type)",
   "checkbox (value)",
   "definePlugin (value)",
   "group (value)",
@@ -145,5 +151,6 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "text (value)",
   "textarea (value)",
   "upload (value)",
+  "validateFieldValues (value)",
 ]
 `;

@@ -17,6 +17,10 @@ import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
 import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
+import {
+  isPluginOptionContainer,
+  RESERVED_PLUGIN_OPTION_KEYS,
+} from "../../plugins/plugin-options";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 /**
@@ -155,6 +159,15 @@ export type FieldNode = {
   // the canonical tokens.
   type: (typeof UI_FIELD_TYPES)[number] | (string & {});
   label?: string;
+  /**
+   * Options belonging to the field's own plugin type, which core never reads.
+   *
+   * Typed loosely because the value is passed through rather than rebuilt: a
+   * schema that reconstructed it would lose an own `__proto__` or refuse an own
+   * `constructor`. Read it with `pluginOptionContainer`, which checks the shape
+   * at the point of use.
+   */
+  pluginOptions?: unknown;
   required?: boolean;
   unique?: boolean;
   index?: boolean;
@@ -226,6 +239,41 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // unregistered type falls back to a text column.
       type: z.union([z.enum(UI_FIELD_TYPES), z.string().regex(SLUG_RE)]),
       label: z.string().optional(),
+      // Options belonging to the field's own plugin type. Held in a container
+      // because the shape above is applied to every field whatever its type,
+      // so an option sharing a name with one of these keys would be judged as
+      // that key instead. Core never looks inside, which is what lets any name
+      // be used here — including the ones declared alongside it. Passed through
+      // rather than reconstructed: `z.record` refuses a container carrying an
+      // own `constructor`, and `z.looseObject` copies by assignment, so an own
+      // `__proto__` becomes the copy's prototype and every option is lost with
+      // it. Checking an untouched value keeps both names usable, and unlike a
+      // custom type it still converts to the JSON Schema the editor reads.
+      pluginOptions: z
+        .unknown()
+        .superRefine((held, ctx) => {
+          if (held === undefined) return;
+          if (!isPluginOptionContainer(held)) {
+            ctx.addIssue({
+              code: "custom",
+              message: "pluginOptions must be an object",
+            });
+            return;
+          }
+          const reserved = Object.keys(held).filter(key =>
+            RESERVED_PLUGIN_OPTION_KEYS.has(key)
+          );
+          if (reserved.length > 0) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                `pluginOptions cannot hold ${reserved.join(" or ")}: those ` +
+                "state which field the type is looking at, so an option " +
+                "under either name would never reach it",
+            });
+          }
+        })
+        .optional(),
       required: z.boolean().optional(),
       unique: z.boolean().optional(),
       index: z.boolean().optional(),

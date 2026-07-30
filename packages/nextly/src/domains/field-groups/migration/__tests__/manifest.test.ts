@@ -4,6 +4,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import {
   buildMigrationManifest,
+  hashRegistryIdentity,
   hashManifest,
   invertManifest,
   MIGRATION_TARGET,
@@ -48,8 +49,14 @@ describe("field-group migration manifest", () => {
   it("renames the table, its companion, and its discriminator", () => {
     const { entries } = buildMigrationManifest([row({ hasCompanion: true })]);
     expect(entries).toEqual([
-      { kind: "table", from: "comp_hero", to: "fg_hero" },
-      { kind: "companion", from: "comp_hero_locales", to: "fg_hero_locales" },
+      {
+        kind: "table",
+        from: "comp_hero",
+        to: "fg_hero",
+        // Carried by the table it belongs to rather than listed beside it: a
+        // companion has no registry row and cannot move on its own.
+        companion: { from: "comp_hero_locales", to: "fg_hero_locales" },
+      },
       { kind: "column", ...COLUMN_RENAME, table: "fg_hero" },
       {
         kind: "registry",
@@ -84,8 +91,7 @@ describe("field-group migration manifest", () => {
     const { entries } = buildMigrationManifest([
       row({ slug: "odd-name", tableName: "comp_odd_name", hasCompanion: true }),
     ]);
-    expect(entries).toContainEqual({
-      kind: "companion",
+    expect(entries[0]?.companion).toEqual({
       from: `comp_odd_name${STORAGE_FORMAT.companionSuffix}`,
       to: `fg_odd_name${STORAGE_FORMAT.companionSuffix}`,
     });
@@ -95,7 +101,7 @@ describe("field-group migration manifest", () => {
   // the create path accepts exactly that. Naming one would make the step fail.
   it("does not rename a companion that was never created", () => {
     const { entries } = buildMigrationManifest([row({ hasCompanion: false })]);
-    expect(entries.some(e => e.kind === "companion")).toBe(false);
+    expect(entries.every(e => e.companion === undefined)).toBe(true);
   });
 
   // The column rename runs after its table's, so addressing it by the old name
@@ -338,8 +344,15 @@ describe("field-group migration manifest", () => {
         // Still the migrated name: the column reverts before its table does.
         table: "fg_hero",
       },
-      { kind: "companion", from: "fg_hero_locales", to: "comp_hero_locales" },
-      { kind: "table", from: "fg_hero", to: "comp_hero" },
+      {
+        kind: "table",
+        from: "fg_hero",
+        to: "comp_hero",
+        // Inverted with its owner. Held as a separate entry it would have been
+        // reversed *ahead* of the table it belongs to, and nothing downstream
+        // would have recognised the pair.
+        companion: { from: "fg_hero_locales", to: "comp_hero_locales" },
+      },
     ]);
   });
 
@@ -393,5 +406,67 @@ describe("field-group migration manifest", () => {
     expect(MIGRATION_TARGET.tablePrefix.length).toBeLessThanOrEqual(
       STORAGE_FORMAT.tablePrefix.length
     );
+  });
+});
+
+describe("hashRegistryIdentity", () => {
+  const rows = [
+    { id: "1", slug: "a", hasCompanion: false },
+    { id: "2", slug: "b", hasCompanion: false },
+  ];
+
+  it("does not depend on row order", () => {
+    expect(hashRegistryIdentity(rows)).toBe(
+      hashRegistryIdentity([...rows].reverse())
+    );
+  });
+
+  it("changes when a field group is added or removed", () => {
+    const base = hashRegistryIdentity(rows);
+    expect(
+      hashRegistryIdentity([
+        ...rows,
+        { id: "3", slug: "c", hasCompanion: false },
+      ])
+    ).not.toBe(base);
+    expect(hashRegistryIdentity([rows[0]!])).not.toBe(base);
+  });
+
+  // Enabling localization creates a companion table without replacing the
+  // registry row, so id and slug alone stay identical while the storage gains a
+  // table the recorded plan does not name. A resume against that plan would move
+  // the base and leave the companion behind.
+  it("changes when a row gains storage the recorded plan does not name", () => {
+    expect(
+      hashRegistryIdentity([{ id: "1", slug: "a", hasCompanion: true }])
+    ).not.toBe(
+      hashRegistryIdentity([{ id: "1", slug: "a", hasCompanion: false }])
+    );
+  });
+
+  it("distinguishes different sets of the same size", () => {
+    expect(
+      hashRegistryIdentity([{ id: "1", slug: "a", hasCompanion: false }])
+    ).not.toBe(
+      hashRegistryIdentity([{ id: "1", slug: "b", hasCompanion: false }])
+    );
+  });
+
+  // The whole reason the id is in here. A group deleted and recreated under the
+  // same slug is a different row, and a resume that cannot see that would adopt
+  // the new row's table as its own completed work — then rename it away on a
+  // rollback, destroying an identifier the author chose.
+  it("distinguishes a row recreated under the same slug", () => {
+    expect(hashRegistryIdentity([{ id: "1", slug: "hero" }])).not.toBe(
+      hashRegistryIdentity([{ id: "2", slug: "hero" }])
+    );
+  });
+
+  // `table_name` is rewritten as each rename commits, so anything derived from
+  // it would stop matching partway through the run it protects.
+  it("ignores everything except the id and slug", () => {
+    expect(
+      hashRegistryIdentity([{ id: "1", slug: "a", tableName: "fg_a" }] as never)
+    ).toBe(hashRegistryIdentity([{ id: "1", slug: "a" }]));
   });
 });

@@ -71,6 +71,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
@@ -103,10 +104,15 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
+import { projectFields } from "../../webhooks/project-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
-import { isRecordingDisabledByConfig } from "../../webhooks/recording-policy";
+import {
+  getWebhookEmitSpec,
+  isRecordingDisabledByConfig,
+} from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
+import type { WebhookResource } from "../../webhooks/types";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -420,6 +426,66 @@ export class CollectionMutationService extends BaseService {
     if (isRecordingDisabledByConfig("collection", collectionSlug))
       return fields;
     return this.webhookFieldTree(fields, executor);
+  }
+
+  /**
+   * Emit a collection's curated create event (e.g. `form.submission.created`)
+   * when it declared `webhooks.emit`, INSIDE the caller's transaction so it
+   * commits with the row. The payload is a default-deny projection of the
+   * created document, so a collection that opted its `entry.*` events out for
+   * PII ships only the allowlisted fields, on a resource kind (e.g. `form`) the
+   * per-collection opt-out does not gate. Returns whether a row was recorded so
+   * the caller folds it into its fast-drain gate; a no-op for ordinary
+   * collections. Applied at every create seam so the collection-level contract
+   * holds for the direct, transaction, and bulk create paths alike.
+   */
+  private async recordCuratedCreateEvent(
+    tx: Parameters<typeof recordMutationEvent>[0],
+    collectionName: string,
+    entryId: string,
+    createdDocument: Record<string, unknown>,
+    actor: RequestActor,
+    fields: readonly SensitiveFieldSource[],
+    writeLocale?: string
+  ): Promise<boolean> {
+    const emitSpec = getWebhookEmitSpec("collection", collectionName);
+    if (!emitSpec) return false;
+    const locale = writeLocale ? { locale: writeLocale } : {};
+    // `emitSpec.kind` is a non-entry family (normalization rejects entry.*), so
+    // the resource carries a `slug` and never a `collection`: the per-collection
+    // opt-out that suppressed the raw entry.* events does not gate this kind.
+    const resource: WebhookResource = {
+      kind: emitSpec.kind,
+      slug: collectionName,
+      id: entryId,
+      ...locale,
+    };
+    // Expand the field tree so a password/hidden value nested inside an
+    // allowlisted group/component/repeater is still stripped from the
+    // (default-deny) projection: the curated event ships data, so it needs the
+    // same sensitive-field stripping the raw entry.* events get. The recording is
+    // a write-integrity operation — a failure (component expansion or the outbox
+    // insert) must roll the write back, never commit the row without its promised
+    // event — so mark it for the bulk/transaction create loops, which otherwise
+    // convert an error into a soft per-item failure and continue.
+    try {
+      const sensitiveFields = await this.webhookFieldTree(
+        fields,
+        tx.getDrizzle()
+      );
+      return await recordMutationEvent(tx, {
+        type: emitSpec.event,
+        resource,
+        // Default-deny projection: only the allowlisted keys ship, so a PII
+        // collection's sensitive columns never reach the payload.
+        data: projectFields(createdDocument, emitSpec.fields),
+        previous: null,
+        fields: sensitiveFields,
+        actor,
+      });
+    } catch (err) {
+      throw markWriteIntegrityFailure(err);
+    }
   }
 
   /**
@@ -2122,22 +2188,7 @@ export class CollectionMutationService extends BaseService {
           isJsonFieldType(field.type, field) &&
           finalData[field.name] != null
         ) {
-          const value = finalData[field.name];
-          // Only stringify if it's an object/array and not already a string
-          if (typeof value === "object") {
-            finalData[field.name] = JSON.stringify(value);
-          } else if (typeof value === "string") {
-            // Already a string - check if it's valid JSON to avoid double-serialization
-            try {
-              JSON.parse(value);
-              // It's already valid JSON string, keep as-is
-            } catch {
-              // Not valid JSON string - this is unusual for JSON fields
-              console.warn(
-                `[createEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
-              );
-            }
-          }
+          finalData[field.name] = toJsonColumnValue(finalData[field.name]);
         }
       });
 
@@ -2459,6 +2510,21 @@ export class CollectionMutationService extends BaseService {
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
+
+        // A collection may replace its (here suppressed) `entry.created` with a
+        // curated, metadata-only event (see recordCuratedCreateEvent). Fold the
+        // result into `recorded` so the post-commit fast drain still fires when
+        // only the curated event was recorded.
+        const curatedRecorded = await this.recordCuratedCreateEvent(
+          tx,
+          params.collectionName,
+          entry.id as string,
+          createdDocument,
+          actorForWrite(params.actor, params.user),
+          fields,
+          localizedWrite ? localizedWrite.writeLocale : undefined
+        );
+        recorded = recorded || curatedRecorded;
         // A create landing directly on `published` is a publish lifecycle event
         // too (D69). Recorded in the SAME transaction, so it commits with the row
         // and inherits the recording opt-out. `statusEventsFor` emits only
@@ -2612,6 +2678,10 @@ export class CollectionMutationService extends BaseService {
               locale: this.localization
                 ? resolveRequestedLocale(this.localization, params.locale)
                 : undefined,
+              // A trusted write sees the row it just wrote regardless of
+              // lifecycle; an untrusted one gets the published default, the
+              // same answer its own GET would give.
+              status: params.overrideAccess === true ? "all" : undefined,
             }
           );
         } catch (expansionError) {
@@ -4037,22 +4107,7 @@ export class CollectionMutationService extends BaseService {
           isJsonFieldType(field.type, field) &&
           finalData[field.name] != null
         ) {
-          const value = finalData[field.name];
-          // Only stringify if it's an object/array and not already a string
-          if (typeof value === "object") {
-            finalData[field.name] = JSON.stringify(value);
-          } else if (typeof value === "string") {
-            // Already a string - check if it's valid JSON to avoid double-serialization
-            try {
-              JSON.parse(value);
-              // It's already valid JSON string, keep as-is
-            } catch {
-              // Not valid JSON string - this is unusual for JSON fields
-              console.warn(
-                `[updateEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
-              );
-            }
-          }
+          finalData[field.name] = toJsonColumnValue(finalData[field.name]);
         }
       });
 
@@ -5162,6 +5217,10 @@ export class CollectionMutationService extends BaseService {
               locale: this.localization
                 ? resolveRequestedLocale(this.localization, params.locale)
                 : undefined,
+              // A trusted write sees the row it just wrote regardless of
+              // lifecycle; an untrusted one gets the published default, the
+              // same answer its own GET would give.
+              status: params.overrideAccess === true ? "all" : undefined,
             }
           );
         } catch (expansionError) {
@@ -5961,7 +6020,11 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
+        !isRecordingDisabledByConfig("collection", params.collectionName) ||
+        // A curated `webhooks.emit` consumes the assembled document too — its
+        // allowlist may include a component/m2m field — so assemble relations
+        // even when the raw entry.* recording is opted out for this collection.
+        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
       const { documentParts: createdParts, document: createdDocument } =
         await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
@@ -6002,6 +6065,18 @@ export class CollectionMutationService extends BaseService {
         fields: eventFields,
         actor: eventActor,
       });
+      // Emit the collection's curated create event too (a no-op unless it
+      // declared `webhooks.emit`), so a form/PII collection created through the
+      // transaction and bulk paths gets the same event as the direct path.
+      const curatedCreateRecorded = await this.recordCuratedCreateEvent(
+        tx,
+        params.collectionName,
+        (entry as Record<string, unknown>).id as string,
+        createdDocument,
+        eventActor,
+        fields
+      );
+      eventRecorded = eventRecorded || curatedCreateRecorded;
       // A create landing directly on `published` is also a publish lifecycle
       // event, gated on the collection's Draft/Published flag so an ordinary
       // user `status` field is not mistaken for a lifecycle change. `from` is
@@ -7344,7 +7419,11 @@ export class CollectionMutationService extends BaseService {
       // recorded event with a parent-only payload.
       const needsRelations =
         !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
+        !isRecordingDisabledByConfig("collection", params.collectionName) ||
+        // A curated `webhooks.emit` consumes the assembled document too — its
+        // allowlist may include a component/m2m field — so assemble relations
+        // even when the raw entry.* recording is opted out for this collection.
+        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
       const { documentParts: createdParts, document: createdDocument } =
         await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
@@ -7385,6 +7464,18 @@ export class CollectionMutationService extends BaseService {
         fields: eventFields,
         actor: eventActor,
       });
+      // Emit the collection's curated create event too (a no-op unless it
+      // declared `webhooks.emit`), so a form/PII collection created through the
+      // transaction and bulk paths gets the same event as the direct path.
+      const curatedCreateRecorded = await this.recordCuratedCreateEvent(
+        tx,
+        params.collectionName,
+        (entry as Record<string, unknown>).id as string,
+        createdDocument,
+        eventActor,
+        fields
+      );
+      eventRecorded = eventRecorded || curatedCreateRecorded;
       // A create landing directly on `published` is also a publish lifecycle
       // event, gated on the collection's Draft/Published flag so an ordinary
       // user `status` field is not mistaken for a lifecycle change. `from` is

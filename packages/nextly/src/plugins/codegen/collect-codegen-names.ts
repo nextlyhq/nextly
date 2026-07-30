@@ -22,12 +22,12 @@
  * @module plugins/codegen/collect-codegen-names
  */
 
-import type { NextlyServiceConfig } from "../../di/register";
 import {
   AuthEvents,
   DocumentEvents,
   MediaEvents,
 } from "../../events/event-names";
+import type { PermissionConfigSource } from "../permissions/collect-permissions";
 import { collectCustomPermissions } from "../permissions/collect-permissions";
 import type { PluginDefinition } from "../plugin-context";
 
@@ -57,7 +57,7 @@ const SINGLE_ACTIONS = ["read", "update", "publish", "unpublish"] as const;
  * collector so generated types match what boot actually seeds.
  */
 export function collectCodegenNames(
-  config: NextlyServiceConfig,
+  config: PermissionConfigSource,
   plugins: PluginDefinition[]
 ): CodegenNames {
   const permissionSlugs = new Set<string>();
