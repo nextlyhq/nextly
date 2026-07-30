@@ -60,13 +60,31 @@ export interface RegistryRow {
   hasCompanion: boolean;
 }
 
+/** A companion table's rename, carried by the entry for the table it belongs to. */
+export interface CompanionRename {
+  from: string;
+  to: string;
+}
+
 /** One thing the migration will rename. */
 export interface ManifestEntry {
-  kind: "registry" | "table" | "companion" | "column";
+  kind: "registry" | "table" | "column";
   from: string;
   to: string;
   /** Set for `column`, naming the table the column belongs to. */
   table?: string;
+  /**
+   * The localization companion that moves with this table.
+   *
+   * A property rather than an entry of its own, because a companion is not an
+   * independent object: it has no registry row, its name is derived from its
+   * owner's `table_name`, and it can never be renamed apart from its owner. As a
+   * sibling entry it occupied a second step position, which left the resume
+   * crash window unable to explain it and let `invertManifest`'s order reversal
+   * separate it from the owner it must move with. Held here, neither is
+   * expressible.
+   */
+  companion?: CompanionRename;
   /**
    * This rename is already reflected in the database.
    *
@@ -134,6 +152,17 @@ export function invertManifest(
     from: entry.to,
     to: entry.from,
     ...(entry.table === undefined ? {} : { table: entry.table }),
+    // Inverted with its owner rather than beside it. Order reverses here, so a
+    // companion held as a separate entry would come to precede the table it
+    // belongs to and stop being recognised as its companion at all.
+    ...(entry.companion === undefined
+      ? {}
+      : {
+          companion: {
+            from: entry.companion.to,
+            to: entry.companion.from,
+          },
+        }),
   }));
   return { entries: inverted, hash: hashManifest(inverted) };
 }
@@ -174,18 +203,22 @@ export function buildMigrationManifest(
     const target = retargetName(row);
 
     if (target !== null) {
-      entries.push({ kind: "table", from: row.tableName, to: target });
-
-      if (row.hasCompanion) {
-        // Derived from the table name that was read, not from the slug, so a
-        // custom-named table's companion is still found.
-        const suffix = STORAGE_FORMAT.companionSuffix;
-        entries.push({
-          kind: "companion",
-          from: `${row.tableName}${suffix}`,
-          to: `${target}${suffix}`,
-        });
-      }
+      // Derived from the table name that was read, not from the slug, so a
+      // custom-named table's companion is still found.
+      const suffix = STORAGE_FORMAT.companionSuffix;
+      entries.push({
+        kind: "table",
+        from: row.tableName,
+        to: target,
+        ...(row.hasCompanion
+          ? {
+              companion: {
+                from: `${row.tableName}${suffix}`,
+                to: `${target}${suffix}`,
+              },
+            }
+          : {}),
+      });
     }
 
     // Every field-group data table carries the discriminator column: the schema
@@ -255,8 +288,19 @@ export function hashManifest(entries: readonly ManifestEntry[]): string {
   // `satisfied` is deliberately excluded: progress is not identity. A plan whose
   // steps have partly run is the same plan, and the marker must still recognise
   // it on resume.
+  //
+  // The companion is part of the map because it names a second physical table
+  // this step moves. Omitting it would let two plans that rename the same table
+  // but disagree about whether it has a companion hash identically, and a resume
+  // would then accept a plan that moves one more object than the one recorded.
   const canonical = JSON.stringify(
-    entries.map(e => [e.kind, e.table ?? null, e.from, e.to])
+    entries.map(e => [
+      e.kind,
+      e.table ?? null,
+      e.from,
+      e.to,
+      e.companion === undefined ? null : [e.companion.from, e.companion.to],
+    ])
   );
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -365,7 +409,7 @@ function assertNoTargetConflict(
   rows: readonly RegistryRow[]
 ): void {
   const renamedAway = new Set(
-    entries.filter(e => e.kind !== "column").map(e => fold(e.from))
+    entries.flatMap(tableRenamesOf).map(rename => fold(rename.from))
   );
   // A row this plan leaves alone keeps its companion as well as its base table,
   // so both names stay occupied. Reserving only the base name let another row's
@@ -380,36 +424,50 @@ function assertNoTargetConflict(
   }
 
   const claimed = new Map<string, string>();
-  for (const entry of entries) {
-    if (entry.kind === "column") continue;
-    const key = fold(entry.to);
+  for (const rename of entries.flatMap(tableRenamesOf)) {
+    const key = fold(rename.to);
 
     if (kept.has(key)) {
       throw refuseRename(
-        entry,
+        rename,
         "migration target name is already in use",
-        `${entry.to} belongs to a field group this plan leaves unchanged`
+        `${rename.to} belongs to a field group this plan leaves unchanged`
       );
     }
     const previous = claimed.get(key);
     if (previous !== undefined) {
       throw refuseRename(
-        entry,
+        rename,
         "two objects would be renamed to the same name",
-        `${previous} also renames to ${entry.to}`
+        `${previous} also renames to ${rename.to}`
       );
     }
-    claimed.set(key, entry.from);
+    claimed.set(key, rename.from);
   }
 }
 
+/**
+ * Every physical table an entry moves: its own, and its companion's.
+ *
+ * A companion occupies a name and can collide exactly like a table that has an
+ * entry, so name checks have to see it even though it no longer has one of its
+ * own. Column entries move no table and contribute nothing.
+ */
+export function tableRenamesOf(
+  entry: ManifestEntry
+): { from: string; to: string }[] {
+  if (entry.kind === "column") return [];
+  const own = { from: entry.from, to: entry.to };
+  return entry.companion === undefined ? [own] : [own, entry.companion];
+}
+
 function refuseRename(
-  entry: ManifestEntry,
+  rename: { from: string; to: string },
   reason: string,
   detail: string
 ): NextlyError {
   return NextlyError.serviceUnavailable({
-    logMessage: `field-group migration cannot rename ${entry.from}: ${detail}`,
-    logContext: { reason, from: entry.from, to: entry.to, detail },
+    logMessage: `field-group migration cannot rename ${rename.from}: ${detail}`,
+    logContext: { reason, from: rename.from, to: rename.to, detail },
   });
 }

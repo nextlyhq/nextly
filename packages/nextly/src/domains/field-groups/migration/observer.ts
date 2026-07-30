@@ -12,10 +12,10 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
-import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
 import {
   indexCatalog,
   resolveCatalogName,
@@ -69,10 +69,11 @@ export function createStorageObserver(
     pointers: async (_session, registryTable): Promise<string[]> => {
       // Addressed by a name the ORM's schema registry does not know: it resolves
       // tables exactly by the name their Drizzle definition declares, and during
-      // a run the registry is under whichever name the plan has reached. The
-      // identifier is quoted; there are no values to bind.
-      const rows = await adapter.executeQuery<Record<string, unknown>>(
-        `SELECT ${quoteIdent(REGISTRY_TABLE_NAME_COLUMN, dialect)} FROM ${quoteIdent(registryTable, dialect)}`
+      // a run the registry is under whichever name the plan has reached. Issued
+      // as a Drizzle statement so the identifier is quoted for the dialect in
+      // use rather than by hand.
+      const rows = await adapter.queryStatement(
+        sql`SELECT ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} FROM ${sql.identifier(registryTable)}`
       );
       return rows
         .map(row => row[REGISTRY_TABLE_NAME_COLUMN])

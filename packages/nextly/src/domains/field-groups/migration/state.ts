@@ -552,13 +552,8 @@ function parseAppliedManifest(value: unknown): ManifestEntry[] {
     if (!isRecord(raw)) {
       throw markerCorrupt("recorded plan contains a non-object entry");
     }
-    const { kind, from, to, table } = raw;
-    if (
-      kind !== "registry" &&
-      kind !== "table" &&
-      kind !== "companion" &&
-      kind !== "column"
-    ) {
+    const { kind, from, to, table, companion } = raw;
+    if (kind !== "registry" && kind !== "table" && kind !== "column") {
       throw markerCorrupt("recorded plan entry has no known kind");
     }
     if (typeof from !== "string" || from.length === 0) {
@@ -582,8 +577,33 @@ function parseAppliedManifest(value: unknown): ManifestEntry[] {
       from,
       to,
       ...(table === undefined ? {} : { table }),
+      ...(companion === undefined
+        ? {}
+        : { companion: readCompanion(companion) }),
     };
   });
+}
+
+/**
+ * A recorded companion rename.
+ *
+ * Validated and carried rather than dropped: the entry returned here is what a
+ * resume executes, so a companion the parser did not copy would leave the
+ * companion table behind under its old name while its owner moved — the exact
+ * split the companion was made a property to prevent.
+ */
+function readCompanion(value: unknown): { from: string; to: string } {
+  if (!isRecord(value)) {
+    throw markerCorrupt("recorded companion is not an object");
+  }
+  const { from, to } = value;
+  if (typeof from !== "string" || from.length === 0) {
+    throw markerCorrupt("recorded companion has no source name");
+  }
+  if (typeof to !== "string" || to.length === 0) {
+    throw markerCorrupt("recorded companion has no target name");
+  }
+  return { from, to };
 }
 
 // A marker that exists but cannot be read is refused rather than ignored:

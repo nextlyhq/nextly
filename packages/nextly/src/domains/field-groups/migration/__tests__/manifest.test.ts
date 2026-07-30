@@ -49,8 +49,14 @@ describe("field-group migration manifest", () => {
   it("renames the table, its companion, and its discriminator", () => {
     const { entries } = buildMigrationManifest([row({ hasCompanion: true })]);
     expect(entries).toEqual([
-      { kind: "table", from: "comp_hero", to: "fg_hero" },
-      { kind: "companion", from: "comp_hero_locales", to: "fg_hero_locales" },
+      {
+        kind: "table",
+        from: "comp_hero",
+        to: "fg_hero",
+        // Carried by the table it belongs to rather than listed beside it: a
+        // companion has no registry row and cannot move on its own.
+        companion: { from: "comp_hero_locales", to: "fg_hero_locales" },
+      },
       { kind: "column", ...COLUMN_RENAME, table: "fg_hero" },
       {
         kind: "registry",
@@ -85,8 +91,7 @@ describe("field-group migration manifest", () => {
     const { entries } = buildMigrationManifest([
       row({ slug: "odd-name", tableName: "comp_odd_name", hasCompanion: true }),
     ]);
-    expect(entries).toContainEqual({
-      kind: "companion",
+    expect(entries[0]?.companion).toEqual({
       from: `comp_odd_name${STORAGE_FORMAT.companionSuffix}`,
       to: `fg_odd_name${STORAGE_FORMAT.companionSuffix}`,
     });
@@ -96,7 +101,7 @@ describe("field-group migration manifest", () => {
   // the create path accepts exactly that. Naming one would make the step fail.
   it("does not rename a companion that was never created", () => {
     const { entries } = buildMigrationManifest([row({ hasCompanion: false })]);
-    expect(entries.some(e => e.kind === "companion")).toBe(false);
+    expect(entries.every(e => e.companion === undefined)).toBe(true);
   });
 
   // The column rename runs after its table's, so addressing it by the old name
@@ -339,8 +344,15 @@ describe("field-group migration manifest", () => {
         // Still the migrated name: the column reverts before its table does.
         table: "fg_hero",
       },
-      { kind: "companion", from: "fg_hero_locales", to: "comp_hero_locales" },
-      { kind: "table", from: "fg_hero", to: "comp_hero" },
+      {
+        kind: "table",
+        from: "fg_hero",
+        to: "comp_hero",
+        // Inverted with its owner. Held as a separate entry it would have been
+        // reversed *ahead* of the table it belongs to, and nothing downstream
+        // would have recognised the pair.
+        companion: { from: "fg_hero_locales", to: "comp_hero_locales" },
+      },
     ]);
   });
 

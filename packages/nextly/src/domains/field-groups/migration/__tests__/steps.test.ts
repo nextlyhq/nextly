@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -46,8 +48,12 @@ function createWorld(initial: {
   const statements: string[] = [];
   let transactions = 0;
 
-  function apply(sql: string, params: unknown[] = []): void {
-    statements.push(sql);
+  function apply(raw: string, params: unknown[] = []): void {
+    statements.push(raw);
+    // Line breaks and indentation in a statement are nothing to a driver, so
+    // this world does not treat them as meaningful either. Everything that IS
+    // meaningful stays strict below: the quoting, and `$1`/`$2` binding.
+    const sql = raw.replace(/\s+/g, " ").trim();
     const rename = /^ALTER TABLE "(.+?)" RENAME TO "(.+?)"$/.exec(sql);
     if (rename?.[1] !== undefined && rename[2] !== undefined) {
       if (!tables.has(rename[1])) {
@@ -114,6 +120,15 @@ function createWorld(initial: {
         async execute(sql: string, params?: unknown[]) {
           apply(sql, params);
           return [];
+        },
+        // Compiled through a real Drizzle dialect, which is what the adapters
+        // hand their driver. A double that inspected the template object
+        // instead would accept identifiers this dialect refuses to quote and
+        // parameters it never extracts, and certify a statement no driver
+        // could run.
+        async runStatement(statement: SQL) {
+          const compiled = new PgDialect().sqlToQuery(statement);
+          apply(compiled.sql, compiled.params);
         },
       } as never);
     },
@@ -238,20 +253,20 @@ describe("rename steps", () => {
 
   // A companion's name derives from its owner's `table_name`, so the owner's
   // update already moves it; writing a pointer for it would target no row.
-  it("does not touch the pointer for a companion", async () => {
+  // A companion has no step of its own to occupy a position: it moves on its
+  // owner's entry. A second position is what left the resume crash window unable
+  // to explain the companion, and what let inversion separate the two.
+  it("gives a companion no step of its own", async () => {
     const withCompanion = [row({ hasCompanion: true })];
-    const w = createWorld({
-      tables: [LEGACY_REGISTRY, "comp_hero", "comp_hero_locales"],
-      columns: { comp_hero: [...TYPE_COLUMN] },
-      pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
-    });
     const built = buildMigrationManifest(withCompanion).entries;
-    const steps = stepsFor(w, built);
-    const companionIndex = built.findIndex(e => e.kind === "companion");
-    await steps[companionIndex]?.run(w.session);
 
-    expect(w.tableNames()).toContain("fg_hero_locales");
-    expect(w.statements.filter(s => s.startsWith("UPDATE"))).toHaveLength(0);
+    // One table entry, one column entry, one registry entry — the companion adds
+    // no fourth.
+    expect(built.map(e => e.kind)).toEqual(["table", "column", "registry"]);
+    expect(built[0]?.companion).toEqual({
+      from: "comp_hero_locales",
+      to: "fg_hero_locales",
+    });
   });
 
   // No registry row addresses the registry itself.
@@ -437,20 +452,56 @@ describe("a companion moves with its owner", () => {
 
   // The companion still has its own entry and position, so the plan's shape and
   // hash are unchanged. Its step finds the source already gone and does nothing.
-  it("leaves the companion's own step as a no-op that still verifies", async () => {
-    const w = world();
+  // MySQL commits each RENAME on its own, so a crash between the base and the
+  // companion is reachable. The resume must finish the companion rather than
+  // treat the entry as done because reconciliation marked it satisfied — which
+  // is why the step decides per table from the catalog, not per entry.
+  it("finishes a companion whose rename did not land with its owner's", async () => {
+    const w = createWorld({
+      // The torn state: base already moved, companion still under its old name.
+      tables: [LEGACY_REGISTRY, "fg_hero", "comp_hero_locales"],
+      columns: { fg_hero: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["fg_hero"] },
+    });
+    const satisfied: ManifestEntry[] = entries.map((entry, index) =>
+      index === 0 ? { ...entry, satisfied: true } : entry
+    );
+    const steps = buildMigrationSteps({
+      entries: satisfied,
+      identifierCase: PRESERVING,
+      observer: w.observer,
+    });
+
+    await steps[0]?.run(w.session);
+
+    expect(w.tableNames()).toContain("fg_hero_locales");
+    expect(w.tableNames()).not.toContain("comp_hero_locales");
+    await expect(steps[0]?.verify(w.session)).resolves.toBe(true);
+  });
+
+  // A companion's indexes are as lost as a table's if a rename drops them, and
+  // the companion is the half with no entry of its own to check for it.
+  it("refuses when a rename dropped a companion's index", async () => {
+    const w = createWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero", "comp_hero_locales"],
+      columns: { comp_hero: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
+      indexes: { comp_hero: ["hero_slug_ix"], comp_hero_locales: ["loc_ix"] },
+    });
     const steps = buildMigrationSteps({
       entries,
       identifierCase: PRESERVING,
       observer: w.observer,
     });
     await steps[0]?.run(w.session);
-    const before = w.statements.length;
+    w.dropIndexes("fg_hero_locales");
 
-    const companionIndex = entries.findIndex(e => e.kind === "companion");
-    await steps[companionIndex]?.run(w.session);
-    expect(w.statements).toHaveLength(before);
-    await expect(steps[companionIndex]?.verify(w.session)).resolves.toBe(true);
+    const error = await steps[0]?.verify(w.session).catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.table).toBe("fg_hero_locales");
+      expect(error.logContext?.lost).toEqual(["loc_ix"]);
+    }
   });
 });
 

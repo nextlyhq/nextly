@@ -13,32 +13,20 @@
  * @module domains/field-groups/migration/steps
  */
 
+import { sql } from "drizzle-orm";
+
 import { NextlyError } from "../../../errors/nextly-error";
 import { generateSQL } from "../../schema/pipeline/sql-templates";
-import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
 import {
   indexCatalog,
   resolveCatalogName,
   type IdentifierCaseRules,
 } from "../../schema/utils/resolve-catalog-name";
 
-import { type ManifestEntry } from "./manifest";
+import { tableRenamesOf, type ManifestEntry } from "./manifest";
 import { findLostIndexes, refuseLostIndexes } from "./observer";
 import type { MigrationStep } from "./runner";
-import type { MigrationDialect, MigrationSession } from "./session";
-
-/**
- * Positional parameter markers for a dialect.
- *
- * node-postgres binds `$1`, `$2`; mysql2 and better-sqlite3 bind `?`. The
- * transaction context hands the statement to the driver unchanged, so emitting
- * one form everywhere makes every statement with parameters fail on the other.
- */
-function placeholders(dialect: MigrationDialect, count: number): string[] {
-  return Array.from({ length: count }, (_, index) =>
-    dialect === "postgresql" ? `$${index + 1}` : "?"
-  );
-}
+import type { MigrationSession } from "./session";
 
 /**
  * The registry column holding a row's physical table name.
@@ -141,23 +129,17 @@ export function buildMigrationSteps(args: {
     if (entry.kind === "column") {
       return columnStep(entry, { position, applied, identifierCase, observer });
     }
-    // A companion follows its owner immediately in the plan. Its rename joins
-    // the owner's step rather than standing alone, because the registry derives
-    // the companion's name from the owner's `table_name`: whichever of the two
-    // renames the pointer update is separated from, there is a window where the
-    // derived name addresses an object that does not exist. Only moving both
-    // objects and the pointer together closes it.
-    const next = entries[index + 1];
-    const companion =
-      entry.kind === "table" && next?.kind === "companion" ? next : undefined;
-
+    // The companion travels on the entry rather than beside it, so it shares
+    // this step's position. The registry derives a companion's name from its
+    // owner's `table_name`, so whichever of the two renames the pointer update
+    // were separated from, there would be a window where the derived name
+    // addresses an object that is not there.
     return renameStep(entry, {
       position,
       applied,
       registryTable: registryNameAt(entries, position),
       identifierCase,
       observer,
-      companion,
     });
   });
 }
@@ -170,33 +152,44 @@ interface StepContext {
 }
 
 /**
- * Rename a table, and move the registry pointer with it when the table is one a
- * registry row addresses.
+ * Rename a table and its companion, and move the registry pointer with them.
  *
- * Both halves are idempotent because they must survive a partial step. MySQL
- * commits DDL implicitly, so a rename can land while the pointer update fails;
- * the resume re-runs this step, finds the table already moved, and re-applies
- * the pointer. The rename tolerates that by checking the catalog first, and the
- * update is a no-op once no row still points at the old name.
+ * How atomic that is depends on the dialect, and the difference is not one this
+ * module can paper over:
+ *
+ * - **Postgres and SQLite** have transactional DDL. The renames and the pointer
+ *   update commit together or not at all, which is the guarantee this step is
+ *   shaped around: a reader never sees a pointer addressing a table that moved.
+ * - **MySQL** commits DDL implicitly. Each `RENAME TABLE` ends the transaction
+ *   it is in, so the pointer update necessarily runs in a later one. There is a
+ *   window in which a concurrent reader sees renamed tables and a stale pointer,
+ *   and no ordering closes it — moving the pointer first only swaps which side
+ *   is briefly wrong. Both intermediate states resolve to "table not found"
+ *   rather than to wrong data, and the window is bounded by the run.
+ *
+ * So on MySQL this is sequenced with repair rather than atomic, and every half
+ * is idempotent to make that repair possible: the renames check the catalog
+ * first, and the pointer update is a no-op once no row still points at the old
+ * name.
  */
 function renameStep(
   entry: ManifestEntry,
-  context: StepContext & {
-    registryTable: string;
-    companion?: ManifestEntry;
-  }
+  context: StepContext & { registryTable: string }
 ): MigrationStep {
-  const { applied, identifierCase, observer, registryTable, companion } =
-    context;
+  const { identifierCase, observer, registryTable } = context;
   // Companions carry no pointer of their own: their name is derived from the
   // owner's `table_name`, so the owner's update already moves them. The registry
   // is not addressed by any row either.
   const movesPointer = entry.kind === "table";
-  // Captured by `run` while the source still exists, and read by `verify`.
-  // `undefined` means the source was already gone when this step ran, so there
-  // is nothing to compare against — reported as not comparable rather than as
-  // nothing lost.
-  let indexesBefore: string[] | undefined;
+  // Base table first, then its companion if it has one. Both are moved by this
+  // step, so both are renamed, both are verified, and both have their indexes
+  // compared -- a companion whose indexes were dropped is as lost as a table's.
+  const renames = tableRenamesOf(entry);
+  // Captured by `run` while the sources still exist, and read by `verify`,
+  // positionally against `renames`. `undefined` means that source was already
+  // gone when this step ran, so there is nothing to compare against — reported
+  // as not comparable rather than as nothing lost.
+  let indexesBefore: (string[] | undefined)[] = [];
 
   return {
     id: `${entry.kind}:${entry.from}->${entry.to}`,
@@ -207,38 +200,33 @@ function renameStep(
       // to one.
       const present = await observer.tables(session);
       const catalog = indexCatalog(present, identifierCase.tables);
-      const source = resolveCatalogName(catalog, entry.from);
-      // Captured while the source still exists, so `verify` can tell whether the
-      // rename carried the table's indexes with it.
-      indexesBefore =
-        source === undefined ? undefined : await observer.indexNames(source);
+      const sources = renames.map(rename =>
+        resolveCatalogName(catalog, rename.from)
+      );
+      // Sequential rather than concurrent: the observer checks out a connection
+      // per call, and a pool sized to one cannot serve two at once.
+      indexesBefore = [];
+      for (const source of sources) {
+        indexesBefore.push(
+          source === undefined ? undefined : await observer.indexNames(source)
+        );
+      }
 
       await session.inTransaction(async ctx => {
-        // Re-runnable: on a resume the rename may already have committed, and
-        // issuing it again would fail on a source that is no longer there. A
-        // satisfied entry skips the DDL for the same reason.
-        if (!applied && source !== undefined) {
-          await ctx.execute(
-            generateSQL(
-              { type: "rename_table", fromName: entry.from, toName: entry.to },
-              session.dialect
-            )
-          );
-        }
-        // Renamed before the pointer moves, so the name the registry derives
-        // always addresses an object that is there. The companion's own step
-        // later finds its source gone and does nothing, which is the same
-        // idempotence every step already relies on.
-        if (
-          companion !== undefined &&
-          resolveCatalogName(catalog, companion.from) !== undefined
-        ) {
+        // Re-runnable, and decided per table rather than per entry: on a resume
+        // a rename may already have committed, and issuing it again would fail
+        // on a source that is no longer there. The catalog answers that for each
+        // table on its own, which is what a torn step needs — skipping the whole
+        // entry because reconciliation called it satisfied would strand a
+        // companion whose own rename never landed.
+        for (const [index, rename] of renames.entries()) {
+          if (sources[index] === undefined) continue;
           await ctx.execute(
             generateSQL(
               {
                 type: "rename_table",
-                fromName: companion.from,
-                toName: companion.to,
+                fromName: rename.from,
+                toName: rename.to,
               },
               session.dialect
             )
@@ -250,16 +238,16 @@ function renameStep(
         // stale and fail verification on every resume, forever. The update is
         // idempotent, so running it when it is already correct costs nothing.
         if (!movesPointer) return;
-        // Values are bound; only the table name is interpolated, through
-        // `quoteIdent`. The registry cannot be reached through Drizzle here: the
-        // schema registry looks tables up exactly by the name their Drizzle
-        // definition declares, so a table addressed under a migrated name is
-        // unregistered as far as the ORM is concerned.
-        const [toMarker, fromMarker] = placeholders(session.dialect, 2);
-        const column = quoteIdent(REGISTRY_TABLE_NAME_COLUMN, session.dialect);
-        await ctx.execute(
-          `UPDATE ${quoteIdent(registryTable, session.dialect)} SET ${column} = ${toMarker} WHERE ${column} = ${fromMarker}`,
-          [entry.to, entry.from]
+        // Issued as a Drizzle statement, which quotes the identifier and binds
+        // the values in whichever form the driver expects. The registry cannot
+        // be reached through the typed query builder here: it resolves a table
+        // through the schema registry, which knows tables only by the name their
+        // Drizzle definition declares, and mid-run the registry is under
+        // whichever name the plan has reached.
+        await ctx.runStatement(
+          sql`UPDATE ${sql.identifier(registryTable)}
+              SET ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.to}
+              WHERE ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.from}`
         );
       });
     },
@@ -268,20 +256,24 @@ function renameStep(
         await observer.tables(session),
         identifierCase.tables
       );
-      const target = resolveCatalogName(catalog, entry.to);
-      if (target === undefined) return false;
-      if (resolveCatalogName(catalog, entry.from) !== undefined) return false;
 
-      // Renaming a table keeps its indexes on every supported dialect, so a name
-      // missing afterwards means one was dropped rather than moved. Refuses
-      // rather than returning false: a lost index is not "not yet done", and a
-      // retry cannot bring it back.
-      const lost = findLostIndexes(
-        indexesBefore,
-        await observer.indexNames(target)
-      );
-      if (lost.comparable && lost.lost.length > 0) {
-        throw refuseLostIndexes({ table: target, lost: lost.lost });
+      for (const [index, rename] of renames.entries()) {
+        const target = resolveCatalogName(catalog, rename.to);
+        if (target === undefined) return false;
+        if (resolveCatalogName(catalog, rename.from) !== undefined)
+          return false;
+
+        // Renaming a table keeps its indexes on every supported dialect, so a
+        // name missing afterwards means one was dropped rather than moved.
+        // Refuses rather than returning false: a lost index is not "not yet
+        // done", and a retry cannot bring it back.
+        const lost = findLostIndexes(
+          indexesBefore[index],
+          await observer.indexNames(target)
+        );
+        if (lost.comparable && lost.lost.length > 0) {
+          throw refuseLostIndexes({ table: target, lost: lost.lost });
+        }
       }
 
       if (!movesPointer) return true;
