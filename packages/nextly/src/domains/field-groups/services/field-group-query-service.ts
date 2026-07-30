@@ -5,6 +5,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { CompanionSchema } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
@@ -69,6 +70,23 @@ export interface ComponentReadAccess {
    * across them all rather than created per row.
    */
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
+  /**
+   * Companion schemas resolved during this population, shared for the same
+   * reason the policy map is: component rows are expanded concurrently and rows
+   * pointing at the same target would otherwise each re-read its metadata.
+   */
+  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
+  /**
+   * The language the surrounding read resolved to, forwarded so a target
+   * collection's read rule can be applied when it filters on a localized field
+   * of that collection.
+   *
+   * Separate from this population's own `locale`, which decides which
+   * translation of the COMPONENT's fields to overlay. The two are the same
+   * language on every current caller, but they answer different questions and a
+   * component read that resolved no locale must not silently borrow one.
+   */
+  locale?: string;
 }
 
 export interface PopulateComponentDataParams {
@@ -1128,7 +1146,9 @@ export class FieldGroupQueryService extends BaseService {
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
           targetPolicies: access.targetPolicies,
+          targetCompanions: access.targetCompanions,
           withheldByAccess: access.withheldByAccess,
+          locale: access.locale,
         }
       );
 

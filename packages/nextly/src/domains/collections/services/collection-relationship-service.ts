@@ -11,6 +11,7 @@ import {
   keysToCamelCase,
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import { resolveStatusFilter } from "../../../lib/status-filter";
 import {
   AccessControlService,
   DEFAULT_OWNER_FIELD,
@@ -20,8 +21,15 @@ import {
   describeUntranslatableConstraint,
   stripNoOpConstraintMembers,
 } from "../../../services/access/constraint-shape";
-import type { CollectionFileManager } from "../../../services/collection-file-manager";
-import { buildDrizzleCondition } from "../../../services/collections/drizzle-condition";
+import type {
+  CollectionFileManager,
+  CompanionSchema,
+} from "../../../services/collection-file-manager";
+import {
+  buildDrizzleCondition,
+  buildLocalizedWhereExists,
+  type LocalizedQueryContext,
+} from "../../../services/collections/drizzle-condition";
 import {
   buildWhereClause,
   type WhereFilter,
@@ -107,11 +115,43 @@ interface RelatedRowAccess {
    * instead of once per value.
    */
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
+  /**
+   * Companion schemas already looked up during this expansion, for the same
+   * reason {@link RelatedRowAccess.targetPolicies} exists.
+   *
+   * Loading one costs a collection-metadata read even though the built table is
+   * itself cached, and a `hasMany` relationship on the single-entry path
+   * confirms one reference at a time — so resolving per confirmation turns a
+   * relationship with hundreds of values into hundreds of metadata reads.
+   * Populated only when a rule actually needs a companion filter, so a target
+   * without one pays nothing.
+   */
+  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
+  /**
+   * The language the surrounding read resolved to, used when a target
+   * collection's read rule filters on a localized field.
+   *
+   * Already resolved by the caller — the requested locale, or the default when
+   * none was asked for — because resolving it needs the localization config and
+   * this service has none. Absent means no companion filter can be built, so
+   * such a rule withholds its rows.
+   *
+   * This does NOT make expansion return a related row's translated values: a
+   * related row is still read from its main table. It decides only which
+   * language a rule's predicate is evaluated against.
+   */
+  locale?: string;
 }
 
 /** A target collection's read policy, as one expansion needs it. */
 export interface TargetReadPolicy {
   rules: CollectionAccessRules | undefined;
+  /**
+   * Whether the collection has Draft/Published, so a read of it can resolve the
+   * status its rows are filtered by. Taken from the same record the rules come
+   * from rather than looked up separately.
+   */
+  hasStatus: boolean;
 }
 
 /**
@@ -184,6 +224,14 @@ export interface RelationshipExpansionOptions {
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
 
   /**
+   * Companion schemas already looked up during this expansion, carried by a
+   * nested hop for the same reason the policy map is.
+   *
+   * @internal
+   */
+  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
+
+  /**
    * The caller's authenticated scope, when one applies.
    *
    * A scoped API key is judged on its OWN stamped grant rather than its
@@ -191,6 +239,15 @@ export interface RelationshipExpansionOptions {
    * owner's session would get.
    */
   authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * The language this read resolved to, forwarded so a target collection's read
+   * rule can be applied when it filters on a localized field.
+   *
+   * Pass the resolved locale, not the raw request parameter: see
+   * {@link RelatedRowAccess.locale}.
+   */
+  locale?: string;
 }
 
 /**
@@ -984,6 +1041,57 @@ export class CollectionRelationshipService extends BaseService {
    * has not been given the caller yet would judge everyone anonymous and hide
    * rows from entitled callers.
    */
+  /**
+   * Read the rows a relationship points at, as this caller may see them.
+   *
+   * The only place a related row is fetched. Six call sites used to repeat the
+   * same five steps — resolve the schema, select by id, normalize timestamps,
+   * apply the target collection's read rules, redact its protected fields — and
+   * every capability a related row was missing had to be added to each of them
+   * and then audited for the one that was forgotten. That audit has been run
+   * three times: for the caller's scope, for the read locale, and for two
+   * caches. Behind one seam each of those becomes a single change.
+   *
+   * System entities keep the lean path deliberately: they have no collection
+   * record, so no stored rules and no hooks apply, and their secrets are
+   * stripped by column name during redaction instead.
+   *
+   * Returns only the rows this caller may read. A refused row is simply absent —
+   * one unreadable reference must not refuse the whole parent read — so callers
+   * must not assume the result lines up with the ids they asked for.
+   */
+  private async readTargetRows(
+    targetCollection: string,
+    ids: string[],
+    access: RelatedRowAccess
+  ): Promise<Record<string, unknown>[]> {
+    if (ids.length === 0) return [];
+
+    const schema = isSystemEntity(targetCollection)
+      ? getSystemEntityTable(targetCollection)
+      : await this.fileManager.loadDynamicSchema(targetCollection);
+    if (!schema) return [];
+
+    const entries = (await this.db
+      .select()
+      .from(schema)
+      .where(inArray(schema.id, ids))) as Record<string, unknown>[];
+
+    const rows = entries.map(entry =>
+      convertTimestampsToCamelCase({ ...entry })
+    );
+    const readable = await this.filterRowsByCollectionAccess(
+      targetCollection,
+      rows,
+      access
+    );
+    // Redaction runs before any caller derives a label from a row: a label
+    // copies a field's value under another key, so one taken from an unredacted
+    // row survives the redaction of its own source field.
+    await this.redactRelatedRows(targetCollection, readable, access);
+    return readable;
+  }
+
   private async filterRowsByCollectionAccess(
     targetCollection: string,
     rows: Record<string, unknown>[],
@@ -1070,7 +1178,9 @@ export class CollectionRelationshipService extends BaseService {
         this.narrowByTargetPredicate(
           targetCollection,
           group,
-          predicates.get(key) as Record<string, unknown>
+          predicates.get(key) as Record<string, unknown>,
+          access,
+          policy
         )
       )
     );
@@ -1149,6 +1259,7 @@ export class CollectionRelationshipService extends BaseService {
         rules: accessService.getAccessRules(
           collection as Record<string, unknown>
         ),
+        hasStatus: (collection as { status?: boolean }).status === true,
       };
     })();
     access.targetPolicies?.set(targetCollection, pending);
@@ -1172,7 +1283,9 @@ export class CollectionRelationshipService extends BaseService {
   private async narrowByTargetPredicate(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    constraint: Record<string, unknown>
+    constraint: Record<string, unknown>,
+    access: RelatedRowAccess,
+    policy: TargetReadPolicy
   ): Promise<Record<string, unknown>[] | null> {
     try {
       const schema = isSystemEntity(targetCollection)
@@ -1180,12 +1293,35 @@ export class CollectionRelationshipService extends BaseService {
         : await this.fileManager.loadDynamicSchema(targetCollection);
       if (!schema) return [];
 
+      // The status a read of this target resolves to for this caller, asked of
+      // the helper that owns that decision rather than restated here. It applies
+      // to the row AND to any companion row consulted about it: constraining
+      // only one of the two admits a draft row whose published translation
+      // satisfies the rule.
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus: policy.hasStatus,
+        overrideAccess: access.overrideAccess === true,
+        explicit: undefined,
+      });
+
+      const localizedCtx = await this.buildTargetLocalizedContext(
+        targetCollection,
+        schema,
+        access,
+        constraint,
+        statusFilter?.value
+      );
+
       const untranslatable = describeUntranslatableConstraint(
         constraint,
         name => Object.prototype.hasOwnProperty.call(schema, name),
-        // No companion support on this path, so a filter on a localized field
-        // is reported untranslatable here rather than quietly dropped.
-        () => false
+        // A localized field has no column on the main table, so it counts as
+        // translatable only while a companion context is in hand. Without one
+        // it is reported untranslatable and the rows are withheld, rather than
+        // the member being dropped and the read running under a weaker
+        // predicate than the rule states.
+        name =>
+          Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
       );
       if (untranslatable !== null) {
         this.logger.warn(
@@ -1203,7 +1339,9 @@ export class CollectionRelationshipService extends BaseService {
       const condition = buildDrizzleCondition(
         buildWhereClause(restricting as WhereFilter),
         schema,
-        this.adapter.dialect ?? "postgresql"
+        this.adapter.dialect ?? "postgresql",
+        localizedCtx,
+        buildLocalizedWhereExists
       );
       // A constraint that restricts on paper and compiles to nothing would
       // admit every row. Withhold instead: the rule asked to narrow.
@@ -1222,13 +1360,23 @@ export class CollectionRelationshipService extends BaseService {
       // ownership or tenant reassignment that also replaced the contents — the
       // caller would be handed the version that belonged to whoever held it
       // before. Authorization and the data it admits come from one read.
+      // Guarded on the column and not on the flag alone: naming a column the
+      // table does not have fails the whole query, and the catch below would
+      // then withhold every row of the collection.
+      const statusCondition =
+        statusFilter && schema.status
+          ? eq(schema.status, statusFilter.value)
+          : undefined;
       const admitted = (await this.db
         .select()
         .from(schema)
-        .where(and(inArray(schema.id, ids), condition))) as Record<
-        string,
-        unknown
-      >[];
+        .where(
+          and(
+            inArray(schema.id, ids),
+            ...(statusCondition ? [statusCondition] : []),
+            condition
+          )
+        )) as Record<string, unknown>[];
       const fresh = new Map(
         admitted.map(row => {
           const normalized = convertTimestampsToCamelCase({ ...row });
@@ -1248,6 +1396,87 @@ export class CollectionRelationshipService extends BaseService {
       // caller must not report this as a refusal — nothing was decided.
       return null;
     }
+  }
+
+  /**
+   * The target collection's companion schema, looked up once per expansion.
+   *
+   * The PENDING lookup is cached rather than its result: references are
+   * confirmed concurrently, so every one of them reaches this point before the
+   * first has anything to store, and caching only the settled value leaves each
+   * issuing its own metadata read.
+   */
+  private resolveTargetCompanion(
+    targetCollection: string,
+    access: RelatedRowAccess
+  ): Promise<CompanionSchema | null> {
+    const cached = access.targetCompanions?.get(targetCollection);
+    if (cached) return cached;
+    const pending = this.fileManager.loadCompanionSchema(targetCollection);
+    access.targetCompanions?.set(targetCollection, pending);
+    return pending;
+  }
+
+  /**
+   * The companion context a predicate on a localized field of the TARGET
+   * collection needs, or null when there is none to build.
+   *
+   * A localized field has no column on the main table — it lives in the
+   * collection's `_locales` companion, one row per language — so a predicate
+   * naming one can only be applied as a subquery against that table. Without
+   * this the field looked like a column the target does not have, and every row
+   * behind such a rule was withheld from expansion while a list read of the
+   * same collection returned them.
+   *
+   * Null when the target is not localized, or when no locale reached this
+   * expansion: a companion filter has to name one language, and the read that
+   * asked for every language at once (or never said) has no single answer.
+   * Withholding is the outcome then, unchanged from before.
+   *
+   * Also null when the constraint names only columns the target already has.
+   * Looking a companion up costs a collection-metadata read, and the ordinary
+   * case — an owner or tenant predicate on a plain column — has nothing to
+   * resolve there, so a localized application would pay for every target it
+   * populates without a companion filter ever being built.
+   */
+  private async buildTargetLocalizedContext(
+    targetCollection: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
+    schema: any,
+    access: RelatedRowAccess,
+    constraint: Record<string, unknown>,
+    /** The status a read of this target resolves to, or undefined for none. */
+    statusValue: string | undefined
+  ): Promise<LocalizedQueryContext | null> {
+    if (!access.locale || isSystemEntity(targetCollection)) return null;
+    // Judged on the raw constraint keys, which is what the untranslatable check
+    // inspects: a member naming something the table does not have is either a
+    // localized field or a mistake, and both have to reach that check with the
+    // same information it would otherwise be missing.
+    const namesNonColumn = Object.keys(constraint).some(
+      field => !Object.prototype.hasOwnProperty.call(schema, field)
+    );
+    if (!namesNonColumn) return null;
+
+    const companion = await this.resolveTargetCompanion(
+      targetCollection,
+      access
+    );
+    if (!companion || companion.localizedFields.length === 0) return null;
+
+    return {
+      companionTableName: companion.companionTableName,
+      localizedFields: companion.localizedFields,
+      // The same table object the confirming query selects FROM, so the
+      // companion's `_parent` correlates against the row being judged.
+      mainIdColumn: schema.id,
+      locale: access.locale,
+      // A companion row in another state must not satisfy the filter: a draft
+      // translation holding the permitted value would otherwise admit a row the
+      // target's own list read, filtering on the same status, excludes. Gated on
+      // the companion having the column, matching the read path.
+      statusValue: companion.hasStatus ? statusValue : undefined,
+    };
   }
 
   /**
@@ -1488,6 +1717,7 @@ export class CollectionRelationshipService extends BaseService {
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      locale: options.locale,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
@@ -1497,6 +1727,10 @@ export class CollectionRelationshipService extends BaseService {
       // the outermost call, because a collection's rules can change between
       // requests.
       targetPolicies: options.targetPolicies ?? new Map(),
+      // Shared and inherited exactly as the policy map is, for the same reason:
+      // a nested hop starting its own would re-read the metadata of a collection
+      // an ancestor already looked up.
+      targetCompanions: options.targetCompanions ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -1879,24 +2113,11 @@ export class CollectionRelationshipService extends BaseService {
           field.options?.targetLabelField
         );
 
-        // Batch fetch all entries from system entity
-        const entries = await this.db
-          .select()
-          .from(targetSchema)
-          .where(inArray(targetSchema.id, relatedIds));
-
-        // Redact before labelling, for the same reason as the dynamic branch
-        // below: the label copies a field value under another key, so it must
-        // be taken from a row that has already been stripped.
-        const rows = entries.map((entry: Record<string, unknown>) =>
-          convertTimestampsToCamelCase({ ...entry })
-        );
-        const readable = await this.filterRowsByCollectionAccess(
+        const readable = await this.readTargetRows(
           targetCollection,
-          rows,
+          relatedIds,
           access
         );
-        await this.redactRelatedRows(targetCollection, readable, access);
         for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
@@ -1905,32 +2126,16 @@ export class CollectionRelationshipService extends BaseService {
         }
       } else {
         // Handle dynamic collections
-        const targetSchema =
-          await this.fileManager.loadDynamicSchema(targetCollection);
         const labelField = await this.getBestLabelField(
           targetCollection,
           field.options?.targetLabelField
         );
 
-        // Batch fetch all entries using Drizzle's inArray helper
-        const entries = await this.db
-          .select()
-          .from(targetSchema)
-          .where(inArray(targetSchema.id, relatedIds));
-
-        // Redact BEFORE deriving the label. The label is a copy of a field's
-        // value under a different key, so a label taken from a row that has not
-        // been redacted yet survives the redaction of its own source field and
-        // hands back the protected value under `label`.
-        const rows = entries.map((entry: Record<string, unknown>) =>
-          convertTimestampsToCamelCase({ ...entry })
-        );
-        const readable = await this.filterRowsByCollectionAccess(
+        const readable = await this.readTargetRows(
           targetCollection,
-          rows,
+          relatedIds,
           access
         );
-        await this.redactRelatedRows(targetCollection, readable, access);
         for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
@@ -2028,48 +2233,13 @@ export class CollectionRelationshipService extends BaseService {
         return resultMap;
       }
 
-      // Batch fetch all target entries
-      const targetSchema =
-        await this.fileManager.loadDynamicSchema(targetCollectionName);
       const labelField = await this.getBestLabelField(
         targetCollectionName,
         field.options?.targetLabelField
       );
-
-      console.log(
-        `[ManyToMany Expand] Target collection: ${targetCollectionName}, Label field: ${labelField}`
-      );
-
-      // Batch fetch all target entries using Drizzle's inArray
-      const targetEntries = await this.db
-        .select()
-        .from(targetSchema)
-        .where(inArray(targetSchema.id, allTargetIds));
-
-      console.log(
-        `[ManyToMany Expand] Fetched ${targetEntries.length} target entries`
-      );
-      if (targetEntries.length > 0) {
-        console.log(
-          `[ManyToMany Expand] Sample entry:`,
-          JSON.stringify(targetEntries[0], null, 2)
-        );
-      }
-
-      // Redact before labelling: the label copies a field's value under
-      // another key, so taking it from an unredacted row would return a
-      // protected value that the redaction of its source field cannot reach.
-      const targetRows = targetEntries.map((entry: Record<string, unknown>) =>
-        convertTimestampsToCamelCase({ ...entry })
-      );
-      const readableTargetRows = await this.filterRowsByCollectionAccess(
+      const readableTargetRows = await this.readTargetRows(
         targetCollectionName,
-        targetRows,
-        access
-      );
-      await this.redactRelatedRows(
-        targetCollectionName,
-        readableTargetRows,
+        allTargetIds,
         access
       );
 
@@ -2079,9 +2249,6 @@ export class CollectionRelationshipService extends BaseService {
           // Falls back to the id when the label's source field did not survive
           // redaction.
           const label = row[labelField] || row.id;
-          console.log(
-            `[ManyToMany Expand] Entry ${String(row.id)}: labelField="${labelField}", value="${String(label)}"`
-          );
           return [row.id, { ...row, label }];
         })
       );
@@ -2140,6 +2307,7 @@ export class CollectionRelationshipService extends BaseService {
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      locale: options.locale,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
@@ -2149,6 +2317,10 @@ export class CollectionRelationshipService extends BaseService {
       // the outermost call, because a collection's rules can change between
       // requests.
       targetPolicies: options.targetPolicies ?? new Map(),
+      // Shared and inherited exactly as the policy map is, for the same reason:
+      // a nested hop starting its own would re-read the metadata of a collection
+      // an ancestor already looked up.
+      targetCompanions: options.targetCompanions ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -2706,55 +2878,15 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess = {}
   ): Promise<Record<string, unknown> | null> {
     try {
-      // Check if this is a system entity (like "users")
-      if (isSystemEntity(collectionName)) {
-        const targetSchema = getSystemEntityTable(collectionName);
-        if (!targetSchema) {
-          return null;
-        }
-
-        const [entry] = await this.db
-          .select()
-          .from(targetSchema)
-          .where(eq(targetSchema.id, entryId))
-          .limit(1);
-
-        if (!entry) return null;
-        const normalized = convertTimestampsToCamelCase({ ...entry });
-        const [readable] = await this.filterRowsByCollectionAccess(
-          collectionName,
-          [normalized],
-          access
-        );
-        // Reads as absent rather than as an error: one unreadable reference
-        // must not refuse the whole parent read, and the caller learns no more
-        // than a reference pointing at nothing would tell them.
-        if (!readable) return null;
-        await this.redactRelatedRows(collectionName, [readable], access);
-        return readable;
-      } else {
-        // Handle dynamic collections
-        const schema = await this.fileManager.loadDynamicSchema(collectionName);
-        const [entry] = await this.db
-          .select()
-          .from(schema)
-          .where(eq(schema.id, entryId))
-          .limit(1);
-
-        if (!entry) return null;
-        const normalized = convertTimestampsToCamelCase({ ...entry });
-        const [readable] = await this.filterRowsByCollectionAccess(
-          collectionName,
-          [normalized],
-          access
-        );
-        // Reads as absent rather than as an error: one unreadable reference
-        // must not refuse the whole parent read, and the caller learns no more
-        // than a reference pointing at nothing would tell them.
-        if (!readable) return null;
-        await this.redactRelatedRows(collectionName, [readable], access);
-        return readable;
-      }
+      const [readable] = await this.readTargetRows(
+        collectionName,
+        [entryId],
+        access
+      );
+      // Reads as absent rather than as an error: one unreadable reference must
+      // not refuse the whole parent read, and the caller learns no more than a
+      // reference pointing at nothing would tell them.
+      return readable ?? null;
     } catch {
       return null;
     }
@@ -2867,32 +2999,15 @@ export class CollectionRelationshipService extends BaseService {
         return [];
       }
 
-      // Fetch the actual entries using MySQL-compatible IN clause
-      const targetSchema =
-        await this.fileManager.loadDynamicSchema(targetCollectionName);
-
-      // Build IN clause with parameterized values for MySQL compatibility
-      const placeholders = sql.join(
-        relatedIds.map((id: string) => sql`${id}`),
-        sql.raw(", ")
-      );
-
-      const entries = await this.db
-        .select()
-        .from(targetSchema)
-        .where(sql`${targetSchema.id} IN (${placeholders})`);
-
-      const normalized = (entries || []).map((entry: Record<string, unknown>) =>
-        convertTimestampsToCamelCase({ ...entry })
-      );
-      const readable = await this.filterRowsByCollectionAccess(
+      // Through the shared reader, which binds the id list with Drizzle's
+      // `inArray` rather than assembling the IN clause by hand. The sibling
+      // many-to-many batch path has always used `inArray` and passes on MySQL,
+      // so the hand-built list this replaces was not buying compatibility.
+      return await this.readTargetRows(
         targetCollectionName,
-        normalized,
+        relatedIds,
         access
       );
-      // Strip related-row secrets before rows are spread into responses.
-      await this.redactRelatedRows(targetCollectionName, readable, access);
-      return readable;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];

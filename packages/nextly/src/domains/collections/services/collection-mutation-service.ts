@@ -2598,6 +2598,12 @@ export class CollectionMutationService extends BaseService {
               user: params.user,
               overrideAccess: params.overrideAccess,
               authenticatedScope: params.authenticatedScope,
+              // The language just written, so a target collection whose read
+              // rule filters on one of its own localized fields is judged in
+              // the same language the response reports.
+              locale: this.localization
+                ? resolveRequestedLocale(this.localization, params.locale)
+                : undefined,
             }
           );
         } catch (expansionError) {
@@ -5133,6 +5139,12 @@ export class CollectionMutationService extends BaseService {
               user: params.user,
               overrideAccess: params.overrideAccess,
               authenticatedScope: params.authenticatedScope,
+              // The language just written, so a target collection whose read
+              // rule filters on one of its own localized fields is judged in
+              // the same language the response reports.
+              locale: this.localization
+                ? resolveRequestedLocale(this.localization, params.locale)
+                : undefined,
             }
           );
         } catch (expansionError) {

@@ -42,15 +42,19 @@ function silentLogger() {
 }
 
 /**
- * Minimal adapter whose Drizzle handle answers the single-row
- * `select().from().where().limit()` chain fetchRelatedEntry uses.
+ * Minimal adapter whose Drizzle handle answers the
+ * `select().from().where()` chain every related-row read uses.
+ *
+ * Resolves at `where()` rather than at a trailing `limit()`: one reader now
+ * fetches by id list, so a single reference is a one-element list rather than a
+ * limited query. A double that still answered only the limited shape would
+ * resolve to nothing here and report a refusal that never happened.
  */
 function adapterReturning(row: Record<string, unknown> | null) {
   const chain = {
     select: () => chain,
     from: () => chain,
-    where: () => chain,
-    limit: () => Promise.resolve(row ? [row] : []),
+    where: () => Promise.resolve(row ? [row] : []),
   };
   return {
     getDrizzle: () => chain,
