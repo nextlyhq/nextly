@@ -86,6 +86,43 @@ describe("hook error propagation", () => {
     expect(NextlyError.is(error)).toBe(true);
   });
 
+  it("preserves a typed error thrown by a beforeOperation hook", async () => {
+    // The same guarantee on the other execution path. `beforeOperation` has its
+    // own loop with its own catch, and fixing one and not the other leaves half
+    // the lifecycle rebuilding errors.
+    const registry = new HookRegistry();
+    const thrown = NextlyError.forbidden({});
+    registry.register("beforeOperation", "docs", () => {
+      throw thrown;
+    });
+
+    await expect(
+      registry.executeBeforeOperation({
+        collection: "docs",
+        operation: "read",
+        args: {},
+      } as never)
+    ).rejects.toBe(thrown);
+  });
+
+  it("wraps an untyped beforeOperation error as internal", async () => {
+    const registry = new HookRegistry();
+    const original = new Error("boom");
+    registry.register("beforeOperation", "docs", () => {
+      throw original;
+    });
+
+    const error = await registry
+      .executeBeforeOperation({
+        collection: "docs",
+        operation: "read",
+        args: {},
+      } as never)
+      .catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    expect((error as { cause?: unknown }).cause).toBe(original);
+  });
+
   it("still runs later hooks when no one throws", async () => {
     // The mirror: error handling must not change the ordinary path.
     const registry = new HookRegistry();

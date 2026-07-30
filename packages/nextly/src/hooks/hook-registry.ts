@@ -55,6 +55,39 @@ import type {
  *
  * @class HookRegistry
  */
+/**
+ * Turn whatever a hook threw into the error the boundary should see.
+ *
+ * A hook that rejects its input does so deliberately, and says how: a
+ * validation error carries field issues, a forbidden one carries a status.
+ * Rebuilding it as a generic error throws all of that away and the boundary
+ * answers 500, so a hook enforcing a rule reports a server fault instead of
+ * the rule.
+ *
+ * Anything else really is unexpected. The original is kept as `cause` rather
+ * than flattened into a message, so its stack survives, and the hook and
+ * collection travel in log context where they are useful without being
+ * disclosed to the caller.
+ */
+function normalizeHookError(
+  error: unknown,
+  hookType: string,
+  collection: string
+): unknown {
+  if (NextlyError.is(error)) {
+    return error;
+  }
+  return NextlyError.internal({
+    cause: error instanceof Error ? error : undefined,
+    logContext: {
+      reason: "hook-execution-failed",
+      hookType,
+      collection,
+      ...(error instanceof Error ? {} : { thrown: String(error) }),
+    },
+  });
+}
+
 export class HookRegistry {
   /**
    * Internal storage for hooks
@@ -275,27 +308,7 @@ export class HookRegistry {
           data = result;
         }
       } catch (error: unknown) {
-        // A hook that rejects its input does so deliberately, and says how: a
-        // validation error carries field issues, a forbidden one carries a
-        // status. Rebuilding it as a generic error threw all of that away and
-        // the boundary answered 500, so a hook enforcing a rule reported a
-        // server fault instead of the rule.
-        if (NextlyError.is(error)) {
-          throw error;
-        }
-        // Anything else really is unexpected. The original is kept as `cause`
-        // rather than flattened into a message, so its stack survives, and the
-        // hook and collection travel in log context where they are useful
-        // without being disclosed to the caller.
-        throw NextlyError.internal({
-          cause: error instanceof Error ? error : undefined,
-          logContext: {
-            reason: "hook-execution-failed",
-            hookType,
-            collection: context.collection,
-            ...(error instanceof Error ? {} : { thrown: String(error) }),
-          },
-        });
+        throw normalizeHookError(error, hookType, context.collection);
       }
     }
 
@@ -382,11 +395,7 @@ export class HookRegistry {
           args = result;
         }
       } catch (error: unknown) {
-        // Re-throw with additional context for debugging
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Hook execution failed for beforeOperation on ${context.collection}: ${message}`
-        );
+        throw normalizeHookError(error, "beforeOperation", context.collection);
       }
     }
 
