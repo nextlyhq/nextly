@@ -952,7 +952,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Remove the companion `_locales` table and this single's archive rows before
         // the main table. The companion holds an FK to `<main>.id`, so it must go first
         // or the main drop orphans it (Postgres) / is rejected by the FK (MySQL).
-        await teardownEntityI18n({ adapter, slug, tableName });
+        await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
         // Use dialect-appropriate quoting for the table name.
         const dialect = adapter.dialect || "postgresql";

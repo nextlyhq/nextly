@@ -696,7 +696,7 @@ async function handleRemovedSingles(
       // to `<main>.id` which blocks the drop outright on MySQL. Running before the registry
       // delete keeps the single detectable as an orphan if any of this fails.
       await teardownEntityComponentData({ adapter, parentTable: tableName });
-      await teardownEntityI18n({ adapter, slug, tableName });
+      await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
       // Delete registry entry directly
       await adapter.delete("dynamic_singles", {
@@ -753,7 +753,12 @@ async function handleRemovedComponents(
       // `<main>.id`, blocking the drop on MySQL. Both go before the registry delete so a
       // failure leaves the component detectable as an orphan.
       await teardownEntityComponentData({ adapter, parentTable: tableName });
-      await teardownEntityI18n({ adapter, slug, tableName });
+      await teardownEntityI18n({
+        adapter,
+        slug,
+        tableName,
+        kind: "fieldGroup",
+      });
 
       // Delete registry entry directly
       await adapter.delete(STORAGE_FORMAT.registryTable, {

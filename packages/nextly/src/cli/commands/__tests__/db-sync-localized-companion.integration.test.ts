@@ -424,6 +424,43 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(rows).toEqual([{ title: "Survives" }]);
   });
 
+  it("forgets the transition when the entity is deleted", async () => {
+    // The record lives in `nextly_meta`, not in any table the teardown drops, and it is keyed by
+    // kind and slug — both of which a later entity can reuse. Left behind, it hands that entity a
+    // predecessor's source locale and refuses its real one, after its companion has already been
+    // created and seeded.
+    const config = defineConfig({
+      localization: { locales: ["de", "en"], defaultLocale: "de" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_deleted",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    await runSync(config);
+    await expect(
+      readTransition("collection", "dbsync_deleted")
+    ).resolves.toMatchObject({ sourceLocale: "de" });
+
+    const { teardownEntityI18n } = await import(
+      "../../../domains/i18n/migration/teardown-entity-i18n"
+    );
+    await teardownEntityI18n({
+      adapter: adapter as unknown as Parameters<
+        typeof teardownEntityI18n
+      >[0]["adapter"],
+      slug: "dbsync_deleted",
+      tableName: "dc_dbsync_deleted",
+      kind: "collection",
+    });
+
+    await expect(
+      readTransition("collection", "dbsync_deleted")
+    ).resolves.toEqual({ status: "untracked" });
+  });
+
   it("leaves a non-localized collection with no companion", async () => {
     await runSync(
       defineConfig({

@@ -113,6 +113,7 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
       adapter: args.adapter,
       slug: orphan.slug,
       tableName: orphan.tableName,
+      kind: "collection",
     });
     // Drop the physical data table, then the metadata row (force-bypass the
     // pipeline lock — prune is the explicit, authorized drop path).
