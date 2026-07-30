@@ -787,6 +787,12 @@ export class SingleQueryService extends BaseService {
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
     params.captureReferences?.(doc);
     doc = await this.expandUploadFields(doc, singleMeta.fields);
+    // The language this read resolved to, shared by both expansions below so a
+    // related row and a related row inside a component are judged alike.
+    const readLocale = this.resolveLocaleChain(
+      options.locale,
+      options.fallbackLocale
+    )?.[0];
     doc = await this.expandRelationshipFields(
       doc,
       singleMeta.fields,
@@ -804,6 +810,9 @@ export class SingleQueryService extends BaseService {
         // Collects the references a target collection refused, so the
         // completeness check below reads them as absent on purpose.
         withheldByAccess: params.withheldByAccess,
+        // A target collection's read rule may filter on one of its own
+        // localized fields, which is a companion lookup rather than a column.
+        locale: readLocale,
       },
       strict,
       // The read path threads a caller, so the target collection's field rules
@@ -837,7 +846,9 @@ export class SingleQueryService extends BaseService {
             // too, and the rows of one population share a policy cache.
             withheldByAccess: params.withheldByAccess,
             targetPolicies: new Map(),
+            targetCompanions: new Map(),
             authenticatedScope: options.authenticatedScope,
+            locale: readLocale,
           },
           // Read errors otherwise become empty component values, which reads to a
           // rule exactly like a component that holds nothing.
@@ -2445,6 +2456,12 @@ export class SingleQueryService extends BaseService {
        */
       authenticatedScope?: AuthenticatedScope;
       withheldByAccess?: Set<string>;
+      /**
+       * The language this read resolved to, so a target collection's read rule
+       * can be applied when its predicate names a localized field of that
+       * collection. Absent leaves such a rule withholding its rows.
+       */
+      locale?: string;
     } = {},
     /**
      * Propagate expansion failures instead of returning the document
@@ -2500,6 +2517,7 @@ export class SingleQueryService extends BaseService {
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,
+          locale: access.locale,
         }
       );
       return expandedDoc as SingleDocument;

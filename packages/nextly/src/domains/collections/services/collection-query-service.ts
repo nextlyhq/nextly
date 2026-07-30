@@ -39,6 +39,7 @@ import type {
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
   buildDrizzleCondition,
+  buildLocalizedWhereExists,
   type LocalizedQueryContext,
 } from "../../../services/collections/drizzle-condition";
 import {
@@ -320,101 +321,6 @@ export class CollectionQueryService extends BaseService {
         companion.hasStatus && statusFilterValue
           ? statusFilterValue
           : undefined,
-    });
-  }
-
-  /**
-   * Build a companion EXISTS condition for a where-filter on a localized field (i18n M4c).
-   * Maps the where operator to a SQL predicate on the companion column for the requested locale.
-   * Returns `undefined` for operators not supported over the companion (caller falls through).
-   */
-  private buildLocalizedWhereExists(
-    ctx: LocalizedQueryContext,
-    column: string,
-    op: string,
-    value: unknown,
-    dialect: string
-  ): ReturnType<typeof sql> | undefined {
-    const t = sql.identifier(ctx.companionTableName);
-    const col = sql.identifier(column);
-    let valueCondition: ReturnType<typeof sql> | undefined;
-    switch (op) {
-      case "=":
-        valueCondition = sql`${t}.${col} = ${value}`;
-        break;
-      case "!=":
-        valueCondition = sql`${t}.${col} <> ${value}`;
-        break;
-      case ">":
-        valueCondition = sql`${t}.${col} > ${value}`;
-        break;
-      case ">=":
-        valueCondition = sql`${t}.${col} >= ${value}`;
-        break;
-      case "<":
-        valueCondition = sql`${t}.${col} < ${value}`;
-        break;
-      case "<=":
-        valueCondition = sql`${t}.${col} <= ${value}`;
-        break;
-      case "LIKE":
-        valueCondition = sql`${t}.${col} LIKE ${value}`;
-        break;
-      case "ILIKE":
-        valueCondition =
-          dialect === "postgresql"
-            ? sql`${t}.${col} ILIKE ${value}`
-            : sql`${t}.${col} LIKE ${value}`;
-        break;
-      case "IS NULL": {
-        // A localized field is absent for the locale when no companion row holds
-        // a value — an untranslated entry usually has no companion row at all.
-        // Match those with NOT EXISTS(row with a value) rather than
-        // EXISTS(col IS NULL), which would require a companion row to exist.
-        const present = buildCompanionExists({
-          companionTableName: ctx.companionTableName,
-          mainIdColumn: ctx.mainIdColumn,
-          locale: ctx.locale,
-          valueCondition: sql`${t}.${col} IS NOT NULL`,
-          statusValue: ctx.statusValue,
-        });
-        return sql`NOT ${present}`;
-      }
-      case "IS NOT NULL":
-        valueCondition = sql`${t}.${col} IS NOT NULL`;
-        break;
-      case "IN":
-        if (Array.isArray(value) && value.length > 0) {
-          // Expand the array into an SQL list; a bare array bind would emit
-          // `col IN $1` and compare against the whole array as one value.
-          const inList = sql.join(
-            value.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${t}.${col} IN (${inList})`;
-        }
-        break;
-      case "NOT IN":
-        if (Array.isArray(value) && value.length > 0) {
-          // Expand into an SQL list, mirroring the IN case; without this the
-          // localized not_in filter is silently dropped and excludes nothing.
-          const notInList = sql.join(
-            value.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
-        }
-        break;
-      default:
-        return undefined;
-    }
-    if (!valueCondition) return undefined;
-    return buildCompanionExists({
-      companionTableName: ctx.companionTableName,
-      mainIdColumn: ctx.mainIdColumn,
-      locale: ctx.locale,
-      valueCondition,
-      statusValue: ctx.statusValue,
     });
   }
 
@@ -1157,6 +1063,10 @@ export class CollectionQueryService extends BaseService {
             user: params.user,
             overrideAccess: params.overrideAccess,
             authenticatedScope: params.authenticatedScope,
+            // The language this read resolved to, so a target collection whose
+            // read rule filters on a localized field can have that filter
+            // applied against the right companion rows instead of withholding.
+            locale: localeChain?.[0],
           }
         );
 
@@ -1190,6 +1100,10 @@ export class CollectionQueryService extends BaseService {
               // Shared across every component row this listing expands, so
               // rows pointing at the same target resolve its policy once.
               targetPolicies: new Map(),
+              targetCompanions: new Map(),
+              // A relationship inside a component points at a collection whose
+              // read rule may filter on one of its own localized fields.
+              locale: localeChain?.[0],
             },
           });
       }
@@ -2013,13 +1927,19 @@ export class CollectionQueryService extends BaseService {
         };
       }
 
+      // Resolved once and reused: relationship expansion below needs the same
+      // language, so deriving it twice would let the two drift.
+      const localeChain = this.resolveLocaleChain(
+        params.locale,
+        params.fallbackLocale
+      );
       // i18n M4: resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
       await this.populateLocalized(
         params.collectionName,
         [entry as Record<string, unknown>],
-        this.resolveLocaleChain(params.locale, params.fallbackLocale),
+        localeChain,
         undefined,
         statusFilter?.value ?? null // i18n M6: per-locale published filter
       );
@@ -2069,6 +1989,9 @@ export class CollectionQueryService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           authenticatedScope: params.authenticatedScope,
+          // As on the list path: the language a target collection's read rule is
+          // evaluated in when its predicate names a localized field.
+          locale: localeChain?.[0],
         }
       );
 
@@ -2095,6 +2018,9 @@ export class CollectionQueryService extends BaseService {
             user: params.user,
             overrideAccess: params.overrideAccess,
             authenticatedScope: params.authenticatedScope,
+            // As on the list path: a component's relationship reaches a
+            // collection that may scope reads by a localized field.
+            locale: localeChain?.[0],
           },
         });
       }
@@ -2346,8 +2272,7 @@ export class CollectionQueryService extends BaseService {
       schema,
       dialect,
       localizedCtx,
-      (ctx, column, op, value, d) =>
-        this.buildLocalizedWhereExists(ctx, column, op, value, d)
+      buildLocalizedWhereExists
     );
   }
 

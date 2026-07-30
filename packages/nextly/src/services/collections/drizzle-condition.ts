@@ -30,9 +30,11 @@ import {
   isNull,
   isNotNull,
   or,
+  sql,
 } from "drizzle-orm";
 
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
+import { buildCompanionExists } from "../../domains/i18n/companion-join";
 
 import type { buildWhereClause } from "./query-operators";
 
@@ -65,6 +67,108 @@ export type LocalizedExistsBuilder = (
   value: unknown,
   dialect: string
 ) => SQL | undefined;
+
+/**
+ * Translate a filter on a localized field into a companion-table EXISTS.
+ *
+ * Sits beside the condition builder it feeds for the same reason that one is
+ * shared: a localized field is filtered by a subquery rather than a column, so
+ * a second implementation of this mapping would be free to disagree about an
+ * operator — and here the disagreement is invisible, because a filter that
+ * matches the wrong companion rows still returns a plausible result set.
+ *
+ * Returns `undefined` for an operator with no companion equivalent, leaving the
+ * caller to treat the filter as untranslated rather than as unrestricted.
+ */
+export function buildLocalizedWhereExists(
+  ctx: LocalizedQueryContext,
+  column: string,
+  op: string,
+  value: unknown,
+  dialect: string
+): SQL | undefined {
+  const t = sql.identifier(ctx.companionTableName);
+  const col = sql.identifier(column);
+  let valueCondition: SQL | undefined;
+  switch (op) {
+    case "=":
+      valueCondition = sql`${t}.${col} = ${value}`;
+      break;
+    case "!=":
+      valueCondition = sql`${t}.${col} <> ${value}`;
+      break;
+    case ">":
+      valueCondition = sql`${t}.${col} > ${value}`;
+      break;
+    case ">=":
+      valueCondition = sql`${t}.${col} >= ${value}`;
+      break;
+    case "<":
+      valueCondition = sql`${t}.${col} < ${value}`;
+      break;
+    case "<=":
+      valueCondition = sql`${t}.${col} <= ${value}`;
+      break;
+    case "LIKE":
+      valueCondition = sql`${t}.${col} LIKE ${value}`;
+      break;
+    case "ILIKE":
+      valueCondition =
+        dialect === "postgresql"
+          ? sql`${t}.${col} ILIKE ${value}`
+          : sql`${t}.${col} LIKE ${value}`;
+      break;
+    case "IS NULL": {
+      // A localized field is absent for the locale when no companion row holds
+      // a value — an untranslated entry usually has no companion row at all.
+      // Match those with NOT EXISTS(row with a value) rather than
+      // EXISTS(col IS NULL), which would require a companion row to exist.
+      const present = buildCompanionExists({
+        companionTableName: ctx.companionTableName,
+        mainIdColumn: ctx.mainIdColumn,
+        locale: ctx.locale,
+        valueCondition: sql`${t}.${col} IS NOT NULL`,
+        statusValue: ctx.statusValue,
+      });
+      return sql`NOT ${present}`;
+    }
+    case "IS NOT NULL":
+      valueCondition = sql`${t}.${col} IS NOT NULL`;
+      break;
+    case "IN":
+      if (Array.isArray(value) && value.length > 0) {
+        // Expand the array into an SQL list; a bare array bind would emit
+        // `col IN $1` and compare against the whole array as one value.
+        const inList = sql.join(
+          value.map(v => sql`${v}`),
+          sql`, `
+        );
+        valueCondition = sql`${t}.${col} IN (${inList})`;
+      }
+      break;
+    case "NOT IN":
+      if (Array.isArray(value) && value.length > 0) {
+        // Expand into an SQL list, mirroring the IN case; without this the
+        // localized not_in filter is silently dropped and excludes nothing.
+        const notInList = sql.join(
+          value.map(v => sql`${v}`),
+          sql`, `
+        );
+        valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
+      }
+      break;
+    default:
+      return undefined;
+  }
+  if (!valueCondition) return undefined;
+  return buildCompanionExists({
+    companionTableName: ctx.companionTableName,
+    mainIdColumn: ctx.mainIdColumn,
+    locale: ctx.locale,
+    valueCondition,
+    statusValue: ctx.statusValue,
+  });
+}
 
 export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
