@@ -14,10 +14,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
+import { resolveTransitionRecorder } from "../../domains/i18n/migration/transition-recorder";
 import {
   beginI18nTransition,
   type I18nTransitionKind,
-  type TransitionStateStore,
 } from "../../domains/i18n/migration/transition-state";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
@@ -795,35 +795,6 @@ async function handleRemovedComponents(
  * `ensureCompanionTable` returns early when the table is already there — so
  * running it on every sync costs one probe per localized entity.
  */
-/**
- * Where a localization transition gets recorded, paired with the locale to record.
- *
- * Returns undefined when the app names no default locale: no entity can be localized without one,
- * so there is no transition to describe and nothing to record it against. Keeping the two together
- * means a caller cannot hold a store and reach for a locale that was never configured.
- */
-async function resolveTransitionRecorder(
-  config: LoadConfigResult["config"],
-  adapter: DrizzleAdapter,
-  logger: ServiceLogger
-): Promise<(TransitionStateStore & { defaultLocale: string }) | undefined> {
-  const defaultLocale = (
-    config as { localization?: { defaultLocale?: string } }
-  ).localization?.defaultLocale;
-  if (typeof defaultLocale !== "string" || defaultLocale.length === 0) {
-    return undefined;
-  }
-  const { MetaService } = await import(
-    "../../domains/meta/services/meta-service"
-  );
-  const meta = new MetaService(adapter, logger);
-  return {
-    defaultLocale,
-    getEntry: key => meta.getEntry(key),
-    set: (key, value) => meta.set(key, value),
-  };
-}
-
 export async function ensureLocalizedCompanions(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,

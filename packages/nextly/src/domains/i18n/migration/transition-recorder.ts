@@ -1,0 +1,70 @@
+/**
+ * Building the thing that records a localization transition.
+ *
+ * Every path that can create a companion needs the same two pieces: somewhere to
+ * put the record, and the locale to put in it. Neither is interesting on its own
+ * and both are easy to get subtly wrong — a store without a locale invites a
+ * caller to reach for `defaultLocale` from whatever config is nearest, which is
+ * how a transition ends up labelled with a locale that was never in force. So
+ * they are resolved together, once, here.
+ *
+ * Returns undefined when the app names no default locale. An entity cannot be
+ * localized without one, so there is no transition to describe, and handing back
+ * nothing is more honest than a recorder that would have to invent a language.
+ *
+ * @module domains/i18n/migration/transition-recorder
+ */
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import type { Logger } from "../../../services/shared/types";
+
+import type { TransitionStateStore } from "./transition-state";
+
+/**
+ * Somewhere to record a transition, together with the locale to record.
+ *
+ * Kept as one value so the two cannot be sourced separately.
+ */
+export type TransitionRecorder = TransitionStateStore & {
+  /** The locale the main table's existing content is in, at the moment of transition. */
+  defaultLocale: string;
+};
+
+/** The adapter surface `MetaService` needs, which every caller here already holds. */
+type MetaCapableAdapter = Pick<DrizzleAdapter, "getDrizzle">;
+
+/** Swallows everything. `MetaService` logs nothing on the paths used here. */
+const SILENT_LOGGER: Logger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+};
+
+/**
+ * Resolve where a transition gets recorded and with which locale.
+ *
+ * `logger` is optional because the provisioning paths differ in what they have:
+ * the CLI carries a real logger, the dev reload path writes through `console`.
+ * Neither matters to the record itself.
+ */
+export async function resolveTransitionRecorder(
+  config: { localization?: { defaultLocale?: string } },
+  adapter: MetaCapableAdapter,
+  logger: Logger = SILENT_LOGGER
+): Promise<TransitionRecorder | undefined> {
+  const defaultLocale = config.localization?.defaultLocale;
+  if (typeof defaultLocale !== "string" || defaultLocale.length === 0) {
+    return undefined;
+  }
+  // Imported here rather than at module scope: this module is reached from the
+  // dev reload path, and the service pulls in the dialect schema tables.
+  const { MetaService } = await import("../../meta/services/meta-service");
+  const meta = new MetaService(adapter as DrizzleAdapter, logger);
+  return {
+    defaultLocale,
+    getEntry: key => meta.getEntry(key),
+    set: (key, value) => meta.set(key, value),
+  };
+}

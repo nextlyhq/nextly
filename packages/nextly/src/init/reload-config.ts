@@ -23,6 +23,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -615,8 +616,13 @@ async function ensureLocalizedCompanionsForReload(
     fields?: { name: string; type: string; localized?: boolean }[];
   };
   // The kind prefixes the `deferred` keys, because a collection and a single may share a slug
-  // and only one of them may have been deferred.
-  const groups: [string, Localizable[], (e: Localizable) => string][] = [
+  // and only one of them may have been deferred. It is also part of the transition record's
+  // key, for the same reason, so it is typed rather than left an open string.
+  const groups: [
+    I18nTransitionKind,
+    Localizable[],
+    (e: Localizable) => string,
+  ][] = [
     [
       "collection",
       (config.collections ?? []) as Localizable[],
@@ -634,11 +640,21 @@ async function ensureLocalizedCompanionsForReload(
     ],
   ];
 
+  // Where a newly created companion's transition gets recorded. Undefined when the app
+  // names no default locale, in which case nothing below can be localized anyway.
+  const { resolveTransitionRecorder } = await import(
+    "../domains/i18n/migration/transition-recorder"
+  );
+  const { beginI18nTransition } = await import(
+    "../domains/i18n/migration/transition-state"
+  );
+  const transitions = await resolveTransitionRecorder(config, adapter);
+
   for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {
       if (!entity.slug || entity.localized !== true) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
-      await ensureCompanionTable(
+      const created = await ensureCompanionTable(
         adapter,
         {
           slug: entity.slug,
@@ -655,6 +671,16 @@ async function ensureLocalizedCompanionsForReload(
           );
         }
       );
+      // Only on the call that created the companion. That is the one moment the current
+      // default locale still describes the content already sitting on the main table;
+      // recorded later it would attach today's default to older writes.
+      if (created && transitions) {
+        await beginI18nTransition(transitions, {
+          kind,
+          slug: entity.slug,
+          sourceLocale: transitions.defaultLocale,
+        });
+      }
       // Creating the table is not enough on its own: `ensureCompanionTable` returns
       // immediately when one already exists, so marking a FURTHER field localized on an
       // already-localized entity takes the no-DDL path, syncs its metadata, and leaves the
