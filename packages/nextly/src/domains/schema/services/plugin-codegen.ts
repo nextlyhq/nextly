@@ -11,13 +11,13 @@
  * @module domains/schema/services/plugin-codegen
  */
 import type { BlockFieldCatalogType } from "../../../collections/fields/catalog";
-import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../../collections/fields/catalog";
 import { NextlyError } from "../../../errors/nextly-error";
 import type {
   PluginFieldCodegenImport,
   PluginFieldInstance,
 } from "../../../plugins/contributions";
 import { detachedField } from "../../../shared/lib/detached-field";
+import { pluginStorageFieldType } from "../../../shared/lib/plugin-storage";
 import { getFieldType } from "../field-types/field-type-registry";
 
 /** A field as the generators hold it: a type, maybe a name, maybe children. */
@@ -73,14 +73,7 @@ export function pluginTsType(field: CodegenField): string | undefined {
  * the same substitution the write path makes when it applies the primitive's
  * rules to a custom type.
  */
-export function pluginStorageFieldType(
-  field: CodegenField
-): BlockFieldCatalogType | undefined {
-  if (typeof field.type !== "string") return undefined;
-  const registered = getFieldType(field.type);
-  if (!registered) return undefined;
-  return STORAGE_PRIMITIVE_AS_FIELD_TYPE[registered.storage];
-}
+export { pluginStorageFieldType };
 
 /**
  * The same field, retyped as the built-in its plugin type stores as.
@@ -190,6 +183,46 @@ export function pluginCodegenImports(
     });
   };
 
+  /**
+   * A template literal reduced to its `${...}` bodies, with the literal text
+   * dropped.
+   *
+   * Brace depth is counted rather than matched with a regex: an interpolation may
+   * hold braces of its own — an object type, a mapped type, a nested block — and
+   * stopping at the first `}` would discard everything after it. That direction
+   * of error is the costly one: it drops an import the expression really needs,
+   * leaving the generated file naming an identifier it never brought into scope.
+   */
+  function keepInterpolations(literal: string): string {
+    const bodies: string[] = [];
+
+    for (let i = 0; i < literal.length; i++) {
+      if (literal[i] === "\\") {
+        i++;
+        continue;
+      }
+      if (literal[i] !== "$" || literal[i + 1] !== "{") continue;
+
+      let depth = 1;
+      const start = i + 2;
+      let j = start;
+      for (; j < literal.length && depth > 0; j++) {
+        if (literal[j] === "\\") {
+          j++;
+          continue;
+        }
+        if (literal[j] === "{") depth++;
+        else if (literal[j] === "}") depth--;
+      }
+      // An unterminated interpolation keeps what is there: the expression is not
+      // this function's to judge, and dropping the tail would lose references.
+      bodies.push(literal.slice(start, depth === 0 ? j - 1 : literal.length));
+      i = j - 1;
+    }
+
+    return bodies.join(" ");
+  }
+
   // Whether the expression THIS field emitted actually names the import.
   // A declared list belongs to a field type, but a callback may use an import
   // only for some option values, so a field where it did not would carry an
@@ -221,9 +254,7 @@ export function pluginCodegenImports(
       // A template's literal text is text, but its `${...}` interpolations hold
       // real references — a template-literal type is a plausible thing for a
       // type to emit — so only the parts between them are dropped.
-      .replace(/`(?:[^`\\]|\\.)*`/g, literal =>
-        [...literal.matchAll(/\$\{([^}]*)\}/g)].map(m => m[1]).join(" ")
-      );
+      .replace(/`(?:[^`\\]|\\.)*`/g, keepInterpolations);
     // Identifier boundaries rather than `\b`: a legal exported name may begin
     // or end with `$`, which is a non-word character, so `\b` would fail to
     // match it and the import would be dropped as unused.

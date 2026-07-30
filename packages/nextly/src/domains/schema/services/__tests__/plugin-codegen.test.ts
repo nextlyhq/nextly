@@ -1026,6 +1026,45 @@ describe("plugin field types in the Zod generator", () => {
     expect(code).not.toMatch(/tags:\s*z\.array/);
   });
 
+  it("keeps a reference after a nested brace in an interpolation", () => {
+    registerFieldType({
+      type: "conditional",
+      storage: "json",
+      component: "@acme/cd/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/cd" }],
+        tsType: () => '`${{ kind: "x" } extends Rating ? "yes" : "no"}`',
+      },
+    });
+
+    // The object literal closes a brace the interpolation did not open, so a
+    // scan that stopped at the first `}` would drop `Rating` and leave the
+    // generated file naming an identifier it never imported.
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "c", type: "conditional" }])
+    );
+
+    expect(iface.imports).toContain('import type { Rating } from "@acme/cd";');
+  });
+
+  it("still drops a name appearing only in a template's literal text", () => {
+    registerFieldType({
+      type: "texty",
+      storage: "json",
+      component: "@acme/tx/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/tx" }],
+        tsType: () => '`Rating-${"a"}`',
+      },
+    });
+
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "t", type: "texty" }])
+    );
+
+    expect(iface.imports).toEqual([]);
+  });
+
   it("does not count a name used only after a dot", () => {
     registerFieldType({
       type: "qualified",

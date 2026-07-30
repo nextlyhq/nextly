@@ -1,5 +1,6 @@
 import type { FieldConfig } from "../../../collections/fields/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 
 /**
  * Default relationship expansion depth for component data.
@@ -80,7 +81,12 @@ const ALWAYS_JSON_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 export function shouldTreatAsJson(field: FieldConfig): boolean {
-  if (ALWAYS_JSON_TYPES.has(field.type)) {
+  // A plugin type is decided on what it stores, not on its own token, or a
+  // `json`-backed field would get a JSON column and a raw object written into
+  // it. None of the primitives is `select`, `relationship` or `upload`, so the
+  // branches below still read the declared type.
+  const storageToken = storageTypeToken(field);
+  if (storageToken !== undefined && ALWAYS_JSON_TYPES.has(storageToken)) {
     return true;
   }
 
