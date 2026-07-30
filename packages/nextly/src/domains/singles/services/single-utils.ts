@@ -210,7 +210,11 @@ export function getDefaultValue(field: FieldConfig): unknown {
     return "{}";
   }
 
-  switch (field.type) {
+  // Seeded by what the column holds, as the JSON predicate above already is: a
+  // plugin type names none of the cases below, so it would fall through to the
+  // text default and put `""` into a numeric or boolean column, or a value
+  // `new Date()` cannot read.
+  switch (storageTypeToken(field) ?? field.type) {
     case "text":
     case "textarea":
     case "email":

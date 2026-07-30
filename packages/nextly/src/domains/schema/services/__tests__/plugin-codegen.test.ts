@@ -295,6 +295,39 @@ describe("standalone interface generation", () => {
     expect(message).toContain("'Array'");
   });
 
+  it("does not credit a longer name that ends with the global", () => {
+    registerFieldType({
+      type: "readonly-list",
+      storage: "json",
+      component: "@acme/rl/admin#Input",
+      codegen: { tsType: () => "ReadonlyArray<string>" },
+    });
+    registerFieldType({
+      type: "own-array2",
+      storage: "json",
+      component: "@acme/oa2/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Array"], from: "@acme/oa2" }],
+        tsType: () => "Array<string>",
+      },
+    });
+
+    // `Array<` occurs inside `ReadonlyArray<`. Counting it as a use of the
+    // global would reserve `Array` and refuse an import that could not have
+    // shadowed `ReadonlyArray` anyway.
+    const file = new TypeGenerator({
+      generateInputTypes: false,
+      generateConfig: false,
+    }).generateTypesFile([
+      collection([
+        { name: "r", type: "readonly-list" },
+        { name: "a", type: "own-array2" },
+      ]),
+    ]);
+
+    expect(file.code).toContain('import type { Array } from "@acme/oa2";');
+  });
+
   it("reserves a global a plugin used without importing it", () => {
     registerFieldType({
       type: "uses-global",

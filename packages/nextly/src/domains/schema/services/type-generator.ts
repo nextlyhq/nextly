@@ -1566,10 +1566,13 @@ ${properties}
    * nothing.
    */
   private reserveGlobalsWritten(body: string, reserved: Set<string>): void {
-    const occurrences = (haystack: string, needle: string): number =>
-      haystack.split(needle).length - 1;
+    // Counted at identifier boundaries rather than as a substring: `Array<`
+    // occurs inside `ReadonlyArray<`, and crediting that to `Array` would
+    // reserve a name the emitted code never used and refuse an import that
+    // could not have shadowed anything.
+    const occurrences = (haystack: string, name: string): number =>
+      haystack.match(new RegExp(`(?<![$\\w])${name}<`, "g"))?.length ?? 0;
     for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
-      const token = `${global}<`;
       // Only an emission whose own type declared an import for this name is
       // subtracted. A plugin writing `Partial<Model>` without importing
       // `Partial` means the standard global, exactly as core does, so its use
@@ -1578,11 +1581,11 @@ ${properties}
       const byPlugins = this.pluginEmissions.reduce(
         (total, emission) =>
           emission.imported.has(global)
-            ? total + occurrences(emission.expression, token)
+            ? total + occurrences(emission.expression, global)
             : total,
         0
       );
-      if (occurrences(body, token) > byPlugins) reserved.add(global);
+      if (occurrences(body, global) > byPlugins) reserved.add(global);
     }
   }
 
