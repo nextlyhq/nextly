@@ -1,8 +1,32 @@
-import { beforeAll, afterAll } from "vitest";
+import { beforeAll, afterAll, afterEach, expect } from "vitest";
+
+import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
 beforeAll(() => {
   // Setup test environment
   console.log("🧪 Setting up nextly tests...");
+});
+
+/**
+ * Fail any test that leaves a PostgreSQL transaction aborted.
+ *
+ * `current transaction is aborted` is always a SECONDARY error: some earlier statement in the
+ * transaction failed and was swallowed, and every statement after it reports this instead. The
+ * pattern that produces it is an existence check written as "run a query and catch the
+ * failure" — valid on SQLite and MySQL, fatal on PostgreSQL, and therefore invisible to a suite
+ * that passes on the first two.
+ *
+ * Asserted centrally rather than per test, because the failure surfaces far from its cause and
+ * no individual test knows to look for it.
+ *
+ * Runs after EVERY test so the failure is attributed to the test that caused it rather than to
+ * whichever one happens to run last. The message comes from the same function published through
+ * `nextly/testing`, so this suite and a plugin author's suite report the identical diagnosis;
+ * only the assertion differs, because each runner reports its own best.
+ */
+afterEach(() => {
+  const aborted = describeAbortedTransactions();
+  if (aborted) expect.fail(aborted);
 });
 
 afterAll(() => {
