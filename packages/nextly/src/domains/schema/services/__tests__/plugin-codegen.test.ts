@@ -1665,6 +1665,72 @@ describe("plugin field types in the Zod generator", () => {
     ).toContain('import type { Rating } from "@acme/vl";');
   });
 
+  it("reserves a standard utility the Zod output applies", () => {
+    registerFieldType({
+      type: "zod-uses-readonly",
+      storage: "json",
+      component: "@acme/zur/admin#Input",
+      // No `Readonly` import, so this means the standard global.
+      codegen: { zodSchema: () => "z.custom<Readonly<string[]>>()" },
+    });
+    registerFieldType({
+      type: "zod-imports-readonly",
+      storage: "json",
+      component: "@acme/zir/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Readonly"], from: "@acme/zir" }],
+        zodSchema: () => "z.custom<Readonly<string>>()",
+      },
+    });
+
+    // The Zod file is its own module, so an import lands in the same scope as
+    // the expression relying on the global. Reserving from a fixed list of
+    // utility names leaves every one outside it shadowable here too.
+    let message = "";
+    try {
+      new ZodGenerator({ generateTypes: false }).generateSchema(
+        collection([
+          { name: "r", type: "zod-uses-readonly" },
+          { name: "i", type: "zod-imports-readonly" },
+        ])
+      );
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'Readonly'");
+  });
+
+  it("keeps a Zod global free when one shared field emitted it twice", () => {
+    registerFieldType({
+      type: "zod-shared-record",
+      storage: "json",
+      component: "@acme/zsr/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Record"], from: "@acme/zsr" }],
+        zodSchema: () => "z.custom<Record<string, string>>()",
+      },
+    });
+
+    // One field object reused by two groups, which is how a shared field
+    // definition is normally written. Both emit `Record<`, so the body holds
+    // two while an identity-keyed map holds one — and the generator would
+    // credit itself with the difference and refuse the plugin's own import.
+    const shared = { name: "s", type: "zod-shared-record" };
+    const schema = new ZodGenerator({ generateTypes: false }).generateSchema(
+      collection([
+        { name: "a", type: "group", fields: [shared] },
+        { name: "b", type: "group", fields: [shared] },
+      ])
+    );
+
+    expect(schema.code).toContain('import type { Record } from "@acme/zsr";');
+  });
+
   it("emits only the import list belonging to this file's expression", () => {
     // Both expressions exist, but each names its own imports, so the type used
     // by only one of them appears in only that file.

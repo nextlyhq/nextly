@@ -47,7 +47,9 @@ import {
   pluginCodegenImports,
   pluginStorageFieldType,
   pluginZodSchema,
+  reserveAppliedGlobals,
 } from "./plugin-codegen";
+import type { PluginEmission } from "./plugin-codegen";
 
 /** What a blocks field accepts when it declares no kinds of its own. */
 const DEFAULT_BLOCKS_DOCUMENT_KIND = "page";
@@ -134,6 +136,16 @@ export class ZodGenerator {
 
   /** Expressions the plugin callbacks returned during this run; see below. */
   private pluginExpressions = new Map<object, string>();
+
+  /**
+   * The same expressions in emission order, repeats included.
+   *
+   * The map above is keyed by field object, so one field reused in two
+   * containers collapses to a single entry. Reserving globals has to count what
+   * the file actually wrote: undercounting a plugin's own uses marks the name
+   * as core's and refuses the plugin's legitimate import.
+   */
+  private pluginEmissions: PluginEmission[] = [];
   private readonly includeComments: boolean;
   private readonly schemaPrefix: string;
 
@@ -160,6 +172,7 @@ export class ZodGenerator {
    */
   generateSchema(collection: DynamicCollectionRecord): GeneratedZodSchema {
     this.pluginExpressions = new Map();
+    this.pluginEmissions = [];
     const schemas = this.generateSchemaDefinitions(collection);
     const types = this.generateTypes
       ? this.generateTypeExports(collection)
@@ -234,6 +247,19 @@ export class ZodGenerator {
   // ============================================================
 
   /**
+   * Keep an expression for the global-reservation count.
+   *
+   * Recorded per emission rather than per field, so a field object reused in
+   * two containers contributes both of the expressions the file actually holds.
+   */
+  private recordEmission(field: object, expression: string): void {
+    this.pluginEmissions.push({
+      expression,
+      imported: pluginDeclaredImportNames(field, "zodImports"),
+    });
+  }
+
+  /**
    * Generates import statements for the schema file.
    *
    * A plugin field type's Zod expression may name a type it declared imports
@@ -248,22 +274,11 @@ export class ZodGenerator {
     body: string
   ): string {
     const reserved = this.declaredNames(collection);
-    // The same protection the TypeScript generator gives its own output: an
-    // import of a global utility shadows it for the whole module, so a plugin
-    // writing `Partial<Model>` without importing it loses that type to another
-    // plugin's same-named import. Only occurrences this file wrote outside the
-    // expressions that declared an import for the name are counted.
-    const occurrences = (haystack: string, name: string): number =>
-      haystack.match(new RegExp(`(?<![$\\w])${name}<`, "g"))?.length ?? 0;
-    for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
-      let byPlugins = 0;
-      for (const [field, expression] of emittedByField) {
-        if (pluginDeclaredImportNames(field, "zodImports").has(global)) {
-          byPlugins += occurrences(expression, global);
-        }
-      }
-      if (occurrences(body, global) > byPlugins) reserved.add(global);
-    }
+    // The same protection the TypeScript generator gives its own output, run by
+    // the same function: an import of a global utility shadows it for the whole
+    // module, so a plugin writing `Partial<Model>` without importing it loses
+    // that type to another plugin's same-named import.
+    reserveAppliedGlobals(body, this.pluginEmissions, reserved);
 
     const pluginImports = pluginCodegenImports(
       [collection],
@@ -505,6 +520,7 @@ export class ZodGenerator {
       const contributed = pluginZodSchema(field);
       if (contributed !== undefined) {
         this.pluginExpressions.set(field, contributed);
+        this.recordEmission(field, contributed);
         // Parenthesized because the modifiers below are appended as text. A
         // type is free to return any expression, and `a ? b : c` would take
         // `.optional()` onto its last branch only, while `x as T` would take it
@@ -844,6 +860,7 @@ export class ZodGenerator {
           // nested field would otherwise be filtered out and the schema would
           // name an identifier it never imported.
           this.pluginExpressions.set(field, contributed);
+          this.recordEmission(field, contributed);
           // Parenthesized for the same reason as the top-level branch: the
           // `.optional()` below is appended as text.
           zodSchema = `(${contributed})`;

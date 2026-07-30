@@ -55,6 +55,7 @@ import {
   pluginCodegenImports,
   pluginStorageFieldType,
   pluginTsType,
+  reserveAppliedGlobals,
 } from "./plugin-codegen";
 
 // ============================================================
@@ -1562,51 +1563,12 @@ ${properties}
   }
 
   /**
-   * Reserve the globals `body` relies on resolving, so no import shadows them.
-   *
-   * An import of one shadows it for the whole scope it lands in — a non-generic
-   * `Partial` makes every `Partial<Post>` fail to compile — but only the ones
-   * this output actually wrote are worth reserving, so a name no construct here
-   * uses stays free.
-   *
-   * A plugin expression naming `Partial<Model>` is the plugin using its own
-   * import, so its uses are subtracted rather than removed from the text:
-   * deleting them would also erase core's own `Partial<Post>` and reserve
-   * nothing.
+   * Reserve the globals this output relies on resolving, so no import shadows
+   * them. Shared with the Zod generator, which emits different files from the
+   * same expressions and needs the identical rule.
    */
   private reserveGlobalsWritten(body: string, reserved: Set<string>): void {
-    // Counted at identifier boundaries rather than as a substring: `Array<`
-    // occurs inside `ReadonlyArray<`, and crediting that to `Array` would
-    // reserve a name the emitted code never used and refuse an import that
-    // could not have shadowed anything.
-    const occurrences = (haystack: string, name: string): number =>
-      haystack.match(new RegExp(`(?<![$\\w])${name}<`, "g"))?.length ?? 0;
-
-    // Every name the output applies type arguments to, rather than a list of
-    // the ones that happened to come up. `Partial` is not special: `Readonly`,
-    // `Required`, `Exclude` and the rest shadow just as badly, and a standard
-    // utility missing from a fixed list would be imported over in silence.
-    // Matching requires the `<` to follow immediately, as a generic
-    // application does, so a comparison never reads as one.
-    const applied = new Set(
-      Array.from(body.matchAll(/(?<![$\w])([A-Za-z_$][\w$]*)</g), m => m[1])
-    );
-
-    for (const global of applied) {
-      // Only an emission whose own type declared an import for this name is
-      // subtracted. A plugin writing `Partial<Model>` without importing
-      // `Partial` means the standard global, exactly as core does, so its use
-      // has to be protected from another plugin's same-named import rather
-      // than counted as that plugin's own.
-      const byPlugins = this.pluginEmissions.reduce(
-        (total, emission) =>
-          emission.imported.has(global)
-            ? total + occurrences(emission.expression, global)
-            : total,
-        0
-      );
-      if (occurrences(body, global) > byPlugins) reserved.add(global);
-    }
+    reserveAppliedGlobals(body, this.pluginEmissions, reserved);
   }
 
   private asScalarStorageField(

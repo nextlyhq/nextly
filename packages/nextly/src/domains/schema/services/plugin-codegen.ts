@@ -423,6 +423,70 @@ function closingSlash(source: string, open: number): number {
   return -1;
 }
 
+/** One expression a plugin type emitted, with the names its own type imported. */
+export interface PluginEmission {
+  expression: string;
+  imported: ReadonlySet<string>;
+}
+
+/**
+ * Reserve the globals `body` relies on resolving, so no import shadows them.
+ *
+ * An import of one shadows it for the whole scope it lands in — a non-generic
+ * `Partial` makes every `Partial<Post>` fail to compile — but only the ones an
+ * output actually wrote are worth reserving, so a name no construct uses stays
+ * free.
+ *
+ * A plugin expression naming `Partial<Model>` is the plugin using its own
+ * import, so its uses are subtracted rather than removed from the text:
+ * deleting them would also erase core's own `Partial<Post>` and reserve
+ * nothing. `emissions` therefore has to carry repeats — the same field object
+ * reused in two containers is emitted twice, and counting it once leaves the
+ * subtraction short and refuses the plugin's own legitimate import.
+ *
+ * Shared by both generators rather than written once each: they emit different
+ * files from the same expressions, and the two copies drifted — one gaining a
+ * fix the other did not.
+ */
+export function reserveAppliedGlobals(
+  body: string,
+  emissions: readonly PluginEmission[],
+  reserved: Set<string>
+): void {
+  // Counted at identifier boundaries rather than as a substring: `Array<`
+  // occurs inside `ReadonlyArray<`, and crediting that to `Array` would
+  // reserve a name the emitted code never used and refuse an import that
+  // could not have shadowed anything.
+  const occurrences = (haystack: string, name: string): number =>
+    haystack.match(new RegExp(`(?<![$\\w])${name}<`, "g"))?.length ?? 0;
+
+  // Every name the output applies type arguments to, rather than a list of the
+  // ones that happened to come up. `Partial` is not special: `Readonly`,
+  // `Required`, `Exclude` and the rest shadow just as badly, and a standard
+  // utility missing from a fixed list would be imported over in silence.
+  // Matching requires the `<` to follow immediately, as a generic application
+  // does, so a comparison never reads as one.
+  const applied = new Set(
+    Array.from(body.matchAll(/(?<![$\w])([A-Za-z_$][\w$]*)</g), m => m[1])
+  );
+
+  for (const global of applied) {
+    // Only an emission whose own type declared an import for this name is
+    // subtracted. A plugin writing `Partial<Model>` without importing
+    // `Partial` means the standard global, exactly as core's own use is, so its
+    // use has to be protected from another plugin's same-named import rather
+    // than counted as that plugin's own.
+    const byPlugins = emissions.reduce(
+      (total, emission) =>
+        emission.imported.has(global)
+          ? total + occurrences(emission.expression, global)
+          : total,
+      0
+    );
+    if (occurrences(body, global) > byPlugins) reserved.add(global);
+  }
+}
+
 /**
  * The `import type` lines a generated file needs for the plugin types it uses.
  *
