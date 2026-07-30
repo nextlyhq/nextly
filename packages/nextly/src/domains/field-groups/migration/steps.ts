@@ -141,12 +141,23 @@ export function buildMigrationSteps(args: {
     if (entry.kind === "column") {
       return columnStep(entry, { position, applied, identifierCase, observer });
     }
+    // A companion follows its owner immediately in the plan. Its rename joins
+    // the owner's step rather than standing alone, because the registry derives
+    // the companion's name from the owner's `table_name`: whichever of the two
+    // renames the pointer update is separated from, there is a window where the
+    // derived name addresses an object that does not exist. Only moving both
+    // objects and the pointer together closes it.
+    const next = entries[index + 1];
+    const companion =
+      entry.kind === "table" && next?.kind === "companion" ? next : undefined;
+
     return renameStep(entry, {
       position,
       applied,
       registryTable: registryNameAt(entries, position),
       identifierCase,
       observer,
+      companion,
     });
   });
 }
@@ -170,9 +181,13 @@ interface StepContext {
  */
 function renameStep(
   entry: ManifestEntry,
-  context: StepContext & { registryTable: string }
+  context: StepContext & {
+    registryTable: string;
+    companion?: ManifestEntry;
+  }
 ): MigrationStep {
-  const { applied, identifierCase, observer, registryTable } = context;
+  const { applied, identifierCase, observer, registryTable, companion } =
+    context;
   // Companions carry no pointer of their own: their name is derived from the
   // owner's `table_name`, so the owner's update already moves them. The registry
   // is not addressed by any row either.
@@ -206,6 +221,25 @@ function renameStep(
           await ctx.execute(
             generateSQL(
               { type: "rename_table", fromName: entry.from, toName: entry.to },
+              session.dialect
+            )
+          );
+        }
+        // Renamed before the pointer moves, so the name the registry derives
+        // always addresses an object that is there. The companion's own step
+        // later finds its source gone and does nothing, which is the same
+        // idempotence every step already relies on.
+        if (
+          companion !== undefined &&
+          resolveCatalogName(catalog, companion.from) !== undefined
+        ) {
+          await ctx.execute(
+            generateSQL(
+              {
+                type: "rename_table",
+                fromName: companion.from,
+                toName: companion.to,
+              },
               session.dialect
             )
           );

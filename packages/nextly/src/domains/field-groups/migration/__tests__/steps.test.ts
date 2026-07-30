@@ -401,3 +401,55 @@ describe("index survival across a rename", () => {
     await expect(step?.verify(w.session)).resolves.toBe(true);
   });
 });
+
+describe("a companion moves with its owner", () => {
+  const rows = [row({ hasCompanion: true })];
+  const entries = buildMigrationManifest(rows).entries;
+
+  function world() {
+    return createWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero", "comp_hero_locales"],
+      columns: { comp_hero: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
+    });
+  }
+
+  // The registry derives the companion's name from the owner's `table_name`, so
+  // the moment the pointer moves it starts deriving `fg_hero_locales`. If the
+  // companion were renamed by a later independently recorded step, a crash or a
+  // concurrent reader in that window would see localized storage missing.
+  it("renames the companion in the same step that moves the pointer", async () => {
+    const w = world();
+    const [tableStep] = buildMigrationSteps({
+      entries,
+      identifierCase: PRESERVING,
+      observer: w.observer,
+    });
+    await tableStep?.run(w.session);
+
+    expect(w.tableNames()).toContain("fg_hero");
+    expect(w.tableNames()).toContain("fg_hero_locales");
+    expect(w.pointersOf(LEGACY_REGISTRY)).toEqual(["fg_hero"]);
+    // One transaction, so no window exists between the two renames and the
+    // pointer at all.
+    expect(w.transactionCount()).toBe(1);
+  });
+
+  // The companion still has its own entry and position, so the plan's shape and
+  // hash are unchanged. Its step finds the source already gone and does nothing.
+  it("leaves the companion's own step as a no-op that still verifies", async () => {
+    const w = world();
+    const steps = buildMigrationSteps({
+      entries,
+      identifierCase: PRESERVING,
+      observer: w.observer,
+    });
+    await steps[0]?.run(w.session);
+    const before = w.statements.length;
+
+    const companionIndex = entries.findIndex(e => e.kind === "companion");
+    await steps[companionIndex]?.run(w.session);
+    expect(w.statements).toHaveLength(before);
+    await expect(steps[companionIndex]?.verify(w.session)).resolves.toBe(true);
+  });
+});
