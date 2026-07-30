@@ -35,6 +35,7 @@ vi.mock("node:fs", async importOriginal => {
 });
 
 const CONFIG_PATH = "/virtual/nextly.config.ts";
+const OTHER_CONFIG_PATH = "/virtual/other.config.ts";
 
 /** The change listener the loader registered with `watch`. */
 function capturedListener(): (event: string) => void {
@@ -48,7 +49,9 @@ function capturedListener(): (event: string) => void {
 const loaded = { mod: { default: { plugins: [] } }, dependencies: [] };
 
 beforeEach(() => {
-  vi.mocked(existsSync).mockImplementation(path => path === CONFIG_PATH);
+  vi.mocked(existsSync).mockImplementation(
+    path => path === CONFIG_PATH || path === OTHER_CONFIG_PATH
+  );
   clearConfigCache();
   clearFieldTypes();
 });
@@ -93,5 +96,50 @@ describe("watched config reloads", () => {
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(maxActive).toBe(1);
+  });
+
+  it("drains against the watcher that is installed, not the one that queued", async () => {
+    bundleAndRequire.mockResolvedValue(loaded);
+    await loadConfig({ configPath: CONFIG_PATH, cwd: "/virtual", watch: true });
+    const fireFirst = capturedListener();
+
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let call = 0;
+    const bundled: string[] = [];
+
+    bundleAndRequire.mockImplementation(async (args: { filepath: string }) => {
+      bundled.push(args.filepath);
+      call += 1;
+      // Hold the first reload open so the watcher is replaced underneath it.
+      if (call === 1) await gate;
+      return loaded;
+    });
+
+    // A reload is now in flight against the first watcher.
+    fireFirst("change");
+
+    // The first watcher is stopped and a different config is watched instead,
+    // which is what `clearConfigCache()` followed by another watched load does.
+    clearConfigCache();
+    await loadConfig({
+      configPath: OTHER_CONFIG_PATH,
+      cwd: "/virtual",
+      watch: true,
+    });
+    const fireSecond = capturedListener();
+    fireSecond("change");
+
+    release();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // The drained reload has to be the second watcher's config. Reloading the
+    // first again would hand its result to callbacks registered for the
+    // second, and the second's change would never be loaded at all.
+    expect(bundled.at(-1)).toBe(OTHER_CONFIG_PATH);
   });
 });
