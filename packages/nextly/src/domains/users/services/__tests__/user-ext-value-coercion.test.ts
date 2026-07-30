@@ -111,6 +111,23 @@ describe("coerceUserExtValue", () => {
     ).toThrow(NextlyError);
   });
 
+  it("refuses a non-string for a text-backed type", () => {
+    registerFieldType({
+      type: "slugish2",
+      storage: "text",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    expect(() =>
+      coerceUserExtValue({ nested: 1 }, { name: "handle", type: "slugish2" })
+    ).toThrow(NextlyError);
+    // The value a text column can actually hold still passes.
+    expect(coerceUserExtValue("ok", { name: "handle", type: "slugish2" })).toBe(
+      "ok"
+    );
+  });
+
   it("refuses an Invalid Date object", () => {
     registerFieldType({
       type: "occurred3",

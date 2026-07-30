@@ -959,6 +959,15 @@ export class TypeGenerator {
         }
         break;
 
+      case "json":
+        // A JSON column hands back whatever was stored — object, array or
+        // scalar — so the field cannot be narrowed further. Reached through the
+        // storage fallback below when a `json`-backed plugin type declares no
+        // rendering of its own; without a case here it fell to the unknown-type
+        // default and generated `string`.
+        tsType = "unknown";
+        break;
+
       default: {
         // A plugin-contributed type renders itself; failing that, what the
         // registry says it stores. `string` remains the fallback only for a

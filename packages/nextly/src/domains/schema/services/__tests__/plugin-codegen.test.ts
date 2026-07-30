@@ -100,6 +100,24 @@ describe("plugin field types in the TypeScript generator", () => {
     expect(file.code).toContain("Scaled<3>");
   });
 
+  it("types a json-backed user field as unknown, not string", () => {
+    registerFieldType({
+      type: "profile-blob",
+      storage: "json",
+      component: "@acme/pb/admin#Blob",
+      surfaces: ["users"],
+    });
+
+    // No `tsType`, so generation falls back to the storage primitive. A JSON
+    // column hands back an object, array or scalar, so `string` is wrong.
+    const records = convertToUserFieldRecords([
+      { name: "profile", type: "profile-blob" },
+    ] as unknown as Parameters<typeof convertToUserFieldRecords>[0]);
+    const iface = new TypeGenerator().generateUserInterface(records);
+
+    expect(iface.code).toMatch(/profile\??:\s*unknown;/);
+  });
+
   it("returns the imports the User interface on its own relies on", () => {
     registerFieldType({
       type: "badge",

@@ -204,6 +204,15 @@ export function coerceUserExtValue(
     if (token === "date" && typeof value !== "string") {
       throw userExtValueError(name, "a date");
     }
+    // Text and long text both hold a string. An object bound to a plain text
+    // column fails on SQLite, and that failure is read as the extension table
+    // being absent — so without this the value is dropped rather than refused.
+    if (
+      (token === "text" || token === "textarea") &&
+      typeof value !== "string"
+    ) {
+      throw userExtValueError(name, "text");
+    }
   }
 
   if (typeof value !== "string") return value;
