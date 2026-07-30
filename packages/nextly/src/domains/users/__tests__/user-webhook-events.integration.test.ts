@@ -86,11 +86,10 @@ interface EventRow {
 }
 
 describe("user mutation webhook events (real SQLite)", () => {
-  // Cast to any because this test only imports the sqlite adapter; the full
-  // DrizzleAdapter type lives in @nextlyhq/adapter-drizzle and importing it here
-  // would add a dev dep just for a variable annotation (mirrors the sibling
-  // user-mutation transaction integration test).
-  let adapter: any;
+  // Inferred from the imported factory rather than importing the full
+  // DrizzleAdapter type from @nextlyhq/adapter-drizzle (a dependency this suite
+  // does not otherwise need), so every adapter call stays type-checked.
+  let adapter: ReturnType<typeof createSqliteAdapter>;
   let service: UserMutationService;
 
   beforeAll(async () => {

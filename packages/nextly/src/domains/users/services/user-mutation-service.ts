@@ -100,7 +100,12 @@ interface DrizzleTransactionLike {
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): Promise<Record<string, unknown>[]>;
+        // `.for("update")` exists on the Postgres/MySQL builders (SQLite has no
+        // row lock); it is only invoked off SQLite, and the query is awaitable
+        // either way.
+        limit(count: number): Promise<Record<string, unknown>[]> & {
+          for(strength: "update"): Promise<Record<string, unknown>[]>;
+        };
       };
     };
   };
@@ -1143,16 +1148,23 @@ export class UserMutationService extends BaseService {
         // Read the removed account's identity INSIDE the transaction, right
         // before the delete, so the event reports the row actually being
         // removed. Email and name are read (external systems key on email, not
-        // an opaque id); reading here rather than before the transaction means
-        // an `updateUser` that commits in between cannot make the event record a
-        // stale address. Absence is the NOT_FOUND case — thrown inside the tx,
-        // which rolls back and surfaces unchanged through the catch below.
+        // an opaque id). On Postgres/MySQL the read takes a FOR UPDATE row lock,
+        // so a concurrent `updateUser` cannot commit between this read and the
+        // delete and make the event advertise a stale address; the lock is held
+        // until this transaction commits with the removal. SQLite has no row
+        // lock, but a write transaction serializes writers, so its transaction
+        // already excludes that race. Absence is the NOT_FOUND case — thrown
+        // inside the tx, which rolls back and surfaces unchanged through the
+        // catch below.
+        const preimageQuery = txDb
+          .select({ id: users.id, email: users.email, name: users.name })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
         const preimage = (
-          await txDb
-            .select({ id: users.id, email: users.email, name: users.name })
-            .from(users)
-            .where(eq(users.id, userId))
-            .limit(1)
+          this.dialect === "sqlite"
+            ? await preimageQuery
+            : await preimageQuery.for("update")
         )[0];
         if (!preimage) {
           throw NextlyError.notFound({
