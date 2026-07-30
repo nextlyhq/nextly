@@ -8,6 +8,8 @@
  * @since 1.0.0
  */
 
+import { NextlyError } from "../errors/nextly-error";
+
 import type {
   BeforeOperationArgs,
   BeforeOperationContext,
@@ -273,10 +275,27 @@ export class HookRegistry {
           data = result;
         }
       } catch (error: unknown) {
-        // Re-throw with additional context for debugging
-        throw new Error(
-          `Hook execution failed for ${hookType} on ${context.collection}: ${error instanceof Error ? error.message : String(error)}`
-        );
+        // A hook that rejects its input does so deliberately, and says how: a
+        // validation error carries field issues, a forbidden one carries a
+        // status. Rebuilding it as a generic error threw all of that away and
+        // the boundary answered 500, so a hook enforcing a rule reported a
+        // server fault instead of the rule.
+        if (NextlyError.is(error)) {
+          throw error;
+        }
+        // Anything else really is unexpected. The original is kept as `cause`
+        // rather than flattened into a message, so its stack survives, and the
+        // hook and collection travel in log context where they are useful
+        // without being disclosed to the caller.
+        throw NextlyError.internal({
+          cause: error instanceof Error ? error : undefined,
+          logContext: {
+            reason: "hook-execution-failed",
+            hookType,
+            collection: context.collection,
+            ...(error instanceof Error ? {} : { thrown: String(error) }),
+          },
+        });
       }
     }
 

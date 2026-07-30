@@ -1,0 +1,106 @@
+/**
+ * A hook's typed error survives the registry.
+ *
+ * `execute()` rebuilt every thrown error as a generic one, keeping only its
+ * message. A hook rejecting input with `NextlyError.validation()` therefore
+ * reached the mutation boundary as something `NextlyError.is()` does not
+ * recognise, and the caller was answered 500 — so a hook enforcing a rule
+ * reported a server fault instead of the rule, and the field issues it supplied
+ * to explain itself were gone.
+ */
+import { describe, expect, it } from "vitest";
+
+import { NextlyError } from "../../errors/nextly-error";
+import { HookRegistry } from "../hook-registry";
+import type { HookContext } from "../types";
+
+function contextFor(collection: string): HookContext {
+  return {
+    collection,
+    operation: "create",
+    data: {},
+  } as unknown as HookContext;
+}
+
+describe("hook error propagation", () => {
+  it("preserves a validation error thrown by a hook", async () => {
+    const registry = new HookRegistry();
+    const thrown = NextlyError.validation({
+      publicMessage: "Title is required.",
+    });
+    registry.register("beforeCreate", "docs", () => {
+      throw thrown;
+    });
+
+    // Identity, not just shape: the boundary reads status, code and field
+    // issues off this object, and a copy carrying the message alone would
+    // satisfy a looser assertion while still losing them.
+    await expect(
+      registry.execute("beforeCreate", contextFor("docs"))
+    ).rejects.toBe(thrown);
+  });
+
+  it("keeps the error recognisable to NextlyError.is", async () => {
+    const registry = new HookRegistry();
+    registry.register("beforeCreate", "docs", () => {
+      throw NextlyError.forbidden({});
+    });
+
+    // What the mutation boundary actually branches on. Without it the response
+    // falls through to a 500 regardless of what the hook meant.
+    const error = await registry
+      .execute("beforeCreate", contextFor("docs"))
+      .catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+  });
+
+  it("wraps an untyped error as internal, keeping the original as cause", async () => {
+    const registry = new HookRegistry();
+    const original = new Error("boom");
+    registry.register("beforeCreate", "docs", () => {
+      throw original;
+    });
+
+    const error = await registry
+      .execute("beforeCreate", contextFor("docs"))
+      .catch((e: unknown) => e);
+
+    // Genuinely unexpected, so it becomes an internal error — but the original
+    // is kept rather than flattened into a message, so the stack survives.
+    expect(NextlyError.is(error)).toBe(true);
+    expect((error as NextlyError).code).toBe("INTERNAL_ERROR");
+    expect((error as { cause?: unknown }).cause).toBe(original);
+  });
+
+  it("survives a thrown non-Error", async () => {
+    // A hook may throw a string. It must not take the registry down with it,
+    // and what it threw is worth recording.
+    const registry = new HookRegistry();
+    registry.register("beforeCreate", "docs", () => {
+      throw "nope";
+    });
+
+    const error = await registry
+      .execute("beforeCreate", contextFor("docs"))
+      .catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+  });
+
+  it("still runs later hooks when no one throws", async () => {
+    // The mirror: error handling must not change the ordinary path.
+    const registry = new HookRegistry();
+    const seen: string[] = [];
+    registry.register("beforeCreate", "docs", ctx => {
+      seen.push("first");
+      return { ...(ctx.data as object), a: 1 };
+    });
+    registry.register("beforeCreate", "docs", ctx => {
+      seen.push("second");
+      return ctx.data;
+    });
+
+    const data = await registry.execute("beforeCreate", contextFor("docs"));
+    expect(seen).toEqual(["first", "second"]);
+    expect(data).toMatchObject({ a: 1 });
+  });
+});
