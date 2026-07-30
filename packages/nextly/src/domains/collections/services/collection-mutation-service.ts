@@ -103,6 +103,7 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
@@ -4315,6 +4316,17 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
 
+      // Stage B draft/published split: an update to a PUBLISHED document that
+      // names no status is non-destructive on a split-enabled collection — it is
+      // stored as the working draft, leaving the live row untouched. Requires the
+      // draft/publish lifecycle (`status`) and drafts-enabled versioning.
+      const splitEnabled =
+        collectionHasStatus && versionsConfig?.drafts?.enabled === true;
+      // No status named ⇒ neither the main row nor the write-locale companion
+      // `_status` is being set (matches the transition guard's own build gate at
+      // `transitionNextStatus !== undefined`).
+      const namesNoStatus = transitionNextStatus === undefined;
+
       // Resolved BEFORE the transaction opens, for the reason given on the
       // create path: expansion reads the component registry on the pooled
       // connection. Hoisting it also keeps a conflict retry from re-running the
@@ -4361,6 +4373,9 @@ export class CollectionMutationService extends BaseService {
           // This locale's committed status before the write, reused by both the
           // prior document and the post-write overlay so the two stay symmetric.
           let committedLocaleStatus: string | null = null;
+          // Stage B: set once the row-locked prior state is read below — true
+          // when this update should be stored as the working draft.
+          let storeAsWorkingDraft = false;
 
           // Take the row lock the UPDATE below needs anyway, before reading the
           // prior state. Without it two concurrent updates to the same entry
@@ -4531,6 +4546,20 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
+          // Stage B: decide the draft edit from the ROW-LOCKED prior status —
+          // the main row, or the write locale's companion `_status` — the same
+          // locked reads the transition guard uses, so the decision is
+          // TOCTOU-safe (a concurrent publish/unpublish committed before the
+          // lock is seen). A never-published (`draft`) or per-locale-absent
+          // (`null`) document fails the test and edits in place.
+          const draftLiveStatus = isNonDefaultLocaleStatusWrite
+            ? committedLocaleStatus
+            : (((preUpdateRow as { status?: unknown } | undefined)?.status as
+                | string
+                | undefined) ?? null);
+          storeAsWorkingDraft =
+            splitEnabled && namesNoStatus && draftLiveStatus === "published";
+
           // TOCTOU-safe authorization: classify the transition against the
           // status just read UNDER THE ROW LOCK (`preUpdateRow` /
           // `committedLocaleStatus`), not the pre-transaction read, and enforce
@@ -4615,16 +4644,28 @@ export class CollectionMutationService extends BaseService {
             })
             .join(", ");
           sqlParams.push(params.entryId);
-          await tx.execute(
-            `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
-            sqlParams as (string | number | boolean | Date | null | undefined)[]
-          );
+          // Stage B: skip the live-row UPDATE for a draft edit — the pending
+          // change is stored as the working draft below, not written to the row.
+          if (!storeAsWorkingDraft) {
+            await tx.execute(
+              `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
+              sqlParams as (
+                | string
+                | number
+                | boolean
+                | Date
+                | null
+                | undefined
+              )[]
+            );
+          }
 
           // Capture the committed per-locale `_status` BEFORE the upsert so the
           // post-commit event can report the real prior value. Only when the
           // write actually changes this locale's status (companion `_status` is
           // present only when `status` was explicitly in the patch).
           if (
+            !storeAsWorkingDraft &&
             localizedUpdate &&
             typeof localizedUpdate.companionData._status === "string"
           ) {
@@ -4639,6 +4680,7 @@ export class CollectionMutationService extends BaseService {
           // i18n M5: upsert the translatable values into the companion row for the write's locale
           // (same transaction). Only the provided localized columns are touched.
           if (
+            !storeAsWorkingDraft &&
             localizedUpdate &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
@@ -4660,6 +4702,7 @@ export class CollectionMutationService extends BaseService {
 
           // Save component field data to separate comp_{slug} tables
           if (
+            !storeAsWorkingDraft &&
             this.fieldGroupDataService &&
             Object.keys(attemptComponentData).length > 0
           ) {
@@ -4684,7 +4727,10 @@ export class CollectionMutationService extends BaseService {
           // tx-scoped Drizzle handle binds the junction writes to this tx.
           const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
           for (const field of manyToManyFields) {
-            if (manyToManyData[field.name] !== undefined) {
+            if (
+              !storeAsWorkingDraft &&
+              manyToManyData[field.name] !== undefined
+            ) {
               await this.relationshipService.deleteManyToManyRelations(
                 params.collectionName,
                 params.entryId,
@@ -4843,7 +4889,7 @@ export class CollectionMutationService extends BaseService {
                 // locale-specific too — the singles path counts it the same way.
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
-              if (versionsConfig?.enabled) {
+              if (versionsConfig?.enabled && !storeAsWorkingDraft) {
                 await captureInTx(tx, this.versionCapture, {
                   ref: {
                     scopeKind: "collection",
@@ -4885,26 +4931,65 @@ export class CollectionMutationService extends BaseService {
                 });
               }
 
+              // Stage B: a status-less update to a published document is stored
+              // as the working draft — the live row and its relations were left
+              // untouched above — instead of updating the live row and capturing
+              // a published version. The parent overlay already produced the
+              // intended parent with no write; overlay the in-memory intended
+              // relations onto the (unchanged) live relations read for the
+              // snapshot so a changed component/m2m field is reflected.
+              if (storeAsWorkingDraft) {
+                const draftParts = await this.snapshotPartsFor(
+                  {
+                    parentRow,
+                    components: {
+                      ...snapshotComponents,
+                      ...componentFieldData,
+                    },
+                    manyToMany: { ...snapshotM2M, ...manyToManyData },
+                  },
+                  fields,
+                  tx
+                );
+                await new VersionsRepository(tx).upsertWorkingDraft({
+                  ref: {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  locale: capturedLocaleState
+                    ? (localizedUpdate?.writeLocale ??
+                      this.componentSnapshotLocale(params.locale))
+                    : null,
+                  snapshot: assembleDocument(draftParts),
+                  createdBy: params.user?.id ?? null,
+                });
+              }
+
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
-              // `recorded` is false when the collection opted out of recording.
+              // `recorded` is false when the collection opted out of recording. A
+              // draft edit records no public event: the live document did not
+              // change.
               const updatedDocument = assembleDocument(documentParts);
-              recorded = await recordMutationEvent(tx, {
-                type: "entry.updated",
-                resource: {
-                  kind: "entry",
-                  collection: params.collectionName,
-                  id: params.entryId,
-                  // The resolved write locale — see the create path.
-                  ...(localizedUpdate
-                    ? { locale: localizedUpdate.writeLocale }
-                    : {}),
-                },
-                data: updatedDocument,
-                previous: previousDocument,
-                fields: webhookFields,
-                actor: actorForWrite(params.actor, params.user),
-              });
+              if (!storeAsWorkingDraft) {
+                recorded = await recordMutationEvent(tx, {
+                  type: "entry.updated",
+                  resource: {
+                    kind: "entry",
+                    collection: params.collectionName,
+                    id: params.entryId,
+                    // The resolved write locale — see the create path.
+                    ...(localizedUpdate
+                      ? { locale: localizedUpdate.writeLocale }
+                      : {}),
+                  },
+                  data: updatedDocument,
+                  previous: previousDocument,
+                  fields: webhookFields,
+                  actor: actorForWrite(params.actor, params.user),
+                });
+              }
 
               // D69 status lifecycle events, recorded in the SAME transaction as
               // entry.updated (mirrors the post-commit transitionStatus, but
