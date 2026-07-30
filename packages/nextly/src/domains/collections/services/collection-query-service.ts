@@ -95,6 +95,7 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { VersionsRepository } from "../../versions/versions-repository";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -2226,6 +2227,36 @@ export class CollectionQueryService extends BaseService {
                 : undefined,
           },
         });
+      }
+
+      // Stage B: on a trusted draft-view read, surface the working draft
+      // (pending edits to a published document) in place of the live row, when
+      // one exists. Placed AFTER the live assembly above so re-reading LIVE
+      // relations/components/localized values by the shared entry id cannot
+      // clobber the draft's values, and BEFORE the redaction/shaping below so
+      // the snapshot's owner column, password values, and field-level read
+      // access are stripped and enforced like any other read. Never surfaced for
+      // a published-only or untrusted read: `statusFilter === null` excludes the
+      // published default and `?status=published`, and `overrideAccess ||
+      // routeAuthorized` excludes an anonymous caller passing `?status=all`.
+      const draftView =
+        (collectionForStatus as { status?: boolean }).status === true &&
+        statusFilter === null &&
+        (params.overrideAccess === true || params.routeAuthorized === true);
+      if (draftView) {
+        const workingDraft = await new VersionsRepository(
+          this.adapter
+        ).findWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId,
+          },
+          localeChain?.[0] ?? null
+        );
+        if (workingDraft) {
+          expandedEntry = workingDraft.snapshot as Record<string, unknown>;
+        }
       }
 
       // Redact password hashes BEFORE any afterRead hook runs (a hook could

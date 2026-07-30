@@ -98,4 +98,34 @@ describe("draft/published split — updateEntry (integration)", () => {
     // No durable (numbered) version was stamped for the draft edit.
     expect(await durableCount()).toBe(durableBefore);
   });
+
+  it("surfaces the working draft on a trusted draft-view read, but the live row on a published-view read", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited-in-draft" }
+    );
+
+    // Draft view: no explicit status on a trusted read resolves the status
+    // filter to null, so the overlay returns the pending edit.
+    const draftRead = await entries.getEntry({ ...ctx, entryId: id });
+    expect((draftRead.data as { title?: string }).title).toBe(
+      "edited-in-draft"
+    );
+
+    // Published view: an explicit status filter suppresses the overlay, so the
+    // live (unchanged) row is returned.
+    const publishedRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      status: "published",
+    });
+    expect((publishedRead.data as { title?: string }).title).toBe("live");
+  });
 });
