@@ -42,6 +42,7 @@ import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collectio
 
 import {
   asScalarStorageField,
+  pluginDeclaredImportNames,
   isPluginDataField,
   pluginCodegenImports,
   pluginStorageFieldType,
@@ -167,7 +168,11 @@ export class ZodGenerator {
     // Built after the body, so a plugin import is emitted only when one of the
     // plugin expressions actually references it. Searching the whole body would
     // match the generator's own declarations instead.
-    const imports = this.generateImports(collection, this.pluginExpressions);
+    const imports = this.generateImports(
+      collection,
+      this.pluginExpressions,
+      [schemas, types].join("\n")
+    );
 
     const code = [imports, "", schemas, types].filter(Boolean).join("\n");
 
@@ -239,11 +244,30 @@ export class ZodGenerator {
    */
   private generateImports(
     collection: DynamicCollectionRecord,
-    emittedByField: ReadonlyMap<object, string>
+    emittedByField: ReadonlyMap<object, string>,
+    body: string
   ): string {
+    const reserved = this.declaredNames(collection);
+    // The same protection the TypeScript generator gives its own output: an
+    // import of a global utility shadows it for the whole module, so a plugin
+    // writing `Partial<Model>` without importing it loses that type to another
+    // plugin's same-named import. Only occurrences this file wrote outside the
+    // expressions that declared an import for the name are counted.
+    const occurrences = (haystack: string, name: string): number =>
+      haystack.match(new RegExp(`(?<![$\\w])${name}<`, "g"))?.length ?? 0;
+    for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
+      let byPlugins = 0;
+      for (const [field, expression] of emittedByField) {
+        if (pluginDeclaredImportNames(field, "zodImports").has(global)) {
+          byPlugins += occurrences(expression, global);
+        }
+      }
+      if (occurrences(body, global) > byPlugins) reserved.add(global);
+    }
+
     const pluginImports = pluginCodegenImports(
       [collection],
-      this.declaredNames(collection),
+      reserved,
       "zodImports",
       emittedByField
     );
@@ -481,7 +505,11 @@ export class ZodGenerator {
       const contributed = pluginZodSchema(field);
       if (contributed !== undefined) {
         this.pluginExpressions.set(field, contributed);
-        zodSchema = contributed;
+        // Parenthesized because the modifiers below are appended as text. A
+        // type is free to return any expression, and `a ? b : c` would take
+        // `.optional()` onto its last branch only, while `x as T` would take it
+        // onto the type and not parse at all.
+        zodSchema = `(${contributed})`;
       } else {
         // No schema of its own, but the registry knows what it stores.
         // Re-entered as the storage primitive's built-in type rather than
@@ -816,7 +844,9 @@ export class ZodGenerator {
           // nested field would otherwise be filtered out and the schema would
           // name an identifier it never imported.
           this.pluginExpressions.set(field, contributed);
-          zodSchema = contributed;
+          // Parenthesized for the same reason as the top-level branch: the
+          // `.optional()` below is appended as text.
+          zodSchema = `(${contributed})`;
         } else {
           const storageType = pluginStorageFieldType(field);
           const asStorage =

@@ -875,10 +875,25 @@ export class UserMutationService extends BaseService {
 
       if (hasExt) {
         const fieldNames = this.getCustomFieldNames();
+        // Shaped by the same rule the create path uses. An update binds to the
+        // same columns, and its failure is read the same way — as the extension
+        // table being absent — so an unshaped value would be skipped silently
+        // here exactly as it was dropped there.
+        const byName = new Map(
+          this.getEffectiveFields()
+            .filter(
+              (field): field is typeof field & { name: string } =>
+                "name" in field && typeof field.name === "string"
+            )
+            .map(field => [field.name, field])
+        );
         for (const fieldName of fieldNames) {
           if (fieldName in changes) {
-            customFieldUpdates[fieldName] =
-              (changes as Record<string, unknown>)[fieldName] ?? null;
+            const raw = (changes as Record<string, unknown>)[fieldName] ?? null;
+            const field = byName.get(fieldName);
+            customFieldUpdates[fieldName] = field
+              ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
+              : raw;
             hasCustomFieldChanges = true;
           }
         }

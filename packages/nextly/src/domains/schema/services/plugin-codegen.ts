@@ -260,7 +260,11 @@ export function pluginCodegenImports(
       i = j - 1;
     }
 
-    return bodies.join(" ");
+    // Reduced again: a body may itself hold a template, and `String.replace`
+    // does not rescan what a replacer returns — so `${`Rating`}` would hand
+    // back the inner literal and its text would read as a reference. Each pass
+    // removes one level of nesting, so this terminates.
+    return bodies.join(" ").replace(TEMPLATE_LITERAL, keepInterpolations);
   }
 
   // Whether the expression THIS field emitted actually names the import.

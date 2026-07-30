@@ -1171,6 +1171,64 @@ describe("plugin field types in the Zod generator", () => {
     expect(code).not.toContain("@acme/tl");
   });
 
+  it("applies optional to a whole contributed expression", () => {
+    registerFieldType({
+      type: "either",
+      storage: "json",
+      component: "@acme/ei/admin#Input",
+      codegen: { zodSchema: () => "cond ? z.string() : z.number()" },
+    });
+
+    // The modifier is appended as text, so an unparenthesized ternary would
+    // take `.optional()` onto its last branch only and leave the first
+    // required.
+    const code = new ZodGenerator().generateSchema(
+      collection([{ name: "e", type: "either" }])
+    ).code;
+
+    expect(code).toContain("(cond ? z.string() : z.number()).optional()");
+  });
+
+  it("reserves a global the Zod file itself relies on", () => {
+    registerFieldType({
+      type: "uses-record",
+      storage: "json",
+      component: "@acme/ur/admin#Input",
+      // No `Record` import: this means the standard global.
+      codegen: { zodSchema: () => "z.custom<Record<string, string>>()" },
+    });
+    registerFieldType({
+      type: "imports-record",
+      storage: "json",
+      component: "@acme/ir/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Record"], from: "@acme/ir" }],
+        zodSchema: () => "z.custom<Record<string>>()",
+      },
+    });
+
+    // Crediting both expressions as plugin-owned would leave `Record`
+    // unreserved, and the second plugin's import would shadow the global the
+    // first depends on for the whole module.
+    let message = "";
+    try {
+      new ZodGenerator().generateSchema(
+        collection([
+          { name: "g", type: "uses-record" },
+          { name: "i", type: "imports-record" },
+        ])
+      );
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      message = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(message).toContain("'Record'");
+  });
+
   it("does not make a validator for a list out of a hasMany plugin field", () => {
     registerFieldType({
       type: "tagish",
@@ -1290,6 +1348,26 @@ describe("plugin field types in the Zod generator", () => {
     );
 
     expect(iface.imports).toContain('import type { Rating } from "@acme/qb";');
+  });
+
+  it("does not count a name inside a template nested in an interpolation", () => {
+    registerFieldType({
+      type: "nested-literal",
+      storage: "json",
+      component: "@acme/nl/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/nl" }],
+        tsType: () => "`${`Rating`}`",
+      },
+    });
+
+    // The word is literal text of the inner template, so nothing references
+    // the binding and emitting it fails a consumer under `noUnusedLocals`.
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "n", type: "nested-literal" }])
+    );
+
+    expect(iface.imports).toEqual([]);
   });
 
   it("keeps an interpolation after comment-like text in a template", () => {
