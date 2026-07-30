@@ -70,6 +70,10 @@ export interface EntrySystemHeaderProps {
   /** Called when the user switches the active content language (i18n M7). When omitted, the
    *  language switcher is not rendered. */
   onLocaleChange?: (locale: string) => void;
+  /** Whether the entity is localized. Forwarded to the version-history panel as
+   *  the authoritative signal for its locale filter (shared writes can produce
+   *  null-locale versions, so the rows alone are not conclusive). */
+  localized?: boolean;
 
   /** Save Draft handler — routed through useEntryForm.handleSubmit('save-draft').
    *  Used in create mode and when editing a draft entry. */
@@ -175,6 +179,7 @@ export function EntrySystemHeader({
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
+  localized,
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
   const entryLocale = useEntryLocale();
@@ -529,6 +534,8 @@ export function EntrySystemHeader({
                 }
           }
           fields={historyFields}
+          // Authoritative localized signal for the panel's locale filter.
+          entityLocalized={localized}
           // Restore reuses the ordinary edit permission, so a caller who may
           // only read history is not offered a write that would be refused.
           canRestore={canUpdateDocument}

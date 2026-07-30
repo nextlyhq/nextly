@@ -614,6 +614,7 @@ export function SingleForm({
                    single isn't localized / localization isn't configured. */
                 locale={locale}
                 onLocaleChange={onLocaleChange}
+                localized={schema.localized === true}
                 toolbarSlot={
                   <EntryFormToolbarSlots
                     context="single"

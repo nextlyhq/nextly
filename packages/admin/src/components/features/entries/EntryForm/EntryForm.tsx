@@ -390,6 +390,7 @@ export function EntryForm({
                   historyEnabled={historyEnabledFrom(collection)}
                   locale={locale}
                   onLocaleChange={onLocaleChange}
+                  localized={collection.localized === true}
                   toolbarSlot={
                     <EntryFormToolbarSlots
                       context="collection"

@@ -350,6 +350,9 @@ export interface CreateCollectionPayload {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. Default false. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Whether writes bust cache tags. Default true; false opts the collection out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Default true; false
@@ -377,6 +380,9 @@ export interface UpdateCollectionPayload {
   status?: boolean;
   /** Toggle version history. Every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Toggle cache revalidation. Default true; false opts the collection out. */
   revalidate?: boolean;
   /** Toggle webhook recording. Default true; false keeps the collection's

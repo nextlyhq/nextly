@@ -33,6 +33,8 @@ export interface VersionListOptions {
   cursor?: number;
   /** Include rolling autosave rows. Defaults to false (durable versions only). */
   includeAutosave?: boolean;
+  /** Scope the listing to one locale's versions. Absent lists every locale. */
+  locale?: string;
 }
 
 export class VersionsService {

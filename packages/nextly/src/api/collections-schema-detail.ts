@@ -25,7 +25,10 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
-import { resolveBuilderVersions } from "../domains/versions/builder-versions";
+import {
+  coerceBuilderMaxPerDoc,
+  resolveBuilderVersions,
+} from "../domains/versions/builder-versions";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -213,8 +216,26 @@ export const PATCH = withErrorHandler(
     // resolver — it aliases to a versioned config for back-compat, which would
     // stop the toggle from turning versioning off on a Draft/Published
     // collection.
+    // Retention without the on/off switch is ambiguous — the resolver needs to
+    // know whether history is enabled — so a retention-only patch is rejected
+    // rather than silently ignored. The switch and its retention always travel
+    // together from the Builder.
+    if (body.versionsMaxPerDoc !== undefined && body.versions === undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "versionsMaxPerDoc",
+            code: "MISSING_DEPENDENCY",
+            message: "versionsMaxPerDoc requires versions to be set.",
+          },
+        ],
+      });
+    }
     if (body.versions !== undefined) {
-      updateData.versions = resolveBuilderVersions(body.versions === true);
+      updateData.versions = resolveBuilderVersions(
+        body.versions === true,
+        coerceBuilderMaxPerDoc(body.versionsMaxPerDoc)
+      );
     }
 
     // Cache-revalidation toggle, normalized to the resolved config the write
