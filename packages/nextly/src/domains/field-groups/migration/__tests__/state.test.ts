@@ -218,17 +218,19 @@ describe("field-group migration marker", () => {
   // it. Writing it only at settlement loses it the moment a rollback starts.
   it("carries the applied plan through a run and its steps", async () => {
     const { meta } = createMeta();
+    // A down run records the plan that was APPLIED, not its inverse: the record
+    // says what happened, and the rollback inverts it when it executes.
     const applied = [
       {
         kind: "registry" as const,
-        from: "dynamic_field_groups",
-        to: "dynamic_components",
+        from: "dynamic_components",
+        to: "dynamic_field_groups",
       },
-      { kind: "table" as const, from: "fg_hero", to: "comp_hero" },
+      { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
       {
         kind: "column" as const,
-        from: "_field_group_type",
-        to: "_component_type",
+        from: "_component_type",
+        to: "_field_group_type",
         table: "fg_hero",
       },
     ];
@@ -263,6 +265,18 @@ describe("field-group migration marker", () => {
     [
       "a registry entry that renames something else",
       [{ kind: "registry" as const, from: "x", to: "y" }],
+    ],
+    [
+      // The inverse of an applied plan is not a record of applied work. Storing
+      // it would let a rollback invert it twice and migrate forward.
+      "a pre-inverted registry entry",
+      [
+        {
+          kind: "registry" as const,
+          from: "dynamic_field_groups",
+          to: "dynamic_components",
+        },
+      ],
     ],
     [
       "a list renaming the registry twice",
@@ -330,8 +344,8 @@ describe("field-group migration marker", () => {
         appliedManifest: [
           {
             kind: "registry" as const,
-            from: "dynamic_field_groups",
-            to: "dynamic_components",
+            from: "dynamic_components",
+            to: "dynamic_field_groups",
           },
           entry,
         ],

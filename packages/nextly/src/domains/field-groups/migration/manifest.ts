@@ -291,14 +291,21 @@ function assertNoAliasedCompanion(rows: readonly RegistryRow[]): void {
     });
   }
 
+  // Compared exactly, like the system-table check above and unlike the
+  // occupancy check below. This asks whether a derived companion name and a
+  // stored table name are the *same physical table*, which is identity: on
+  // Postgres a quoted `COMP_HERO_LOCALES` is a different table from
+  // `comp_hero_locales`, and folding would refuse that installation for good.
+  // Where MySQL really does resolve both spellings to one table, deciding that
+  // needs the dialect and belongs to catalog reconciliation.
   const owners = new Map<string, string>();
-  for (const row of rows) owners.set(fold(row.tableName), row.slug);
+  for (const row of rows) owners.set(row.tableName, row.slug);
 
   for (const row of rows) {
     if (!row.hasCompanion) continue;
     // No self-collision is possible: a name cannot equal itself plus a suffix,
     // so any owner found here is necessarily a different group.
-    const companion = fold(`${row.tableName}${STORAGE_FORMAT.companionSuffix}`);
+    const companion = `${row.tableName}${STORAGE_FORMAT.companionSuffix}`;
     const owner = owners.get(companion);
     if (owner === undefined) continue;
     throw NextlyError.serviceUnavailable({

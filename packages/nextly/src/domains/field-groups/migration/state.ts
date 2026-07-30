@@ -122,6 +122,11 @@ export interface MigratingState {
   /**
    * The plan being applied, carried for the whole run.
    *
+   * Always the plan that was applied to reach migrated storage, never its
+   * inverse. A rollback reverses it at execution time; storing it pre-inverted
+   * would let a resume invert it twice and migrate forward while believing it
+   * was rolling back.
+   *
    * A `down` run reverses what an earlier `up` recorded, so the record has to
    * survive the transition out of `settled` and every step after it. Writing it
    * only at settlement would lose it the moment a rollback started, leaving a
@@ -499,20 +504,22 @@ function parseAppliedManifest(value: unknown): ManifestEntry[] {
       `recorded plan renames the registry ${String(registryEntries.length)} times, not once`
     );
   }
-  // Counting the entry is not enough: it has to be the registry rename. An
-  // entry naming anything else satisfies a count check while leaving a rollback
-  // unable to restore the registry, which is the state this validation exists to
-  // rule out. Only the two canonical directions are legal.
+  // Counting the entry is not enough: it has to be *the* registry rename, in the
+  // one direction a record of applied work can have.
+  //
+  // `appliedManifest` always holds the plan that was applied to reach migrated
+  // storage — legacy to target. It is a record of what happened, not of what is
+  // about to happen, and a rollback inverts it at execution time rather than
+  // storing it pre-inverted. Accepting the inverted form would let a rollback
+  // invert it a second time and generate legacy-to-migrated operations while
+  // claiming to restore legacy.
   const registry = registryEntries[0] as Record<string, unknown>;
-  const legacyToTarget =
-    registry.from === STORAGE_FORMAT.registryTable &&
-    registry.to === MIGRATION_TARGET.registryTable;
-  const targetToLegacy =
-    registry.from === MIGRATION_TARGET.registryTable &&
-    registry.to === STORAGE_FORMAT.registryTable;
-  if (!legacyToTarget && !targetToLegacy) {
+  if (
+    registry.from !== STORAGE_FORMAT.registryTable ||
+    registry.to !== MIGRATION_TARGET.registryTable
+  ) {
     throw markerCorrupt(
-      "recorded plan's registry entry does not rename the registry table"
+      "recorded plan's registry entry is not the applied registry rename"
     );
   }
   return value.map(raw => {

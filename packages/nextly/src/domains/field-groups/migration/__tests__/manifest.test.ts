@@ -294,6 +294,18 @@ describe("field-group migration manifest", () => {
     ).not.toThrow();
   });
 
+  // Companion ownership is an identity question, so it compares exactly. On
+  // Postgres a quoted COMP_HERO_LOCALES is a different table, and folding would
+  // refuse that installation permanently.
+  it("does not treat a case-different table as a companion alias", () => {
+    expect(() =>
+      buildMigrationManifest([
+        row({ slug: "hero", tableName: "comp_hero", hasCompanion: true }),
+        row({ slug: "other", tableName: "COMP_HERO_LOCALES" }),
+      ])
+    ).not.toThrow();
+  });
+
   // Renaming a table away frees its name, so two rows swapping prefixes is not
   // a conflict.
   it("allows a target whose occupant is itself renamed away", () => {
