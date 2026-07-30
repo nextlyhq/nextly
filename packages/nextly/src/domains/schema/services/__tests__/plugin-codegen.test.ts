@@ -359,6 +359,26 @@ describe("codegen import collisions", () => {
     expect(messages.join(" ")).toContain("'Partial'");
   });
 
+  it("allows a global name no emitted construct uses", () => {
+    registerFieldType({
+      type: "pick-named",
+      storage: "json",
+      component: "@acme/pk/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Pick"], from: "@acme/pk" }],
+        tsType: () => "Pick",
+      },
+    });
+
+    // Nothing this run emits writes `Pick<...>`, so the global is not at risk
+    // of being shadowed and the import is legitimate.
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "p", type: "pick-named" }]),
+    ]);
+
+    expect(file.code).toContain('from "@acme/pk"');
+  });
+
   it("refuses an import named after a generated input alias", () => {
     registerFieldType({
       type: "input-ish",
@@ -751,6 +771,27 @@ describe("plugin field types in the Zod generator", () => {
         collection([{ name: "r", type: "literal-named" }])
       ).code
     ).not.toContain("@acme/ln");
+  });
+
+  it("counts a reference inside a template interpolation", () => {
+    registerFieldType({
+      type: "templated",
+      storage: "json",
+      component: "@acme/tp/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Prefix"], from: "@acme/tp" }],
+        zodSchema: () => "z.custom<`${Prefix}-id`>()",
+      },
+    });
+
+    // The literal text around it is not a reference, but the interpolation is —
+    // dropping the whole template would leave the schema naming an identifier
+    // it never imported.
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "t", type: "templated" }])
+      ).code
+    ).toContain('import type { Prefix } from "@acme/tp";');
   });
 
   it("emits only the import list belonging to this file's expression", () => {

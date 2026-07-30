@@ -39,9 +39,11 @@ import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
+import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
@@ -500,6 +502,23 @@ function carriedUserFieldOptions(
 
   const container = (field as { pluginOptions?: unknown }).pluginOptions;
   if (container !== null && typeof container === "object") {
+    // The instance restates `type` and `name` as its identity after folding, so
+    // an option under either would be replaced before the type that declared it
+    // could read it. Refused rather than carried and silently lost.
+    const reserved = Object.keys(container).filter(key =>
+      RESERVED_PLUGIN_OPTION_KEYS.has(key)
+    );
+    if (reserved.length > 0) {
+      throw NextlyError.validation({
+        errors: reserved.map(key => ({
+          path: `users.fields.${String((field as { name?: unknown }).name)}.pluginOptions.${key}`,
+          code: "RESERVED",
+          message:
+            `'${key}' cannot be used as a plugin option: it states which ` +
+            `field the type is looking at`,
+        })),
+      });
+    }
     for (const [key, value] of Object.entries(container)) collect(key, value);
   }
 

@@ -13,7 +13,9 @@ const builtIn: UserFieldConfig = { name: "company", type: "text" };
 const pluginContributed: UserFieldConfig = {
   name: "score",
   type: "star-rating",
-  ratingScale: { max: 5 },
+  // Required by the plugin arm: it is what tells this apart from a built-in
+  // declaration, so a malformed `{ type: "select" }` still fails its own shape.
+  pluginOptions: { ratingScale: { max: 5 } },
 };
 
 export const userFieldConfigAdmitsPluginTypes: UserFieldConfig[] = [

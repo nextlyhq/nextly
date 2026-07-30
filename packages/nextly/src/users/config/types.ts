@@ -61,6 +61,15 @@ export interface UserPhoneFieldConfig extends UserSurfaceFieldBase {
  */
 export interface UserPluginFieldConfig extends UserSurfaceFieldBase {
   type: string & {};
+  /**
+   * Required, and that is what keeps this arm from swallowing the built-ins.
+   *
+   * `string & {}` accepts every literal, so without something structural to
+   * tell the arms apart a malformed `{ type: "select" }` would satisfy this one
+   * and lose the error its own shape would have raised. The container is where
+   * a plugin type's options belong anyway.
+   */
+  pluginOptions: Record<string, unknown>;
   [option: string]: unknown;
 }
 

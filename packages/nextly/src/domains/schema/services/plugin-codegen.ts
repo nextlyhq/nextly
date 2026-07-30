@@ -175,7 +175,12 @@ export function pluginCodegenImports(
     const code = expression
       .replace(/"(?:[^"\\]|\\.)*"/g, '""')
       .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-      .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+      // A template's literal text is text, but its `${...}` interpolations hold
+      // real references — a template-literal type is a plausible thing for a
+      // type to emit — so only the parts between them are dropped.
+      .replace(/`(?:[^`\\]|\\.)*`/g, literal =>
+        [...literal.matchAll(/\$\{([^}]*)\}/g)].map(m => m[1]).join(" ")
+      );
     // Identifier boundaries rather than `\b`: a legal exported name may begin
     // or end with `$`, which is a non-word character, so `\b` would fail to
     // match it and the import would be dropped as unused.

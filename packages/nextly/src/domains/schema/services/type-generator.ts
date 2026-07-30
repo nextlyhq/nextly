@@ -358,6 +358,15 @@ export class TypeGenerator {
     );
     if (emitsBlockDocument) reserved.add("BlockDocument");
 
+    // Globals the emitted code relies on resolving. An import of one shadows it
+    // for the whole file — a non-generic `Partial` makes every `Partial<Post>`
+    // fail to compile — but only the ones this output actually wrote are worth
+    // reserving, so a name no construct here uses stays free.
+    const emittedBody = lines.slice(importSlot).join("\n");
+    for (const global of ["Array", "Record", "Partial", "Omit", "Pick"]) {
+      if (new RegExp(`\\b${global}<`).test(emittedBody)) reserved.add(global);
+    }
+
     const imports: string[] = [];
     // A blocks field is typed as the engine's document, imported from `nextly`
     // rather than the engine package so the generated file resolves against the
@@ -1364,25 +1373,14 @@ ${properties}
   }
 
   /**
-   * Fails when two entities would generate the same interface name.
-   *
-   * Distinct slugs can still collide: a field group `seo` and a collection
-   * `seo-field-group` both produce `SeoFieldGroup`, because the suffix this
-   * appends is itself a legal part of a slug. Slug-uniqueness validation does
-   * not catch it — the slugs differ. TypeScript would then MERGE the two
-   * declarations rather than reject them, so each `Config` entry would silently
-   * acquire the other's required fields and the generated API would type calls
-   * against a shape no row ever has.
-   */
-  /**
    * Every top-level name this run will declare.
    *
    * An import sharing one of these conflicts with the local declaration
    * (TS2440), so the import scan is given them to refuse the clash before the
-   * file is written. `User` and `Config` are emitted unconditionally; the rest
-   * are one interface per entity, plus the input aliases when those are being
-   * generated — a collection declares `<Name>CreateInput` and `<Name>UpdateInput`,
-   * a single declares `<Name>UpdateInput`.
+   * file is written. `User` is always emitted, `Config` when the config
+   * interface is generated, and the rest are one interface per entity plus the
+   * input aliases when those are generated — a collection declares
+   * `<Name>CreateInput` and `<Name>UpdateInput`, a single `<Name>UpdateInput`.
    */
   private declaredInterfaceNames(
     collections: DynamicCollectionRecord[],
@@ -1393,16 +1391,8 @@ ${properties}
     // `declare module`, which creates no top-level binding, so an import of
     // that name coexists with it. `Config` is declared only when the config
     // interface is generated.
-    // Names the generated code relies on resolving globally. An import of one
-    // shadows it for the whole file — a non-generic `Partial` makes every
-    // emitted `Partial<Post>` fail to compile — so they are reserved as firmly
-    // as the interfaces this file declares.
-    const names = new Set<string>(["User", "Array", "Record"]);
+    const names = new Set<string>(["User"]);
     if (this.generateConfig) names.add("Config");
-    if (this.generateInputTypes) {
-      names.add("Partial");
-      names.add("Omit");
-    }
 
     for (const collection of collections) {
       const name = this.toPascalCase(collection.slug);
@@ -1424,6 +1414,17 @@ ${properties}
     return names;
   }
 
+  /**
+   * Fails when two entities would generate the same interface name.
+   *
+   * Distinct slugs can still collide: a field group `seo` and a collection
+   * `seo-field-group` both produce `SeoFieldGroup`, because the suffix this
+   * appends is itself a legal part of a slug. Slug-uniqueness validation does
+   * not catch it — the slugs differ. TypeScript would then MERGE the two
+   * declarations rather than reject them, so each `Config` entry would silently
+   * acquire the other's required fields and the generated API would type calls
+   * against a shape no row ever has.
+   */
   private assertNoInterfaceNameCollisions(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[],
