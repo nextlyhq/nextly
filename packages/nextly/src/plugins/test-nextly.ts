@@ -107,34 +107,93 @@ export function getConfiguredTestDialects(): TestDialect[] {
 }
 
 /**
- * Wrap an adapter so any aborted-transaction error is recorded before it propagates.
+ * Read the driver's text off an unknown thrown value.
  *
- * Existence checks in this codebase have historically been written as "run a query and catch
- * the failure". That is a valid probe on SQLite and MySQL and a transaction-killer on
- * PostgreSQL: the probe catches its own error, reports "absent", and every later statement in
- * the same transaction fails. Reviewers found that shape repeatedly by reading code; the suite
- * never once found it, because the symptom appears far from the cause and only on one dialect.
+ * Only the two shapes that can actually carry it. Anything else is not a database error, and
+ * stringifying it would produce "[object Object]" rather than a message worth matching.
+ */
+function driverMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return typeof error === "string" ? error : "";
+}
+
+/** The one method the abort probe needs from a transaction context. */
+interface AbortProbeContext {
+  execute?: (sql: string) => Promise<unknown>;
+}
+
+/**
+ * Ask the transaction for one more statement to find out whether it is still usable.
  *
- * Recording it here turns the class into an automatic failure. The assertion lives in the
- * shared setup file so it applies to every integration test without each one opting in.
+ * PostgreSQL marks a transaction aborted the moment a statement in it fails and keeps it that
+ * way until COMMIT or ROLLBACK. A COMMIT on an aborted transaction is accepted and silently
+ * downgraded to a rollback, so a callback that catches its own failure and returns normally
+ * leaves `transaction()` resolving over a transaction that discarded every write. From outside,
+ * one more statement is the only thing that reveals it: the aborted state answers, because the
+ * error that caused it is gone.
+ *
+ * A probe failure that is not the abort signature is ignored. The probe exists to observe the
+ * transaction, never to add a failure mode of its own.
+ */
+async function probeForAbortedTransaction(
+  ctx: AbortProbeContext
+): Promise<void> {
+  if (typeof ctx?.execute !== "function") return;
+  try {
+    await ctx.execute("SELECT 1");
+  } catch (error) {
+    const message = driverMessage(error);
+    if (message.includes(PG_ABORTED_TRANSACTION)) {
+      recordAbortedTransaction(message);
+    }
+  }
+}
+
+/**
+ * Wrap an adapter so a transaction left in PostgreSQL's aborted state is recorded.
+ *
+ * An existence check is easy to write as "run a query and catch the failure". That is a valid
+ * probe on SQLite and MySQL and a transaction-killer on PostgreSQL: the check catches its own
+ * error, reports "absent", and every later statement in the same transaction fails. The symptom
+ * then surfaces far from its cause, and on one dialect only.
+ *
+ * Two places can see it and both are needed. An abort that propagates out of `transaction()` is
+ * caught below. An abort that never escapes — because the callback swallowed it and returned
+ * normally, which is what the bulk write paths do for per-item errors while `stopOnError` is
+ * false — cannot reach that catch, and is found instead by probing the context once the callback
+ * resolves.
+ *
+ * Recording is all this does. The assertion lives in the shared setup file so it covers every
+ * integration test without each one opting in, and control flow is deliberately left alone:
+ * turning a resolved transaction into a rejected one would change the path under test.
+ *
+ * One case stays uncovered: a callback that swallows the poisoning error and then throws
+ * something unrelated. The probe cannot run, and the outer catch sees only the substitute, so
+ * the sighting is lost — but that failure is at least loud, because the substitute propagates.
  */
 function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
   const originalTransaction = adapter.transaction?.bind(adapter);
   if (!originalTransaction) return adapter;
   const wrapped = async (...args: unknown[]): Promise<unknown> => {
+    const [callback, ...rest] = args;
+    // Probe on the context the callback itself used, so the question reaches the transaction
+    // that may have been poisoned rather than a fresh connection from the pool.
+    const instrumented =
+      typeof callback === "function"
+        ? async (ctx: AbortProbeContext): Promise<unknown> => {
+            const result = await (
+              callback as (c: AbortProbeContext) => Promise<unknown>
+            )(ctx);
+            await probeForAbortedTransaction(ctx);
+            return result;
+          }
+        : callback;
     try {
       return await (
         originalTransaction as (...a: unknown[]) => Promise<unknown>
-      )(...args);
+      )(instrumented, ...rest);
     } catch (error) {
-      // Only shapes that can actually carry the driver's text. Anything else is not a
-      // database error and stringifying it would just produce "[object Object]".
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "";
+      const message = driverMessage(error);
       if (message.includes(PG_ABORTED_TRANSACTION)) {
         recordAbortedTransaction(message);
       }

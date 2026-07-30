@@ -58,6 +58,26 @@ describe.skipIf(!onPostgres)("aborted-transaction guard (integration)", () => {
     expect(sightings[0]).toMatch(/current transaction is aborted/);
   });
 
+  it("records the abort even when the callback swallows it and returns normally", async () => {
+    current = await createTestNextly({ dialect: "postgresql" });
+
+    // No rejection to observe from out here: the callback catches its own failure and returns,
+    // so PostgreSQL accepts the COMMIT, downgrades it to a rollback, and `transaction()`
+    // resolves over a transaction that kept nothing. This is the shape the bulk write paths
+    // produce when they record a per-item error and move to the next item.
+    await current.adapter.transaction(async tx => {
+      try {
+        await tx.execute("SELECT 1 FROM a_relation_that_does_not_exist");
+      } catch {
+        // Swallowed on purpose: this is the pattern being guarded against.
+      }
+    });
+
+    const sightings = takeAbortedTransactionSightings();
+    expect(sightings.length).toBeGreaterThan(0);
+    expect(sightings[0]).toMatch(/current transaction is aborted/);
+  });
+
   it("stays silent when nothing aborts", async () => {
     current = await createTestNextly({ dialect: "postgresql" });
 

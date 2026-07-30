@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, afterEach } from "vitest";
+import { beforeAll, afterAll, afterEach, expect } from "vitest";
 
 import { takeAbortedTransactionSightings } from "./aborted-transaction-sightings";
 
@@ -17,16 +17,16 @@ beforeAll(() => {
  * that passes on the first two.
  *
  * Asserted centrally rather than per test, because the failure surfaces far from its cause and
- * no individual test knows to look for it. This shape was found repeatedly by reading code
- * while the suite stayed green; this is the suite learning to see it.
+ * no individual test knows to look for it.
  *
  * Runs after EVERY test so the failure is attributed to the test that caused it rather than to
- * whichever one happens to run last.
+ * whichever one happens to run last. Reported through `expect.fail` so it arrives as an
+ * assertion failure, which is what a test runner knows how to present.
  */
 afterEach(() => {
   const sightings = takeAbortedTransactionSightings();
   if (sightings.length === 0) return;
-  throw new Error(
+  expect.fail(
     `A PostgreSQL transaction was aborted during this test, which means an earlier ` +
       `statement inside it failed and was swallowed. Find the swallowed error — it is the ` +
       `real defect, and this message is only its shadow. Seen ${sightings.length} time(s):\n` +
