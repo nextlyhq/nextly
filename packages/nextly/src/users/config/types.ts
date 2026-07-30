@@ -61,7 +61,9 @@ export interface UserPhoneFieldConfig extends UserSurfaceFieldBase {
  * so reaching the open arm is deliberate rather than a shape falling through
  * to it.
  */
-declare const pluginUserFieldBrand: unique symbol;
+export const pluginUserFieldBrand: unique symbol = Symbol.for(
+  "nextly.plugin-user-field"
+);
 
 /**
  * A field whose type a plugin contributed and opted into the `users` surface.

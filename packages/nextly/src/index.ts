@@ -652,7 +652,7 @@ export type {
 // Declares a user field whose type a plugin contributed, which the built-in
 // arms of `UserFieldConfig` cannot be widened to admit without losing their
 // own errors.
-export { pluginUserField } from "./users";
+export { pluginUserField, pluginUserFieldBrand } from "./users";
 
 // User config validation
 export {

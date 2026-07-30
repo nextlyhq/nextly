@@ -7,7 +7,7 @@ export type {
   UserConfig,
 } from "./types";
 
-export { pluginUserField } from "./types";
+export { pluginUserField, pluginUserFieldBrand } from "./types";
 
 export {
   validateUserConfig,
