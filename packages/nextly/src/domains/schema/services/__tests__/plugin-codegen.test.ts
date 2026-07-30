@@ -1198,6 +1198,27 @@ describe("plugin field types in the Zod generator", () => {
     expect(iface.imports).toEqual([]);
   });
 
+  it("keeps an interpolation after comment-like text in a template", () => {
+    registerFieldType({
+      type: "urlish",
+      storage: "json",
+      component: "@acme/ur/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/ur" }],
+        tsType: () => "`https://${Rating}`",
+      },
+    });
+
+    // The `//` of the URL sits in the template's literal text. Stripping
+    // comments while the template is still intact would take the rest of the
+    // line, and the reference inside `${...}` with it.
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "u", type: "urlish" }])
+    );
+
+    expect(iface.imports).toContain('import type { Rating } from "@acme/ur";');
+  });
+
   it("does not count a name that appears only in a comment", () => {
     registerFieldType({
       type: "commented",

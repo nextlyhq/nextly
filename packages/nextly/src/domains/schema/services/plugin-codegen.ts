@@ -256,6 +256,13 @@ export function pluginCodegenImports(
     const code = expression
       .replace(/"(?:[^"\\]|\\.)*"/g, '""')
       .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      // Templates are reduced first, before comments: a template's literal text
+      // may legitimately contain `//` — `` `https://${Rating}` `` is a valid
+      // template-literal type — and stripping comments while it is still intact
+      // would take the rest of the line, interpolations and all. Its
+      // `${...}` bodies survive as ordinary text, so the passes below still
+      // apply to them.
+      .replace(/`(?:[^`\\]|\\.)*`/g, keepInterpolations)
       // A comment is text as well: `string /* Rating */` references nothing.
       // Stripped after the quoted forms, so a `//` inside a string is not read
       // as one, and before the regex removal below, which SUBSTITUTES `//` and
@@ -277,11 +284,7 @@ export function pluginCodegenImports(
       // binding: `Models.Rating` uses `Models`. Dropping the member keeps the
       // object it was read from, so what the expression really references is
       // still counted. A decimal is untouched, as a digit cannot start a name.
-      .replace(/\.\s*[A-Za-z_$][\w$]*/g, "")
-      // A template's literal text is text, but its `${...}` interpolations hold
-      // real references — a template-literal type is a plausible thing for a
-      // type to emit — so only the parts between them are dropped.
-      .replace(/`(?:[^`\\]|\\.)*`/g, keepInterpolations);
+      .replace(/\.\s*[A-Za-z_$][\w$]*/g, "");
     // Identifier boundaries rather than `\b`: a legal exported name may begin
     // or end with `$`, which is a non-word character, so `\b` would fail to
     // match it and the import would be dropped as unused.
