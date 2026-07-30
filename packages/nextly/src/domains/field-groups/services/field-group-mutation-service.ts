@@ -28,6 +28,8 @@ import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  companionTableExists,
+  mainTableHasColumns,
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
@@ -77,6 +79,38 @@ function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return field.type === STORAGE_FORMAT.fieldType;
 }
 
+/**
+ * The component instances a dynamic-zone payload actually contains.
+ *
+ * A repeatable zone sends an array; a non-repeatable one — the supported default — sends a
+ * single object. The pre-transaction check and the write itself both need this answer, and
+ * mirroring the normalisation by hand in each is what let them drift: the check read a
+ * non-repeatable object as "no instances", so that slug never reached the presence map, and the
+ * write then went looking for a companion table from inside the transaction. That is precisely
+ * the failure the check exists to prevent.
+ *
+ * Deriving it once means the two cannot disagree about what a payload holds.
+ */
+function resolveZoneInstances(
+  field: FieldGroupFieldConfig,
+  value: unknown
+): ComponentInstanceData[] {
+  const raw = field.repeatable ? value : [value];
+  return Array.isArray(raw) ? (raw as ComponentInstanceData[]) : [];
+}
+
+/**
+ * Whether each localized field group's companion table physically exists, keyed by slug and
+ * resolved BEFORE the write transaction opens.
+ *
+ * This answers a question that cannot be asked again once a transaction is open. Probing for
+ * a relation that does not exist raises an error, and PostgreSQL marks the entire transaction
+ * aborted the moment one does — so although the probe catches it and reports "absent", every
+ * following statement fails with `current transaction is aborted`. Carrying the pre-resolved
+ * answer in is what lets the in-transaction path know without asking.
+ */
+export type FieldGroupCompanionPresence = ReadonlyMap<string, boolean>;
+
 export class FieldGroupMutationService extends BaseService {
   private readonly registryService: FieldGroupRegistryService;
 
@@ -99,16 +133,38 @@ export class FieldGroupMutationService extends BaseService {
    * The caller writes `main` to the instance row and, after it has the instance id, upserts
    * the companion via {@link upsertLocalizedComponent}.
    */
-  private splitLocalizedComponent(
+  private async splitLocalizedComponent(
     meta: DynamicFieldGroupRecord,
-    data: Record<string, unknown>
-  ): {
+    data: Record<string, unknown>,
+    locale: string | undefined,
+    // Present only on the in-transaction path. Both members travel together by design:
+    // inside a transaction the companion's existence must ALREADY be known, because asking
+    // again means probing a possibly-absent relation, and on PostgreSQL that aborts the
+    // whole transaction. Omitted on the pooled path, which is free to probe.
+    tx?: {
+      adapter: {
+        dialect: SupportedDialect;
+        executeQuery<T = unknown>(
+          sql: string,
+          params?: unknown[]
+        ): Promise<T[]>;
+      };
+      presence: FieldGroupCompanionPresence;
+    }
+  ): Promise<{
     schema: ReturnType<typeof buildCompanionSchema>;
     main: Record<string, unknown>;
     companion: Record<string, unknown>;
-  } {
+    /** Whether the companion physically exists, so callers can reuse it without re-probing. */
+    companionExists: boolean;
+  }> {
     if (!this.localization || meta.localized !== true) {
-      return { schema: null, main: data, companion: {} };
+      return {
+        schema: null,
+        main: data,
+        companion: {},
+        companionExists: false,
+      };
     }
     const schema = buildCompanionSchema({
       slug: meta.slug,
@@ -117,7 +173,80 @@ export class FieldGroupMutationService extends BaseService {
       dialect: this.adapter.dialect,
       status: false,
     });
-    if (!schema) return { schema: null, main: data, companion: {} };
+    if (!schema)
+      return {
+        schema: null,
+        main: data,
+        companion: {},
+        companionExists: false,
+      };
+    // Resolve existence BEFORE splitting. Splitting first and then discovering the
+    // companion is absent strands the translatable values: they leave the main payload
+    // and the upsert that would have taken them is skipped, so the write reports success
+    // having saved nothing. Resolving here also means any refusal is raised before the
+    // caller opens its transaction, so it leaves exactly as raised rather than through
+    // the adapter's error classification, which rewraps anything that is not already a
+    // `DatabaseError`.
+    //
+    // Inside a transaction the answer is READ, never probed. A probe against a missing
+    // relation aborts the entire transaction on PostgreSQL — the error is caught here but
+    // the connection is already poisoned, so the fallback write that follows would die with
+    // `current transaction is aborted`.
+    //
+    // `resolveZoneInstances` makes the map complete by construction, so a miss means the two
+    // paths have drifted again. It defaults to "absent" rather than "provisioned" because the
+    // two are not equally safe to guess wrong: "absent" takes the fallback, which writes to the
+    // main table and fails loudly there if the columns are gone, whereas "provisioned" splits
+    // the values out and upserts into a table that may not exist — reintroducing the very abort
+    // this parameter was added to prevent.
+    const companionExists = tx
+      ? (tx.presence.get(meta.slug) ?? false)
+      : await companionTableExists(this.adapter, schema.companionTableName);
+    if (!companionExists) {
+      const writeLocale = resolveRequestedLocale(this.localization, locale);
+      if (writeLocale !== this.localization.defaultLocale) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            fieldGroupTable: schema.companionTableName,
+            locale: writeLocale,
+          },
+        });
+      }
+      // Default language keeps the pre-companion fallback — but only where it can
+      // actually work. A field group whose main `comp_*` table never had these
+      // columns (localized from creation, or already migrated) would otherwise take
+      // this branch and hand the values to a table with nowhere to put them, which
+      // fails at the driver as a 500. Refusing turns that into an answer the caller
+      // can act on.
+      // Only introspect on the pooled path. Inside a parent transaction this would
+      // borrow a second connection and deadlock a single-connection pool — and it does
+      // not need to, because `assertLocalizedFieldGroupsWritable` has already answered
+      // the same question before that transaction opened.
+      const fallbackPossible =
+        tx !== undefined ||
+        (await mainTableHasColumns(
+          this.adapter,
+          meta.tableName,
+          schema.localizedFields.map(f => f.column)
+        ));
+      if (!fallbackPossible) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            fieldGroupTable: schema.companionTableName,
+            locale: writeLocale,
+          },
+        });
+      }
+      return { schema: null, main: data, companion: {}, companionExists };
+    }
     const { main, companion } = splitLocalizedWrite(
       data,
       schema.localizedFields
@@ -129,6 +258,7 @@ export class FieldGroupMutationService extends BaseService {
       schema,
       main,
       companion: this.serializeCompanionValues(companion, schema, meta.fields),
+      companionExists,
     };
   }
 
@@ -262,9 +392,76 @@ export class FieldGroupMutationService extends BaseService {
     }
   }
 
+  /**
+   * Answer, BEFORE the caller opens its transaction, whether every localized field group in
+   * this payload can actually be written.
+   *
+   * Two reasons it cannot wait until the write itself. The probes borrow a connection from the
+   * pool, so running them inside the parent transaction waits for a connection that cannot be
+   * released until that transaction finishes; and answering here keeps a refusal exactly as
+   * raised, rather than passing it through the adapter's error classification on the way out of
+   * a transaction callback, which rewraps anything that is not already a `DatabaseError`.
+   *
+   * Idempotent and read-only — it introspects and probes, and writes nothing.
+   */
+  async assertLocalizedFieldGroupsWritable(
+    params: Pick<SaveComponentDataParams, "fields" | "data" | "locale">
+  ): Promise<FieldGroupCompanionPresence> {
+    const presence = new Map<string, boolean>();
+    if (!this.localization) return presence;
+    for (const field of params.fields) {
+      if (!isFieldGroupField(field)) continue;
+      const value = params.data[field.name];
+      if (value === undefined || value === null) continue;
+      // Mirror `saveComponentData`'s dispatch exactly, including its precedence: a field
+      // carrying both `components` and `component` is written as a dynamic zone, so
+      // deciding `component` first here would check a type the write never touches.
+      //
+      // For a dynamic zone the type travels per instance, so the PAYLOAD decides what is
+      // written, not the field's list of permitted types. Walking the permitted list
+      // instead would probe types absent from this write — and would refuse a perfectly
+      // good save whenever some other permitted type happened to be missing its
+      // companion. Deduplicated, because a zone commonly repeats one type.
+      const slugs = new Set<string>();
+      if (field.components && field.components.length > 0) {
+        for (const instance of resolveZoneInstances(field, value)) {
+          const type = (instance as Record<string, unknown> | null)?.[
+            STORAGE_FORMAT.wireTypeKey
+          ];
+          if (typeof type === "string" && field.components.includes(type)) {
+            slugs.add(type);
+          }
+        }
+      } else if (field.component) {
+        slugs.add(field.component);
+      }
+      for (const slug of slugs) {
+        if (presence.has(slug)) continue;
+        const meta = await this.registryService.getComponentBySlug(slug);
+        if (!meta || meta.localized !== true) continue;
+        // Reuse the same split the write performs: it raises the 409 when the
+        // companion is missing and the fallback is unavailable, which is exactly the
+        // decision needed here — and on the pooled adapter, outside any transaction.
+        // Its verdict on existence is then carried into the transaction, so the write
+        // never has to ask a question that would abort the transaction to answer.
+        const { companionExists } = await this.splitLocalizedComponent(
+          meta,
+          {},
+          params.locale
+        );
+        presence.set(slug, companionExists);
+      }
+    }
+    return presence;
+  }
+
   async saveComponentDataInTransaction(
     tx: TransactionContext,
-    params: SaveComponentDataParams
+    params: SaveComponentDataParams,
+    // Resolved by `assertLocalizedFieldGroupsWritable` before this transaction opened.
+    // Required rather than optional: inside a transaction there is no safe way to work it
+    // out, since probing a missing companion aborts the transaction on PostgreSQL.
+    presence: FieldGroupCompanionPresence
   ): Promise<void> {
     const { parentId, parentTable, fields, data, locale } = params;
 
@@ -295,6 +492,7 @@ export class FieldGroupMutationService extends BaseService {
           field,
           data: fieldData,
           locale,
+          presence,
         });
       } else if (field.component) {
         if (field.repeatable) {
@@ -305,6 +503,7 @@ export class FieldGroupMutationService extends BaseService {
             componentSlug: field.component,
             data: fieldData,
             locale,
+            presence,
           });
         } else {
           await this.saveSingleComponentInTx(tx, {
@@ -314,6 +513,7 @@ export class FieldGroupMutationService extends BaseService {
             componentSlug: field.component,
             data: fieldData as ComponentInstanceData,
             locale,
+            presence,
           });
         }
       }
@@ -392,9 +592,10 @@ export class FieldGroupMutationService extends BaseService {
 
       // i18n: split translatable values out of the main comp_ write — they live on the
       // companion. `main === data` when the component isn't localized (unchanged path).
-      const { schema, main, companion } = this.splitLocalizedComponent(
+      const { schema, main, companion } = await this.splitLocalizedComponent(
         componentMeta,
-        data
+        data,
+        locale
       );
 
       let instanceId: string;
@@ -465,10 +666,18 @@ export class FieldGroupMutationService extends BaseService {
       componentSlug: string;
       data: ComponentInstanceData;
       locale?: string;
+      presence: FieldGroupCompanionPresence;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      componentSlug,
+      data,
+      locale,
+      presence,
+    } = params;
 
     try {
       const componentMeta =
@@ -494,9 +703,14 @@ export class FieldGroupMutationService extends BaseService {
       );
 
       // i18n: split translatable values out of the main comp_ write (companion-owned).
-      const { schema, main, companion } = this.splitLocalizedComponent(
+      const { schema, main, companion } = await this.splitLocalizedComponent(
         componentMeta,
-        data
+        data,
+        locale,
+        // Never probe from in here: the answer was resolved before this transaction
+        // opened, because asking now would mean querying a possibly-absent relation,
+        // and on PostgreSQL that aborts the transaction outright.
+        { adapter: this.txWriteAdapter(tx), presence }
       );
 
       let instanceId: string;
@@ -585,9 +799,10 @@ export class FieldGroupMutationService extends BaseService {
         // i18n: split translatable values out per instance (companion-owned). The
         // diff-by-id update keeps the instance id stable, so companion rows for OTHER
         // locales survive a re-save in one locale.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           componentMeta,
-          instance
+          instance,
+          locale
         );
 
         await this.prepareInstanceForWrite(
@@ -665,10 +880,18 @@ export class FieldGroupMutationService extends BaseService {
       componentSlug: string;
       data: unknown;
       locale?: string;
+      presence: FieldGroupCompanionPresence;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      componentSlug,
+      data,
+      locale,
+      presence,
+    } = params;
 
     if (!Array.isArray(data)) {
       this.logger.warn("Repeatable component data is not an array", {
@@ -699,9 +922,14 @@ export class FieldGroupMutationService extends BaseService {
         const instance = instances[i];
         const instanceId = instance.id;
         // i18n: split translatable values out (companion-owned) per instance.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           componentMeta,
-          instance
+          instance,
+          locale,
+          // Never probe from in here: the answer was resolved before this transaction
+          // opened, because asking now would mean querying a possibly-absent relation,
+          // and on PostgreSQL that aborts the transaction outright.
+          { adapter: this.txWriteAdapter(tx), presence }
         );
 
         await this.prepareInstanceForWrite(
@@ -784,11 +1012,11 @@ export class FieldGroupMutationService extends BaseService {
     const { parentId, parentTable, fieldName, field, data, locale } = params;
     const allowedSlugs = field.components ?? [];
 
-    const instances = field.repeatable
-      ? (data as ComponentInstanceData[])
-      : [data as ComponentInstanceData];
+    // Shared with the pre-transaction check, so the two cannot disagree about which
+    // instances this payload holds.
+    const instances = resolveZoneInstances(field, data);
 
-    if (!Array.isArray(instances)) {
+    if (instances.length === 0 && data !== null && data !== undefined) {
       this.logger.warn("Multi-component data is not an array", { fieldName });
       return;
     }
@@ -866,9 +1094,10 @@ export class FieldGroupMutationService extends BaseService {
         const componentFields = meta.fields;
         const instanceId = instance.id;
         // i18n: split translatable values out per instance using its own component meta.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           meta,
-          instance
+          instance,
+          locale
         );
 
         await this.prepareInstanceForWrite(
@@ -951,16 +1180,18 @@ export class FieldGroupMutationService extends BaseService {
       field: FieldGroupFieldConfig;
       data: unknown;
       locale?: string;
+      presence: FieldGroupCompanionPresence;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, field, data, locale } = params;
+    const { parentId, parentTable, fieldName, field, data, locale, presence } =
+      params;
     const allowedSlugs = field.components ?? [];
 
-    const instances = field.repeatable
-      ? (data as ComponentInstanceData[])
-      : [data as ComponentInstanceData];
+    // Shared with the pre-transaction check, so the two cannot disagree about which
+    // instances this payload holds.
+    const instances = resolveZoneInstances(field, data);
 
-    if (!Array.isArray(instances)) {
+    if (instances.length === 0 && data !== null && data !== undefined) {
       this.logger.warn("Multi-component data is not an array", { fieldName });
       return;
     }
@@ -1020,9 +1251,14 @@ export class FieldGroupMutationService extends BaseService {
         const componentFields = meta.fields;
         const instanceId = instance.id;
         // i18n: split translatable values out per instance using its own component meta.
-        const { schema, main, companion } = this.splitLocalizedComponent(
+        const { schema, main, companion } = await this.splitLocalizedComponent(
           meta,
-          instance
+          instance,
+          locale,
+          // Never probe from in here: the answer was resolved before this transaction
+          // opened, because asking now would mean querying a possibly-absent relation,
+          // and on PostgreSQL that aborts the transaction outright.
+          { adapter: this.txWriteAdapter(tx), presence }
         );
 
         await this.prepareInstanceForWrite(
