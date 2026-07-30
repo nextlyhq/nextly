@@ -588,6 +588,91 @@ describe("plugin field types in the Zod generator", () => {
     expect(schema.code).toContain('from "@acme/pz"');
   });
 
+  it("omits an import a nested field's expression does not use", () => {
+    registerFieldType({
+      type: "nested-maybe",
+      storage: "number",
+      component: "@acme/nm/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Maybe"], from: "@acme/nm" }],
+        zodSchema: () => "z.number()",
+      },
+    });
+
+    // An unrecorded field is treated as using its imports, so the filtering
+    // only reaches nested fields once their expression is recorded too.
+    const schema = new ZodGenerator().generateSchema(
+      collection([
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [{ name: "m", type: "nested-maybe" }],
+        },
+      ])
+    );
+
+    expect(schema.code).not.toContain("@acme/nm");
+  });
+
+  it("emits an import a nested field's expression relies on", () => {
+    registerFieldType({
+      type: "nested-doc",
+      storage: "json",
+      component: "@acme/nd/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Nested"], from: "@acme/nd" }],
+        zodSchema: () => "z.custom<Nested>()",
+      },
+    });
+
+    // The nested branch emits its own expression; not recording it would drop
+    // the import and leave the schema naming an identifier it never imported.
+    const schema = new ZodGenerator().generateSchema(
+      collection([
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [{ name: "d", type: "nested-doc" }],
+        },
+      ])
+    );
+
+    expect(schema.code).toContain('import type { Nested } from "@acme/nd";');
+  });
+
+  it("does not let one field's usage activate another's same-named import", () => {
+    registerFieldType({
+      type: "uses-shared",
+      storage: "json",
+      component: "@acme/a/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Shared"], from: "@acme/a" }],
+        zodSchema: () => "z.custom<Shared>()",
+      },
+    });
+    registerFieldType({
+      type: "skips-shared",
+      storage: "number",
+      component: "@acme/b/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Shared"], from: "@acme/b" }],
+        zodSchema: () => "z.number()",
+      },
+    });
+
+    // The second type never names `Shared`, so it must not be treated as
+    // imported — otherwise the two modules look like a cross-module clash.
+    const schema = new ZodGenerator().generateSchema(
+      collection([
+        { name: "a", type: "uses-shared" },
+        { name: "b", type: "skips-shared" },
+      ])
+    );
+
+    expect(schema.code).toContain('import type { Shared } from "@acme/a";');
+    expect(schema.code).not.toContain("@acme/b");
+  });
+
   it("emits only the import list belonging to this file's expression", () => {
     // Both expressions exist, but each names its own imports, so the type used
     // by only one of them appears in only that file.

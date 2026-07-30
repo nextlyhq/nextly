@@ -139,7 +139,7 @@ export function pluginCodegenImports(
   entities: ReadonlyArray<{ fields?: unknown }>,
   declaredNames: ReadonlySet<string> = new Set(),
   usedBy: "tsImports" | "zodImports" = "tsImports",
-  emitted?: string
+  emittedByField?: ReadonlyMap<object, string>
 ): string[] {
   const byModule = new Map<string, Set<string>>();
   // Which module first claimed each local name. Two modules exporting the same
@@ -160,27 +160,31 @@ export function pluginCodegenImports(
     });
   };
 
-  // Whether the output this file ended up with actually names the import.
-  // A declared list is per field TYPE, but a callback may use an import only
-  // for some option values — so a collection where it never did would carry an
-  // import nothing references, which fails a consuming app compiled with
-  // `noUnusedLocals`. Checked against what was emitted rather than inferred
-  // from the callback, so a conditional use is judged on its result.
-  const used = (name: string): boolean => {
-    if (emitted === undefined) return true;
+  // Whether the expression THIS field emitted actually names the import.
+  // A declared list belongs to a field type, but a callback may use an import
+  // only for some option values, so a field where it did not would carry an
+  // import nothing references — `noUnusedLocals` fails on that. Judged per
+  // field rather than against the file as a whole: two types can declare the
+  // same name from different modules, and one using it must not activate the
+  // other's, which would then be refused as a cross-module clash.
+  const used = (name: string, expression: string | undefined): boolean => {
+    if (expression === undefined) return true;
     return new RegExp(
       `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
-    ).test(emitted);
+    ).test(expression);
   };
 
-  const record = (imports: readonly PluginFieldCodegenImport[]): void => {
+  const record = (
+    imports: readonly PluginFieldCodegenImport[],
+    expression: string | undefined
+  ): void => {
     for (const entry of imports) {
       const names = byModule.get(entry.from) ?? new Set<string>();
       for (const name of entry.names) {
-        // Discarded before any collision check: a name the emitted output never
-        // references is not going to be imported, so it cannot collide with
-        // anything and must not refuse a generation that would be valid.
-        if (!used(name)) continue;
+        // Discarded before any collision check: a name this field's expression
+        // never references is not going to be imported, so it cannot collide
+        // with anything and must not refuse a generation that would be valid.
+        if (!used(name, expression)) continue;
         // Whatever this particular run declares or imports for itself — the
         // caller knows, because it is the thing emitting them. An import
         // sharing one of those names conflicts with the local declaration
@@ -215,7 +219,7 @@ export function pluginCodegenImports(
       // carried an unused import, which fails a consuming app compiled with
       // `noUnusedLocals`.
       const imports = codegenFor(field)?.[usedBy];
-      if (imports) record(imports);
+      if (imports) record(imports, emittedByField?.get(field));
     }
   }
 

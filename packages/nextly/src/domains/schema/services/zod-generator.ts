@@ -132,7 +132,7 @@ export class ZodGenerator {
   private readonly generateTypes: boolean;
 
   /** Expressions the plugin callbacks returned during this run; see below. */
-  private pluginExpressions: string[] = [];
+  private pluginExpressions = new Map<object, string>();
   private readonly includeComments: boolean;
   private readonly schemaPrefix: string;
 
@@ -158,7 +158,7 @@ export class ZodGenerator {
    * @returns Generated schema with code, filename, and metadata
    */
   generateSchema(collection: DynamicCollectionRecord): GeneratedZodSchema {
-    this.pluginExpressions = [];
+    this.pluginExpressions = new Map();
     const schemas = this.generateSchemaDefinitions(collection);
     const types = this.generateTypes
       ? this.generateTypeExports(collection)
@@ -167,10 +167,7 @@ export class ZodGenerator {
     // Built after the body, so a plugin import is emitted only when one of the
     // plugin expressions actually references it. Searching the whole body would
     // match the generator's own declarations instead.
-    const imports = this.generateImports(
-      collection,
-      this.pluginExpressions.join("\n")
-    );
+    const imports = this.generateImports(collection, this.pluginExpressions);
 
     const code = [imports, "", schemas, types].filter(Boolean).join("\n");
 
@@ -242,13 +239,13 @@ export class ZodGenerator {
    */
   private generateImports(
     collection: DynamicCollectionRecord,
-    emitted: string
+    emittedByField: ReadonlyMap<object, string>
   ): string {
     const pluginImports = pluginCodegenImports(
       [collection],
       this.declaredNames(collection),
       "zodImports",
-      emitted
+      emittedByField
     );
     return [`import { z } from "zod";`, ...pluginImports].join("\n");
   }
@@ -483,7 +480,7 @@ export class ZodGenerator {
     else {
       const contributed = pluginZodSchema(field);
       if (contributed !== undefined) {
-        this.pluginExpressions.push(contributed);
+        this.pluginExpressions.set(field, contributed);
         zodSchema = contributed;
       } else {
         // No schema of its own, but the registry knows what it stores.
@@ -812,6 +809,10 @@ export class ZodGenerator {
         // the row's schema even though it is stored.
         const contributed = pluginZodSchema(field);
         if (contributed !== undefined) {
+          // Recorded like the top-level branch: an import used only by a
+          // nested field would otherwise be filtered out and the schema would
+          // name an identifier it never imported.
+          this.pluginExpressions.set(field, contributed);
           zodSchema = contributed;
         } else {
           const storageType = pluginStorageFieldType(field);
