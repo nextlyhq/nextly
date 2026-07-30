@@ -122,10 +122,23 @@ function driverMessage(error: unknown): string {
     : `aborted transaction reported without a readable message (SQLSTATE ${PG_ABORTED_TRANSACTION_SQLSTATE})`;
 }
 
-/** The one method the abort probe needs from a transaction context. */
+/**
+ * The savepoint pair the abort probe needs from a transaction context.
+ *
+ * Both optional on the interface, and only implemented where the dialect has savepoints —
+ * PostgreSQL being the one that matters here, since it is the only dialect that poisons a
+ * transaction in the first place.
+ */
 interface AbortProbeContext {
-  execute?: (sql: string) => Promise<unknown>;
+  savepoint?: (name: string) => Promise<void>;
+  releaseSavepoint?: (name: string) => Promise<void>;
 }
+
+/**
+ * Fixed name, distinctive enough not to collide with a savepoint a test took itself. Created and
+ * released immediately, so nesting cannot leave more than one of these outstanding.
+ */
+const ABORT_PROBE_SAVEPOINT = "nextly_abort_probe";
 
 /**
  * Ask the transaction for one more statement to find out whether it is still usable.
@@ -137,6 +150,12 @@ interface AbortProbeContext {
  * one more statement is the only thing that reveals it: the aborted state answers, because the
  * error that caused it is gone.
  *
+ * The statement is a savepoint rather than a `SELECT`, for two reasons. An aborted transaction
+ * rejects `SAVEPOINT` with the same code it rejects everything else by, so it answers the question
+ * just as well — and it goes through the adapter's own method, which keeps this file free of the
+ * SQL string a shipped module has no business carrying. On a healthy transaction the savepoint is
+ * released immediately, leaving nothing behind.
+ *
  * A probe failure that is NOT the abort signature propagates. The probe is meant to observe the
  * transaction rather than change it, and a statement of its own that fails has changed it: the
  * transaction is now aborted because of this query, and reporting success would be a lie.
@@ -144,9 +163,9 @@ interface AbortProbeContext {
 async function probeForAbortedTransaction(
   ctx: AbortProbeContext
 ): Promise<void> {
-  if (typeof ctx?.execute !== "function") return;
+  if (typeof ctx?.savepoint !== "function") return;
   try {
-    await ctx.execute("SELECT 1");
+    await ctx.savepoint(ABORT_PROBE_SAVEPOINT);
   } catch (error) {
     if (isAbortedTransactionError(error)) {
       recordAbortedTransaction(driverMessage(error));
@@ -160,6 +179,9 @@ async function probeForAbortedTransaction(
     // manufacture exactly the silent loss the guard exists to catch.
     throw error;
   }
+  // Reached only when the transaction was healthy, so the savepoint exists and releasing it is
+  // what leaves the transaction exactly as the callback left it.
+  await ctx.releaseSavepoint?.(ABORT_PROBE_SAVEPOINT);
 }
 
 /**
