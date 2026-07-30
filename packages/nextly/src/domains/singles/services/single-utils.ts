@@ -18,12 +18,14 @@
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { detachedField } from "../../../shared/lib/detached-field";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
   pluginEmptyValue,
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
+import { getFieldType } from "../../schema/field-types/field-type-registry";
 import type { SingleDocument, SingleResult } from "../types";
 
 // ============================================================
@@ -103,6 +105,66 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
   }
 
   return false;
+}
+
+/**
+ * Run a contributed type's own `validate` over a resolved default.
+ *
+ * A single's row is auto-created on first read by inserting its defaults
+ * directly, so this value never passes through the write path that validates
+ * ordinary writes. A static default is caught when the config loads, but a
+ * function default produces its value only when resolved against real data,
+ * which first happens here. Left unchecked it is persisted by a READ, and a
+ * contributed control may be read-only — so the row could not then be repaired
+ * from the UI.
+ *
+ * Only the type's own rules run: the field's `validate` and the built-in
+ * primitive checks belong to the write path, and running them here would newly
+ * refuse defaults that boot fine today.
+ */
+export async function assertValidPluginDefault(
+  field: { name?: string; type?: string },
+  value: unknown,
+  singleSlug: string
+): Promise<void> {
+  if (typeof field.type !== "string" || value === null || value === undefined) {
+    return;
+  }
+  const registered = getFieldType(field.type);
+  if (!registered?.validate) return;
+
+  const name = field.name ?? "";
+  const result = await registered.validate(value, {
+    data: {},
+    req: {},
+    field: detachedField({ name, type: field.type }),
+    path: name,
+    mode: "create",
+  });
+
+  if (result === true) return;
+
+  const issues =
+    typeof result === "string"
+      ? [{ path: name, code: "INVALID_VALUE", message: result }]
+      : Array.isArray(result)
+        ? result.map(issue => ({
+            path: issue.path ?? name,
+            code: "INVALID_VALUE",
+            message: issue.message,
+          }))
+        : [
+            {
+              path: name,
+              code: "INVALID_VALUE",
+              message: `${name} default was refused by its field type.`,
+            },
+          ];
+
+  throw NextlyError.validation({
+    errors: issues,
+    logContext: { single: singleSlug, field: field.name, reason: "default" },
+  });
 }
 
 /**

@@ -16,9 +16,16 @@
  *
  * @module shared/lib/assert-plugin-field-declarations
  */
+import { ALL_FIELD_TYPES } from "../../collections/fields/types";
+import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { pluginFieldOptionIssues } from "./plugin-field-options";
+
+/** Canonical tokens, for telling a typo apart from a contributed type. */
+const BUILT_IN_FIELD_TYPES = new Set<string>(
+  ALL_FIELD_TYPES as readonly string[]
+);
 
 /** The shape every entity carrying validatable fields shares. */
 interface FieldBearingEntity {
@@ -50,6 +57,33 @@ export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
       };
       const at =
         typeof named.name === "string" ? `${basePath}.${named.name}` : basePath;
+
+      // The `define*` validators cannot answer this: they run while the config
+      // bundle is evaluated, before `contributes.fieldTypes`, so every
+      // contributed token looks unknown to them and they defer it here. This is
+      // the first point where a token no plugin claimed is distinguishable from
+      // one that simply had not registered yet — and left unrefused it would
+      // reach the schema pipeline and silently build a text column.
+      // Registration is not authorization: these entities are all the entries
+      // surface, and a type offered only on `forms` or `users` renders a
+      // component its author never opted in here. The `define*` validators
+      // enforced both, and both have to be re-asked at the only point where the
+      // registry is populated.
+      if (
+        typeof named.type !== "string" ||
+        !(
+          BUILT_IN_FIELD_TYPES.has(named.type) ||
+          isPluginFieldTypeOnSurface(named.type, "entries")
+        )
+      ) {
+        errors.push({
+          path: `${at}.type`,
+          code: "FIELD_TYPE_INVALID",
+          message: `Invalid field type '${String(named.type)}'. No built-in type, and no installed plugin offers it on this surface.`,
+        });
+        continue;
+      }
+
       for (const issue of pluginFieldOptionIssues(field)) {
         errors.push({
           path: issue.path ? `${at}.${issue.path}` : at,

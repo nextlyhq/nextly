@@ -34,7 +34,7 @@ function createQueryService(): SingleQueryService {
 }
 
 describe("SingleQueryService.buildDefaultDocument", () => {
-  it("routes a localized field's default to localizedDefaults, off the main insert", () => {
+  it("routes a localized field's default to localizedDefaults, off the main insert", async () => {
     const service = createQueryService();
     const meta = siteSettingsMeta({
       localized: true,
@@ -51,7 +51,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     });
 
     const { document, insertValues, localizedDefaults } =
-      service.buildDefaultDocument(meta as unknown as SingleMeta);
+      await service.buildDefaultDocument(meta as unknown as SingleMeta);
 
     // The localized default is captured for the companion, not the main insert.
     expect(localizedDefaults).toMatchObject({ siteName: "My Site" });
@@ -64,7 +64,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(localizedDefaults).not.toHaveProperty("region");
   });
 
-  it("routes a localized title default to the companion", () => {
+  it("routes a localized title default to the companion", async () => {
     const service = createQueryService();
     const meta = siteSettingsMeta({
       localized: true,
@@ -73,15 +73,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       fields: [{ name: "title", type: "text", localized: true }],
     });
 
-    const { insertValues, localizedDefaults } = service.buildDefaultDocument(
-      meta as unknown as SingleMeta
-    );
+    const { insertValues, localizedDefaults } =
+      await service.buildDefaultDocument(meta as unknown as SingleMeta);
 
     expect(localizedDefaults).toHaveProperty("title");
     expect(insertValues).not.toHaveProperty("title");
   });
 
-  it("preserves the seeded title/slug for the required system identity fields", () => {
+  it("preserves the seeded title/slug for the required system identity fields", async () => {
     const service = createQueryService();
     // Mirror defineSingle's auto-injected system fields: `title` and `slug` are
     // required text fields with no defaultValue. The required type-default ("")
@@ -94,7 +93,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       ],
     });
 
-    const { document, insertValues } = service.buildDefaultDocument(
+    const { document, insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
@@ -104,7 +103,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(document.slug).toBe("site-settings");
   });
 
-  it("keeps the system title seed when a same-named field emits no column", () => {
+  it("keeps the system title seed when a same-named field emits no column", async () => {
     const service = createQueryService();
     // A column-less field named `title` (a component) does not suppress the
     // system text title column, so the seeded label must still reach the insert
@@ -113,14 +112,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       fields: [{ name: "title", type: "component", required: true }],
     });
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
     expect(insertValues.title).toBe("Site Settings");
   });
 
-  it("keeps the seed when title is a long-text column (textarea)", () => {
+  it("keeps the seed when title is a long-text column (textarea)", async () => {
     const service = createQueryService();
     // A `textarea`/`code` identity field maps to a `longText` column — still
     // textual storage, so the label/slug seed is valid and must be kept.
@@ -128,14 +127,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       fields: [{ name: "title", type: "textarea", required: true }],
     });
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
     expect(insertValues.title).toBe("Site Settings");
   });
 
-  it("uses the field's own type default when title is redefined as a non-text column", () => {
+  it("uses the field's own type default when title is redefined as a non-text column", async () => {
     const service = createQueryService();
     // A user redefining `title` as a number column must get its numeric default,
     // not the label string — inserting a string into a number column would fail.
@@ -143,14 +142,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       fields: [{ name: "title", type: "number", required: true }],
     });
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
     expect(insertValues.title).toBe(0);
   });
 
-  it("drops the identity seed when title is an optional non-text localized field", () => {
+  it("drops the identity seed when title is an optional non-text localized field", async () => {
     const service = createQueryService();
     // Redefining `title` as an OPTIONAL non-text localized field: the label
     // string seed must not survive into the (numeric) companion column just
@@ -161,14 +160,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     });
 
     const { document, localizedDefaults, insertValues } =
-      service.buildDefaultDocument(meta as unknown as SingleMeta);
+      await service.buildDefaultDocument(meta as unknown as SingleMeta);
 
     expect(localizedDefaults).not.toHaveProperty("title");
     expect(insertValues).not.toHaveProperty("title");
     expect(document).not.toHaveProperty("title");
   });
 
-  it("evaluates a function defaultValue before routing it to the companion", () => {
+  it("evaluates a function defaultValue before routing it to the companion", async () => {
     const service = createQueryService();
     // A localized field may carry a function default `(data) => value`. It must
     // be evaluated, not copied as a function object (which a companion upsert
@@ -185,7 +184,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       ],
     });
 
-    const { document, localizedDefaults } = service.buildDefaultDocument(
+    const { document, localizedDefaults } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
@@ -193,7 +192,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(document.siteName).toBe("Computed");
   });
 
-  it("drops a localized field that emits no storage column from the defaults", () => {
+  it("drops a localized field that emits no storage column from the defaults", async () => {
     const service = createQueryService();
     // A `component` field is localized here but emits no companion column
     // (its descriptor is "skip"). Its default must not be routed to a phantom
@@ -211,24 +210,22 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       ],
     });
 
-    const { localizedDefaults, insertValues } = service.buildDefaultDocument(
-      meta as unknown as SingleMeta
-    );
+    const { localizedDefaults, insertValues } =
+      await service.buildDefaultDocument(meta as unknown as SingleMeta);
 
     expect(localizedDefaults).toHaveProperty("siteName");
     expect(localizedDefaults).not.toHaveProperty("hero");
     expect(insertValues).not.toHaveProperty("hero");
   });
 
-  it("returns empty localizedDefaults for a non-localized single", () => {
+  it("returns empty localizedDefaults for a non-localized single", async () => {
     const service = createQueryService();
     const meta = siteSettingsMeta({
       fields: [{ name: "region", type: "text", defaultValue: "us" }],
     });
 
-    const { insertValues, localizedDefaults } = service.buildDefaultDocument(
-      meta as unknown as SingleMeta
-    );
+    const { insertValues, localizedDefaults } =
+      await service.buildDefaultDocument(meta as unknown as SingleMeta);
 
     expect(localizedDefaults).toEqual({});
     expect(insertValues).toMatchObject({ region: "us" });
@@ -237,7 +234,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
   // A `defaultValue` function does not survive serialization to
   // `dynamic_singles.fields`, so the resolution must read it from the live
   // code-first config the registry exposes via `getCodeFirstFields`.
-  it("resolves a defaultValue from the code-first config when the serialized meta lacks it", () => {
+  it("resolves a defaultValue from the code-first config when the serialized meta lacks it", async () => {
     const registry = createMockSingleRegistry();
     const service = new SingleQueryService(
       createMockAdapter() as unknown as Ctor[0],
@@ -270,7 +267,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       },
     ]);
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
@@ -285,7 +282,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     });
   });
 
-  it("passes logical (not JSON-stringified) prior values to a dependent default function", () => {
+  it("passes logical (not JSON-stringified) prior values to a dependent default function", async () => {
     const registry = createMockSingleRegistry();
     const service = new SingleQueryService(
       createMockAdapter() as unknown as Ctor[0],
@@ -323,14 +320,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       },
     ]);
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
     expect(insertValues).toMatchObject({ tier: "pro" });
   });
 
-  it("JSON-encodes a primitive default for a json-backed column", () => {
+  it("JSON-encodes a primitive default for a json-backed column", async () => {
     // A json column stores text (SQLite especially), so a primitive default like
     // `() => true` must be encoded to "true"; a raw boolean cannot be bound.
     const registry = createMockSingleRegistry();
@@ -348,14 +345,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       { name: "flags", type: "json", defaultValue: () => true },
     ]);
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
     expect(insertValues.flags).toBe("true");
   });
 
-  it("keeps the serialized-meta default for a UI-created single (no code-first fields)", () => {
+  it("keeps the serialized-meta default for a UI-created single (no code-first fields)", async () => {
     // getCodeFirstFields returns undefined by default in the mock, mirroring a
     // UI-created single; the serialized primitive default still applies.
     const service = createQueryService();
@@ -363,14 +360,14 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       fields: [{ name: "region", type: "text", defaultValue: "us" }],
     });
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 
     expect(insertValues).toMatchObject({ region: "us" });
   });
 
-  it("rejects a password field that declares a defaultValue", () => {
+  it("rejects a password field that declares a defaultValue", async () => {
     // This path inserts the resolved value directly, bypassing the write path's
     // password hashing, so a password default would persist in plaintext; it
     // must be refused rather than stored.
@@ -390,7 +387,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
 
     let caught: unknown;
     try {
-      service.buildDefaultDocument(meta as unknown as SingleMeta);
+      await service.buildDefaultDocument(meta as unknown as SingleMeta);
     } catch (error) {
       caught = error;
     }
@@ -402,7 +399,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     expect(publicData?.errors?.[0]?.code).toBe("PASSWORD_DEFAULT_UNSUPPORTED");
   });
 
-  it("coerces a string date default to a Date for the timestamp column", () => {
+  it("coerces a string date default to a Date for the timestamp column", async () => {
     // A timestamp column needs a Date; the ordinary write path coerces, and the
     // direct insert must too, or SQLite stores the string in an integer column.
     const registry = createMockSingleRegistry();
@@ -423,7 +420,7 @@ describe("SingleQueryService.buildDefaultDocument", () => {
       },
     ]);
 
-    const { insertValues } = service.buildDefaultDocument(
+    const { insertValues } = await service.buildDefaultDocument(
       meta as unknown as SingleMeta
     );
 

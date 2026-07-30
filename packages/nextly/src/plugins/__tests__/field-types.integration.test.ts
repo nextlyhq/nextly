@@ -18,6 +18,7 @@ import {
   registerFieldType,
 } from "../../domains/schema/field-types/field-type-registry";
 import { getColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { definePlugin } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
@@ -55,7 +56,7 @@ describe("custom field types", () => {
     ).toBe("text");
   });
 
-  it("config validation accepts a registered custom type, rejects an unregistered one", () => {
+  it("config validation defers an unregistered custom type, boot refuses it", () => {
     const cfg = {
       slug: "ratings",
       fields: [
@@ -64,15 +65,26 @@ describe("custom field types", () => {
       ],
     } as unknown as CollectionConfig;
 
-    // Unregistered → rejected with FIELD_TYPE_INVALID.
+    // Unregistered → deferred here, because a plugin registers its types after
+    // every define* call has run. Refusing now would refuse every contributed
+    // type outright.
     const before = validateCollectionConfig(cfg);
-    expect(before.valid).toBe(false);
-    expect(before.errors.some(e => e.code === "FIELD_TYPE_INVALID")).toBe(true);
+    expect(before.errors.some(e => e.code === "FIELD_TYPE_INVALID")).toBe(
+      false
+    );
 
-    // Registered → accepted.
+    // ...and refused at boot, which is the first point the answer is knowable.
+    expect(() =>
+      assertPluginFieldDeclarations({ collections: [cfg] })
+    ).toThrow();
+
+    // Registered → accepted by both.
     registerFieldType({ ...ratingType });
     const after = validateCollectionConfig(cfg);
     expect(after.errors.some(e => e.code === "FIELD_TYPE_INVALID")).toBe(false);
+    expect(() =>
+      assertPluginFieldDeclarations({ collections: [cfg] })
+    ).not.toThrow();
   });
 
   it("rejects a registered type that did not opt into the entries surface", () => {
@@ -80,6 +92,18 @@ describe("custom field types", () => {
     // a collection (entries surface), or the entry editor would try to render a
     // component the plugin never opted in there.
     registerFieldType({ ...ratingType, surfaces: ["forms"] });
+    // Refused at boot rather than at define time: registration is what makes
+    // the surface knowable, and that happens after the config is built.
+    expect(() =>
+      assertPluginFieldDeclarations({
+        collections: [
+          {
+            slug: "ratings",
+            fields: [{ name: "score", type: "rating" }],
+          },
+        ],
+      })
+    ).toThrow();
     const result = validateCollectionConfig({
       slug: "ratings",
       fields: [{ name: "score", type: "rating" }],

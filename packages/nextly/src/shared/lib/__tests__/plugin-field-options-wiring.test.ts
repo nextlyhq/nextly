@@ -21,6 +21,7 @@ import {
   assertValidPluginFieldOptions,
 } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors/nextly-error";
+import { assertPluginFieldDeclarations } from "../assert-plugin-field-declarations";
 import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
 import { validateSingleConfig } from "../../../singles/config/validate-single";
@@ -125,15 +126,49 @@ describe("declaration checks reach every authoring path", () => {
     ).toThrow(/policy\.kinds must name at least one kind/);
   });
 
-  it("rejects an unregistered plugin type as unknown, before any option check", () => {
-    // No registration: this is the cold-load ordering, and it is why the
-    // define* calls are not advertised as a gate for plugin field types.
+  it("defers an unregistered plugin type rather than refusing it", () => {
+    // The cold-load ordering: a plugin registers its types when the app boots,
+    // which is after every define* call has run. Refusing an unrecognised token
+    // here would refuse every contributed type, so a plugin field could only be
+    // declared by bypassing these validators.
     expect(() =>
       defineCollection({
         slug: "posts",
         fields: [badField],
       } as unknown as CollectionConfig)
-    ).toThrow(/Invalid field type 'document'/);
+    ).not.toThrow();
+  });
+
+  it("refuses at boot a type no plugin ever claimed", () => {
+    // Deferring is not accepting. This is the first point where a typo is
+    // distinguishable from a type that had simply not registered yet, so it is
+    // where the question gets its answer.
+    let messages = "";
+    try {
+      assertPluginFieldDeclarations({
+        collections: [{ slug: "posts", fields: [badField] }],
+      });
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as
+        | { errors?: Array<{ message: string }> }
+        | undefined;
+      messages = (data?.errors ?? []).map(i => i.message).join(" ");
+    }
+
+    expect(messages).toContain("Invalid field type 'document'");
+  });
+
+  it("accepts at boot a type a plugin did claim", () => {
+    registerDocument();
+
+    expect(() =>
+      assertPluginFieldDeclarations({
+        collections: [
+          { slug: "posts", fields: [{ name: "doc", type: "document" }] },
+        ],
+      })
+    ).not.toThrow();
   });
 
   it("refuses a code-first single field", () => {

@@ -534,7 +534,7 @@ export class SingleMutationService extends BaseService {
         this.logger.info("Preparing default Single document before update", {
           slug,
         });
-        const built = this.queryService.buildDefaultDocument(singleMeta);
+        const built = await this.queryService.buildDefaultDocument(singleMeta);
         existingDoc = built.document;
         pendingAutoCreateValues = built.insertValues;
         pendingLocalizedDefaults = built.localizedDefaults;

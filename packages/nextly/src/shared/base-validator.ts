@@ -338,12 +338,18 @@ export function validateFieldTypeShared(
       (isCustomType?.(fieldType) ?? false));
 
   if (!isKnown) {
-    errors.push({
-      path: `${path}.type`,
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      message: `Invalid field type '${String(fieldType)}'. Valid types: ${VALID_FIELD_TYPES.join(", ")}`,
-      code: "FIELD_TYPE_INVALID",
-    });
+    // Deferred, not accepted. A plugin contributes its field types when the app
+    // boots, which is after every `define*` call has already run — the config
+    // bundle is evaluated first. Refusing an unrecognised token here therefore
+    // refuses every contributed type, so a plugin field could only be declared
+    // by bypassing these validators entirely.
+    //
+    // A typo is indistinguishable from a not-yet-registered type at this point,
+    // so the answer is not knowable here and the question is asked again at
+    // boot, once `contributes.fieldTypes` has run: see
+    // `assertPluginFieldDeclarations`, which refuses a token no plugin claimed.
+    // `false` still skips the per-type checks below, which have nothing to say
+    // about a type they do not know.
     return false;
   }
 

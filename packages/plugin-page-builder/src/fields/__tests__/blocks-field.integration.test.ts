@@ -18,10 +18,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { text } from "nextly/config";
+import { defineCollection, defineSingle, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pageBuilder } from "../../plugin";
+import { blocks } from "../blocksHelper";
 
 /** Only what this suite calls, so it does not reach into core's private types. */
 interface CollectionsHandler {
@@ -122,17 +123,17 @@ function dataOf(result: unknown): Record<string, unknown> {
 async function handlerFor(dialect: TestDialect): Promise<CollectionsHandler> {
   current = await createTestNextly({
     dialect,
-    // Installed so the field type is registered. A `blocks` field cannot be
-    // built with `defineCollection` for the same reason: the config bundle is
-    // evaluated before `contributes.fieldTypes` runs, so the token is unknown
-    // at that point and the collection is declared as a raw config instead.
+    // Installed so the field type is registered before the schema is built.
+    // `defineCollection` accepts the token because it defers an unrecognised
+    // one to boot rather than refusing it, which is what makes a contributed
+    // field declarable from code at all.
     plugins: [pageBuilder()],
     collections: [
-      {
+      defineCollection({
         slug: "docs",
-        fields: [text({ name: "title" }), { name: "content", type: "blocks" }],
-      },
-    ] as never,
+        fields: [text({ name: "title" }), blocks({ name: "content" })],
+      }),
+    ],
   });
   return current.getService<CollectionsHandler>("collectionsHandler");
 }
@@ -254,14 +255,14 @@ describeEachDialect("blocks field storage", dialect => {
       dialect,
       plugins: [pageBuilder()],
       collections: [
-        {
+        defineCollection({
           slug: "docs",
           fields: [
             text({ name: "title" }),
-            { name: "content", type: "blocks", blocks: { allow: ["core/*"] } },
+            blocks({ name: "content", blocks: { allow: ["core/*"] } }),
           ],
-        },
-      ] as never,
+        }),
+      ],
     });
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
