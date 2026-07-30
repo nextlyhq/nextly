@@ -288,7 +288,7 @@ export class FieldGroupMutationService extends BaseService {
         // of the same fields, so a scalar JSON document has to be written the
         // same way on both sides or a translation reads back differently from
         // the value it was translated from.
-        out[column] = toJsonColumnValue(value).value;
+        out[column] = toJsonColumnValue(value);
       } else {
         out[column] = value;
       }
@@ -1564,7 +1564,7 @@ export class FieldGroupMutationService extends BaseService {
       const columnName = toSnakeCase(key);
 
       result[columnName] = shouldTreatAsJson(field)
-        ? toJsonColumnValue(value).value
+        ? toJsonColumnValue(value)
         : value;
     }
 

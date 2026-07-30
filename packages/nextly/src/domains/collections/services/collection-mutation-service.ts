@@ -2123,13 +2123,7 @@ export class CollectionMutationService extends BaseService {
           isJsonFieldType(field.type, field) &&
           finalData[field.name] != null
         ) {
-          const encoded = toJsonColumnValue(finalData[field.name]);
-          finalData[field.name] = encoded.value;
-          if (encoded.invalidJsonString) {
-            console.warn(
-              `[createEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
-            );
-          }
+          finalData[field.name] = toJsonColumnValue(finalData[field.name]);
         }
       });
 
@@ -4029,13 +4023,7 @@ export class CollectionMutationService extends BaseService {
           isJsonFieldType(field.type, field) &&
           finalData[field.name] != null
         ) {
-          const encoded = toJsonColumnValue(finalData[field.name]);
-          finalData[field.name] = encoded.value;
-          if (encoded.invalidJsonString) {
-            console.warn(
-              `[updateEntry] Field "${field.name}" (type: ${field.type}) is a string but not valid JSON`
-            );
-          }
+          finalData[field.name] = toJsonColumnValue(finalData[field.name]);
         }
       });
 
