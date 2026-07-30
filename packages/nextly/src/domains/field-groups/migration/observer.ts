@@ -1,0 +1,127 @@
+/**
+ * Binds the migration's observations to the schema pipeline's introspection.
+ *
+ * The steps decide against an injected `StorageObserver` so they stay testable
+ * without a database. This is the one implementation of that seam, and it reads
+ * through `introspectLiveSnapshot` rather than issuing its own catalog queries:
+ * that function already answers the same question for all three dialects, and a
+ * second implementation of "what does this table look like" would drift from it
+ * exactly the way independent naming rules have drifted here before.
+ *
+ * @module domains/field-groups/migration/observer
+ */
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import { NextlyError } from "../../../errors/nextly-error";
+import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
+
+import type { ObservedColumn, StorageObserver } from "./steps";
+
+/** The registry column holding a row's physical table name. */
+const REGISTRY_TABLE_NAME_COLUMN = "table_name";
+
+/**
+ * Observations a step needs that go beyond names, kept separate from
+ * `StorageObserver` so the step contract stays the smaller of the two.
+ */
+export interface IndexObserver {
+  /**
+   * A table's index names, or `undefined` when the snapshot did not track them.
+   *
+   * `undefined` is **not** "no indexes". Snapshots written before index data was
+   * recorded leave the field unset, and reading that as an empty list would
+   * report every index intact on a snapshot that never held any.
+   */
+  indexNames(table: string): Promise<string[] | undefined>;
+}
+
+/** Observe a live database through the schema pipeline's introspection. */
+export function createStorageObserver(
+  adapter: DrizzleAdapter
+): StorageObserver & IndexObserver {
+  const dialect = adapter.getCapabilities().dialect;
+
+  async function snapshotOf(table: string) {
+    const snapshot = await introspectLiveSnapshot(
+      adapter.getDrizzle(),
+      dialect,
+      [table]
+    );
+    return snapshot.tables.find(entry => entry.name === table);
+  }
+
+  return {
+    tables: async () => adapter.listTables(),
+
+    columns: async (_session, table): Promise<ObservedColumn[] | undefined> => {
+      const spec = await snapshotOf(table);
+      if (spec === undefined) return undefined;
+      return spec.columns.map(column => ({
+        name: column.name,
+        type: column.type,
+      }));
+    },
+
+    pointers: async (_session, registryTable): Promise<string[]> => {
+      // Addressed by a name the ORM's schema registry does not know: it resolves
+      // tables exactly by the name their Drizzle definition declares, and during
+      // a run the registry is under whichever name the plan has reached. The
+      // identifier is quoted; there are no values to bind.
+      const rows = await adapter.executeQuery<Record<string, unknown>>(
+        `SELECT ${quoteIdent(REGISTRY_TABLE_NAME_COLUMN, dialect)} FROM ${quoteIdent(registryTable, dialect)}`
+      );
+      return rows
+        .map(row => row[REGISTRY_TABLE_NAME_COLUMN])
+        .filter((value): value is string => typeof value === "string");
+    },
+
+    indexNames: async (table): Promise<string[] | undefined> => {
+      const spec = await snapshotOf(table);
+      if (spec === undefined) return undefined;
+      // Preserved as `undefined` rather than collapsed to `[]`, so a caller can
+      // tell "this table has no indexes" from "nobody recorded any".
+      if (spec.indexes === undefined) return undefined;
+      return spec.indexes.map(index => index.name);
+    },
+  };
+}
+
+/**
+ * Refuse when a rename did not carry a table's indexes with it.
+ *
+ * Renaming a table keeps its indexes on all three dialects, so a name missing
+ * afterwards means one was dropped rather than moved. Compared **by name**
+ * rather than by count: a count survives losing one index and gaining another,
+ * which is exactly the shape of the SQLite index loss this checks for.
+ *
+ * `before` being `undefined` means the step could not observe the source — the
+ * rename had already committed when it ran — and there is nothing to compare
+ * against. That is reported rather than silently passing, because the gap is
+ * real: a crash between a rename and its verification hides index loss, and only
+ * the end-of-run structural verification can catch it.
+ */
+export function findLostIndexes(
+  before: string[] | undefined,
+  after: string[] | undefined
+): { comparable: false } | { comparable: true; lost: string[] } {
+  if (before === undefined || after === undefined) return { comparable: false };
+  const present = new Set(after);
+  return { comparable: true, lost: before.filter(name => !present.has(name)) };
+}
+
+/** Build the refusal a lost index deserves. */
+export function refuseLostIndexes(args: {
+  table: string;
+  lost: string[];
+}): NextlyError {
+  return NextlyError.serviceUnavailable({
+    logMessage: `field-group migration lost indexes while renaming ${args.table}`,
+    logContext: {
+      reason: "rename did not carry the table's indexes",
+      table: args.table,
+      lost: args.lost,
+    },
+  });
+}
