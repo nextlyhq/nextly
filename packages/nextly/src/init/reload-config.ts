@@ -486,8 +486,15 @@ function publishScopeRecording(
   // Opt-outs first, always: safe regardless of sync state (recording is off).
   for (const e of entities) {
     if (!e.slug) continue;
-    if (resolveWebhookRecording(e.webhooks).record === false) {
-      setWebhookRecording(scope, e.slug, false, sourceOf(e.slug));
+    const resolved = resolveWebhookRecording(e.webhooks);
+    if (resolved.record === false) {
+      setWebhookRecording(
+        scope,
+        e.slug,
+        false,
+        sourceOf(e.slug),
+        resolved.emit
+      );
     }
   }
 
@@ -500,8 +507,9 @@ function publishScopeRecording(
   pruneRemovedCodeFirstRecording(scope, present);
   for (const e of entities) {
     if (!e.slug) continue;
-    if (resolveWebhookRecording(e.webhooks).record === true) {
-      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug));
+    const resolved = resolveWebhookRecording(e.webhooks);
+    if (resolved.record === true) {
+      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug), resolved.emit);
     }
   }
 }

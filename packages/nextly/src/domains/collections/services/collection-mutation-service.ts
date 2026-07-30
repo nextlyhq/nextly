@@ -103,10 +103,15 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
+import { projectFields } from "../../webhooks/project-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
-import { isRecordingDisabledByConfig } from "../../webhooks/recording-policy";
+import {
+  getWebhookEmitSpec,
+  isRecordingDisabledByConfig,
+} from "../../webhooks/recording-policy";
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
+import type { WebhookResource } from "../../webhooks/types";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -2459,6 +2464,51 @@ export class CollectionMutationService extends BaseService {
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
+
+        // A collection may replace its (here suppressed) `entry.created` with a
+        // curated, metadata-only event: a form submission emits
+        // `form.submission.created` carrying only the allowlisted fields, never
+        // the visitor's answers. Recorded in the SAME transaction so it commits
+        // with the row, on a resource kind (e.g. `form`) that the per-collection
+        // opt-out does not gate. Ordinary collections declare no emit and skip it.
+        const emitSpec = getWebhookEmitSpec(
+          "collection",
+          params.collectionName
+        );
+        if (emitSpec) {
+          const emitLocale = localizedWrite
+            ? { locale: localizedWrite.writeLocale }
+            : {};
+          const curatedResource: WebhookResource =
+            emitSpec.kind === "entry"
+              ? {
+                  kind: "entry",
+                  collection: params.collectionName,
+                  id: entry.id as string,
+                  ...emitLocale,
+                }
+              : {
+                  kind: emitSpec.kind,
+                  slug: params.collectionName,
+                  id: entry.id as string,
+                  ...emitLocale,
+                };
+          const curatedRecorded = await recordMutationEvent(tx, {
+            type: emitSpec.event,
+            resource: curatedResource,
+            // Default-deny projection: only the allowlisted keys ship, so a PII
+            // collection's sensitive columns never reach the payload.
+            data: projectFields(createdDocument, emitSpec.fields),
+            previous: null,
+            // The data is already a curated allowlist; there is nothing further
+            // to strip, and the raw field tree does not describe these keys.
+            fields: [],
+            actor: actorForWrite(params.actor, params.user),
+          });
+          // Fire the post-commit fast drain when only the curated event recorded
+          // (the collection's own `entry.created` was suppressed).
+          recorded = recorded || curatedRecorded;
+        }
         // A create landing directly on `published` is a publish lifecycle event
         // too (D69). Recorded in the SAME transaction, so it commits with the row
         // and inherits the recording opt-out. `statusEventsFor` emits only

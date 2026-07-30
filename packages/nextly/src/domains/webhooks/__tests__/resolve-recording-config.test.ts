@@ -37,4 +37,74 @@ describe("resolveWebhookRecording", () => {
       record: true,
     });
   });
+
+  it("resolves a curated emit and derives the resource kind from the event", () => {
+    expect(
+      resolveWebhookRecording({
+        record: false,
+        emit: {
+          event: "form.submission.created",
+          fields: ["form", "submittedAt", "status"],
+        },
+      })
+    ).toEqual({
+      record: false,
+      emit: {
+        event: "form.submission.created",
+        kind: "form",
+        fields: ["form", "submittedAt", "status"],
+      },
+    });
+  });
+
+  it("resolves an emit with no field allowlist", () => {
+    expect(
+      resolveWebhookRecording({
+        record: false,
+        emit: { event: "form.submission.created" },
+      })
+    ).toEqual({
+      record: false,
+      emit: { event: "form.submission.created", kind: "form" },
+    });
+  });
+
+  it("derives the kind for any declared event family", () => {
+    expect(
+      resolveWebhookRecording({
+        record: false,
+        emit: { event: "user.created" },
+      }).emit
+    ).toEqual({ event: "user.created", kind: "user" });
+  });
+
+  it("drops a malformed emit rather than throwing", () => {
+    const asInput = (v: unknown) =>
+      v as boolean | { record?: boolean } | undefined;
+    // Unknown event -> no curated event at all.
+    expect(
+      resolveWebhookRecording(
+        asInput({ record: false, emit: { event: "nope.created" } })
+      )
+    ).toEqual({ record: false });
+    // A non-object emit -> no curated event.
+    expect(
+      resolveWebhookRecording(
+        asInput({ record: false, emit: "form.submission.created" })
+      )
+    ).toEqual({ record: false });
+    // Non-string field names -> the event still resolves, the allowlist is
+    // dropped (an empty projection is safer than shipping unexpected keys).
+    expect(
+      resolveWebhookRecording(
+        asInput({
+          record: false,
+          emit: { event: "form.submission.created", fields: [1, 2] },
+        })
+      )
+    ).toEqual({
+      record: false,
+      emit: { event: "form.submission.created", kind: "form" },
+    });
+  });
 });
