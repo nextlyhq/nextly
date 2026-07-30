@@ -77,6 +77,11 @@ export interface ComponentReadAccess {
    */
   targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
   /**
+   * The caller's Draft/Published intent, forwarded when they asked to see
+   * everything. Only `"all"` propagates; see the relationship service for why.
+   */
+  status?: "all";
+  /**
    * The language the surrounding read resolved to, forwarded so a target
    * collection's read rule can be applied when it filters on a localized field
    * of that collection.
@@ -1149,6 +1154,7 @@ export class FieldGroupQueryService extends BaseService {
           targetCompanions: access.targetCompanions,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
+          status: access.status,
         }
       );
 
