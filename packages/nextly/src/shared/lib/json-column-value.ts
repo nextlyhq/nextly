@@ -8,19 +8,15 @@
  * column is plain text, that binds a boolean to a text column and reads back as
  * something other than what was written.
  *
+ * A string is the one input the value alone cannot classify: it may be a
+ * document an earlier step encoded, or the logical string the caller means to
+ * store. Whether it parses is the only signal available, and it is a heuristic
+ * — a logical string that happens to look like JSON is read as a document. What
+ * is NOT ambiguous is a string that does not parse: nothing can read it as an
+ * encoded document, so writing it raw is wrong under either meaning.
+ *
  * @module shared/lib/json-column-value
  */
-
-/** What a value turned into, and whether it was a string that is not JSON. */
-export interface JsonColumnValue {
-  value: unknown;
-  /**
-   * The value was already a string but does not parse as JSON. Left exactly as
-   * given — re-encoding it would double-serialize content a previous write
-   * stored — and reported so a caller can say so.
-   */
-  invalidJsonString: boolean;
-}
 
 /**
  * Encode `value` for a JSON column.
@@ -29,24 +25,26 @@ export interface JsonColumnValue {
  * callers already skip them, so encoding them here would write the string
  * `"null"` where a real SQL NULL belongs.
  */
-export function toJsonColumnValue(value: unknown): JsonColumnValue {
-  if (value === null || value === undefined) {
-    return { value, invalidJsonString: false };
-  }
+export function toJsonColumnValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
 
   if (typeof value === "string") {
     try {
       JSON.parse(value);
-      // Already encoded by an earlier write or by the caller; re-encoding would
-      // wrap it in quotes and change what is stored.
-      return { value, invalidJsonString: false };
+      // Parses, so it is taken as a document an earlier step already encoded.
+      // Re-encoding would wrap it in quotes and change what is stored.
+      return value;
     } catch {
-      return { value, invalidJsonString: true };
+      // Does not parse, so it is not an encoded document and there is nothing
+      // to double-encode. Written raw it puts bare text where the column holds
+      // JSON, which Postgres and MySQL reject outright; encoding it stores the
+      // string the caller actually had.
+      return JSON.stringify(value);
     }
   }
 
   // Objects, arrays, booleans and numbers all encode the same way. A boolean
   // and a number are legal JSON documents in their own right, which is why they
   // belong here rather than being passed through as the driver's own types.
-  return { value: JSON.stringify(value), invalidJsonString: false };
+  return JSON.stringify(value);
 }

@@ -569,7 +569,7 @@ export function serializeJsonFields(
     if (!("name" in field) || !field.name) continue;
 
     if (shouldTreatAsJson(field) && result[field.name] != null) {
-      result[field.name] = toJsonColumnValue(result[field.name]).value;
+      result[field.name] = toJsonColumnValue(result[field.name]);
     }
   }
 
