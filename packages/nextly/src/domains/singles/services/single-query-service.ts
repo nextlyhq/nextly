@@ -308,6 +308,13 @@ function referencesExpanded(
   const parsedStored = parseReferenceValue(stored);
   if (parsedStored === UNREADABLE_CONTAINER) return false;
   const storedList = parsedStored;
+  // References the target's own rules refused are absent on purpose, so they
+  // are removed from what has to have arrived. A `hasMany` holding both
+  // readable and refused rows therefore compares the shortened list against
+  // the references that were actually expandable, rather than against every
+  // reference the row stored.
+  const expectable = (ref: unknown): boolean =>
+    !withheldByAccess?.has(referenceId(ref));
   if (withheldByAccess?.size) {
     const refusedEveryReference = (
       Array.isArray(storedList) ? storedList : [storedList]
@@ -317,7 +324,7 @@ function referencesExpanded(
     if (refusedEveryReference) return true;
   }
   const storedRefs = Array.isArray(storedList)
-    ? storedList.filter(id => !isEmptyValue(id))
+    ? storedList.filter(id => !isEmptyValue(id)).filter(expectable)
     : undefined;
 
   if (Array.isArray(assembled)) {
@@ -780,6 +787,11 @@ export class SingleQueryService extends BaseService {
             enforceFieldAccess: enforceRelatedFieldAccess,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,
+            // A relationship inside a component is populated by the same
+            // service, so a refusal there has to reach the completeness check
+            // too, and the rows of one population share a policy cache.
+            withheldByAccess: params.withheldByAccess,
+            targetPolicies: new Map(),
             authenticatedScope: options.authenticatedScope,
           },
           // Read errors otherwise become empty component values, which reads to a

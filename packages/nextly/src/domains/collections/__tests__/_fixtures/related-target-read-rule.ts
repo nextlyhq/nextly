@@ -28,6 +28,10 @@ export default function relatedTargetReadRule({
     // "allowed" and hands back the one row it exists to withhold.
     case "blocked-one":
       return id !== req.user?.blockedId;
+    // Refuses one named row and admits the rest, so a list-valued relationship
+    // ends up part readable and part refused.
+    case "partial":
+      return id !== req.user?.blockedId;
     // Answers with a PREDICATE rather than a verdict: the caller may read the
     // collection, but only the rows matching their tenant.
     case "tenant-scoped":

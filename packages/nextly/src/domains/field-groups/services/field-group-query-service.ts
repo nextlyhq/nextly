@@ -52,6 +52,11 @@ export interface ComponentReadAccess {
    */
   authenticatedScope?: AuthenticatedScope;
   /**
+   * Ids withheld because a target collection refused the caller, so a
+   * completeness check can tell a refusal from a load that failed.
+   */
+  withheldByAccess?: Set<string>;
+  /**
    * Target read policies resolved during this population.
    *
    * Component rows are expanded concurrently, and rows pointing at the same
@@ -1117,6 +1122,7 @@ export class FieldGroupQueryService extends BaseService {
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
           targetPolicies: access.targetPolicies,
+          withheldByAccess: access.withheldByAccess,
         }
       );
 

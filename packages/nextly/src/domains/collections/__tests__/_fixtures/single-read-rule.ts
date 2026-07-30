@@ -21,6 +21,10 @@ export default function singleReadRule({
     // No predicate: the caller alone decides, so nothing is filtered.
     case "always":
       return true;
+    // Admitted here so a test can pair this caller with a TARGET rule that
+    // refuses only some of the rows a relationship points at.
+    case "partial":
+      return true;
     // A dotted path, whose suffix translation discards while comparing the base
     // column instead — a different predicate than the rule states.
     case "dotted":

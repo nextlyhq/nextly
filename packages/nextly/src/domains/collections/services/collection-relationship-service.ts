@@ -1002,8 +1002,10 @@ export class CollectionRelationshipService extends BaseService {
       );
     } catch {
       // A target whose rules cannot be read is not a target whose rules are
-      // satisfied.
-      this.recordWithheld(rows, [], access);
+      // satisfied. Deliberately NOT recorded as withheld-by-access: a caller
+      // checking its expansion for completeness must still see an unexplained
+      // absence here, or a rule that tolerates absence decides on evidence a
+      // failure removed.
       return [];
     }
 
@@ -1039,20 +1041,24 @@ export class CollectionRelationshipService extends BaseService {
     });
 
     const confirmed = [...unrestricted];
+    let anyPredicateFailed = false;
     for (const [key, group] of byPredicate) {
-      confirmed.push(
-        ...(await this.narrowByTargetPredicate(
-          targetCollection,
-          group,
-          predicates.get(key) as Record<string, unknown>
-        ))
+      const narrowed = await this.narrowByTargetPredicate(
+        targetCollection,
+        group,
+        predicates.get(key) as Record<string, unknown>
       );
+      // Null means the predicate could not be applied at all. The rows stay out
+      // either way, but nothing was decided about them, so they are not
+      // reported as refused.
+      if (narrowed === null) anyPredicateFailed = true;
+      else confirmed.push(...narrowed);
     }
     // Restored to the order they were fetched in, since the grouping above
     // reads them out by predicate.
     const kept = new Set(confirmed);
     const ordered = admitted.filter(row => kept.has(row));
-    this.recordWithheld(admitted, ordered, access);
+    if (!anyPredicateFailed) this.recordWithheld(admitted, ordered, access);
     return ordered;
   }
 
@@ -1125,7 +1131,7 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     rows: Record<string, unknown>[],
     constraint: Record<string, unknown>
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<Record<string, unknown>[] | null> {
     try {
       const schema = isSystemEntity(targetCollection)
         ? getSystemEntityTable(targetCollection)
@@ -1181,7 +1187,9 @@ export class CollectionRelationshipService extends BaseService {
         collection: targetCollection,
         error,
       });
-      return [];
+      // Null, not an empty list: the rows are withheld either way, but the
+      // caller must not report this as a refusal — nothing was decided.
+      return null;
     }
   }
 

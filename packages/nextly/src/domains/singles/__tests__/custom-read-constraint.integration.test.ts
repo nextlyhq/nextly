@@ -1172,6 +1172,79 @@ describe("Single custom read rules vs the assembled document (integration)", () 
     expect(result.data!.author).toBe(authorId);
   });
 
+  // A list-valued relationship may hold both readable and refused targets. The
+  // refused ones are absent on purpose, so completeness has to be measured
+  // against what could be read, not against everything the row stored.
+  it("serves a judged read whose list holds one refused target", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "authors",
+              relationTo: "authors",
+              hasMany: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    // The caller is admitted by the Single's rule and refused by the target's
+    // rule for one specific row, so the list ends up part readable and part
+    // refused — which is the case the check has to account for.
+    const readable = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Readable" }
+    );
+    const refused = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Refused" }
+    );
+    const refusedId = (refused.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        authors: [(readable.data as { id: string }).id, refusedId],
+      },
+      { overrideAccess: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: {
+          read: { type: "custom", functionPath: TARGET_RULE_PATH },
+        },
+      },
+      { and: [{ column: "slug", op: "=", value: "authors" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "partial", blockedId: refusedId },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    const authors = result.data!.authors as Record<string, unknown>[];
+    // The readable half survived; the refused half is simply not there.
+    expect(JSON.stringify(authors)).toContain("Readable");
+    expect(JSON.stringify(authors)).not.toContain("Refused");
+  });
+
   // A container is serialized to JSON wholesale, so a reference left populated
   // inside one is written as the row and never read back as a reference again.
   it("stores a reference for a populated value inside a group", async () => {
