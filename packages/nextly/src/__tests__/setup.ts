@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, afterEach } from "vitest";
 
-import { takeAbortedTransactionSightings } from "../plugins/test-nextly";
+import { takeAbortedTransactionSightings } from "./aborted-transaction-sightings";
 
 beforeAll(() => {
   // Setup test environment

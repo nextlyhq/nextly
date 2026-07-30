@@ -17,10 +17,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { takeAbortedTransactionSightings } from "../../__tests__/aborted-transaction-sightings";
 import {
   createTestNextly,
   getConfiguredTestDialects,
-  takeAbortedTransactionSightings,
   type TestNextly,
 } from "../test-nextly";
 

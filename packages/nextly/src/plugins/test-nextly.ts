@@ -19,6 +19,10 @@ import { randomBytes } from "node:crypto";
 
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  PG_ABORTED_TRANSACTION,
+  recordAbortedTransaction,
+} from "../__tests__/aborted-transaction-sightings";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import { createAdapter } from "../database/factory";
 import {
@@ -103,19 +107,6 @@ export function getConfiguredTestDialects(): TestDialect[] {
 }
 
 /**
- * PostgreSQL's signature for "an earlier statement in this transaction failed".
- *
- * It is always a SECONDARY error: the statement that actually broke was swallowed somewhere,
- * and everything after it in the transaction reports this instead. That is what makes the
- * class so hard to see — on SQLite and MySQL the swallowed error is harmless, so a suite can
- * be green on two dialects and quietly broken on the third.
- */
-const PG_ABORTED_TRANSACTION = "current transaction is aborted";
-
-/** Aborted-transaction failures seen during the current test file, if any. */
-const abortedTransactionSightings: string[] = [];
-
-/**
  * Wrap an adapter so any aborted-transaction error is recorded before it propagates.
  *
  * Existence checks in this codebase have historically been written as "run a query and catch
@@ -145,24 +136,13 @@ function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
             ? error
             : "";
       if (message.includes(PG_ABORTED_TRANSACTION)) {
-        abortedTransactionSightings.push(message);
+        recordAbortedTransaction(message);
       }
       throw error;
     }
   };
   (adapter as { transaction: unknown }).transaction = wrapped;
   return adapter;
-}
-
-/**
- * Aborted-transaction errors seen so far, for the shared setup file to assert on.
- * Reading also clears, so one file's failure cannot be re-reported against the next.
- */
-export function takeAbortedTransactionSightings(): string[] {
-  return abortedTransactionSightings.splice(
-    0,
-    abortedTransactionSightings.length
-  );
 }
 
 export interface CreateTestNextlyOptions {
