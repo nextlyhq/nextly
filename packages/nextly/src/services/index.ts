@@ -215,12 +215,20 @@ export class ServiceContainer {
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
         : (console as unknown as Logger);
+      // The dispatcher (admin REST) and the setup seeder reach users through
+      // this facade, so inject the shared drain fast path here — otherwise their
+      // user.created/deleted events would sit in the outbox until the scheduled
+      // drain. Absent on a bare container (CLI/test), which relies on that drain.
+      const fastDrainScheduler = container.has("webhookFastDrainScheduler")
+        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
+        : undefined;
       this._users = new UsersService(
         this.adapter,
         logger,
         config?.users,
         userExtSchemaService,
-        emailService
+        emailService,
+        fastDrainScheduler
       );
     }
     return this._users;

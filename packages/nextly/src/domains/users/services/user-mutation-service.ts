@@ -41,6 +41,7 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
@@ -96,6 +97,18 @@ interface DrizzleTransactionLike {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+}
+
+/**
+ * The single capability the user write paths need from the webhook fast-path
+ * drain: a synchronous, self-gating kick that runs a bounded delivery after the
+ * response. Declared as this narrow interface — which `WebhookFastDrainScheduler`
+ * satisfies — rather than the concrete scheduler so the dependency is exactly
+ * the method called, and a test can supply a spy without reconstructing the
+ * scheduler's private state.
+ */
+interface WebhookDrainOffer {
+  offer(): void;
 }
 
 /**
@@ -200,13 +213,17 @@ export class UserMutationService extends BaseService {
     logger: Logger,
     userConfig?: UserConfig,
     userExtSchemaService?: UserExtSchemaService,
-    emailService?: EmailService
+    emailService?: EmailService,
+    // Optional so a bare service (CLI, seed, unit test) still records events and
+    // simply relies on the scheduled drain; wired from DI on the request paths.
+    fastDrainScheduler?: WebhookDrainOffer
   ) {
     super(adapter, logger);
 
     this.userConfig = userConfig;
     this.userExtSchemaService = userExtSchemaService;
     this.emailService = emailService;
+    this.fastDrainScheduler = fastDrainScheduler;
 
     // Build merged Zod schemas when custom fields are configured
     if (userConfig?.fields && userConfig.fields.length > 0) {
@@ -346,6 +363,10 @@ export class UserMutationService extends BaseService {
 
   private readonly emailService?: EmailService;
 
+  // Post-commit fast-path drain kick, shared with the collection/single/media
+  // write paths. Absent on bare services, where the scheduled drain delivers.
+  private readonly fastDrainScheduler?: WebhookDrainOffer;
+
   /**
    * Create a new local user with password authentication.
    *
@@ -354,12 +375,16 @@ export class UserMutationService extends BaseService {
    * NextlyError.duplicate(). Validation errors carry per-field paths but
    * never echo values; identifiers go to logContext.
    *
+   * @param actor - Who initiated the write, recorded for event attribution.
+   *   Omitted for genuinely internal calls (seed, self-registration), which
+   *   record no actor.
    * @throws NextlyError(VALIDATION_ERROR) on input validation / invalid role ids.
    * @throws NextlyError(DUPLICATE) when the email is already registered.
    * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async createLocalUser(
-    userData: CreateLocalUserData
+    userData: CreateLocalUserData,
+    actor?: RequestActor
   ): Promise<UserMutationResponse> {
     try {
       // Determine if this is the very first user in the database (existence check)
@@ -506,22 +531,31 @@ export class UserMutationService extends BaseService {
       // Record a `user.created` webhook event inside the same transaction that
       // inserts the account, so a subscriber observes the account exactly when
       // it becomes real (and never for a rolled-back create). The payload is
-      // deliberately PII-safe: identity and roles only, never the password hash
-      // or the invite-token hash. Roles reflect what was REQUESTED — they are
-      // assigned post-commit — which is what a creation event conveys.
-      const recordCreatedEvent = (txDb: DrizzleTransactionLike) =>
-        recordMutationEventInTx(txDb, this.dialect, {
-          type: "user.created",
-          resource: { kind: "user", id: newUserId },
-          data: {
-            id: newUserId,
-            email: userData.email,
-            name: userData.name ?? null,
-            roles: userData.roles ?? [],
-          },
-          fields: [],
-          actor: null,
-        });
+      // deliberately PII-safe: identity only, never the password hash or the
+      // invite-token hash. Roles are omitted on purpose: they are assigned after
+      // this transaction commits (and the first user's super-admin role is too),
+      // so no committed role state exists to report here without a false claim —
+      // a creation event asserts identity, and role changes are their own
+      // concern. `userCreatedRecorded` captures whether a row was written so the
+      // fast drain is offered only for a real event, and only after commit.
+      let userCreatedRecorded = false;
+      const recordCreatedEvent = async (txDb: DrizzleTransactionLike) => {
+        userCreatedRecorded = await recordMutationEventInTx(
+          txDb,
+          this.dialect,
+          {
+            type: "user.created",
+            resource: { kind: "user", id: newUserId },
+            data: {
+              id: newUserId,
+              email: userData.email,
+              name: userData.name ?? null,
+            },
+            fields: [],
+            actor: actor ?? null,
+          }
+        );
+      };
 
       // Wrap user + user_ext + invite inserts in a transaction for atomicity.
       // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
@@ -584,6 +618,14 @@ export class UserMutationService extends BaseService {
           throw txErr;
         }
       }
+
+      // With the account and its outbox row committed, kick the fast-path drain
+      // so the first delivery attempt happens immediately instead of waiting for
+      // the scheduled trigger — mirroring the collection/single/media write
+      // paths. Gated on a real recording and deferred until after commit; the
+      // call is synchronous, self-gating, and a no-op off a Next runtime or with
+      // no subscribers, so the scheduled drain stays the backstop.
+      if (userCreatedRecorded) this.fastDrainScheduler?.offer();
 
       // Fetch created user
       const user = await this.db.query.users.findFirst({
@@ -1042,10 +1084,14 @@ export class UserMutationService extends BaseService {
    * §13.8 + spec note: user existence is sensitive (account enumeration);
    * the public message stays generic. The id flows only through logContext.
    *
+   * @param actor - Who initiated the delete, recorded for event attribution.
    * @throws NextlyError(NOT_FOUND) when the user does not exist.
    * @throws NextlyError on DB errors via fromDatabaseError.
    */
-  async deleteUser(userId: number | string): Promise<void> {
+  async deleteUser(
+    userId: number | string,
+    actor?: RequestActor
+  ): Promise<void> {
     const { users, accounts, userRoles } = this.tables;
 
     // Check if user exists. Email and name are read too so the delete event can
@@ -1073,6 +1119,7 @@ export class UserMutationService extends BaseService {
     // BaseService.withTransaction yields `unknown` (it can't reference the
     // dialect-specific Drizzle transaction type without binding to all three
     // driver packages); the fluent query API is identical across dialects.
+    let userDeletedRecorded = false;
     try {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
@@ -1114,17 +1161,21 @@ export class UserMutationService extends BaseService {
         // this guard the loser would emit a duplicate event with a fresh id that
         // downstream idempotency cannot collapse. PII-safe identity only.
         if (affectedRowCount(deleteResult, this.dialect) > 0) {
-          await recordMutationEventInTx(txDb, this.dialect, {
-            type: "user.deleted",
-            resource: { kind: "user", id: String(userId) },
-            data: {
-              id: user.id,
-              email: user.email ?? null,
-              name: user.name ?? null,
-            },
-            fields: [],
-            actor: null,
-          });
+          userDeletedRecorded = await recordMutationEventInTx(
+            txDb,
+            this.dialect,
+            {
+              type: "user.deleted",
+              resource: { kind: "user", id: String(userId) },
+              data: {
+                id: user.id,
+                email: user.email ?? null,
+                name: user.name ?? null,
+              },
+              fields: [],
+              actor: actor ?? null,
+            }
+          );
         }
       });
     } catch (err) {
@@ -1132,5 +1183,12 @@ export class UserMutationService extends BaseService {
       // Normalise raw driver errors so fk/etc. produce the right NextlyError kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
+
+    // With the removal and its outbox row committed, kick the fast-path drain so
+    // the delete event is delivered immediately rather than at the next
+    // scheduled trigger (same rationale as createLocalUser). Gated on a real
+    // recording, synchronous, self-gating, and a no-op without a Next runtime or
+    // subscribers.
+    if (userDeletedRecorded) this.fastDrainScheduler?.offer();
   }
 }

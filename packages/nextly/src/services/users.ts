@@ -28,6 +28,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { RequestActor } from "../auth/request-actor";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { MinimalUser } from "../types/auth";
 import type { UserConfig } from "../users/config/types";
 
@@ -69,7 +71,11 @@ export class UsersService extends BaseService {
     logger: Logger,
     userConfig?: UserConfig,
     userExtSchemaService?: UserExtSchemaService,
-    emailService?: EmailService
+    emailService?: EmailService,
+    // Forwarded to the mutation service so its user events take the fast-path
+    // drain; optional, so a bare facade still records and relies on the
+    // scheduled drain.
+    fastDrainScheduler?: WebhookFastDrainScheduler
   ) {
     super(adapter, logger);
 
@@ -85,7 +91,8 @@ export class UsersService extends BaseService {
       logger,
       userConfig,
       userExtSchemaService,
-      emailService
+      emailService,
+      fastDrainScheduler
     );
     this.accountService = new UserAccountService(adapter, logger);
   }
@@ -140,16 +147,19 @@ export class UsersService extends BaseService {
    * PR 4: returns the created user directly. Throws NextlyError on failure
    * (e.g. DUPLICATE on email collision).
    */
-  async createLocalUser(userData: {
-    email: string;
-    name: string;
-    image?: string | null;
-    password?: string | null;
-    roles?: string[];
-    isActive?: boolean;
-    [key: string]: unknown;
-  }): Promise<UserMutationResponse> {
-    return this.mutationService.createLocalUser(userData);
+  async createLocalUser(
+    userData: {
+      email: string;
+      name: string;
+      image?: string | null;
+      password?: string | null;
+      roles?: string[];
+      isActive?: boolean;
+      [key: string]: unknown;
+    },
+    actor?: RequestActor
+  ): Promise<UserMutationResponse> {
+    return this.mutationService.createLocalUser(userData, actor);
   }
 
   /**
@@ -181,8 +191,11 @@ export class UsersService extends BaseService {
    * PR 4: returns void. Throws NextlyError(NOT_FOUND) when the user does
    * not exist, or NextlyError on DB errors.
    */
-  async deleteUser(userId: number | string): Promise<void> {
-    return this.mutationService.deleteUser(userId);
+  async deleteUser(
+    userId: number | string,
+    actor?: RequestActor
+  ): Promise<void> {
+    return this.mutationService.deleteUser(userId, actor);
   }
 
   // ========================================

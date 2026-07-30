@@ -1,7 +1,9 @@
 /**
  * End-to-end proof that the user mutation service emits `user.created` and
- * `user.deleted` outbox events atomically with the account change, and that the
- * recorded payload is PII-safe (identity + roles, never the password hash).
+ * `user.deleted` outbox events atomically with the account change, that the
+ * recorded payload is PII-safe (identity only, never the password hash, tokens,
+ * or role assignments), that the caller is attributed, and that the shared
+ * fast-path drain is kicked after commit.
  *
  * Uses SQLite (cheapest live DB, no container) driving the real Drizzle
  * `withTransaction` path — the same path production takes — so the new
@@ -15,7 +17,15 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
 import {
@@ -114,15 +124,18 @@ describe("user mutation webhook events (real SQLite)", () => {
     rmSync(TEST_DB_DIR, { recursive: true, force: true });
   });
 
-  it("records a PII-safe user.created event in the same transaction", async () => {
+  it("records a PII-safe, attributed user.created event in the same transaction", async () => {
     setWebhookAuditEnabled(true);
 
-    const created = await service.createLocalUser({
-      email: "hook-create@test.local",
-      name: "Hooked",
-      password: "TestPassword123!",
-      isActive: true,
-    });
+    const created = await service.createLocalUser(
+      {
+        email: "hook-create@test.local",
+        name: "Hooked",
+        password: "TestPassword123!",
+        isActive: true,
+      },
+      { type: "user", id: "admin-actor-1" }
+    );
 
     const rows = await adapter.executeQuery<EventRow>(
       "SELECT type, resource_kind, resource_id, payload FROM nextly_events WHERE type = ? AND resource_id = ?",
@@ -134,11 +147,16 @@ describe("user mutation webhook events (real SQLite)", () => {
     const envelope = JSON.parse(rows[0].payload);
     expect(envelope.data.email).toBe("hook-create@test.local");
     expect(envelope.data.name).toBe("Hooked");
+    // The write is attributed to the authenticated caller, not anonymous.
+    expect(envelope.actor).toEqual({ type: "user", id: "admin-actor-1" });
+    // Roles are assigned after this transaction commits, so the creation event
+    // makes no role claim — the payload carries no `roles` field at all.
+    expect(envelope.data.roles).toBeUndefined();
     // The password hash and any token must never ride in the payload.
     expect(rows[0].payload).not.toMatch(/passwordHash|password_hash|token/i);
   });
 
-  it("records user.deleted with the removed account's identity", async () => {
+  it("records an attributed user.deleted with the removed account's identity", async () => {
     setWebhookAuditEnabled(true);
     const created = await service.createLocalUser({
       email: "hook-delete@test.local",
@@ -147,15 +165,44 @@ describe("user mutation webhook events (real SQLite)", () => {
       isActive: true,
     });
 
-    await service.deleteUser(created.id);
+    await service.deleteUser(created.id, { type: "user", id: "admin-actor-2" });
 
     const rows = await adapter.executeQuery<EventRow>(
-      "SELECT type, resource_kind, resource_id, payload FROM nextly_events WHERE type = ?",
-      ["user.deleted"]
+      "SELECT type, resource_kind, resource_id, payload FROM nextly_events WHERE type = ? AND resource_id = ?",
+      ["user.deleted", created.id]
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].resource_id).toBe(created.id);
     const envelope = JSON.parse(rows[0].payload);
     expect(envelope.data.email).toBe("hook-delete@test.local");
+    expect(envelope.actor).toEqual({ type: "user", id: "admin-actor-2" });
+  });
+
+  it("offers the fast-path drain after committing user events", async () => {
+    setWebhookAuditEnabled(true);
+    const offer = vi.fn();
+    // The mutation service depends only on `offer()`, so a plain spy satisfies
+    // the injected drain without reconstructing the real scheduler.
+    const drained = new UserMutationService(
+      adapter,
+      silentLogger,
+      undefined,
+      undefined,
+      undefined,
+      { offer }
+    );
+
+    const created = await drained.createLocalUser({
+      email: "hook-drain@test.local",
+      name: "Drained",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    // A recorded create kicks the drain exactly once, after commit.
+    expect(offer).toHaveBeenCalledTimes(1);
+
+    await drained.deleteUser(created.id);
+    // A recorded delete kicks it again.
+    expect(offer).toHaveBeenCalledTimes(2);
   });
 });
