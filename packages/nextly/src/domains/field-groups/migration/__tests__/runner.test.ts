@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
+import { hashManifest, type ManifestEntry } from "../manifest";
 import { runMigrationSteps, type MigrationStep } from "../runner";
 import type { MigrationSession } from "../session";
+import { MIGRATION_MARKER_VERSION } from "../state";
 
 const SESSION = {
   dialect: "postgresql",
@@ -32,16 +34,24 @@ function step(
 }
 
 // `advanceStep` reads the marker before writing, so the fake has to behave like
+// The marker carries the plan it is executing, and the read verifies that plan
+// against its recorded hash, so a stand-in marker has to carry both.
+const MARKER_PLAN: ManifestEntry[] = [
+  { kind: "registry", from: "dynamic_components", to: "dynamic_field_groups" },
+];
+const MARKER_PLAN_HASH = hashManifest(MARKER_PLAN);
+
 // a real marker rather than just recording calls.
 function markerMeta(events: string[], migrationId: string) {
   let stored: Record<string, unknown> = {
-    version: 1,
+    version: MIGRATION_MARKER_VERSION,
     status: "migrating",
     direction: "up",
     migrationId,
     step: 0,
-    manifestHash: "h",
-    planHash: "p",
+    registryHash: "s",
+    manifestHash: MARKER_PLAN_HASH,
+    appliedManifest: MARKER_PLAN,
   };
   return {
     getEntry: vi.fn(async () => ({ present: true, value: stored })),
@@ -138,13 +148,14 @@ describe("field-group migration runner", () => {
     const meta = markerMeta(events, "run-1");
     // The marker already reports step 1 done.
     await meta.set("k", {
-      version: 1,
+      version: MIGRATION_MARKER_VERSION,
       status: "migrating",
       direction: "up",
       migrationId: "run-1",
       step: 1,
-      manifestHash: "h",
-      planHash: "p",
+      registryHash: "s",
+      manifestHash: MARKER_PLAN_HASH,
+      appliedManifest: MARKER_PLAN,
     });
     events.length = 0;
     await runMigrationSteps({

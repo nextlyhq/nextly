@@ -1,0 +1,110 @@
+/**
+ * An adapter double that models the migration lock rather than accepting writes.
+ *
+ * The lock is a read-modify-write over one row, so a double that let every claim
+ * succeed would certify exclusion that does not exist — and a double missing a
+ * method makes every caller look refused, which is just as misleading. Statements
+ * are compiled through a real dialect so this interprets the SQL and bound
+ * parameters an adapter would hand its driver.
+ *
+ * Shared because two suites need it: the session's own tests, and the reload path
+ * that now holds the same lock.
+ */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
+
+export interface LockingAdapterOptions {
+  /** Marker value the `nextly_meta` read returns, or `undefined` for none. */
+  marker?: unknown;
+  /** Pre-existing claim, so the lock reads as held. */
+  heldBy?: string | null;
+  /** Whether the lock table exists. */
+  lockTableExists?: boolean;
+}
+
+export function createLockingAdapter(options: LockingAdapterOptions = {}) {
+  const lock: { seeded: boolean; owner: string | null } = {
+    seeded: options.heldBy !== undefined,
+    owner: options.heldBy ?? null,
+  };
+  const ddl: string[] = [];
+
+  function interpret(statement: SQL): Record<string, unknown>[] {
+    const { sql: text, params } = new PgDialect().sqlToQuery(statement);
+    const flat = text.replace(/\s+/g, " ").trim();
+
+    if (
+      /^SELECT "\w+" FROM "nextly_field_group_lock" WHERE "id" = \$1$/.test(
+        flat
+      )
+    ) {
+      return lock.seeded ? [{ id: 1, owner: lock.owner }] : [];
+    }
+    if (
+      /^UPDATE "nextly_field_group_lock" SET "owner" = \$1 WHERE "id" = \$2$/.test(
+        flat
+      )
+    ) {
+      // An occupied row refuses a new claim, exactly as the real one does.
+      if (lock.owner === null) lock.owner = params[0] as string | null;
+      return [];
+    }
+    if (
+      /^UPDATE "nextly_field_group_lock" SET "owner" = NULL WHERE "id" = \$1 AND "owner" = \$2$/.test(
+        flat
+      )
+    ) {
+      if (lock.owner === params[1]) lock.owner = null;
+      return [];
+    }
+    throw new Error(`unrecognised statement: ${flat}`);
+  }
+
+  const adapter = {
+    dialect: "postgresql" as const,
+    getCapabilities: () => ({ dialect: "postgresql" }),
+    getDrizzle: () => ({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () =>
+              Promise.resolve(
+                options.marker === undefined
+                  ? []
+                  : [{ key: "k", value: JSON.stringify(options.marker) }]
+              ),
+          }),
+        }),
+      }),
+    }),
+    executeQuery: (sql: string) => {
+      ddl.push(sql);
+      return Promise.resolve([]);
+    },
+    queryStatement: (statement: SQL) => Promise.resolve(interpret(statement)),
+    tableExists: (name: string) =>
+      Promise.resolve(
+        name === "nextly_field_group_lock"
+          ? (options.lockTableExists ?? true)
+          : true
+      ),
+    transaction: (work: (ctx: unknown) => Promise<unknown>) =>
+      work({
+        lockRow: () => Promise.resolve(undefined),
+        insert: (_table: string, data: { owner: string | null }) => {
+          lock.seeded = true;
+          lock.owner = data.owner;
+          return Promise.resolve(data);
+        },
+        runStatement: (statement: SQL) => {
+          interpret(statement);
+          return Promise.resolve();
+        },
+        queryStatement: (statement: SQL) =>
+          Promise.resolve(interpret(statement)),
+      }),
+  } as unknown as DrizzleAdapter;
+
+  return { adapter, ownerNow: () => lock.owner, ddlIssued: () => [...ddl] };
+}

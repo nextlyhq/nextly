@@ -91,7 +91,7 @@ import {
   isDatabaseError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
@@ -933,6 +933,21 @@ export class PostgresAdapter extends DrizzleAdapter {
         params: SqlParam[] = []
       ): Promise<T[]> => {
         const result = await client.query(sql, params as unknown[]);
+        return result.rows as T[];
+      },
+
+      // Run on the transaction-bound Drizzle instance rather than the pool, so
+      // the statement is part of this transaction and sees its uncommitted rows.
+      runStatement: async (statement: SQL): Promise<void> => {
+        await txDb().execute(statement);
+      },
+
+      // node-postgres answers `{ rows }`; the transaction-bound instance keeps
+      // the read inside this transaction so it sees its uncommitted writes.
+      queryStatement: async <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => {
+        const result = await txDb().execute(statement);
         return result.rows as T[];
       },
 

@@ -21,8 +21,10 @@
 //     which the pipeline maps to CONFIRMATION_REQUIRED_NO_TTY. We log
 //     that and keep the dev server alive.
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -71,6 +73,8 @@ import {
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
+import { describeError } from "../errors/index";
+import { NextlyError } from "../errors/nextly-error";
 import type { PluginFieldType } from "../plugins/contributions";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
@@ -764,7 +768,84 @@ function startReload(opts?: {
   return started;
 }
 
+/**
+ * Run a reload with a field-group storage migration excluded throughout.
+ *
+ * `next dev` routes config edits here rather than through the CLI watcher, so
+ * this is the schema-applying path most users are on: it builds field-group
+ * diffs, applies DDL, and its pre-cleanup issues UPDATE and DELETE.
+ * Mid-migration that work reads a database where some tables carry pre-rename
+ * names and some post-rename, with the registry pointers moving one step at a
+ * time.
+ *
+ * The exclusion is *held* rather than sampled, because a migration starting
+ * between a check and the apply leaves exactly the same window open. Holding is
+ * safe here specifically because reloads are already serialized in this process
+ * — `reloadNextlyConfig` keeps one in flight and queues the next — so taking
+ * the lock cannot make a concurrent edit lose its turn.
+ *
+ * A refusal abandons the reload rather than throwing: the previous config stays
+ * in place, whereas an exception escaping here reaches the dev server and turns
+ * every later request into a 500.
+ */
 async function runReload(opts?: {
+  resolver?: ServiceResolver;
+  dispatcher?: PromptDispatcher;
+}): Promise<void> {
+  const resolveService = (name: string): unknown =>
+    opts?.resolver ? opts.resolver(name) : defaultResolver(name);
+
+  let adapter: AdapterLike | undefined;
+  let logger: LoggerLike | undefined;
+  try {
+    logger = (await resolveService("logger")) as LoggerLike;
+    adapter = (await resolveService("adapter")) as AdapterLike;
+  } catch {
+    // DI is not up yet. `applyReload` resolves again and abandons on its own,
+    // so there is nothing to exclude against and nothing to report here.
+  }
+  if (!adapter) return applyReload(opts);
+
+  // Tells a refused exclusion apart from a failure inside the reload itself,
+  // which must propagate exactly as it did before this wrapper existed.
+  let reloadStarted = false;
+  try {
+    await withMigrationExcluded(
+      {
+        // `AdapterLike` is a narrow view of the registered adapter, which is a
+        // `DrizzleAdapter` at runtime.
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger: logger as unknown as Parameters<
+          typeof withMigrationExcluded
+        >[0]["logger"],
+        label: "hmr reload",
+        // This path applies DDL by design, so it may establish the lock table
+        // rather than proceeding unprotected without one.
+        mayCreateLock: true,
+      },
+      () => {
+        reloadStarted = true;
+        return applyReload(opts);
+      }
+    );
+  } catch (error) {
+    if (reloadStarted) throw error;
+    // Logged apart on purpose: a refusal is routine and expected, while a check
+    // that could not run at all would otherwise disable schema applies silently
+    // and look like nothing happened.
+    if (NextlyError.is(error)) {
+      logger?.warn(
+        `[Nextly HMR] schema reload skipped: ${describeError(error)}`
+      );
+    } else {
+      logger?.error(
+        `[Nextly HMR] could not establish migration state, skipping schema reload: ${describeError(error)}`
+      );
+    }
+  }
+}
+
+async function applyReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
 }): Promise<void> {
