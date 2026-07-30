@@ -411,8 +411,8 @@ describe("field-group migration manifest", () => {
 
 describe("hashRegistryIdentity", () => {
   const rows = [
-    { id: "1", slug: "a" },
-    { id: "2", slug: "b" },
+    { id: "1", slug: "a", hasCompanion: false },
+    { id: "2", slug: "b", hasCompanion: false },
   ];
 
   it("does not depend on row order", () => {
@@ -423,15 +423,32 @@ describe("hashRegistryIdentity", () => {
 
   it("changes when a field group is added or removed", () => {
     const base = hashRegistryIdentity(rows);
-    expect(hashRegistryIdentity([...rows, { id: "3", slug: "c" }])).not.toBe(
-      base
-    );
+    expect(
+      hashRegistryIdentity([
+        ...rows,
+        { id: "3", slug: "c", hasCompanion: false },
+      ])
+    ).not.toBe(base);
     expect(hashRegistryIdentity([rows[0]!])).not.toBe(base);
   });
 
+  // Enabling localization creates a companion table without replacing the
+  // registry row, so id and slug alone stay identical while the storage gains a
+  // table the recorded plan does not name. A resume against that plan would move
+  // the base and leave the companion behind.
+  it("changes when a row gains storage the recorded plan does not name", () => {
+    expect(
+      hashRegistryIdentity([{ id: "1", slug: "a", hasCompanion: true }])
+    ).not.toBe(
+      hashRegistryIdentity([{ id: "1", slug: "a", hasCompanion: false }])
+    );
+  });
+
   it("distinguishes different sets of the same size", () => {
-    expect(hashRegistryIdentity([{ id: "1", slug: "a" }])).not.toBe(
-      hashRegistryIdentity([{ id: "1", slug: "b" }])
+    expect(
+      hashRegistryIdentity([{ id: "1", slug: "a", hasCompanion: false }])
+    ).not.toBe(
+      hashRegistryIdentity([{ id: "1", slug: "b", hasCompanion: false }])
     );
   });
 

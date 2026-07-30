@@ -258,13 +258,21 @@ export function buildMigrationManifest(
  * migration's own completed work — letting a resume adopt the author's table and
  * a later rollback rename it away.
  *
+ * `hasCompanion` is part of the identity because the plan's shape depends on it,
+ * not just on which rows exist. Enabling localization on a field group creates a
+ * companion table without replacing the registry row, so id and slug alone stay
+ * identical while the storage the plan describes gains a table the recorded plan
+ * never names — and the resume would move the base and leave the companion.
+ *
  * Sorted by id so the hash is a property of the set rather than of row order.
  */
 export function hashRegistryIdentity(
-  rows: readonly { id: string; slug: string }[]
+  rows: readonly { id: string; slug: string; hasCompanion: boolean }[]
 ): string {
   const canonical = JSON.stringify(
-    rows.map(row => [row.id, row.slug]).sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    rows
+      .map(row => [row.id, row.slug, row.hasCompanion])
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
   );
   return createHash("sha256").update(canonical).digest("hex");
 }
