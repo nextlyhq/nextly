@@ -17,6 +17,7 @@ import type { LoadConfigResult } from "../utils/config-loader";
 
 import type { ResolvedDevOptions } from "./db-sync";
 import {
+  ensureLocalizedCompanions,
   performPermissionSeeding,
   syncCollections,
   syncComponents,
@@ -79,6 +80,20 @@ export function createDebouncedSync(
         await syncCollections(configToSync, adapter, options, context);
         await syncSingles(configToSync, adapter, options, context);
         await syncComponents(configToSync, adapter, options, context);
+
+        // Turning on localization is a config edit, so it arrives through this
+        // watcher as often as through `db:sync`. The companion table is not part of
+        // the push pipeline, and creating it here rather than at the next boot is
+        // what keeps a running server from advertising localization it cannot store.
+        // Suppressed under `--no-auto-sync` for the same reason the rest of the
+        // push is: it issues DDL and can copy rows.
+        if (options.autoSync !== false) {
+          await ensureLocalizedCompanions(
+            configToSync.config,
+            adapter,
+            context
+          );
+        }
 
         // Sync user_ext table (always — handles both code and UI fields)
         await syncUserFields(configToSync, adapter, options, context);

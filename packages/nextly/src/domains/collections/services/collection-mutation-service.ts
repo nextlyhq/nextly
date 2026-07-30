@@ -89,6 +89,10 @@ import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import {
+  companionTableExists as sharedCompanionTableExists,
+  mainTableHasColumns,
+} from "../../i18n/runtime/companion-io";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
@@ -875,20 +879,21 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
-  /** Whether the companion `_locales` table physically exists (migration has run). */
+  /**
+   * Whether the companion `_locales` table physically exists (migration has run).
+   *
+   * Delegates to the shared probe, which returns false only for a dialect-verified
+   * missing-table error and rethrows anything else. Catching every exception here
+   * turned a connection timeout or a permission error into "the table is absent",
+   * which the callers below read as a schema state: one refuses the write with a
+   * 409 telling the operator to re-run sync, the other decides the collection has
+   * no publish lifecycle. Both are the wrong answer to "the database is
+   * unreachable", and both hide a failure the caller would otherwise retry.
+   */
   private async companionTableExists(
     companionTableName: string
   ): Promise<boolean> {
-    const q =
-      this.adapter.dialect === "mysql"
-        ? `\`${companionTableName}\``
-        : `"${companionTableName}"`;
-    try {
-      await this.adapter.executeQuery(`SELECT 1 FROM ${q} LIMIT 0`);
-      return true;
-    } catch {
-      return false;
-    }
+    return sharedCompanionTableExists(this.adapter, companionTableName);
   }
 
   /**
@@ -942,6 +947,65 @@ export class CollectionMutationService extends BaseService {
     // `migrate`, the dev auto-sync leaves localized columns on the MAIN table (Option B), so
     // writes must go there — return null and let the localized values flow to main as today.
     if (!(await this.companionTableExists(companion.companionTableName))) {
+      // The main table carries no language of its own, so anything written there
+      // while the companion is missing is later read as the DEFAULT language —
+      // that is the assumption the companion seed makes when it copies those
+      // columns across. A write in another language therefore has nowhere honest
+      // to go, and both ways of letting it through lose content:
+      //
+      //   UPDATE overwrites. The row already holds the default language on main,
+      //   so a non-default write replaces it and regenerates the slug from the
+      //   translation, silently and with a success response.
+      //
+      //   CREATE mis-files. The values land on main, and the seed then copies
+      //   them into the default language's row — so Spanish text is served as
+      //   English, and Spanish itself has no translation at all.
+      //
+      // The window is real: `db:sync` flips the registry's `localized` flag in
+      // its own process while the running server has yet to create the companion.
+      // Refuse either way; the default language still writes to main, which is
+      // the documented pre-migration fallback.
+      const requested = resolveRequestedLocale(this.localization, locale);
+      if (requested !== this.localization.defaultLocale) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            collection: collectionName,
+            locale: requested,
+            defaultLocale: this.localization.defaultLocale,
+            companionTable: companion.companionTableName,
+          },
+        });
+      }
+      // The default language keeps the fallback, but only where it can actually
+      // work. A collection localized from creation keeps its translatable columns
+      // solely on the companion, and the generated main-table schema omits them, so
+      // returning null here would leave those values in the main payload for a table
+      // that has no columns for them. That write cannot land: it reaches the driver
+      // and fails as a 500. Refusing here says the same thing in terms the caller can
+      // act on, and says it before anything is attempted.
+      const fallbackPossible = await mainTableHasColumns(
+        this.adapter,
+        // The companion is always `<main>_locales`, so the main table is its stem.
+        companion.companionTableName.replace(/_locales$/, ""),
+        companion.localizedFields.map(f => f.column)
+      );
+      if (!fallbackPossible) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          logContext: {
+            cause: "localized-write-without-companion",
+            collection: collectionName,
+            locale: requested,
+            companionTable: companion.companionTableName,
+          },
+        });
+      }
       return null;
     }
 
@@ -2196,6 +2260,17 @@ export class CollectionMutationService extends BaseService {
       // collection opted out of recording), so the post-commit fast drain is
       // scheduled only for a write that recorded something.
       let recorded = false;
+      // Verify every localized field group in this payload can actually be written
+      // BEFORE the transaction opens. Inside it the probes would borrow a second
+      // connection and deadlock a single-connection pool, and a NextlyError raised in
+      // the callback is reclassified by the adapter into an opaque database error —
+      // so the actionable 409 would never reach the caller.
+      const fieldGroupPresence =
+        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+          fields: fields as unknown as FieldConfig[],
+          data: componentFieldData,
+          locale: params.locale,
+        })) ?? new Map<string, boolean>();
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -2238,15 +2313,19 @@ export class CollectionMutationService extends BaseService {
           this.fieldGroupDataService &&
           Object.keys(componentFieldData).length > 0
         ) {
-          await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
-            parentId: entry.id as string,
-            parentTable: tableName,
-            fields: fields as unknown as FieldConfig[],
-            data: componentFieldData,
-            // i18n: thread the write locale so an embedded localized component writes
-            // translatable fields to its companion within the same transaction.
-            locale: params.locale,
-          });
+          await this.fieldGroupDataService.saveComponentDataInTransaction(
+            tx,
+            {
+              parentId: entry.id as string,
+              parentTable: tableName,
+              fields: fields as unknown as FieldConfig[],
+              data: componentFieldData,
+              // i18n: thread the write locale so an embedded localized component writes
+              // translatable fields to its companion within the same transaction.
+              locale: params.locale,
+            },
+            fieldGroupPresence
+          );
         }
 
         // Write many-to-many junction rows inside the transaction so a junction
@@ -4198,6 +4277,17 @@ export class CollectionMutationService extends BaseService {
       // resolves, so a rolled-back attempt (a version conflict) or a commit
       // failure never flags a durable event that isn't there.
       let recorded = false;
+      // Verify every localized field group in this payload can actually be written
+      // BEFORE the transaction opens. Inside it the probes would borrow a second
+      // connection and deadlock a single-connection pool, and a NextlyError raised in
+      // the callback is reclassified by the adapter into an opaque database error —
+      // so the actionable 409 would never reach the caller.
+      const fieldGroupPresence =
+        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+          fields: fields as unknown as FieldConfig[],
+          data: componentFieldData,
+          locale: params.locale,
+        })) ?? new Map<string, boolean>();
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;
@@ -4521,7 +4611,8 @@ export class CollectionMutationService extends BaseService {
                 // i18n: thread the write locale so an embedded localized component writes
                 // translatable fields to its companion within the same transaction.
                 locale: params.locale,
-              }
+              },
+              fieldGroupPresence
             );
           }
 

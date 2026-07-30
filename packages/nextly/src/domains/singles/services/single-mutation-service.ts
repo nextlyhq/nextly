@@ -81,6 +81,7 @@ import {
 import {
   buildCompanionSchema,
   companionTableExists,
+  mainTableHasColumns,
   splitLocalizedWrite,
   upsertCompanionRow,
   type CompanionSchema,
@@ -865,6 +866,53 @@ export class SingleMutationService extends BaseService {
               companion.companionTableName
             )
           : false;
+      // A localized single whose companion table does not exist yet has nowhere to put
+      // a NON-default locale's values: the split below moves them out of the main
+      // payload and the companion upsert is then skipped, so the translation is
+      // silently dropped while the write reports success. The window is real —
+      // `db:sync` flips the registry's `localized` flag in its own process before the
+      // running server creates the companion — so refuse rather than discard.
+      //
+      // The DEFAULT locale keeps the pre-companion fallback, but only where it can
+      // actually work: an entity localized from creation keeps its translatable
+      // columns solely on the companion, and its registered runtime table omits them,
+      // so those keys would be dropped by the ORM while `updated_at` still moved.
+      //
+      // Both checks run HERE, before `adapter.transaction` opens. Introspecting from
+      // inside it would borrow a second connection while the transaction holds one,
+      // which on a small pool means waiting for a connection that cannot be released
+      // until this transaction finishes. Resolving it first also keeps the refusal
+      // exactly as raised: errors leaving a transaction callback pass through the
+      // adapter's error classification, which rewraps anything that is not already a
+      // `DatabaseError`.
+      if (companion && !companionPhysicallyExists && this.localization) {
+        // Captured so the closure below keeps the narrowed type.
+        const defaultLocale = this.localization.defaultLocale;
+        const refuse = (): never => {
+          throw NextlyError.conflict({
+            reason: "state",
+            message:
+              "Translations are not ready for this single yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+            logContext: {
+              cause: "localized-write-without-companion",
+              single: singleMeta.slug,
+              locale: writeLocale,
+              defaultLocale,
+              companionTable: companion.companionTableName,
+            },
+          });
+        };
+        if (writeLocale !== undefined && writeLocale !== defaultLocale) {
+          refuse();
+        }
+        const fallbackPossible = await mainTableHasColumns(
+          this.adapter,
+          singleMeta.tableName,
+          companion.localizedFields.map(f => f.column)
+        );
+        if (!fallbackPossible) refuse();
+      }
+
       // Same pre-transaction, pooled probe for the auto-create default seed: it
       // is keyed on the DEFAULT locale (not the write locale), so it needs its
       // own existence check rather than reusing `companionPhysicallyExists`.
@@ -875,6 +923,20 @@ export class SingleMutationService extends BaseService {
           )
         : false;
       let updatedRows: SingleDocument[];
+      // Verify every localized field group in this payload can actually be written
+      // BEFORE the transaction opens. Inside it the probes would borrow a second
+      // connection while the transaction holds one, which on a small pool means
+      // waiting for a connection that cannot be released until it finishes. It also
+      // keeps the refusal exactly as raised: errors leaving a transaction callback
+      // pass through the adapter's error classification, which rewraps anything that
+      // is not already a `DatabaseError`.
+      const fieldGroupPresence =
+        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+          fields: fieldConfigs,
+          data: componentFieldData,
+          locale: options.locale,
+        })) ?? new Map<string, boolean>();
+
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -1054,12 +1116,18 @@ export class SingleMutationService extends BaseService {
             // row, not the main table. `companion` and `writeLocale` were resolved
             // above (before validation); the split reuses them. Done inside the
             // closure so a retry re-splits the freshly-timestamped payload.
-            const { main: mainPayload, companion: companionData } = companion
-              ? splitLocalizedWrite(updatePayload, companion.localizedFields)
-              : {
-                  main: updatePayload,
-                  companion: {} as Record<string, unknown>,
-                };
+            // Only split when the companion physically exists. Splitting first and
+            // then skipping the companion upsert (gated on the same flag below) would
+            // drop the translatable values on the floor. While the table is absent
+            // they stay on the main table — the pre-companion fallback — which the
+            // pre-transaction guard above has already proven is actually possible.
+            const { main: mainPayload, companion: companionData } =
+              companion && companionPhysicallyExists
+                ? splitLocalizedWrite(updatePayload, companion.localizedFields)
+                : {
+                    main: updatePayload,
+                    companion: {} as Record<string, unknown>,
+                  };
 
             // per-locale status. The status the companion row carries —
             // from `updatePayload` (not `mainPayload`, which may have `status`
@@ -1502,7 +1570,8 @@ export class SingleMutationService extends BaseService {
                   fields: fieldConfigs,
                   data: attemptComponentData,
                   locale: options.locale,
-                }
+                },
+                fieldGroupPresence
               );
             }
 

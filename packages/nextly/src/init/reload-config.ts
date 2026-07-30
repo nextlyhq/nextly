@@ -98,7 +98,11 @@ type LoggerLike = {
 // adapter-drizzle would couple this module to the adapter package.
 interface AdapterLike {
   readonly dialect: "postgresql" | "mysql" | "sqlite";
-  getDrizzle(): unknown;
+  getDrizzle<T = unknown>(): T;
+  // Needed to provision the localized companion below: creating the table and adding
+  // columns to it are both DDL, and the status backfill that accompanies a new `_status`
+  // column is a write.
+  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
 type CollectionDef = {
@@ -552,6 +556,135 @@ function republishRecordingPolicies(
   );
 }
 
+/**
+ * Create, and bring into step, the `_locales` companion of every localized collection, single
+ * and field group in the reloaded config.
+ *
+ * It does NOT seed existing content into the companion. `ensureCompanionTable` is
+ * creation-only and leaves whatever is already on the main table where it is, so a successful
+ * reload is not evidence that default-locale data has been carried across — enabling
+ * localization on an entity that already has content still leaves that content unreadable
+ * until the transition seeds it. Copying it is the gated pipeline's job.
+ *
+ * The reload path is the `next dev` counterpart to the CLI's `ensureLocalizedCompanions`: it is
+ * where a config edit lands when the app is running under plain `next dev` rather than
+ * `nextly db:sync --watch`. `ensureCompanionTable` is idempotent, so entities that already have
+ * their companion cost one introspection each.
+ *
+ * Never throws: a companion that cannot be provisioned must not take down a config reload. The
+ * write guard in the mutation services is what protects content in the meantime.
+ */
+async function ensureLocalizedCompanionsForReload(
+  adapter: AdapterLike,
+  config: {
+    collections?: unknown[];
+    singles?: unknown[];
+    fieldGroups?: unknown[];
+    localization?: { defaultLocale?: string };
+  },
+  // `<kind>:<slug>` for every entity whose schema change was classified unsafe (or whose diff
+  // threw) this cycle, so it was NOT applied. Those must be skipped: creating a companion for
+  // a transition that has not happened is worse than leaving it absent. The Schema Builder
+  // later applies the real transition, and `buildCompanionTransitionStatements` decides
+  // whether to SEED the existing main-table values by looking at whether the companion is
+  // already there. Finding one — empty, created from a config that was never applied — sends
+  // it down the plain reconcile branch instead, and the default-locale content is lost.
+  //
+  // Deliberately per entity rather than a single "something was deferred" flag: entities whose
+  // schema IS in step still need provisioning on this pass, and skipping them wholesale
+  // reintroduces the missing-companion window this function exists to close.
+  deferred: ReadonlySet<string> = new Set()
+): Promise<void> {
+  // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
+  if (process.env.NODE_ENV === "production") return;
+
+  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
+    "../domains/i18n/runtime/companion-io"
+  );
+  const { resolveCollectionTableName, resolveComponentTableName } =
+    await import("../domains/schema/utils/resolve-table-name");
+  const { resolveSingleTableName } = await import(
+    "../domains/singles/services/resolve-single-table-name"
+  );
+
+  type Localizable = {
+    slug?: string;
+    dbName?: string;
+    localized?: boolean;
+    status?: boolean;
+    fields?: { name: string; type: string; localized?: boolean }[];
+  };
+  // The kind prefixes the `deferred` keys, because a collection and a single may share a slug
+  // and only one of them may have been deferred.
+  const groups: [string, Localizable[], (e: Localizable) => string][] = [
+    [
+      "collection",
+      (config.collections ?? []) as Localizable[],
+      e => resolveCollectionTableName(e.slug!, e.dbName),
+    ],
+    [
+      "single",
+      (config.singles ?? []) as Localizable[],
+      e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
+    ],
+    [
+      "fieldGroup",
+      (config.fieldGroups ?? []) as Localizable[],
+      e => resolveComponentTableName(e.slug!),
+    ],
+  ];
+
+  for (const [kind, entities, resolveTableName] of groups) {
+    for (const entity of entities) {
+      if (!entity.slug || entity.localized !== true) continue;
+      if (deferred.has(`${kind}:${entity.slug}`)) continue;
+      await ensureCompanionTable(
+        adapter,
+        {
+          slug: entity.slug,
+          tableName: resolveTableName(entity),
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          status: entity.status === true,
+        },
+        error => {
+          console.warn(
+            `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
+              `Writes in a non-default locale will be refused until it exists: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+      // Creating the table is not enough on its own: `ensureCompanionTable` returns
+      // immediately when one already exists, so marking a FURTHER field localized on an
+      // already-localized entity takes the no-DDL path, syncs its metadata, and leaves the
+      // companion a column short — the write then splits that value into a column that is not
+      // there. The CLI sync reconciles for the same reason; the HMR path needs it too.
+      //
+      // Safe here despite issuing DDL, because the production guard at the top of this
+      // function has already returned: this runs only under `next dev`. The reconcile is
+      // additive, so it never removes a column even when a field stops being localized.
+      await reconcileCompanionColumns(
+        adapter,
+        {
+          slug: entity.slug,
+          tableName: resolveTableName(entity),
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          status: entity.status === true,
+        },
+        error => {
+          console.warn(
+            `[nextly] Could not update the translations table for "${entity.slug}". ` +
+              `Newly translatable fields may fail to save until it is in step: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+    }
+  }
+}
+
 // Reload entry point. resolver is optional and exists primarily for tests.
 // dispatcher is also test-only: injects a fake PromptDispatcher (e.g., one
 // that records prompts and auto-confirms) so tests don't need a real TTY.
@@ -636,6 +769,7 @@ async function runReload(opts?: {
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        localization?: { defaultLocale?: string };
       }
     | undefined;
   let previousFieldTypes: PluginFieldType[] | undefined;
@@ -949,6 +1083,10 @@ async function runReload(opts?: {
   // metadata-only sync below must be skipped rather than persist unmigrated
   // schema metadata; it retries on the next clean reload or restart.
   let deferredSchemaChange = false;
+  // Which entities were deferred, as `<kind>:<slug>`. The flag above answers "may the
+  // metadata-only sync run at all"; this answers "may THIS entity be provisioned", which is a
+  // per-entity question — see `ensureLocalizedCompanionsForReload`.
+  const deferredEntities = new Set<string>();
 
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
@@ -993,6 +1131,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`collection:${target.slug}`);
         desiredCollections[target.slug] = entry;
         continue;
       }
@@ -1004,6 +1143,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`collection:${target.slug}`);
     }
   }
 
@@ -1045,6 +1185,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`single:${target.slug}`);
         desiredSingles[target.slug] = entry;
         continue;
       }
@@ -1056,6 +1197,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`single:${target.slug}`);
     }
   }
 
@@ -1093,6 +1235,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`fieldGroup:${target.slug}`);
         desiredComponents[target.slug] = entry;
         continue;
       }
@@ -1104,6 +1247,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping component '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`fieldGroup:${target.slug}`);
     }
   }
 
@@ -1112,6 +1256,17 @@ async function runReload(opts?: {
   // not surface as a schema diff — so run the idempotent metadata sync before
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
+  // Also provision on the no-DDL path. A missing `_locales` table produces no schema
+  // diff — companion tables are excluded from it — so `hasChanges` stays false and the
+  // reload would return before ever reaching the call after the apply, which is exactly
+  // the missing-companion state this repairs. Idempotent, so running it here and after
+  // a successful apply costs one existence probe per localized entity.
+  await ensureLocalizedCompanionsForReload(
+    adapter,
+    newConfig,
+    deferredEntities
+  );
+
   if (!hasChanges) {
     // Only sync when the schema is genuinely in step (every entity had a zero-op
     // diff). If a real schema change was deferred (unsafe/needs review) or a diff
@@ -1291,6 +1446,19 @@ async function runReload(opts?: {
   });
 
   if (applyResult.success) {
+    // Create the `_locales` companion of every localized entity, now that the apply
+    // has produced their main tables. `next dev` routes config edits here rather
+    // than through the CLI watcher, so without this an entity turned localized under
+    // ordinary HMR had its companion registered in the runtime registry while the
+    // database had no such table — non-default writes were then refused until a
+    // restart. Runs after the apply because the companion carries a foreign key to
+    // its main table, which a brand-new entity does not have before it.
+    await ensureLocalizedCompanionsForReload(
+      adapter,
+      newConfig,
+      deferredEntities
+    );
+
     // Publish each scope's recording policy only AFTER its field-tree metadata
     // sync succeeds (see the assignment after the syncs below): the DDL applied,
     // but if a sync then fails, activating the new decision while the mutation

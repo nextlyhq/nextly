@@ -176,6 +176,199 @@ export async function upsertCompanionRow(
   );
 }
 
+/**
+ * Adapter surface for asking about a table's PHYSICAL shape: the Drizzle handle, which the
+ * shared introspection helper needs. Separate from {@link CompanionWriteAdapter} so the
+ * read/write helpers, which never introspect, keep their narrower contract.
+ */
+export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
+  getDrizzle<T = unknown>(): T;
+}
+
+/**
+ * Add localized columns an EXISTING companion is missing. No-op when the companion is absent —
+ * creating it is {@link ensureCompanionTable}'s job.
+ *
+ * Needed because a companion is created once and then never revisited, while the entity's field
+ * list keeps moving. Marking a further field localized on an already-localized entity leaves the
+ * companion a column short, and the write splits that value straight into a column that is not
+ * there.
+ *
+ * **Additive only, deliberately.** A field that stops being localized leaves its companion column
+ * in place rather than dropping it: this runs unattended, and `db:sync` persists registry metadata
+ * BEFORE its destructive prompt, so a drop here would execute even for an operator who then
+ * declined the change. An unused column is recoverable; a dropped one is not.
+ *
+ * Issues DDL, so it belongs to `db:sync` and never to boot — a running deployment must not alter
+ * its own schema because a config file changed.
+ */
+export async function reconcileCompanionColumns(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    fields: CompanionFieldLike[];
+    dialect: SupportedDialect;
+    status?: boolean;
+  },
+  onError?: (error: unknown) => void
+): Promise<void> {
+  const companionTableName = `${args.tableName}_locales`;
+  // Hoisted so the concurrency recheck in the catch can reuse it.
+  const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
+  const desired = args.fields.filter(f => localizedNames.has(f.name));
+  try {
+    if (!(await companionTableExists(adapter, companionTableName))) return;
+    if (desired.length === 0) return;
+
+    const { introspectLiveSnapshot } = await import(
+      "../../schema/pipeline/diff/introspect-live"
+    );
+    const snapshot = await introspectLiveSnapshot(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      [companionTableName]
+    );
+    const present = new Set(
+      snapshot.tables
+        .find(t => t.name === companionTableName)
+        ?.columns.map(c => c.name) ?? []
+    );
+    // `_status` is deliberately NOT reconciled here. Adding the column is one statement and
+    // backfilling the default-locale row from the main row is another, and the pair cannot be
+    // made retryable from physical shape alone: when the ADD lands and the backfill does not,
+    // every later run sees the column present, concludes the companion is in step, and leaves
+    // previously published content reading as draft while reporting success. MySQL commits DDL
+    // implicitly, so the two cannot be made atomic there either.
+    //
+    // Deciding it correctly needs a record of whether the backfill has run — the localization
+    // transition state this codebase does not keep yet. Until it does, switching Draft/Published
+    // on for an already-localized entity belongs to the migration path, which fails loudly on a
+    // missing column rather than silently hiding published rows.
+    //
+    // The localized-column reconcile below has no such weakness: a missing column is visible on
+    // every run, so a partial apply simply finishes on the next one.
+    const hasStatus = present.has("_status");
+
+    // Draft/Published was switched on after this companion was created, so `_status` is now
+    // required and absent. Reconciling it is unsafe for the reasons above — but returning
+    // quietly is worse than either: the caller persists `status: true`, reports success, and
+    // every later per-locale status read or write hits a column that is not there. Report it
+    // so `db:sync` exits non-zero and the operator learns now rather than at the next publish.
+    //
+    // Only this direction is a problem. Status switched OFF while the column remains is
+    // harmless: the column is simply unused, and the additive policy keeps it.
+    if (args.status === true && !hasStatus) {
+      onError?.(
+        new Error(
+          `The translations table ${companionTableName} predates Draft/Published being enabled ` +
+            `for "${args.slug}", so it has no _status column. Run \`nextly migrate\` to add it: ` +
+            `an unattended sync cannot, because adding the column and back-filling the ` +
+            `default locale's status cannot be retried safely if only the first half lands.`
+        )
+      );
+      return;
+    }
+
+    // Nothing missing — the overwhelmingly common case, and worth leaving before the statement
+    // builder runs.
+    if (desired.every(f => present.has(toColumn(f.name)))) return;
+
+    // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
+    // emits is exactly the difference. `old` is a subset of `new` by construction here, which
+    // is what keeps the result additive.
+    const { buildCompanionReconcileStatements } = await import(
+      "../migration/reconcile-companion"
+    );
+    const statements = buildCompanionReconcileStatements({
+      slug: args.slug,
+      tableName: args.tableName,
+      oldLocalized: desired.filter(f => present.has(toColumn(f.name))),
+      newLocalized: desired,
+      dialect: args.dialect,
+      // Report the companion's ACTUAL status shape on both sides, so the builder sees no status
+      // change and emits only the column difference — never an ADD or DROP of `_status`.
+      status: hasStatus,
+      companionHasStatus: hasStatus,
+      companionExists: true,
+    });
+    for (const stmt of statements) {
+      await adapter.executeQuery(stmt);
+    }
+  } catch (error) {
+    // Same check-then-act window as the create path: a concurrent sync or reload may have added
+    // the very columns this run was adding, and `ADD COLUMN` is not idempotent. Re-introspect
+    // and treat "the shape we wanted is now present" as success, whoever produced it.
+    try {
+      const { introspectLiveSnapshot: reread } = await import(
+        "../../schema/pipeline/diff/introspect-live"
+      );
+      const after = await reread(adapter.getDrizzle(), adapter.dialect, [
+        companionTableName,
+      ]);
+      const now = new Set(
+        after.tables
+          .find(t => t.name === companionTableName)
+          ?.columns.map(c => c.name) ?? []
+      );
+      if (desired.every(f => now.has(toColumn(f.name)))) return;
+    } catch {
+      // Fall through to reporting the original error: if we cannot even re-read the table,
+      // the reconcile genuinely did not succeed.
+    }
+    onError?.(error);
+  }
+}
+
+/**
+ * Whether the main table still physically carries ALL of `columnNames`.
+ *
+ * This answers one question for every entity type: **can the pre-companion fallback actually
+ * persist anything?** While the companion is missing, a write in the default language is meant
+ * to stay on the main table — but that is only true for an entity whose columns are still
+ * there. An entity localized from creation (or one whose migration has run) keeps them only on
+ * the companion, and its registered runtime table omits them, so the write carries keys the
+ * table has no columns for. Measured on all three dialects, that surfaces as a driver error
+ * and a 500 rather than a wrong value — the write does not quietly commit. Answering the
+ * question up front turns that opaque failure into a refusal the caller can act on.
+ *
+ * Goes through the same introspection the schema pipeline uses rather than a `SELECT ... LIMIT 0`
+ * probe. That matters beyond convention: a probe cannot tell "this column does not exist" from
+ * "the database is unreachable", so a transient failure would read as a missing column and
+ * produce a misleading "translations are not ready" refusal instead of the real error.
+ * Introspection fails loudly, and this deliberately does not catch.
+ *
+ * MUST be called before the caller opens its transaction. It borrows a connection from the pool,
+ * so running it inside one waits for a connection that cannot be released until that transaction
+ * finishes — starvation on a small pool. Resolving it first also keeps a refusal exactly as
+ * raised: errors leaving a transaction callback pass through the adapter's error classification,
+ * which rewraps anything that is not already a `DatabaseError`.
+ */
+export async function mainTableHasColumns(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string,
+  columnNames: readonly (string | undefined)[]
+): Promise<boolean> {
+  const wanted = columnNames.filter((c): c is string => Boolean(c));
+  if (wanted.length === 0) return false;
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  const table = snapshot.tables.find(t => t.name === tableName);
+  if (!table) return false;
+  const present = new Set(table.columns.map(c => c.name));
+  // EVERY column, not just one. A partially migrated main table — an older field keeping its
+  // legacy column while a newer localized field never had one — would otherwise pass on the
+  // first column and then fail at the driver on a later one, which is the opaque 500 this
+  // check exists to replace with an actionable refusal.
+  return wanted.every(c => present.has(c));
+}
+
 // Whether a probe error is a verified "this TABLE does not exist" for the
 // current dialect, as opposed to a transient/connection/permission error or a
 // different missing resource (a missing DATABASE, schema, column, or role). The
@@ -243,11 +436,15 @@ export async function companionHasStatusColumn(
 
 /**
  * Boot/db:sync helper: physically create the companion `<tableName>_locales` table if it does
- * not already exist. Idempotent and safe to run on every boot — a no-op once the table exists (or
- * when the entity has no translatable fields). This is the db:sync/dev-boot counterpart to the
- * migration-owned companion creation (`nextly migrate`), so a code-first localized collection /
- * single / component gets a working companion without a manual migrate step. Best-effort: a
- * failure (e.g. main table not yet created) is swallowed so it retries on the next boot.
+ * not already exist. CREATION ONLY — the table is left empty, so an entity that already holds
+ * content on its main table will read null for every localized field until that content is
+ * copied across; a successful return is not evidence that it was. Idempotent and safe to run on
+ * every boot — a no-op once the table exists (or when the entity has no translatable fields).
+ * This is the
+ * db:sync/dev-boot counterpart to the migration-owned companion creation (`nextly migrate`), so a
+ * code-first localized collection / single / component gets a working companion without a manual
+ * migrate step. Best-effort: a failure (e.g. main table not yet created) is swallowed so it
+ * retries on the next boot.
  */
 export async function ensureCompanionTable(
   adapter: CompanionWriteAdapter,
@@ -257,7 +454,12 @@ export async function ensureCompanionTable(
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
-  }
+  },
+  /**
+   * Notified when creation fails. Optional so existing callers are unchanged;
+   * without it the previous swallow-and-retry-next-boot behaviour is preserved.
+   */
+  onError?: (error: unknown) => void
 ): Promise<void> {
   const companionTableName = `${args.tableName}_locales`;
   try {
@@ -281,8 +483,25 @@ export async function ensureCompanionTable(
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
     }
-  } catch {
-    // Best-effort: main table may not exist yet on a very first boot — the companion
-    // will be created on the next boot (or by `nextly migrate`).
+  } catch (error) {
+    // Another process may have created it between the probe and the CREATE — `db:sync` and a
+    // dev boot/HMR reload provision the same companions, and `CREATE TABLE` is not idempotent
+    // here. Losing that race is a success: the table the caller wanted now exists. Confirmed by
+    // re-checking rather than by reading the error text, so this cannot swallow a real failure
+    // that happens to mention the table.
+    if (
+      await companionTableExists(adapter, companionTableName).catch(() => false)
+    ) {
+      return;
+    }
+    // Best-effort: the main table may not exist yet on a very first boot, where the
+    // companion is created on the next boot (or by `nextly migrate`). That case is
+    // expected and self-healing. Anything else is NOT — a persistent failure here
+    // leaves the entity marked localized with no place to store translations, and
+    // swallowing it silently is how that state went unnoticed. Report it through
+    // the optional reporter so a caller (db:sync, boot) can surface it; the
+    // function still resolves, because refusing to boot over a companion is worse
+    // than booting with non-default-locale writes refused.
+    onError?.(error);
   }
 }

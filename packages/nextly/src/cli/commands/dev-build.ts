@@ -16,7 +16,11 @@ import { teardownEntityComponentData } from "../../domains/field-groups/services
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
-import { describeError, immediateMessage } from "../../errors/index";
+import {
+  describeError,
+  immediateMessage,
+  NextlyError,
+} from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
@@ -301,6 +305,12 @@ export async function syncComponents(
       fields: component.fields,
       description: component.description,
       admin: component.admin,
+      // Persist i18n through db:sync, as the singles mapping above already does.
+      // Runtime field-group writes gate on the stored flag, so leaving it unset
+      // made `db:sync` record a localized field group as non-localized:
+      // translatable values kept being treated as shared main-table fields, and a
+      // save in a non-default locale overwrote the default one.
+      localized: component.localized === true,
       configPath: `${STORAGE_FORMAT.configPathDir}/${component.slug}.ts`,
     })
   );
@@ -759,5 +769,151 @@ async function handleRemovedComponents(
         `Failed to delete component "${slug}": ${describeError(error)}`
       );
     }
+  }
+}
+
+/**
+ * Create the companion `_locales` table for every localized collection, single
+ * and component in the config.
+ *
+ * The push pipeline deliberately does not manage companion tables (see
+ * `managed-tables.isCompanionTable`), and `ensureCompanionTable` — the intended
+ * db:sync/dev-boot counterpart to migration-owned creation — was only ever called
+ * at boot. Because `db:sync` runs in its own CLI process, it flipped the
+ * registry's `localized` flag and left creation to whenever the app next started;
+ * a server already running then rendered the whole localization UI over a table
+ * that did not exist.
+ *
+ * MUST be called after `syncCollections`, `syncSingles` AND `syncComponents`:
+ * the companion carries a foreign key to its main table, so running it earlier
+ * fails for whichever entity types have not been pushed yet. Idempotent —
+ * `ensureCompanionTable` returns early when the table is already there — so
+ * running it on every sync costs one probe per localized entity.
+ */
+export async function ensureLocalizedCompanions(
+  config: LoadConfigResult["config"],
+  adapter: CLIDatabaseAdapter,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  // Same policy `performAutoSync` applies: production never gets unattended schema
+  // changes, and this issues DDL and can copy rows. Enforced here rather than at
+  // each call site so no caller can reintroduce the hole. In production the
+  // companion is `nextly migrate`'s job, and the write guard keeps a non-default
+  // write from destroying content until it runs.
+  if (process.env.NODE_ENV === "production") return;
+  const dialect = adapter.getCapabilities().dialect;
+  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
+    "../../domains/i18n/runtime/companion-io"
+  );
+  // Each entity kind resolves its physical table differently, and a custom
+  // `dbName` is where they diverge: collections and singles force their `dc_` /
+  // `single_` prefix onto it (and singles normalize the identifier), while field
+  // groups take no override at all. A single shared "prefix + slug" rule would
+  // point at a table the runtime never created — `dbName: "forms"` on a
+  // collection lives at `dc_forms`, so the companion would be built as
+  // `forms_locales` with a foreign key to a table that does not exist.
+  const { resolveCollectionTableName, resolveComponentTableName } =
+    await import("../../domains/schema/utils/resolve-table-name");
+  const { resolveSingleTableName } = await import(
+    "../../domains/singles/services/resolve-single-table-name"
+  );
+
+  interface LocalizableEntity {
+    slug?: string;
+    dbName?: string;
+    localized?: boolean;
+    status?: boolean;
+    fields?: { name: string; type: string; localized?: boolean }[];
+  }
+
+  const groups: [LocalizableEntity[], (e: LocalizableEntity) => string][] = [
+    [
+      (config.collections ?? []) as LocalizableEntity[],
+      e => resolveCollectionTableName(e.slug!, e.dbName),
+    ],
+    [
+      (config.singles ?? []) as LocalizableEntity[],
+      e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
+    ],
+    [
+      (config.fieldGroups ?? []) as LocalizableEntity[],
+      // Field groups derive their table from the slug alone — unlike collections
+      // and singles they carry no `dbName` override.
+      e => resolveComponentTableName(e.slug!),
+    ],
+  ];
+
+  const failures: string[] = [];
+  for (const [group, resolveTableName] of groups) {
+    for (const entity of group) {
+      if (!entity.slug || entity.localized !== true) continue;
+      const tableName = resolveTableName(entity);
+      // `ensureCompanionTable` resolves even on failure (a first boot may not have
+      // the main table yet), so the reporter — not a try/catch — is what surfaces
+      // a real problem.
+      // `CLIDatabaseAdapter` under-declares the runtime object, which is a real
+      // DrizzleAdapter — the same conversion this file already uses for the sync
+      // service above. `ensureCompanionTable` needs `executeQuery`, which the
+      // declared CLI interface omits.
+      await ensureCompanionTable(
+        adapter as unknown as DrizzleAdapter,
+        {
+          slug: entity.slug,
+          tableName,
+          fields: entity.fields ?? [],
+          dialect,
+          status: entity.status === true,
+        },
+        error => {
+          logger.error(
+            `Could not prepare the translations table for "${entity.slug}" (${tableName}_locales). ` +
+              `Writes in a non-default locale will be refused until it exists: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+          failures.push(entity.slug!);
+        }
+      );
+      // Creating the companion is not enough on its own. `ensureCompanionTable` returns
+      // immediately once the table is there, so marking a FURTHER field localized on an
+      // entity that is already localized leaves the companion a column short — while the
+      // main-table sync above has already added that column to `comp_*` / `dc_*`. The write
+      // then splits the value into a companion column that does not exist. Additive only,
+      // Additive only. The reload path reconciles too — it is dev-only, behind its own
+      // production return — so the two stay in step.
+      await reconcileCompanionColumns(
+        adapter as unknown as DrizzleAdapter,
+        {
+          slug: entity.slug,
+          tableName,
+          fields: entity.fields ?? [],
+          dialect,
+          status: entity.status === true,
+        },
+        error => {
+          logger.error(
+            `Could not update the translations table for "${entity.slug}" (${tableName}_locales). ` +
+              `Newly translatable fields will fail to save until it matches: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+          failures.push(entity.slug!);
+        }
+      );
+    }
+  }
+  // Fail the command. Exiting 0 here would tell deployment automation the schema is
+  // in step while the registry advertises localization the database cannot store, so
+  // every translation write is refused — unlike a failure from the main auto-sync
+  // pipeline, which does stop the run. Boot and the HMR reload stay best-effort by
+  // passing no reporter: they must not refuse to start over a companion.
+  if (failures.length > 0) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `Could not prepare the translations table for: ${failures.join(", ")}. Writes in a non-default locale will be refused until it exists.`,
+      logContext: {
+        cause: "companion-provisioning-failed",
+        entities: failures,
+      },
+    });
   }
 }
