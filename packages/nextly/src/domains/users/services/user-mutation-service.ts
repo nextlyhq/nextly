@@ -47,6 +47,7 @@ import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import {
   buildAcceptInviteLink,
@@ -162,6 +163,29 @@ export interface InviteArtifact {
  * admin needs the link back to deliver it however they choose.
  */
 export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
+
+/**
+ * A user-field value shaped for the `user_ext` column its field maps to.
+ *
+ * The column builder maps a `date` field, and a plugin type storing as
+ * `timestamp`, to a real timestamp column on every dialect, and Drizzle
+ * refuses to bind a string to one. The failure surfaces as a `user_ext` insert
+ * error, which the create path treats as the table being absent: it disables
+ * the extension for the process and writes the user without the value, so a
+ * wrong shape is lost rather than reported.
+ */
+export function coerceUserExtValue(
+  value: unknown,
+  field: { type?: unknown }
+): unknown {
+  if (typeof value !== "string") return value;
+  if (storageTypeToken(field) !== "date") return value;
+  const parsed = new Date(value);
+  // An unparseable string is left as it was: reporting it belongs to
+  // validation, and substituting an Invalid Date would store a null-ish value
+  // for something the caller did supply.
+  return Number.isNaN(parsed.getTime()) ? value : parsed;
+}
 
 export class UserMutationService extends BaseService {
   private readonly userConfig?: UserConfig;
@@ -332,12 +356,20 @@ export class UserMutationService extends BaseService {
     const values: Record<string, unknown> = {};
     const fieldNames = this.getCustomFieldNames();
 
+    // Keyed by name so a value can be shaped by the column its field maps to.
+    const byName = new Map(
+      this.getEffectiveFields()
+        .filter(
+          (field): field is typeof field & { name: string } =>
+            "name" in field && typeof field.name === "string"
+        )
+        .map(field => [field.name, field])
+    );
+
     for (const fieldName of fieldNames) {
-      if (fieldName in input) {
-        values[fieldName] = input[fieldName] ?? null;
-      } else {
-        values[fieldName] = null;
-      }
+      const raw = fieldName in input ? (input[fieldName] ?? null) : null;
+      const field = byName.get(fieldName);
+      values[fieldName] = field ? coerceUserExtValue(raw, field) : raw;
     }
     return values;
   }

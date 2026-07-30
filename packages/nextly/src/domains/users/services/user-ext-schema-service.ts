@@ -1256,8 +1256,14 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
             return sqliteInteger(colName, { mode: "boolean" });
           case "timestamp":
             return sqliteInteger(colName, { mode: "timestamp" });
+          case "json":
+            // SQLite has no JSON type, so the value is held as text. Declaring
+            // the mode makes Drizzle serialize on write and parse on read;
+            // a plain text column would take a live object and store it as
+            // `[object Object]`, with nothing to parse it back on the way out.
+            return sqliteText(colName, { mode: "json" });
           default:
-            return sqliteText(colName); // text / longText / json
+            return sqliteText(colName); // text / longText
         }
       })();
       return isRequired ? col.notNull() : col;

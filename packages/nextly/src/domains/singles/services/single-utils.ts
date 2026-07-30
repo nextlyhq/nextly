@@ -22,6 +22,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { validateBlocksValue } from "../../../collections/fields/validators/blocks-validator";
 import { NextlyError } from "../../../errors";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
 import type { SingleDocument, SingleResult } from "../types";
 
@@ -62,9 +63,13 @@ export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
  * Mirrors the logic in RuntimeSchemaGenerator to ensure consistent handling.
  */
 export function shouldTreatAsJson(field: FieldConfig): boolean {
+  // Classified by what a plugin type stores rather than by its own token,
+  // which names none of these: a json-backed field would otherwise reach its
+  // JSON column as a live object. No storage primitive is `select`,
+  // `relationship` or `upload`, so the branches below read the declared type.
   if (
     ["json", "repeater", "group", "richText", "chips", "blocks"].includes(
-      field.type
+      storageTypeToken(field) ?? field.type
     )
   ) {
     return true;

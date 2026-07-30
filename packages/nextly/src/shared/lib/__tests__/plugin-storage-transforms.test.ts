@@ -12,7 +12,9 @@ import {
   clearFieldTypes,
   registerFieldType,
 } from "../../../domains/schema/field-types/field-type-registry";
+import { isJsonFieldType } from "../../../domains/collections/services/collection-utils";
 import { shouldTreatAsJson } from "../../../domains/field-groups/services/field-group-utils";
+import { shouldTreatAsJson as singleShouldTreatAsJson } from "../../../domains/singles/services/single-utils";
 import { coerceDateFieldsToDate } from "../field-transform";
 
 afterEach(() => {
@@ -82,6 +84,43 @@ describe("value transforms for plugin field types", () => {
     expect(data.hits).toBe("7");
   });
 
+  it("classifies a json-backed type on collections and singles too", () => {
+    registerFieldType({
+      type: "chart",
+      storage: "json",
+      component: "@acme/charts/admin#Chart",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    // The descriptor gives all three surfaces a JSON column; each surface has
+    // its own classifier, and one left reading the raw token would write a
+    // live object into it.
+    expect(isJsonFieldType("chart", { hasMany: false })).toBe(true);
+    expect(
+      singleShouldTreatAsJson({
+        name: "data",
+        type: "chart",
+      } as unknown as FieldConfig)
+    ).toBe(true);
+  });
+
+  it("leaves a text-backed type scalar on collections and singles", () => {
+    registerFieldType({
+      type: "slugish",
+      storage: "text",
+      component: "@acme/slugs/admin#Slug",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    expect(isJsonFieldType("slugish", { hasMany: false })).toBe(false);
+    expect(
+      singleShouldTreatAsJson({
+        name: "handle",
+        type: "slugish",
+      } as unknown as FieldConfig)
+    ).toBe(false);
+  });
+
   it("still reads the declared type for a built-in", () => {
     // The resolution must not displace the built-in decisions it sits in front
     // of: an unregistered token is not a plugin type and keeps its own meaning.
@@ -95,5 +134,11 @@ describe("value transforms for plugin field types", () => {
     const data: Record<string, unknown> = { at: "2026-07-30T00:00:00.000Z" };
     coerceDateFieldsToDate(data, [{ name: "at", type: "date" }]);
     expect(data.at).toBeInstanceOf(Date);
+
+    expect(isJsonFieldType("richText")).toBe(true);
+    expect(isJsonFieldType("text", { hasMany: false })).toBe(false);
+    expect(
+      singleShouldTreatAsJson({ name: "b", type: "richText" } as FieldConfig)
+    ).toBe(true);
   });
 });

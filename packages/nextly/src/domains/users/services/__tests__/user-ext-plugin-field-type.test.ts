@@ -37,6 +37,28 @@ describe("UserExtSchemaService — plugin field types", () => {
     expect(sql).not.toMatch(/"score"\s+TEXT/i);
   });
 
+  it("gives a json-storage field a SQLite column that round-trips", () => {
+    registerFieldType({
+      type: "chart",
+      storage: "json",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    const table = new UserExtSchemaService("sqlite").generateRuntimeSchema([
+      field("chart"),
+    ]);
+
+    // SQLite holds JSON as text, so the column has to carry the mode that
+    // serializes on write and parses on read. Plain text would store a live
+    // object as `[object Object]` and hand back a string.
+    const column = (table as unknown as Record<string, { score?: unknown }>)
+      .score as { mapToDriverValue?: (value: unknown) => unknown } | undefined;
+
+    expect(column).toBeDefined();
+    expect(column?.mapToDriverValue?.({ a: 1 })).toBe('{"a":1}');
+  });
+
   it("maps a boolean-storage plugin field to a boolean column", () => {
     registerFieldType({
       type: "flag",
