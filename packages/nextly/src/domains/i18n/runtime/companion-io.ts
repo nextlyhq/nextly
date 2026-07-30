@@ -453,6 +453,35 @@ export async function companionHasStatusColumn(
  * would attach today's default to content written under some earlier one.
  */
 /**
+ * Whether the main table physically carries any of the entity's translatable columns.
+ *
+ * The question behind it is "would creating an empty companion here hide something". Columns on
+ * main mean content may already be there, and once a companion exists every read resolves through
+ * it — so an empty one makes that content invisible whether or not any row is populated.
+ */
+async function mainHasLocalizedColumns(
+  adapter: CompanionIntrospectAdapter,
+  args: { tableName: string; dialect: SupportedDialect },
+  localized: CompanionFieldLike[]
+): Promise<boolean> {
+  if (localized.length === 0) return false;
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [args.tableName]
+  );
+  const present = new Set(
+    snapshot.tables
+      .find(t => t.name === args.tableName)
+      ?.columns.map(c => c.name) ?? []
+  );
+  return localized.some(f => present.has(toColumn(f.name)));
+}
+
+/**
  * Whether an entity's MAIN table is physically present.
  *
  * Asked through the canonical introspection helper rather than by running a probe query and
@@ -612,6 +641,25 @@ export async function ensureCompanionTable(
       resolveLocalizedFieldNames(args.fields, true)
     );
     const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
+    // A caller that cannot say which language the main table's content is in must not create the
+    // companion over that content. Reads resolve through the companion once it exists, so an empty
+    // one hides everything already written — and because creation is a race, the first caller to
+    // win decides. Boot-time provisioning has no locale to offer, so it defers here and leaves the
+    // entity to the path that does; #382's write guard keeps a non-default write from doing damage
+    // in the meantime.
+    if (
+      !args.sourceLocale &&
+      (await mainHasLocalizedColumns(adapter, args, newLocalized))
+    ) {
+      onError?.(
+        new Error(
+          `Translations table for "${args.slug}" was not created here: this caller cannot say ` +
+            `which language the existing content is in, and creating it empty would hide that ` +
+            `content. Run \`nextly db:sync\` (or \`nextly migrate\` in production).`
+        )
+      );
+      return false;
+    }
     // Ordered ahead of every statement below. See `recordTransition`.
     await args.recordTransition?.();
     const statements =

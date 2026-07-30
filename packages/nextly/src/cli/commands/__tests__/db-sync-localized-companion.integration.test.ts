@@ -338,6 +338,46 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(main).toEqual([{ title: "Still here" }]);
   });
 
+  it("refuses to create the companion when the caller cannot name the language", async () => {
+    // Boot-time provisioning has no localization config to draw a locale from. Creating the
+    // companion there would win the race against the path that does know, and because reads
+    // resolve through the companion once it exists, the existing content would be hidden by
+    // whichever caller happened to be first. So a locale-less caller defers instead.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_noloc",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_noloc" ("id", "slug", "title") VALUES ('row1', 'r1', 'Content')`
+    );
+
+    const { ensureCompanionTable } = await import(
+      "../../../domains/i18n/runtime/companion-io"
+    );
+    const reported: unknown[] = [];
+    const created = await ensureCompanionTable(
+      adapter as unknown as DrizzleAdapter,
+      {
+        slug: "dbsync_noloc",
+        tableName: "dc_dbsync_noloc",
+        fields: [{ name: "title", type: "text", localized: true }],
+        dialect: "sqlite",
+      },
+      error => reported.push(error)
+    );
+
+    expect(created).toBe(false);
+    expect(await tableExists("dc_dbsync_noloc_locales")).toBe(false);
+    // Silence would leave an operator with an entity marked localized and no table, and no clue
+    // why, so the refusal is reported rather than swallowed.
+    expect(reported).toHaveLength(1);
+  });
+
   it("leaves a non-localized collection with no companion", async () => {
     await runSync(
       defineConfig({
