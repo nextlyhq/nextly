@@ -52,6 +52,7 @@ import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
+import { affectedRowCount } from "../../auth/services/auth-service";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
@@ -526,6 +527,14 @@ export class UserMutationService extends BaseService {
       // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
       // BetterSQLite3Transaction depending on dialect) that exposes the same
       // fluent query API as this.db. See BaseService.withTransaction.
+      //
+      // Only the user_ext insert self-heals (a missing user_ext table on a fresh
+      // DB). A flag records that it was the failing statement, so an unrelated
+      // failure — the invite token or the outbox event — propagates as a real
+      // error instead of being misdiagnosed as schema drift and silently retried
+      // WITHOUT the custom-field data (which would report a created user while
+      // dropping its custom fields).
+      let userExtInsertFailed = false;
       try {
         await this.withTransaction(async tx => {
           const txDb = tx as DrizzleTransactionLike;
@@ -533,26 +542,33 @@ export class UserMutationService extends BaseService {
 
           // Always create a user_ext row when custom fields are configured
           if (hasExt && userExtTable) {
-            await txDb.insert(userExtTable).values({
-              id: randomUUID(),
-              user_id: newUserId,
-              ...customFieldValues,
-              created_at: now,
-              updated_at: now,
-            });
+            try {
+              await txDb.insert(userExtTable).values({
+                id: randomUUID(),
+                user_id: newUserId,
+                ...customFieldValues,
+                created_at: now,
+                updated_at: now,
+              });
+            } catch (extErr) {
+              // Mark user_ext as the failing statement and abort the transaction
+              // so the outer catch retries without it. Aborting rather than
+              // continuing is required: PostgreSQL poisons the whole transaction
+              // after any statement error.
+              userExtInsertFailed = true;
+              throw extErr;
+            }
           }
 
           await insertInviteToken(txDb);
           await recordCreatedEvent(txDb);
         });
       } catch (txErr) {
-        // Self-healing: if user_ext is configured but the user_ext insert blew
-        // up (typical on a fresh DB before the user_ext table is created), log
-        // the cause, disable user_ext for the rest of this process, and retry
-        // the user insert alone so the caller still gets a created user. If
-        // user_ext is NOT configured, the failure is unrelated to the schema
-        // drift and must propagate.
-        if (hasExt && userExtTable) {
+        // Self-healing is scoped to a genuine user_ext insert failure (typical on
+        // a fresh DB before the user_ext table exists): disable user_ext for this
+        // process and retry the user insert alone so the caller still gets a
+        // created user. Any other failure is unrelated and must propagate.
+        if (userExtInsertFailed && userExtTable) {
           const cause = txErr instanceof Error ? txErr.message : String(txErr);
           this.logger.warn(
             `user_ext insert failed during createLocalUser; disabling user_ext for this process: ${cause}`
@@ -1086,23 +1102,30 @@ export class UserMutationService extends BaseService {
         // Delete user accounts
         await txDb.delete(accounts).where(eq(accounts.userId, userId));
 
-        // Delete user
-        await txDb.delete(users).where(eq(users.id, userId));
+        // Delete user, capturing how many rows it removed.
+        const deleteResult = await txDb
+          .delete(users)
+          .where(eq(users.id, userId));
 
-        // Record a `user.deleted` event in the same transaction, so it commits
-        // with the removal and never fires for a rolled-back delete. PII-safe
-        // identity only; a delete carries no secret to strip.
-        await recordMutationEventInTx(txDb, this.dialect, {
-          type: "user.deleted",
-          resource: { kind: "user", id: String(userId) },
-          data: {
-            id: user.id,
-            email: user.email ?? null,
-            name: user.name ?? null,
-          },
-          fields: [],
-          actor: null,
-        });
+        // Record `user.deleted` only when THIS transaction actually removed the
+        // account, in the same transaction so it commits with the removal and
+        // never fires for a rolled-back delete. Two concurrent deletes both pass
+        // the pre-transaction existence read, but only one deletes a row; without
+        // this guard the loser would emit a duplicate event with a fresh id that
+        // downstream idempotency cannot collapse. PII-safe identity only.
+        if (affectedRowCount(deleteResult, this.dialect) > 0) {
+          await recordMutationEventInTx(txDb, this.dialect, {
+            type: "user.deleted",
+            resource: { kind: "user", id: String(userId) },
+            data: {
+              id: user.id,
+              email: user.email ?? null,
+              name: user.name ?? null,
+            },
+            fields: [],
+            actor: null,
+          });
+        }
       });
     } catch (err) {
       if (NextlyError.is(err)) throw err;
