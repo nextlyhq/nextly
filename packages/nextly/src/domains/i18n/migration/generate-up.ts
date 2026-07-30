@@ -60,13 +60,33 @@ export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
     .join("\n\n");
 }
 
+/** Options for {@link buildLocalizationUpStatements}. */
+export interface LocalizationUpOptions {
+  /**
+   * Whether to DROP the seeded columns from the main table once their values are copied.
+   *
+   * True for an explicit transition — a Builder toggle or a migration file — where relocating
+   * the data is the whole point and leaving the originals behind would give a field two homes.
+   *
+   * False for **unattended** provisioning (boot, `db:sync`, the dev reload path). Those are
+   * additive-only by policy, and a dropped column is not something the next boot can put back.
+   * The result is a companion that holds the content and a main table still carrying the
+   * originals: reads resolve through the companion, the stale copies harm nothing, and
+   * `nextly migrate` can remove them under supervision. Redundant beats unrecoverable.
+   */
+  dropSeededColumns?: boolean;
+}
+
 /**
  * Statement-array form of {@link buildLocalizationUpSql} (no trailing `;` per element). The
  * runtime enable path (a Builder-entity localization toggle, which has no migration file) runs
  * these individually via the adapter, so it does not have to split a joined string on `;`.
+ *
+ * Drops the relocated columns by default, which is what both existing callers want.
  */
 export function buildLocalizationUpStatements(
-  spec: CompanionMigrationSpec
+  spec: CompanionMigrationSpec,
+  options: LocalizationUpOptions = {}
 ): string[] {
   const { dialect, mainTable, companionTable, defaultLocale, columns } = spec;
 
@@ -102,10 +122,13 @@ export function buildLocalizationUpStatements(
         ]
       : [];
 
-  const drops = onMain.map(
-    c =>
-      `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
-  );
+  const drops =
+    options.dropSeededColumns === false
+      ? []
+      : onMain.map(
+          c =>
+            `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
+        );
 
   return [create, ...seed, ...drops];
 }

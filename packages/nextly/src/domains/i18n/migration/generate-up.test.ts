@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildCompanionCreateOnlySql,
   buildLocalizationUpSql,
+  buildLocalizationUpStatements,
 } from "./generate-up";
 import type { CompanionMigrationSpec } from "./types";
 
@@ -85,5 +86,39 @@ describe("per-locale _status column (i18n M6)", () => {
     // both the target _status and the source status column appear in INSERT...SELECT
     expect(sql).toContain(`"_parent", "_locale", "_status", "title", "body"`);
     expect(sql).toContain(`SELECT "id", 'en', "status", "title", "body"`);
+  });
+});
+
+describe("buildLocalizationUpStatements without the drop", () => {
+  it("still copies the existing values into the companion", () => {
+    // Unattended provisioning is additive-only, but the copy is the entire point: without it the
+    // companion is empty and every localized field reads null over content that is still on disk.
+    const statements = buildLocalizationUpStatements(spec("sqlite"), {
+      dropSeededColumns: false,
+    });
+
+    expect(
+      statements.some(s => s.startsWith(`INSERT INTO "dc_pages_locales"`))
+    ).toBe(true);
+  });
+
+  it("leaves the main table's columns in place", () => {
+    // A dropped column is not something the next boot can put back, so unattended paths must not
+    // drop. The redundant copies on main are inert once reads resolve through the companion.
+    const statements = buildLocalizationUpStatements(spec("sqlite"), {
+      dropSeededColumns: false,
+    });
+
+    expect(statements.some(s => s.includes("DROP COLUMN"))).toBe(false);
+  });
+
+  it("drops by default, so the Builder toggle and migration files are unchanged", () => {
+    // Both existing callers relocate the data deliberately; leaving the originals would give a
+    // field two homes and let the stale one be read after an edit.
+    const statements = buildLocalizationUpStatements(spec("sqlite"));
+
+    expect(
+      statements.filter(s => s.includes("DROP COLUMN")).length
+    ).toBeGreaterThan(0);
   });
 });
