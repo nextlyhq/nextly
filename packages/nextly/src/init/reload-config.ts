@@ -678,7 +678,7 @@ async function ensureLocalizedCompanionsForReload(
         // creates this entity's companion once the apply has produced its main table.
         continue;
       }
-      const created = await ensureCompanionTable(
+      await ensureCompanionTable(
         adapter,
         {
           slug: entity.slug,
@@ -690,6 +690,17 @@ async function ensureLocalizedCompanionsForReload(
           // copied in as this locale's rows, instead of being left behind an empty
           // companion that reads null.
           sourceLocale: transitions?.defaultLocale,
+          // Written before the DDL rather than after a successful return: MySQL commits DDL
+          // implicitly, so a crash in between would leave a companion the next run treats as
+          // pre-existing and never records. It is also what makes a failed copy recoverable.
+          recordTransition: transitions
+            ? () =>
+                beginI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  sourceLocale: transitions.defaultLocale,
+                })
+            : undefined,
         },
         error => {
           console.warn(
@@ -699,16 +710,6 @@ async function ensureLocalizedCompanionsForReload(
           );
         }
       );
-      // Only on the call that created the companion. That is the one moment the current
-      // default locale still describes the content already sitting on the main table;
-      // recorded later it would attach today's default to older writes.
-      if (created && transitions) {
-        await beginI18nTransition(transitions, {
-          kind,
-          slug: entity.slug,
-          sourceLocale: transitions.defaultLocale,
-        });
-      }
       // Creating the table is not enough on its own: `ensureCompanionTable` returns
       // immediately when one already exists, so marking a FURTHER field localized on an
       // already-localized entity takes the no-DDL path, syncs its metadata, and leaves the

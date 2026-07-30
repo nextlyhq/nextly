@@ -574,6 +574,21 @@ export async function ensureCompanionTable(
      * entity that has never held content outside a companion.
      */
     sourceLocale?: string;
+    /**
+     * Durably record that this transition is starting. Called once the companion is known to be
+     * absent and BEFORE any statement runs.
+     *
+     * Before, not after, because MySQL commits DDL implicitly: a crash between creating the table
+     * and recording it would leave a companion whose next run sees the table, takes the early
+     * return, and never records or completes the transition. The same window makes a failed seed
+     * unrecoverable — with the record already written, a later pass can read `enabling` and finish
+     * the copy.
+     *
+     * A failure here abandons the creation rather than proceeding without a record. An unrecorded
+     * companion is the state this exists to prevent, and not creating the table leaves the next
+     * run free to try again from a clean position.
+     */
+    recordTransition?: () => Promise<void>;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -597,6 +612,8 @@ export async function ensureCompanionTable(
       resolveLocalizedFieldNames(args.fields, true)
     );
     const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
+    // Ordered ahead of every statement below. See `recordTransition`.
+    await args.recordTransition?.();
     const statements =
       (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
       buildCompanionReconcileStatements({

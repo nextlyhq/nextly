@@ -900,7 +900,7 @@ export async function ensureLocalizedCompanions(
       // DrizzleAdapter — the same conversion this file already uses for the sync
       // service above. `ensureCompanionTable` needs `executeQuery`, which the
       // declared CLI interface omits.
-      const created = await ensureCompanionTable(
+      await ensureCompanionTable(
         adapter as unknown as DrizzleAdapter,
         {
           slug: entity.slug,
@@ -912,6 +912,17 @@ export async function ensureLocalizedCompanions(
           // copied in as this locale's rows, instead of being left behind an empty
           // companion that reads null.
           sourceLocale: transitions?.defaultLocale,
+          // Written before the DDL rather than after a successful return: MySQL commits DDL
+          // implicitly, so a crash in between would leave a companion the next run treats as
+          // pre-existing and never records. It is also what makes a failed copy recoverable.
+          recordTransition: transitions
+            ? () =>
+                beginI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  sourceLocale: transitions.defaultLocale,
+                })
+            : undefined,
         },
         error => {
           logger.error(
@@ -922,18 +933,6 @@ export async function ensureLocalizedCompanions(
           failures.push(entity.slug!);
         }
       );
-      // Only when this call is the one that created the companion. The content on
-      // the main table was written under the default locale in force at the time,
-      // and this is the one moment the current default is still that locale —
-      // afterwards nothing on disk can say what it was. Recorded for an existing
-      // companion it would attach today's default to older content.
-      if (created && transitions) {
-        await beginI18nTransition(transitions, {
-          kind,
-          slug: entity.slug,
-          sourceLocale: transitions.defaultLocale,
-        });
-      }
       // Skipped before the push, which is what creates the columns a reconcile looks for.
       if (phase === "beforeApply") continue;
       // Creating the companion is not enough on its own. `ensureCompanionTable` returns
