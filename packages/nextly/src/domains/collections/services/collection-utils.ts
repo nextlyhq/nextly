@@ -8,6 +8,8 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+
 /**
  * Field types that are always stored as JSON in the database.
  */
@@ -58,7 +60,13 @@ export function isJsonFieldType(
   fieldType: string,
   field?: { hasMany?: boolean; relationTo?: unknown }
 ): boolean {
-  if (ALWAYS_JSON_TYPES.has(fieldType)) return true;
+  // A plugin type is classified by what it stores: its own token names none of
+  // the built-in branches, so a json-backed field would be written as a live
+  // object into the JSON column its descriptor created. None of the storage
+  // primitives is `select`, `relationship` or `upload`, so the branches below
+  // keep reading the declared type.
+  if (ALWAYS_JSON_TYPES.has(storageTypeToken({ type: fieldType }) ?? fieldType))
+    return true;
 
   if (
     (fieldType === "select" ||

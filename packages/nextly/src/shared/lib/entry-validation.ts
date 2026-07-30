@@ -733,7 +733,10 @@ async function validateFields(
   for (const field of fields) {
     if (!field.name) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
-    const provided = field.name in data;
+    // Own keys only. Field names may be camelCase, so `toString` is a legal
+    // one, and `in` would answer for the prototype: the field would read as
+    // present on every update and carry the inherited function as its value.
+    const provided = Object.hasOwn(data, field.name);
 
     // PATCH semantics: an absent key on update is untouched. On create,
     // absent required fields must still fail.
@@ -741,7 +744,7 @@ async function validateFields(
 
     await validateFieldValue(
       field,
-      data[field.name],
+      provided ? data[field.name] : undefined,
       path,
       data,
       write,

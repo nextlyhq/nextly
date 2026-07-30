@@ -16,6 +16,7 @@ import { normalizeRelationshipValue } from "../../domains/collections/services/c
 import { NextlyError } from "../../errors";
 
 import { detachData } from "./detach";
+import { storageTypeToken } from "./plugin-storage";
 import {
   formatRichTextOutput,
   isRichTextValue,
@@ -636,7 +637,9 @@ export function coerceDateFieldsToDate(
 ): void {
   for (const field of fields) {
     if (!field.name) continue;
-    if (field.type !== "date") continue;
+    // A timestamp-backed plugin type binds to the same column a `date` does,
+    // so it needs the same coercion: Drizzle refuses to bind a string there.
+    if (storageTypeToken(field) !== "date") continue;
     const value = data[field.name];
     if (typeof value === "string") {
       data[field.name] = new Date(value);

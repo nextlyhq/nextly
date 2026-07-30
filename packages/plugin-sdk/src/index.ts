@@ -24,7 +24,8 @@ export { definePlugin } from "nextly";
  *   not yet exercised by a first-party plugin (see STABILITY.md). Phase-2
  *   contribution types — `PluginRole` (D67), `PluginEmailProvider` /
  *   `PluginEmailTemplate` (D65), `ScheduledTask` (D61, reserved) — are also
- *   `@experimental`.
+ *   `@experimental`, as are `PluginFieldCodegen` / `PluginFieldCodegenImport`:
+ *   the codegen callbacks are new and unexercised by a first-party plugin.
  */
 export type {
   PluginDefinition,
@@ -41,6 +42,8 @@ export type {
   PluginFieldInstance,
   PluginFieldIssue,
   PluginFieldValidationResult,
+  PluginFieldCodegen,
+  PluginFieldCodegenImport,
   ScheduledTask,
   PermissionSlug,
   ServiceOpts,
@@ -56,6 +59,23 @@ export type {
  */
 export { text, textarea, checkbox, upload, group } from "nextly";
 export type { FieldConfig } from "nextly";
+
+/**
+ * Validating values against field declarations. A plugin storing structured
+ * content of its own — block props, form submissions — applies the same rules a
+ * write does instead of reimplementing `required`, the per-type checks and
+ * every plugin field type's own `validate`.
+ * @experimental No first-party plugin depends on it yet — core's block props
+ *   are its only caller — so it has not met the graduation bar in
+ *   STABILITY.md. It graduates once the page builder owns block props.
+ */
+export { validateFieldValues } from "nextly";
+export type {
+  ValidateFieldValuesOptions,
+  FieldValueDeclaration,
+  FieldValueDeclarationInput,
+  ValidationIssue,
+} from "nextly";
 
 /**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich

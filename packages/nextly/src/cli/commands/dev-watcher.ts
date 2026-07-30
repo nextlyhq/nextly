@@ -8,6 +8,7 @@
  * @module cli/commands/dev-watcher
  */
 
+import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { CommandContext } from "../program";
@@ -60,34 +61,46 @@ export function createDebouncedSync(
       logger.newline();
       logger.header("Config Changed - Re-syncing");
 
-      // Every reload gets the same gate the first sync did. Editing a plugin
-      // field's options after the watcher starts would otherwise serialize the
-      // metadata and materialize the columns for a declaration its own type
-      // rejects — the state this check exists to keep out of the database.
-      assertPluginFieldDeclarations(configToSync.config);
+      // Pinned to the field types this config registered. Saving again while
+      // the work below is still running reloads the config, which clears and
+      // rebuilds the live registry; the columns being materialized here belong
+      // to the config that started this run, so they have to resolve against
+      // its types and not the ones that replaced them.
+      await runWithFieldTypes(configToSync.fieldTypes, async () => {
+        // Every reload gets the same gate the first sync did. Editing a plugin
+        // field's options after the watcher starts would otherwise serialize
+        // the metadata and materialize the columns for a declaration its own
+        // type rejects — the state this check exists to keep out of the
+        // database.
+        assertPluginFieldDeclarations(configToSync.config);
 
-      // Unconditional, so the orphan scan still runs when the config declares none of a
-      // type: deleting the last entry of a kind is precisely what orphans its table, making
-      // a zero count the case where the scan matters most.
-      await syncCollections(configToSync, adapter, options, context);
-      await syncSingles(configToSync, adapter, options, context);
-      await syncComponents(configToSync, adapter, options, context);
+        // Unconditional, so the orphan scan still runs when the config declares none of a
+        // type: deleting the last entry of a kind is precisely what orphans its table, making
+        // a zero count the case where the scan matters most.
+        await syncCollections(configToSync, adapter, options, context);
+        await syncSingles(configToSync, adapter, options, context);
+        await syncComponents(configToSync, adapter, options, context);
 
-      // Turning on localization is a config edit, so it arrives through this
-      // watcher as often as through `db:sync`. The companion table is not part of
-      // the push pipeline, and creating it here rather than at the next boot is
-      // what keeps a running server from advertising localization it cannot store.
-      // Suppressed under `--no-auto-sync` for the same reason the rest of the
-      // push is: it issues DDL and can copy rows.
-      if (options.autoSync !== false) {
-        await ensureLocalizedCompanions(configToSync.config, adapter, context);
-      }
+        // Turning on localization is a config edit, so it arrives through this
+        // watcher as often as through `db:sync`. The companion table is not part of
+        // the push pipeline, and creating it here rather than at the next boot is
+        // what keeps a running server from advertising localization it cannot store.
+        // Suppressed under `--no-auto-sync` for the same reason the rest of the
+        // push is: it issues DDL and can copy rows.
+        if (options.autoSync !== false) {
+          await ensureLocalizedCompanions(
+            configToSync.config,
+            adapter,
+            context
+          );
+        }
 
-      // Sync user_ext table (always — handles both code and UI fields)
-      await syncUserFields(configToSync, adapter, options, context);
+        // Sync user_ext table (always — handles both code and UI fields)
+        await syncUserFields(configToSync, adapter, options, context);
 
-      // Seed permissions for new/updated collections and singles
-      await performPermissionSeeding(adapter, options, context);
+        // Seed permissions for new/updated collections and singles
+        await performPermissionSeeding(adapter, options, context);
+      });
     } catch (error) {
       logger.error(`Re-sync failed: ${describeError(error)}`);
     } finally {

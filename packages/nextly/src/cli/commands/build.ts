@@ -44,6 +44,7 @@ import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
+import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
@@ -57,12 +58,19 @@ import {
   type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
 import {
   discoverMigrationGroups,
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
+
+import {
+  convertToComponentRecords,
+  convertToSingleRecords,
+  convertToUserFieldRecords,
+} from "./generate-types";
 
 // ============================================================================
 // Types
@@ -252,7 +260,12 @@ export async function runBuild(
   );
   result.errors.push(...entityValidation.errors);
 
-  if (collectionCount === 0) {
+  // Any supported entity is enough to build for. Gating on collections alone
+  // meant an app of singles, field groups, or plugin-backed user fields wrote
+  // no types at all, or kept a stale file from a previous run.
+  const hasSchema = hasSchemaToSync(configResult.config);
+
+  if (!hasSchema) {
     if (entityValidation.errors.length > 0) {
       reportDeclarationErrors(entityValidation.errors, context);
       result.success = false;
@@ -261,9 +274,16 @@ export async function runBuild(
       logger.info("Fix the errors above and run `nextly build` again.");
       process.exit(1);
     }
-    logger.warn("No collections defined in config");
+    logger.warn("No schema defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
     return;
+  }
+
+  // Worth saying even though the build continues: the other entity kinds still
+  // generate types, so stopping here would leave an app of singles or user
+  // fields with no output.
+  if (collectionCount === 0) {
+    logger.warn("No collections defined in config");
   }
 
   // Step 2: Validate all collections
@@ -657,6 +677,16 @@ async function generateAllFiles(
   // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
   const records = convertToRecords(config.collections);
 
+  // The other entity kinds, converted with the same functions `generate:types`
+  // uses. Passing collections alone produced a different types file from the
+  // two commands, so a field declared on a single, a field group, or the user
+  // schema was absent from the build-generated types.
+  const singleRecords = convertToSingleRecords(config.singles ?? []);
+  const componentRecords = convertToComponentRecords(config.fieldGroups ?? []);
+  const userFieldRecords = convertToUserFieldRecords(
+    config.users?.fields ?? []
+  );
+
   // Generate Zod schemas
   if (options.zod !== false) {
     logger.debug("Generating Zod schemas...");
@@ -696,8 +726,23 @@ async function generateAllFiles(
       generateModuleAugmentation: true,
     };
 
+    // The same names `generate:types` narrows `PermissionSlug` and `EventName`
+    // to. Without them the build writes those types as bare `string`, so a
+    // deployment build would widen what a development run had narrowed.
+    const { permissionSlugs, eventNames } = collectCodegenNames(
+      config,
+      config.plugins ?? []
+    );
+
     const typeGenerator = new TypeGenerator(typeGeneratorOptions);
-    const typesFile = typeGenerator.generateTypesFile(records);
+    const typesFile = typeGenerator.generateTypesFile(
+      records,
+      singleRecords,
+      componentRecords,
+      userFieldRecords,
+      permissionSlugs,
+      eventNames
+    );
 
     const typesFilePath = resolve(cwd, config.typescript.outputFile);
     await ensureDir(dirname(typesFilePath));

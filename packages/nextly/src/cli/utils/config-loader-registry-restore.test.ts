@@ -39,7 +39,7 @@ const CONFIG_PATH = "/virtual/nextly.config.ts";
 const SURVIVOR: PluginFieldType = {
   type: "star-rating",
   storage: "number",
-  adminComponent: "StarRating",
+  component: "@acme/ratings/admin#StarRating",
 };
 
 const failingPlugin = {
@@ -84,7 +84,7 @@ describe("loadConfig registry handling on failure", () => {
     const contributed: PluginFieldType = {
       type: "color-swatch",
       storage: "text",
-      adminComponent: "ColorSwatch",
+      component: "@acme/swatch/admin#ColorSwatch",
     };
     bundleAndRequire.mockResolvedValue({
       mod: {

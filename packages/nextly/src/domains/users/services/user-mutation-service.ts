@@ -48,6 +48,7 @@ import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import {
   buildAcceptInviteLink,
@@ -199,6 +200,99 @@ export interface InviteArtifact {
  * admin needs the link back to deliver it however they choose.
  */
 export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
+
+/**
+ * A user-field value shaped for the `user_ext` column its field maps to.
+ *
+ * The column builder maps a `date` field, and a plugin type storing as
+ * `timestamp`, to a real timestamp column on every dialect, and Drizzle
+ * refuses to bind a string to one. The failure surfaces as a `user_ext` insert
+ * error, which the create path treats as the table being absent: it disables
+ * the extension for the process and writes the user without the value, so a
+ * wrong shape is lost rather than reported.
+ */
+export function coerceUserExtValue(
+  value: unknown,
+  field: { name?: unknown; type?: unknown }
+): unknown {
+  const token = storageTypeToken(field);
+  const name = typeof field.name === "string" ? field.name : "input";
+
+  // A plugin user field validates through `z.unknown()`, so nothing upstream
+  // has looked at the value at all. Whatever reaches here goes straight to the
+  // driver, and a failed `user_ext` insert is read as the table being absent —
+  // the extension is disabled for the process and the user is written without
+  // the value. So the shape is answered for here, where it can still be
+  // reported, rather than at the column where it is silently lost.
+  if (value !== null && value !== undefined) {
+    if (token === "number" && !Number.isFinite(value)) {
+      // Not just the type: `NaN` and `Infinity` are numbers that no dialect's
+      // numeric column stores faithfully, and the built-in `z.number()` path
+      // refuses them too.
+      throw userExtValueError(name, "a number");
+    }
+    if (token === "checkbox" && typeof value !== "boolean") {
+      throw userExtValueError(name, "true or false");
+    }
+    if (token === "date" && value instanceof Date) {
+      // An Invalid Date binds as NULL on some drivers and throws on others.
+      if (Number.isNaN(value.getTime())) {
+        throw userExtValueError(name, "a valid date");
+      }
+      return value;
+    }
+    if (token === "date" && typeof value !== "string") {
+      throw userExtValueError(name, "a date");
+    }
+    // Text and long text both hold a string. An object bound to a plain text
+    // column fails on SQLite, and that failure is read as the extension table
+    // being absent — so without this the value is dropped rather than refused.
+    if (
+      (token === "text" || token === "textarea") &&
+      typeof value !== "string"
+    ) {
+      throw userExtValueError(name, "text");
+    }
+    // A JSON column stores what `JSON.stringify` can represent. A BigInt or a
+    // cycle throws there, a function or symbol silently becomes `undefined`,
+    // and either way the failure is read as the extension table being absent —
+    // so the value is answered for here instead of vanishing.
+    if (token === "json") {
+      try {
+        if (JSON.stringify(value) === undefined) {
+          throw userExtValueError(name, "a JSON value");
+        }
+      } catch (error) {
+        if (NextlyError.isValidation(error)) throw error;
+        throw userExtValueError(name, "a JSON value");
+      }
+    }
+  }
+
+  if (typeof value !== "string") return value;
+  if (token !== "date") return value;
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+
+  // Refused rather than forwarded. Nothing upstream rejects it — a `date`
+  // field validates as `z.union([z.date(), z.string()])` and a plugin type
+  // falls to `z.unknown()` — so passing it on reaches the driver, and the
+  // caller is told the value was stored when it was not.
+  throw userExtValueError(name, "a valid date");
+}
+
+/** A refusal naming the field and what its column can hold. */
+function userExtValueError(name: string, expected: string): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: name,
+        code: "INVALID_USER_FIELD_VALUE",
+        message: `${name} must be ${expected}.`,
+      },
+    ],
+  });
+}
 
 export class UserMutationService extends BaseService {
   private readonly userConfig?: UserConfig;
@@ -377,12 +471,22 @@ export class UserMutationService extends BaseService {
     const values: Record<string, unknown> = {};
     const fieldNames = this.getCustomFieldNames();
 
+    // Keyed by name so a value can be shaped by the column its field maps to.
+    const byName = new Map(
+      this.getEffectiveFields()
+        .filter(
+          (field): field is typeof field & { name: string } =>
+            "name" in field && typeof field.name === "string"
+        )
+        .map(field => [field.name, field])
+    );
+
     for (const fieldName of fieldNames) {
-      if (fieldName in input) {
-        values[fieldName] = input[fieldName] ?? null;
-      } else {
-        values[fieldName] = null;
-      }
+      const raw = fieldName in input ? (input[fieldName] ?? null) : null;
+      const field = byName.get(fieldName);
+      values[fieldName] = field
+        ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
+        : raw;
     }
     return values;
   }
@@ -892,10 +996,25 @@ export class UserMutationService extends BaseService {
 
       if (hasExt) {
         const fieldNames = this.getCustomFieldNames();
+        // Shaped by the same rule the create path uses. An update binds to the
+        // same columns, and its failure is read the same way — as the extension
+        // table being absent — so an unshaped value would be skipped silently
+        // here exactly as it was dropped there.
+        const byName = new Map(
+          this.getEffectiveFields()
+            .filter(
+              (field): field is typeof field & { name: string } =>
+                "name" in field && typeof field.name === "string"
+            )
+            .map(field => [field.name, field])
+        );
         for (const fieldName of fieldNames) {
           if (fieldName in changes) {
-            customFieldUpdates[fieldName] =
-              (changes as Record<string, unknown>)[fieldName] ?? null;
+            const raw = (changes as Record<string, unknown>)[fieldName] ?? null;
+            const field = byName.get(fieldName);
+            customFieldUpdates[fieldName] = field
+              ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
+              : raw;
             hasCustomFieldChanges = true;
           }
         }

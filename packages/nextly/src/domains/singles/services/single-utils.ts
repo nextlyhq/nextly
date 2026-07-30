@@ -22,6 +22,8 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { validateBlocksValue } from "../../../collections/fields/validators/blocks-validator";
 import { NextlyError } from "../../../errors";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
 import type { SingleDocument, SingleResult } from "../types";
 
@@ -62,9 +64,13 @@ export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
  * Mirrors the logic in RuntimeSchemaGenerator to ensure consistent handling.
  */
 export function shouldTreatAsJson(field: FieldConfig): boolean {
+  // Classified by what a plugin type stores rather than by its own token,
+  // which names none of these: a json-backed field would otherwise reach its
+  // JSON column as a live object. No storage primitive is `select`,
+  // `relationship` or `upload`, so the branches below read the declared type.
   if (
     ["json", "repeater", "group", "richText", "chips", "blocks"].includes(
-      field.type
+      storageTypeToken(field) ?? field.type
     )
   ) {
     return true;
@@ -205,7 +211,11 @@ export function getDefaultValue(field: FieldConfig): unknown {
     return "{}";
   }
 
-  switch (field.type) {
+  // Seeded by what the column holds, as the JSON predicate above already is: a
+  // plugin type names none of the cases below, so it would fall through to the
+  // text default and put `""` into a numeric or boolean column, or a value
+  // `new Date()` cannot read.
+  switch (storageTypeToken(field) ?? field.type) {
     case "text":
     case "textarea":
     case "email":
@@ -233,7 +243,12 @@ export function getDefaultValue(field: FieldConfig): unknown {
       return "";
 
     case "date":
-      return null;
+      // A required field's column is NOT NULL — `getColumnDescriptor` derives
+      // that from `required` — so seeding null there fails the insert and the
+      // single is never auto-created on first read. The other required
+      // primitives seed an empty value of their own kind; for a timestamp the
+      // only bindable one is a real date.
+      return "required" in field && field.required ? new Date() : null;
 
     case "relationship":
     case "upload":
@@ -554,10 +569,7 @@ export function serializeJsonFields(
     if (!("name" in field) || !field.name) continue;
 
     if (shouldTreatAsJson(field) && result[field.name] != null) {
-      const value = result[field.name];
-      if (typeof value === "object") {
-        result[field.name] = JSON.stringify(value);
-      }
+      result[field.name] = toJsonColumnValue(result[field.name]).value;
     }
   }
 
