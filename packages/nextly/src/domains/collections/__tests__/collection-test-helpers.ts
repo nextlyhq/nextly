@@ -269,6 +269,17 @@ export function createMockComponentDataService(): MockRecord {
         Promise.resolve(params.entry)
       ),
     saveComponentData: vi.fn().mockResolvedValue(undefined),
+    // The collection write saves component rows inside its own transaction,
+    // handing this the presence map resolved beforehand. Absent from the double,
+    // the write threw partway and the failure read as a denied or errored save.
+    saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
+    // Asked before the caller opens its transaction, and its result is handed
+    // to `saveComponentDataInTransaction`. An empty map is what production
+    // returns when no localization is configured, which is the shape these
+    // suites exercise. Built per call so one test cannot mutate another's.
+    assertLocalizedFieldGroupsWritable: vi
+      .fn()
+      .mockImplementation(async () => new Map<string, boolean>()),
     deleteComponentData: vi.fn().mockResolvedValue(undefined),
   };
 }

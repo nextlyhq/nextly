@@ -1,15 +1,31 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getDialectTables } from "../../../database";
+import { container } from "../../../di/container";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import {
+  AccessControlService,
+  DEFAULT_OWNER_FIELD,
+} from "../../../services/access";
+import type { CollectionAccessRules } from "../../../services/access";
+import {
+  describeUntranslatableConstraint,
+  stripNoOpConstraintMembers,
+} from "../../../services/access/constraint-shape";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
+import { buildDrizzleCondition } from "../../../services/collections/drizzle-condition";
+import {
+  buildWhereClause,
+  type WhereFilter,
+} from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
@@ -18,7 +34,11 @@ import {
   stripPasswordFieldValues,
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
+import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+
+import { CollectionAccessService } from "./collection-access-service";
+import type { UserContext } from "./collection-types";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -58,8 +78,40 @@ interface RelatedRowAccess {
    * point opts in as its own caller forwarding lands.
    */
   enforceFieldAccess?: boolean;
+  /**
+   * Evaluate the TARGET collection's own read rules, independently of whether
+   * this caller redacts fields. A Single's authorization view wants the second
+   * without the first: its rule must read real field values, and must still not
+   * be shown a row the response will withhold.
+   */
+  enforceCollectionAccess?: boolean;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
+  /**
+   * The caller's authenticated scope. A scoped API key is judged on its OWN
+   * stamped grant, never on its owner's roles, so the super-admin bypass and
+   * the owner predicate both have to know about one.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /**
+   * Ids withheld because the target collection's rules refused this caller.
+   *
+   * A caller that checks its expansion for completeness cannot otherwise tell
+   * a deliberate refusal from a load that failed, and would report the first
+   * as evidence that went missing.
+   */
+  withheldByAccess?: Set<string>;
+  /**
+   * Target read policies already resolved during this expansion, so a
+   * relationship holding many references reads its collection's metadata once
+   * instead of once per value.
+   */
+  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
+}
+
+/** A target collection's read policy, as one expansion needs it. */
+export interface TargetReadPolicy {
+  rules: CollectionAccessRules | undefined;
 }
 
 /**
@@ -106,6 +158,39 @@ export interface RelationshipExpansionOptions {
    * read paths that forward a real caller; see {@link RelatedRowAccess}.
    */
   enforceFieldAccess?: boolean;
+
+  /**
+   * Evaluate the target collection's own read rules even when field redaction
+   * is off. See {@link RelatedRowAccess.enforceCollectionAccess}.
+   */
+  enforceCollectionAccess?: boolean;
+
+  /**
+   * Collects the ids withheld because a target collection refused the caller,
+   * so a completeness check can tell a refusal from a failure.
+   *
+   * @internal
+   */
+  withheldByAccess?: Set<string>;
+
+  /**
+   * Target read policies already resolved during this expansion.
+   *
+   * Carried by a nested hop so the whole expansion resolves each target
+   * collection's rules once. Not part of what a caller supplies.
+   *
+   * @internal
+   */
+  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
+
+  /**
+   * The caller's authenticated scope, when one applies.
+   *
+   * A scoped API key is judged on its OWN stamped grant rather than its
+   * owner's roles, so a super-admin-owned key must not inherit the bypass its
+   * owner's session would get.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 /**
@@ -687,7 +772,7 @@ function readRelationshipRef(
  * id for two of them, and a lookup keyed on the id alone would hand back
  * whichever row was fetched last.
  */
-function relationKey(collection: string, id: string): string {
+export function relationKey(collection: string, id: string): string {
   // A NUL separator cannot appear in a slug or an id, so no two distinct
   // pairs can collapse to the same key.
   return `${collection}\u0000${id}`;
@@ -838,6 +923,17 @@ export type RelationshipDbExecutor = {
 };
 
 export class CollectionRelationshipService extends BaseService {
+  /**
+   * Decides whether a caller may read a TARGET collection at all.
+   *
+   * Built on first use rather than injected: this service is constructed before
+   * the one that owns the access service, and resolving it lazily keeps that
+   * ordering intact. Stateless, so a second instance costs nothing but the
+   * construction.
+   */
+  private accessService: CollectionAccessService | null = null;
+  private readonly accessControl = new AccessControlService();
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -845,6 +941,353 @@ export class CollectionRelationshipService extends BaseService {
     private readonly collectionService: DynamicCollectionService
   ) {
     super(adapter, logger);
+  }
+
+  private resolveAccessService(): CollectionAccessService {
+    if (!this.accessService) {
+      this.accessService = new CollectionAccessService(
+        this.adapter,
+        this.logger,
+        this.collectionService,
+        this.accessControl,
+        // Optional, and nothing used here needs it: reading a collection's
+        // stored rules and building a request context are independent of RBAC.
+        // Requiring it would make every target rule fail open in a boot that
+        // legitimately omits the service.
+        container.has("rbacAccessControlService")
+          ? container.get<RBACAccessControlService>("rbacAccessControlService")
+          : undefined
+      );
+    }
+    return this.accessService;
+  }
+
+  /**
+   * Drop the rows of a target collection this caller may not read.
+   *
+   * A related row belongs to another collection and carries that collection's
+   * own read rules. Without this, a caller refused the collection outright
+   * still obtains its rows by populating a relationship that points at them.
+   *
+   * Judged on the fetched ROW, not on the collection alone: a rule may be
+   * keyed on the document id, and one evaluated with `undefined` there both
+   * hides rows a rule permits and admits rows it forbids — `id !== blocked`
+   * reads as true when the id never arrives.
+   *
+   * Only the STORED rules are evaluated, not the RBAC permission gate. The
+   * route authorized this caller for the PARENT collection, and requiring a
+   * permission naming a collection they never asked for by name would refuse
+   * population for every caller whose grants do not list it. Whether expansion
+   * should also require a read permission on the target is left open.
+   *
+   * Opt-in for the same reason field-level enforcement is: an entry point that
+   * has not been given the caller yet would judge everyone anonymous and hide
+   * rows from entitled callers.
+   */
+  private async filterRowsByCollectionAccess(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess
+  ): Promise<Record<string, unknown>[]> {
+    // Deliberately NOT keyed on `enforceFieldAccess`. That flag asks whether a
+    // related row's FIELDS should be redacted; this asks whether the caller may
+    // see the row at all, and the two have different callers. A Single's
+    // authorization view populates without field redaction so its rule reads
+    // real values — but if the response is going to withhold the row, the
+    // preliminary view has to withhold it too, or the rule approves a document
+    // on evidence the response then removes and side effects run in between.
+    if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
+      return rows;
+    }
+    if (access.overrideAccess) return rows;
+    if (rows.length === 0) return rows;
+    // System entities carry no stored collection rules; their secrets are
+    // stripped by name during redaction instead.
+    if (isSystemEntity(targetCollection)) return rows;
+
+    const accessService = this.resolveAccessService();
+
+    const user = access.user as UserContext | undefined;
+    // Super-admins bypass stored rules on every other transport. A scoped API
+    // key is authoritative on its OWN grant and never on its owner's roles, so
+    // the bypass does not extend to one — the same carve-out the direct read
+    // paths make.
+    const isScopedApiKey = access.authenticatedScope?.actorType === "apiKey";
+    if (!isScopedApiKey && accessService.isSuperAdmin(user)) return rows;
+
+    let policy: TargetReadPolicy;
+    try {
+      policy = await this.resolveTargetReadPolicy(
+        targetCollection,
+        accessService,
+        access
+      );
+    } catch {
+      // A target whose rules cannot be read is not a target whose rules are
+      // satisfied. Deliberately NOT recorded as withheld-by-access: a caller
+      // checking its expansion for completeness must still see an unexplained
+      // absence here, or a rule that tolerates absence decides on evidence a
+      // failure removed.
+      return [];
+    }
+
+    // Judged concurrently: a custom rule may do its own IO, and a list
+    // expanding many targets would otherwise pay for each one in turn. The
+    // verdicts are zipped back against the original order, so the rows keep
+    // the sequence they were fetched in.
+    const verdicts = await Promise.all(
+      rows.map(row => this.judgeRow(row, policy, accessService, user))
+    );
+    const admitted = rows.filter((_, index) => verdicts[index].allowed);
+    this.recordWithheld(targetCollection, rows, admitted, access);
+    if (admitted.length === 0) return admitted;
+
+    // Rows sharing a predicate are confirmed together, so the usual case of one
+    // predicate for the whole collection costs one query — and a rule that
+    // answers different rows differently still has each row confirmed against
+    // the predicate it was actually judged by.
+    const byPredicate = new Map<string, Record<string, unknown>[]>();
+    const predicates = new Map<string, Record<string, unknown>>();
+    const unrestricted: Record<string, unknown>[] = [];
+    admitted.forEach(row => {
+      const predicate = verdicts[rows.indexOf(row)].predicate;
+      if (!predicate) {
+        unrestricted.push(row);
+        return;
+      }
+      const key = JSON.stringify(predicate);
+      predicates.set(key, predicate);
+      const group = byPredicate.get(key);
+      if (group) group.push(row);
+      else byPredicate.set(key, [row]);
+    });
+
+    // One query per distinct predicate, run together: the usual case is a single
+    // group, and a rule answering rows differently should not pay for each group
+    // in turn when the groups do not depend on one another.
+    const narrowedGroups = await Promise.all(
+      [...byPredicate].map(([key, group]) =>
+        this.narrowByTargetPredicate(
+          targetCollection,
+          group,
+          predicates.get(key) as Record<string, unknown>
+        )
+      )
+    );
+    const confirmed = [...unrestricted];
+    // Null means the predicate could not be applied at all. The rows stay out
+    // either way, but nothing was decided about them, so they are not reported
+    // as refused.
+    const anyPredicateFailed = narrowedGroups.some(g => g === null);
+    for (const group of narrowedGroups) {
+      if (group !== null) confirmed.push(...group);
+    }
+    // Restored to the order they were fetched in, since the grouping above
+    // reads them out by predicate. Matched on id rather than object identity:
+    // narrowing re-reads the rows it admits, so what comes back describes the
+    // same row but is not the same object.
+    const byId = new Map(
+      confirmed.map(row => [row.id as string, row] as const)
+    );
+    const ordered = admitted
+      .map(row => byId.get(row.id as string))
+      .filter((row): row is Record<string, unknown> => row !== undefined);
+    if (!anyPredicateFailed)
+      this.recordWithheld(targetCollection, admitted, ordered, access);
+    return ordered;
+  }
+
+  /**
+   * Note which rows a refusal removed, so a caller checking its expansion for
+   * completeness reads them as absent on purpose rather than as evidence lost.
+   *
+   * Keyed by collection AND id, because an id is only unique within its own
+   * collection: two targets can carry the same one, and a bare-id record would
+   * let a refusal in the first excuse a genuine load failure in the second.
+   */
+  private recordWithheld(
+    targetCollection: string,
+    before: Record<string, unknown>[],
+    after: Record<string, unknown>[],
+    access: RelatedRowAccess
+  ): void {
+    if (!access.withheldByAccess || before.length === after.length) return;
+    const kept = new Set(after);
+    for (const row of before) {
+      if (kept.has(row)) continue;
+      if (typeof row.id === "string") {
+        access.withheldByAccess.add(relationKey(targetCollection, row.id));
+      }
+    }
+  }
+
+  /**
+   * The target collection's read policy, resolved once per expansion.
+   *
+   * Reading it costs a collection-metadata query, and a `hasMany` relationship
+   * fetches one row at a time — so resolving per row turns a relationship with
+   * hundreds of values into hundreds of metadata reads against the same pool
+   * the row fetches need.
+   */
+  private resolveTargetReadPolicy(
+    targetCollection: string,
+    accessService: CollectionAccessService,
+    access: RelatedRowAccess
+  ): Promise<TargetReadPolicy> {
+    const cached = access.targetPolicies?.get(targetCollection);
+    if (cached) return cached;
+
+    // The PENDING lookup is cached, not its result. A `hasMany` relationship
+    // fetches its references concurrently, so every one of them reaches this
+    // point before the first has anything to store — caching only the resolved
+    // value leaves each of them issuing its own metadata read, which is the
+    // pool pressure the cache exists to avoid.
+    const pending = (async (): Promise<TargetReadPolicy> => {
+      const collection =
+        await this.collectionService.getCollection(targetCollection);
+      return {
+        rules: accessService.getAccessRules(
+          collection as Record<string, unknown>
+        ),
+      };
+    })();
+    access.targetPolicies?.set(targetCollection, pending);
+    return pending;
+  }
+
+  /**
+   * Keep only the rows the target's own read predicate admits.
+   *
+   * Asked of the database rather than compared in memory: the predicate is a
+   * full filter, and a second evaluator interpreting its operators is free to
+   * disagree with the one the direct read compiles — a filter that binds less
+   * than the rule states is how a read widens unnoticed. The same translation
+   * the read path uses is applied here, over exactly the ids already fetched,
+   * so this costs one query per target collection rather than one per row.
+   *
+   * A predicate that cannot be translated withholds every row. It is the same
+   * refusal a direct read makes, expressed as absence, because an unreadable
+   * relationship must not turn into an error on the document that points at it.
+   */
+  private async narrowByTargetPredicate(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    constraint: Record<string, unknown>
+  ): Promise<Record<string, unknown>[] | null> {
+    try {
+      const schema = isSystemEntity(targetCollection)
+        ? getSystemEntityTable(targetCollection)
+        : await this.fileManager.loadDynamicSchema(targetCollection);
+      if (!schema) return [];
+
+      const untranslatable = describeUntranslatableConstraint(
+        constraint,
+        name => Object.prototype.hasOwnProperty.call(schema, name),
+        // No companion support on this path, so a filter on a localized field
+        // is reported untranslatable here rather than quietly dropped.
+        () => false
+      );
+      if (untranslatable !== null) {
+        this.logger.warn(
+          "Withholding related rows behind an untranslatable access constraint",
+          { collection: targetCollection, reason: untranslatable }
+        );
+        return [];
+      }
+
+      // Members that cannot narrow anything are dropped first, so "translated
+      // to nothing" below judges only what was meant to restrict.
+      const restricting = stripNoOpConstraintMembers(constraint);
+      if (Object.keys(restricting).length === 0) return rows;
+
+      const condition = buildDrizzleCondition(
+        buildWhereClause(restricting as WhereFilter),
+        schema,
+        this.adapter.dialect ?? "postgresql"
+      );
+      // A constraint that restricts on paper and compiles to nothing would
+      // admit every row. Withhold instead: the rule asked to narrow.
+      if (!condition) return [];
+
+      // A row without a string id cannot be matched against the target table.
+      // Binding an absent one throws on some dialects, and the catch below then
+      // withholds every row of the collection instead of just this one.
+      const ids = rows
+        .map(row => row.id)
+        .filter((id): id is string => typeof id === "string");
+      if (ids.length === 0) return [];
+      // The whole row is re-read under the predicate, not just its id. Reading
+      // the id alone authorizes the row as it is NOW and then returns the copy
+      // fetched a moment earlier: if a predicate field changed in between — an
+      // ownership or tenant reassignment that also replaced the contents — the
+      // caller would be handed the version that belonged to whoever held it
+      // before. Authorization and the data it admits come from one read.
+      const admitted = (await this.db
+        .select()
+        .from(schema)
+        .where(and(inArray(schema.id, ids), condition))) as Record<
+        string,
+        unknown
+      >[];
+      const fresh = new Map(
+        admitted.map(row => {
+          const normalized = convertTimestampsToCamelCase({ ...row });
+          return [normalized.id as string, normalized];
+        })
+      );
+      // Ordered by the rows that came in, so the caller's sequence survives.
+      return rows
+        .map(row => fresh.get(row.id as string))
+        .filter((row): row is Record<string, unknown> => row !== undefined);
+    } catch (error) {
+      this.logger.warn("Could not apply a target collection's read predicate", {
+        collection: targetCollection,
+        error,
+      });
+      // Null, not an empty list: the rows are withheld either way, but the
+      // caller must not report this as a refusal — nothing was decided.
+      return null;
+    }
+  }
+
+  /**
+   * Whether one fetched row survives the target collection's read policy.
+   *
+   * Only verdicts are decided here. An owner-only rule answers a read with a
+   * predicate, and it travels the same route every other predicate does — the
+   * database applies it — so there is no comparison in this process for any
+   * rule shape, and nothing that could read an operator differently from the
+   * query the direct read compiles.
+   */
+  private async judgeRow(
+    row: Record<string, unknown>,
+    policy: TargetReadPolicy,
+    accessService: CollectionAccessService,
+    user: UserContext | undefined
+  ): Promise<{ allowed: boolean; predicate: Record<string, unknown> | null }> {
+    const result = await this.accessControl.evaluateAccess(
+      policy.rules,
+      "read",
+      accessService.buildRequestContext(user),
+      row.id as string | undefined,
+      // The id is supplied and the document is not, which is exactly what a
+      // direct read of this target evaluates with. Handing the row over here
+      // instead would let a rule written as `data?.tenant === req.user.tenant`
+      // admit through a relationship what the target's own endpoint refuses,
+      // making population the more permissive way in.
+      undefined,
+      // Collections stamp the owner into the `created_by` system column.
+      DEFAULT_OWNER_FIELD
+    );
+
+    // The predicate travels with the verdict that produced it. A rule may vary
+    // by document id and answer a concrete row with a narrower predicate than
+    // it answers an id-less question with, so resolving the narrowing
+    // separately would apply the weaker one to rows judged by the stronger.
+    return {
+      allowed: result.allowed,
+      predicate: result.query ?? null,
+    };
   }
 
   /**
@@ -1041,8 +1484,19 @@ export class CollectionRelationshipService extends BaseService {
     // by its own collection's field rules.
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
+      enforceCollectionAccess: options.enforceCollectionAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      authenticatedScope: options.authenticatedScope,
+      withheldByAccess: options.withheldByAccess,
+      // One per expansion, so a relationship holding many references reads its
+      // target's rules once rather than once per value. A nested hop inherits
+      // the map rather than starting its own: several children populating the
+      // same collection would otherwise each resolve its policy again, which
+      // is the repetition this cache exists to remove. Created fresh only for
+      // the outermost call, because a collection's rules can change between
+      // requests.
+      targetPolicies: options.targetPolicies ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -1437,8 +1891,13 @@ export class CollectionRelationshipService extends BaseService {
         const rows = entries.map((entry: Record<string, unknown>) =>
           convertTimestampsToCamelCase({ ...entry })
         );
-        await this.redactRelatedRows(targetCollection, rows, access);
-        for (const row of rows) {
+        const readable = await this.filterRowsByCollectionAccess(
+          targetCollection,
+          rows,
+          access
+        );
+        await this.redactRelatedRows(targetCollection, readable, access);
+        for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
             label: row[labelField] || row.id,
@@ -1466,8 +1925,13 @@ export class CollectionRelationshipService extends BaseService {
         const rows = entries.map((entry: Record<string, unknown>) =>
           convertTimestampsToCamelCase({ ...entry })
         );
-        await this.redactRelatedRows(targetCollection, rows, access);
-        for (const row of rows) {
+        const readable = await this.filterRowsByCollectionAccess(
+          targetCollection,
+          rows,
+          access
+        );
+        await this.redactRelatedRows(targetCollection, readable, access);
+        for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
             // Falls back to the id when the label's source field did not
@@ -1598,11 +2062,20 @@ export class CollectionRelationshipService extends BaseService {
       const targetRows = targetEntries.map((entry: Record<string, unknown>) =>
         convertTimestampsToCamelCase({ ...entry })
       );
-      await this.redactRelatedRows(targetCollectionName, targetRows, access);
+      const readableTargetRows = await this.filterRowsByCollectionAccess(
+        targetCollectionName,
+        targetRows,
+        access
+      );
+      await this.redactRelatedRows(
+        targetCollectionName,
+        readableTargetRows,
+        access
+      );
 
       // Build target entry map
       const targetEntryMap = new Map(
-        targetRows.map((row: Record<string, unknown>) => {
+        readableTargetRows.map((row: Record<string, unknown>) => {
           // Falls back to the id when the label's source field did not survive
           // redaction.
           const label = row[labelField] || row.id;
@@ -1663,8 +2136,19 @@ export class CollectionRelationshipService extends BaseService {
     // any depth is judged by its own collection's field rules.
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
+      enforceCollectionAccess: options.enforceCollectionAccess,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      authenticatedScope: options.authenticatedScope,
+      withheldByAccess: options.withheldByAccess,
+      // One per expansion, so a relationship holding many references reads its
+      // target's rules once rather than once per value. A nested hop inherits
+      // the map rather than starting its own: several children populating the
+      // same collection would otherwise each resolve its policy again, which
+      // is the repetition this cache exists to remove. Created fresh only for
+      // the outermost call, because a collection's rules can change between
+      // requests.
+      targetPolicies: options.targetPolicies ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -2237,8 +2721,17 @@ export class CollectionRelationshipService extends BaseService {
 
         if (!entry) return null;
         const normalized = convertTimestampsToCamelCase({ ...entry });
-        await this.redactRelatedRows(collectionName, [normalized], access);
-        return normalized;
+        const [readable] = await this.filterRowsByCollectionAccess(
+          collectionName,
+          [normalized],
+          access
+        );
+        // Reads as absent rather than as an error: one unreadable reference
+        // must not refuse the whole parent read, and the caller learns no more
+        // than a reference pointing at nothing would tell them.
+        if (!readable) return null;
+        await this.redactRelatedRows(collectionName, [readable], access);
+        return readable;
       } else {
         // Handle dynamic collections
         const schema = await this.fileManager.loadDynamicSchema(collectionName);
@@ -2250,8 +2743,17 @@ export class CollectionRelationshipService extends BaseService {
 
         if (!entry) return null;
         const normalized = convertTimestampsToCamelCase({ ...entry });
-        await this.redactRelatedRows(collectionName, [normalized], access);
-        return normalized;
+        const [readable] = await this.filterRowsByCollectionAccess(
+          collectionName,
+          [normalized],
+          access
+        );
+        // Reads as absent rather than as an error: one unreadable reference
+        // must not refuse the whole parent read, and the caller learns no more
+        // than a reference pointing at nothing would tell them.
+        if (!readable) return null;
+        await this.redactRelatedRows(collectionName, [readable], access);
+        return readable;
       }
     } catch {
       return null;
@@ -2383,9 +2885,14 @@ export class CollectionRelationshipService extends BaseService {
       const normalized = (entries || []).map((entry: Record<string, unknown>) =>
         convertTimestampsToCamelCase({ ...entry })
       );
+      const readable = await this.filterRowsByCollectionAccess(
+        targetCollectionName,
+        normalized,
+        access
+      );
       // Strip related-row secrets before rows are spread into responses.
-      await this.redactRelatedRows(targetCollectionName, normalized, access);
-      return normalized;
+      await this.redactRelatedRows(targetCollectionName, readable, access);
+      return readable;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];

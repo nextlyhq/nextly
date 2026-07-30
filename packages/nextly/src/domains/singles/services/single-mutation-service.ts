@@ -2222,6 +2222,7 @@ export class SingleMutationService extends BaseService {
           enforceFieldAccess: true,
           user: options.user,
           overrideAccess: options.overrideAccess,
+          authenticatedScope: options.authenticatedScope,
         }
       );
 
