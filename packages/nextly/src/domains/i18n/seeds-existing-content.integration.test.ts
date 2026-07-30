@@ -20,7 +20,11 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 
-import { ensureCompanionTable } from "./runtime/companion-io";
+import { buildLocalizationDownStatements } from "./migration/generate-down";
+import {
+  ensureCompanionTable,
+  localizedColumnsOnMain,
+} from "./runtime/companion-io";
 
 let current: TestNextly | undefined;
 
@@ -149,6 +153,65 @@ describe.each(getConfiguredTestDialects())(
 
       expect(created).toBe(false);
       expect(reported).toHaveLength(1);
+    });
+
+    it("survives the whole round trip: enable, edit, disable", async () => {
+      // The journey a user actually takes, which no test covered while every part of it was
+      // proven separately. An edit made while localized lives only in the companion, so a disable
+      // that trusts the retained main column instead of reading the companion silently reverts it.
+      const t = await bootUnlocalized([text({ name: "title" })]);
+      const adapter = t.adapter as unknown as {
+        executeQuery: <T = unknown>(sql: string) => Promise<T[]>;
+      };
+      await adapter.executeQuery(
+        `INSERT INTO ${q("dc_seedsrc")} (${q("id")}, ${q("slug")}, ${q("title")}) ` +
+          `VALUES ('row1', 'r1', 'Before localization')`
+      );
+
+      // ENABLE — the existing value is copied in and the source column is retained.
+      await ensureCompanionTable(
+        t.adapter as Parameters<typeof ensureCompanionTable>[0],
+        {
+          slug: "seedsrc",
+          tableName: "dc_seedsrc",
+          fields: [{ name: "title", type: "text", localized: true }],
+          dialect,
+          sourceLocale: "en",
+        }
+      );
+
+      // EDIT — a localized write touches the companion only, which is what leaves the retained
+      // main column stale and is the whole reason the disable cannot trust it.
+      await adapter.executeQuery(
+        `UPDATE ${q("dc_seedsrc_locales")} SET ${q("title")} = 'Edited while localized' ` +
+          `WHERE ${q("_parent")} = 'row1' AND ${q("_locale")} = 'en'`
+      );
+
+      // DISABLE — restore from the companion, skipping the re-add of a column already present.
+      const present = await localizedColumnsOnMain(
+        t.adapter as Parameters<typeof localizedColumnsOnMain>[0],
+        "dc_seedsrc",
+        [{ name: "title", type: "text", localized: true }]
+      );
+      for (const statement of buildLocalizationDownStatements(
+        {
+          dialect,
+          collection: "seedsrc",
+          mainTable: "dc_seedsrc",
+          companionTable: "dc_seedsrc_locales",
+          defaultLocale: "en",
+          parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
+          columns: [{ name: "title", kind: "text" }],
+        },
+        { existingMainColumns: present.map(c => c.name) }
+      )) {
+        await adapter.executeQuery(statement);
+      }
+
+      const main = await adapter.executeQuery<{ title: string }>(
+        `SELECT ${q("title")} FROM ${q("dc_seedsrc")} WHERE ${q("id")} = 'row1'`
+      );
+      expect(main).toEqual([{ title: "Edited while localized" }]);
     });
   }
 );
