@@ -843,6 +843,36 @@ export async function registerServices(
   await syncCodeFirstSingles(adapter, resolvedLogger, transformedConfig);
 
   // ----------------------------------------
+  // Layer 6b: Register code-first collection hooks
+  // ----------------------------------------
+  // Before plugins initialize, not after: a plugin's `init` is given the live
+  // managed collection services and may read, write or seed through them, and
+  // anything it writes has to pass the same declared hooks every later request
+  // does. Registering afterwards would let initialization data skip the
+  // transformations and invariants that apply to everything else.
+  if (hookRegistry) {
+    if (
+      transformedConfig.collections &&
+      transformedConfig.collections.length > 0
+    ) {
+      const disabledCollectionSlugs = collectPluginContributedSlugs(
+        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        "collections"
+      );
+      const hookedCollections = transformedConfig.collections.filter(
+        collection => !disabledCollectionSlugs.has(collection.slug)
+      );
+      const collectionHooks = registerCollectionHooks(
+        hookedCollections,
+        hookRegistry
+      );
+      resolvedLogger.info?.(
+        `Registered ${collectionHooks.totalHooks} hook(s) for ${collectionHooks.collections.length} collection(s)`
+      );
+    }
+  }
+
+  // ----------------------------------------
   // Layer 7: Initialize Plugins
   // ----------------------------------------
   // Stash the resolved plugins + their contexts so shutdownServices can run
@@ -869,32 +899,6 @@ export async function registerServices(
 
     registerActivityLogHooks(hookRegistry);
     resolvedLogger.info?.("Activity log hooks registered");
-
-    // Register hooks declared on code-first collections, on the same terms as
-    // the Singles block below. Without this the collection half of the
-    // documented hooks API is inert: the read and write paths ask the registry
-    // for a collection's handlers and it is always empty, so a declared
-    // `beforeChange` or `afterRead` never runs and the operation reports
-    // success regardless.
-    if (
-      transformedConfig.collections &&
-      transformedConfig.collections.length > 0
-    ) {
-      const disabledCollectionSlugs = collectPluginContributedSlugs(
-        resolvedPlugins.filter(plugin => plugin.enabled === false),
-        "collections"
-      );
-      const hookedCollections = transformedConfig.collections.filter(
-        collection => !disabledCollectionSlugs.has(collection.slug)
-      );
-      const collectionHooks = registerCollectionHooks(
-        hookedCollections,
-        hookRegistry
-      );
-      resolvedLogger.info?.(
-        `Registered ${collectionHooks.totalHooks} hook(s) for ${collectionHooks.collections.length} collection(s)`
-      );
-    }
 
     // Register hooks declared on code-first Singles so they run on the read and
     // update paths for every consumer (Direct API, REST, tests), not only apps
