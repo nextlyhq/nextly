@@ -33,8 +33,14 @@ export type { ValidationIssue };
  * named here, and anything else is left open for a field type's own options.
  */
 export interface FieldValueDeclaration {
-  /** Column/property name the value is keyed by. */
-  name?: string;
+  /**
+   * Column/property name the value is keyed by.
+   *
+   * Required here, unlike the internal shape: the validator skips any field
+   * without one, so a hand-authored declaration that omitted it would report
+   * success without having checked anything.
+   */
+  name: string;
   /** Built-in field type, or a plugin-contributed one. */
   type: string;
   /** Whether an absent or empty value is refused. */

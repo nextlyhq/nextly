@@ -48,6 +48,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 
 import {
+  asScalarStorageField,
   asStorageEquivalentField,
   isPluginDataField,
   pluginCodegenImports,
@@ -420,7 +421,12 @@ export class TypeGenerator {
         [...collections, ...singles, ...components, { fields: userFields }],
         reserved,
         "tsImports",
-        this.pluginExpressions
+        this.pluginExpressions,
+        // What this file imports on its own behalf: a plugin naming the same
+        // binding from the same module is asking for the one already there.
+        emitsBlockDocument
+          ? new Map([["BlockDocument", "nextly"]])
+          : new Map<string, string>()
       )
     );
     if (imports.length > 0) lines.splice(importSlot, 0, ...imports, "");
@@ -1466,14 +1472,9 @@ ${properties}
     field: DataFieldConfig,
     storageType: Parameters<typeof asStorageEquivalentField>[1]
   ): DataFieldConfig {
-    const scalar: Record<string, unknown> = {
-      ...(field as unknown as Record<string, unknown>),
-    };
-    delete scalar.hasMany;
-    return asStorageEquivalentField(
-      scalar,
-      storageType
-    ) as unknown as DataFieldConfig;
+    // Delegated so this and the Zod generator drop `hasMany` by the same rule;
+    // two copies of it is how the storage fallbacks drifted apart before.
+    return asScalarStorageField(field, storageType);
   }
 
   /**

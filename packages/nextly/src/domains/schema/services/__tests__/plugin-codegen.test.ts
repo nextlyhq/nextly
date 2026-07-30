@@ -348,31 +348,6 @@ describe("codegen import collisions", () => {
     expect(messages.join(" ")).toContain("'Rating'");
   });
 
-  it("refuses a generator-owned name even from the same module", () => {
-    // Merging would be wrong here: the generator emits its own import of this
-    // binding, and two imports of it do not compile even naming one module.
-    registerFieldType({
-      type: "same-module-doc",
-      storage: "json",
-      component: "@acme/docs/admin#Input",
-      codegen: {
-        tsImports: [{ names: ["BlockDocument"], from: "nextly" }],
-        tsType: () => "BlockDocument",
-      },
-    });
-
-    const messages = refusalMessages(() =>
-      new TypeGenerator().generateTypesFile([
-        collection([
-          { name: "page", type: "blocks" },
-          { name: "body", type: "same-module-doc" },
-        ]),
-      ])
-    );
-
-    expect(messages.join(" ")).toContain("BlockDocument");
-  });
-
   it("refuses an import that collides with a generated declaration", () => {
     registerFieldType({
       type: "user-ish",
@@ -599,6 +574,31 @@ describe("codegen import collisions", () => {
     ]);
 
     expect(file.code).not.toContain("@acme/cond");
+  });
+
+  it("reuses the generator's own import instead of refusing it", () => {
+    registerFieldType({
+      type: "same-binding",
+      storage: "json",
+      component: "@acme/sb/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["BlockDocument"], from: "nextly" }],
+        tsType: () => "BlockDocument",
+      },
+    });
+
+    // The plugin wants exactly the binding the blocks field already imports,
+    // and cannot know whether another field caused that import to be emitted.
+    const file = new TypeGenerator().generateTypesFile([
+      collection([
+        { name: "page", type: "blocks" },
+        { name: "body", type: "same-binding" },
+      ]),
+    ]);
+
+    expect(
+      file.code.match(/import type \{ BlockDocument \} from "nextly";/g)
+    ).toHaveLength(1);
   });
 
   it("refuses a plugin claiming a name the generator emits itself", () => {
@@ -891,6 +891,61 @@ describe("plugin field types in the Zod generator", () => {
         collection([{ name: "t", type: "templated" }])
       ).code
     ).toContain('import type { Prefix } from "@acme/tp";');
+  });
+
+  it("does not make a validator for a list out of a hasMany plugin field", () => {
+    registerFieldType({
+      type: "tagish",
+      storage: "text",
+      component: "@acme/tags/admin#Tags",
+    });
+
+    // The storage primitive is one column holding one value. The built-in text
+    // builder wraps on `hasMany`, so carrying the flag through the fallback
+    // would emit an array schema for a field the table stores a string in, and
+    // every write of that field would be refused.
+    const code = new ZodGenerator().generateSchema(
+      collection([{ name: "tags", type: "tagish", hasMany: true }])
+    ).code;
+
+    expect(code).toMatch(/tags:\s*z\.string\(\)/);
+    expect(code).not.toMatch(/tags:\s*z\.array/);
+  });
+
+  it("does not count a name used only as a property key", () => {
+    registerFieldType({
+      type: "keyed",
+      storage: "json",
+      component: "@acme/kd/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Rating"], from: "@acme/kd" }],
+        zodSchema: () => "z.object({ Rating: z.string() })",
+      },
+    });
+
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "k", type: "keyed" }])
+      ).code
+    ).not.toContain("@acme/kd");
+  });
+
+  it("still counts a name used as a property value", () => {
+    registerFieldType({
+      type: "valued",
+      storage: "json",
+      component: "@acme/vl/admin#Input",
+      codegen: {
+        zodImports: [{ names: ["Rating"], from: "@acme/vl" }],
+        zodSchema: () => "z.custom<{ score: Rating }>()",
+      },
+    });
+
+    expect(
+      new ZodGenerator().generateSchema(
+        collection([{ name: "v", type: "valued" }])
+      ).code
+    ).toContain('import type { Rating } from "@acme/vl";');
   });
 
   it("emits only the import list belonging to this file's expression", () => {

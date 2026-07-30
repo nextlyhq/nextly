@@ -98,6 +98,22 @@ export function asStorageEquivalentField<T extends CodegenField>(
 }
 
 /**
+ * The same field retyped as the scalar its storage primitive writes.
+ *
+ * `hasMany` is dropped with it: the primitive maps to a single column, and the
+ * built-in builders wrap on that flag, so keeping it would generate a list for
+ * a field the table holds one value of.
+ */
+export function asScalarStorageField<T extends CodegenField>(
+  field: T,
+  storageType: BlockFieldCatalogType
+): T {
+  const scalar = { ...(field as Record<string, unknown>) };
+  delete scalar.hasMany;
+  return asStorageEquivalentField(scalar, storageType) as unknown as T;
+}
+
+/**
  * Whether a field's type is one a plugin contributed.
  *
  * `isDataField` tests membership of the built-in list, so a plugin type fails
@@ -139,7 +155,8 @@ export function pluginCodegenImports(
   entities: ReadonlyArray<{ fields?: unknown }>,
   declaredNames: ReadonlySet<string> = new Set(),
   usedBy: "tsImports" | "zodImports" = "tsImports",
-  emittedByField?: ReadonlyMap<object, string>
+  emittedByField?: ReadonlyMap<object, string>,
+  coreImports: ReadonlyMap<string, string> = new Map()
 ): string[] {
   const byModule = new Map<string, Set<string>>();
   // Which module first claimed each local name. Two modules exporting the same
@@ -179,6 +196,10 @@ export function pluginCodegenImports(
       // binding. Removed after the quoted forms so a slash inside a string is
       // not mistaken for the start of one.
       .replace(/\/(?:[^/\\\n]|\\.)+\/[gimsuy]*/g, "//")
+      // A property key is a name, not a reference: `{ Rating: string }` and
+      // `z.object({ Rating: z.string() })` use the binding on the value side or
+      // not at all. Only the key is removed, so `{ a: Rating }` still counts.
+      .replace(/([{,]\s*)[A-Za-z_$][\w$]*\s*:/g, "$1")
       // A template's literal text is text, but its `${...}` interpolations hold
       // real references — a template-literal type is a plausible thing for a
       // type to emit — so only the parts between them are dropped.
@@ -203,6 +224,11 @@ export function pluginCodegenImports(
         // never references is not going to be imported, so it cannot collide
         // with anything and must not refuse a generation that would be valid.
         if (!used(name, expression)) continue;
+        // Already imported by the generator from the same module: the plugin
+        // wants the binding that is there, so its line is dropped rather than
+        // refused. An author cannot know whether another field made the
+        // generator import it.
+        if (coreImports.get(name) === entry.from) continue;
         // Whatever this particular run declares or imports for itself — the
         // caller knows, because it is the thing emitting them. An import
         // sharing one of those names conflicts with the local declaration

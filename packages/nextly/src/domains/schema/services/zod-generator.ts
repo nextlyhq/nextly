@@ -41,7 +41,7 @@ import {
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 
 import {
-  asStorageEquivalentField,
+  asScalarStorageField,
   isPluginDataField,
   pluginCodegenImports,
   pluginStorageFieldType,
@@ -488,8 +488,11 @@ export class ZodGenerator {
         // dropping a field whose value is persisted either way.
         const storageType = pluginStorageFieldType(field);
         if (storageType === undefined) return null;
+        // `hasMany` goes with the retyping: the primitive maps to one column,
+        // and the number/text builders wrap on that flag, so keeping it would
+        // generate a validator accepting only arrays for a scalar field.
         return this.generateFieldSchema(
-          asStorageEquivalentField(field, storageType)
+          asScalarStorageField(field, storageType)
         );
       }
     }
@@ -820,7 +823,7 @@ export class ZodGenerator {
             storageType === undefined
               ? null
               : this.generateFieldSchema(
-                  asStorageEquivalentField(field, storageType)
+                  asScalarStorageField(field, storageType)
                 );
           if (asStorage === null) continue;
           // The nested builder emits `name: schema` itself, so the line the
