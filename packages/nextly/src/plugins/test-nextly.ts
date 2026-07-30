@@ -102,6 +102,69 @@ export function getConfiguredTestDialects(): TestDialect[] {
   return configured;
 }
 
+/**
+ * PostgreSQL's signature for "an earlier statement in this transaction failed".
+ *
+ * It is always a SECONDARY error: the statement that actually broke was swallowed somewhere,
+ * and everything after it in the transaction reports this instead. That is what makes the
+ * class so hard to see — on SQLite and MySQL the swallowed error is harmless, so a suite can
+ * be green on two dialects and quietly broken on the third.
+ */
+const PG_ABORTED_TRANSACTION = "current transaction is aborted";
+
+/** Aborted-transaction failures seen during the current test file, if any. */
+const abortedTransactionSightings: string[] = [];
+
+/**
+ * Wrap an adapter so any aborted-transaction error is recorded before it propagates.
+ *
+ * Existence checks in this codebase have historically been written as "run a query and catch
+ * the failure". That is a valid probe on SQLite and MySQL and a transaction-killer on
+ * PostgreSQL: the probe catches its own error, reports "absent", and every later statement in
+ * the same transaction fails. Reviewers found that shape repeatedly by reading code; the suite
+ * never once found it, because the symptom appears far from the cause and only on one dialect.
+ *
+ * Recording it here turns the class into an automatic failure. The assertion lives in the
+ * shared setup file so it applies to every integration test without each one opting in.
+ */
+function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
+  const originalTransaction = adapter.transaction?.bind(adapter);
+  if (!originalTransaction) return adapter;
+  const wrapped = async (...args: unknown[]): Promise<unknown> => {
+    try {
+      return await (
+        originalTransaction as (...a: unknown[]) => Promise<unknown>
+      )(...args);
+    } catch (error) {
+      // Only shapes that can actually carry the driver's text. Anything else is not a
+      // database error and stringifying it would just produce "[object Object]".
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "";
+      if (message.includes(PG_ABORTED_TRANSACTION)) {
+        abortedTransactionSightings.push(message);
+      }
+      throw error;
+    }
+  };
+  (adapter as { transaction: unknown }).transaction = wrapped;
+  return adapter;
+}
+
+/**
+ * Aborted-transaction errors seen so far, for the shared setup file to assert on.
+ * Reading also clears, so one file's failure cannot be re-reported against the next.
+ */
+export function takeAbortedTransactionSightings(): string[] {
+  return abortedTransactionSightings.splice(
+    0,
+    abortedTransactionSightings.length
+  );
+}
+
 export interface CreateTestNextlyOptions {
   /**
    * Boot against a real database server instead of in-memory SQLite.
@@ -510,6 +573,7 @@ export async function createTestNextly(
     } as Parameters<typeof createAdapter>[0]);
   }
   const logger = opts.logger ?? defaultTestLogger;
+  adapter = guardAgainstAbortedTransactions(adapter);
   active = { provisioned, restoreEnv };
 
   try {
