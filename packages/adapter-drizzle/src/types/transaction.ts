@@ -4,6 +4,8 @@
  * @packageDocumentation
  */
 
+import type { SQL } from "drizzle-orm";
+
 import type { SqlParam } from "./core";
 import type {
   SelectOptions,
@@ -80,6 +82,28 @@ export interface TransactionContext {
    * @returns Array of result rows
    */
   execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
+
+  /**
+   * Run a Drizzle-built statement within the transaction, for its effect.
+   *
+   * @remarks
+   * The typed CRUD methods below resolve their table through the schema
+   * registry and reject any name it does not declare. That leaves no way to
+   * write to a table addressed under a name the ORM does not know — a table
+   * mid-rename, most of all — other than assembling SQL by hand, which also
+   * means hand-picking each driver's placeholder syntax.
+   *
+   * This accepts Drizzle's `sql` template instead, so identifier quoting and
+   * parameter binding are generated for the dialect in use. Implemented per
+   * adapter because the underlying call is not uniform: node-postgres and
+   * mysql2 expose `execute`, while better-sqlite3 needs `run` and throws on a
+   * statement that returns no rows.
+   *
+   * Returns nothing: this is for statements run to change data, not to read it.
+   *
+   * @param statement - Drizzle `sql` template to run
+   */
+  runStatement(statement: SQL): Promise<void>;
 
   /**
    * Take an exclusive lock on a single row for the rest of this transaction.

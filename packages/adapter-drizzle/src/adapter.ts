@@ -12,7 +12,7 @@
  */
 
 import { asc, desc, getColumns } from "drizzle-orm";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleWhere } from "./drizzle-where";
 import type {
@@ -247,6 +247,51 @@ export abstract class DrizzleAdapter {
    */
   protected getTableObject(tableName: string): unknown {
     return this.tableResolver?.getTable(tableName) ?? null;
+  }
+
+  /**
+   * Run a Drizzle-built statement and return its rows.
+   *
+   * @remarks
+   * The CRUD methods resolve their table through the schema registry and reject
+   * any name it does not declare, which leaves no way to read from a table the
+   * ORM does not know — one mid-rename, above all — except by assembling SQL and
+   * quoting identifiers by hand. This takes Drizzle's `sql` template instead, so
+   * the dialect in use decides the quoting and the parameter binding.
+   *
+   * Concrete rather than abstract so existing adapters keep working unchanged.
+   * The three drivers disagree about both the call and the result: node-postgres
+   * returns `{ rows }`, mysql2 a `[rows, fields]` tuple, and better-sqlite3 has
+   * no `execute` at all and answers `all`. Keeping that here rather than at each
+   * call site is the point — a caller reasoning about it would be reasoning
+   * about a driver it cannot see.
+   *
+   * @param statement - Drizzle `sql` template to run
+   * @returns Rows the statement produced
+   */
+  async queryStatement<T = Record<string, unknown>>(
+    statement: SQL
+  ): Promise<T[]> {
+    if (this.getCapabilities().dialect === "sqlite") {
+      const db = this.getDrizzle<{ all(query: SQL): T[] | Promise<T[]> }>();
+      return await db.all(statement);
+    }
+    const db = this.getDrizzle<{ execute(query: SQL): Promise<unknown> }>();
+    const result = await db.execute(statement);
+    // `{ rows }` is node-postgres. A bare array is mysql2's `[rows, fields]`
+    // tuple, told apart by its first element being an array — the only test that
+    // does not depend on trusting one driver to keep its shape.
+    if (Array.isArray(result)) {
+      return (Array.isArray(result[0]) ? result[0] : result) as T[];
+    }
+    if (
+      typeof result === "object" &&
+      result !== null &&
+      Array.isArray((result as { rows?: unknown }).rows)
+    ) {
+      return (result as { rows: T[] }).rows;
+    }
+    return [];
   }
 
   /**

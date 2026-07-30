@@ -62,7 +62,7 @@ import {
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -713,6 +713,15 @@ export class SqliteAdapter extends DrizzleAdapter {
       // opens SQLite transactions with BEGIN IMMEDIATE, which takes the write
       // lock up front and serializes writers for the whole transaction.
       lockRow: (): Promise<void> => Promise.resolve(),
+
+      // `run`, not `all`: better-sqlite3 throws on a statement that returns no
+      // rows, which is every statement this method exists to carry. The Drizzle
+      // instance is the transaction-bound one, so the statement runs inside this
+      // transaction.
+      // eslint-disable-next-line @typescript-eslint/require-await
+      runStatement: async (statement: SQL): Promise<void> => {
+        txDb().run(statement);
+      },
 
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
