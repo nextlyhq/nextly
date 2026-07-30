@@ -283,13 +283,12 @@ export class FieldGroupMutationService extends BaseService {
       const field = fieldByColumn.get(column);
       if (value instanceof Date) {
         out[column] = value.toISOString();
-      } else if (
-        field &&
-        shouldTreatAsJson(field) &&
-        value != null &&
-        typeof value === "object"
-      ) {
-        out[column] = JSON.stringify(value);
+      } else if (field && shouldTreatAsJson(field)) {
+        // Same encoder as the main row: a companion holds the localized subset
+        // of the same fields, so a scalar JSON document has to be written the
+        // same way on both sides or a translation reads back differently from
+        // the value it was translated from.
+        out[column] = toJsonColumnValue(value).value;
       } else {
         out[column] = value;
       }
