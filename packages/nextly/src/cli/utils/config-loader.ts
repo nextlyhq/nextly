@@ -217,6 +217,18 @@ let watcherReload: Promise<void> | null = null;
 /** Whether a save arrived while that reload was running. */
 let watcherReloadPending = false;
 
+/**
+ * The options the next drained reload should use.
+ *
+ * The loop below used to close over the options it started with. A watcher
+ * stopped mid-reload and immediately replaced — `clearConfigCache()` followed
+ * by another `watch: true` load — left that loop reloading the OLD config and
+ * delivering it to the NEW callbacks, while the new watcher's change was never
+ * loaded at all. Reading the latest options each turn means a drained reload
+ * always belongs to the watcher that is currently installed.
+ */
+let watcherReloadOptions: LoadConfigOptions | null = null;
+
 const changeCallbacks: Set<ConfigChangeCallback> = new Set();
 
 function findConfigFile(cwd: string): string | undefined {
@@ -285,6 +297,8 @@ async function runWatchReload(options: LoadConfigOptions): Promise<void> {
  * file is read fresh when that run starts.
  */
 function scheduleWatchReload(options: LoadConfigOptions): void {
+  watcherReloadOptions = options;
+
   if (watcherReload) {
     watcherReloadPending = true;
     return;
@@ -293,10 +307,19 @@ function scheduleWatchReload(options: LoadConfigOptions): void {
   watcherReload = (async () => {
     do {
       watcherReloadPending = false;
-      await runWatchReload(options);
+      const next = watcherReloadOptions;
+      // Cleared by `stopWatching`, which is how a reload queued against a
+      // watcher that no longer exists is dropped rather than applied.
+      if (!next) break;
+      await runWatchReload(next);
     } while (watcherReloadPending);
   })().finally(() => {
     watcherReload = null;
+    // A save that arrived while this loop was leaving set the flag against a
+    // run that had already stopped checking it, so it starts the next one.
+    if (watcherReloadPending && watcherReloadOptions) {
+      scheduleWatchReload(watcherReloadOptions);
+    }
   });
 }
 
@@ -305,6 +328,11 @@ function stopWatching(): void {
     fileWatcher.close();
     fileWatcher = null;
   }
+  // Anything this watcher had queued belongs to a config nobody is watching
+  // for any more, and applying it would hand the next watcher's callbacks a
+  // result they never asked for.
+  watcherReloadPending = false;
+  watcherReloadOptions = null;
 }
 
 async function loadConfigInternal(

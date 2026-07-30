@@ -1327,6 +1327,42 @@ describe("plugin field types in the Zod generator", () => {
     ).toContain('import type { Rating } from "@acme/hc";');
   });
 
+  it("does not count a name behind a readonly modifier", () => {
+    registerFieldType({
+      type: "ro-key",
+      storage: "json",
+      component: "@acme/ro/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/ro" }],
+        tsType: () => "{ readonly Rating: string }",
+      },
+    });
+
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "k", type: "ro-key" }])
+    );
+
+    expect(iface.imports).toEqual([]);
+  });
+
+  it("still counts a property literally named readonly on the value side", () => {
+    registerFieldType({
+      type: "ro-value",
+      storage: "json",
+      component: "@acme/rv/admin#Input",
+      codegen: {
+        tsImports: [{ names: ["Rating"], from: "@acme/rv" }],
+        tsType: () => "{ readonly: Rating }",
+      },
+    });
+
+    const iface = new TypeGenerator().generateInterface(
+      collection([{ name: "v", type: "ro-value" }])
+    );
+
+    expect(iface.imports).toContain('import type { Rating } from "@acme/rv";');
+  });
+
   it("does not count a name used only after a dot", () => {
     registerFieldType({
       type: "qualified",

@@ -107,6 +107,9 @@ describe("the plugin options container", () => {
     expect(issues[0]?.path).toBe("hasMany");
   });
 
+  // The refusal above is specific to `hasMany`, so a declaration that simply
+  // does not ask for a list has to stay accepted — otherwise every plugin field
+  // would be refused by the same check.
   it("accepts a plugin field that does not ask for a list", () => {
     registerRecorder();
 
