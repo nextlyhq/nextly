@@ -146,6 +146,12 @@ interface RelatedRowAccess {
 /** A target collection's read policy, as one expansion needs it. */
 export interface TargetReadPolicy {
   rules: CollectionAccessRules | undefined;
+  /**
+   * Whether the collection has Draft/Published, so a read of it can resolve the
+   * status its rows are filtered by. Taken from the same record the rules come
+   * from rather than looked up separately.
+   */
+  hasStatus: boolean;
 }
 
 /**
@@ -1122,7 +1128,8 @@ export class CollectionRelationshipService extends BaseService {
           targetCollection,
           group,
           predicates.get(key) as Record<string, unknown>,
-          access
+          access,
+          policy
         )
       )
     );
@@ -1201,6 +1208,7 @@ export class CollectionRelationshipService extends BaseService {
         rules: accessService.getAccessRules(
           collection as Record<string, unknown>
         ),
+        hasStatus: (collection as { status?: boolean }).status === true,
       };
     })();
     access.targetPolicies?.set(targetCollection, pending);
@@ -1225,7 +1233,8 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     rows: Record<string, unknown>[],
     constraint: Record<string, unknown>,
-    access: RelatedRowAccess
+    access: RelatedRowAccess,
+    policy: TargetReadPolicy
   ): Promise<Record<string, unknown>[] | null> {
     try {
       const schema = isSystemEntity(targetCollection)
@@ -1233,10 +1242,23 @@ export class CollectionRelationshipService extends BaseService {
         : await this.fileManager.loadDynamicSchema(targetCollection);
       if (!schema) return [];
 
+      // The status a read of this target resolves to for this caller, asked of
+      // the helper that owns that decision rather than restated here. It applies
+      // to the row AND to any companion row consulted about it: constraining
+      // only one of the two admits a draft row whose published translation
+      // satisfies the rule.
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus: policy.hasStatus,
+        overrideAccess: access.overrideAccess === true,
+        explicit: undefined,
+      });
+
       const localizedCtx = await this.buildTargetLocalizedContext(
         targetCollection,
         schema,
-        access
+        access,
+        constraint,
+        statusFilter?.value
       );
 
       const untranslatable = describeUntranslatableConstraint(
@@ -1287,13 +1309,23 @@ export class CollectionRelationshipService extends BaseService {
       // ownership or tenant reassignment that also replaced the contents — the
       // caller would be handed the version that belonged to whoever held it
       // before. Authorization and the data it admits come from one read.
+      // Guarded on the column and not on the flag alone: naming a column the
+      // table does not have fails the whole query, and the catch below would
+      // then withhold every row of the collection.
+      const statusCondition =
+        statusFilter && schema.status
+          ? eq(schema.status, statusFilter.value)
+          : undefined;
       const admitted = (await this.db
         .select()
         .from(schema)
-        .where(and(inArray(schema.id, ids), condition))) as Record<
-        string,
-        unknown
-      >[];
+        .where(
+          and(
+            inArray(schema.id, ids),
+            ...(statusCondition ? [statusCondition] : []),
+            condition
+          )
+        )) as Record<string, unknown>[];
       const fresh = new Map(
         admitted.map(row => {
           const normalized = convertTimestampsToCamelCase({ ...row });
@@ -1349,30 +1381,37 @@ export class CollectionRelationshipService extends BaseService {
    * expansion: a companion filter has to name one language, and the read that
    * asked for every language at once (or never said) has no single answer.
    * Withholding is the outcome then, unchanged from before.
+   *
+   * Also null when the constraint names only columns the target already has.
+   * Looking a companion up costs a collection-metadata read, and the ordinary
+   * case — an owner or tenant predicate on a plain column — has nothing to
+   * resolve there, so a localized application would pay for every target it
+   * populates without a companion filter ever being built.
    */
   private async buildTargetLocalizedContext(
     targetCollection: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
     schema: any,
-    access: RelatedRowAccess
+    access: RelatedRowAccess,
+    constraint: Record<string, unknown>,
+    /** The status a read of this target resolves to, or undefined for none. */
+    statusValue: string | undefined
   ): Promise<LocalizedQueryContext | null> {
     if (!access.locale || isSystemEntity(targetCollection)) return null;
+    // Judged on the raw constraint keys, which is what the untranslatable check
+    // inspects: a member naming something the table does not have is either a
+    // localized field or a mistake, and both have to reach that check with the
+    // same information it would otherwise be missing.
+    const namesNonColumn = Object.keys(constraint).some(
+      field => !Object.prototype.hasOwnProperty.call(schema, field)
+    );
+    if (!namesNonColumn) return null;
+
     const companion = await this.resolveTargetCompanion(
       targetCollection,
       access
     );
     if (!companion || companion.localizedFields.length === 0) return null;
-
-    // The status an untrusted read of this target resolves to, asked of the
-    // helper that owns that decision rather than restated here. A companion row
-    // in another state must not satisfy the filter: a draft translation holding
-    // the permitted value would otherwise admit a row that the target's own
-    // list read, filtering on the same resolved status, excludes.
-    const statusFilter = resolveStatusFilter({
-      collectionHasStatus: companion.hasStatus,
-      overrideAccess: access.overrideAccess === true,
-      explicit: undefined,
-    });
 
     return {
       companionTableName: companion.companionTableName,
@@ -1381,7 +1420,11 @@ export class CollectionRelationshipService extends BaseService {
       // companion's `_parent` correlates against the row being judged.
       mainIdColumn: schema.id,
       locale: access.locale,
-      statusValue: statusFilter?.value,
+      // A companion row in another state must not satisfy the filter: a draft
+      // translation holding the permitted value would otherwise admit a row the
+      // target's own list read, filtering on the same status, excludes. Gated on
+      // the companion having the column, matching the read path.
+      statusValue: companion.hasStatus ? statusValue : undefined,
     };
   }
 

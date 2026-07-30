@@ -16,6 +16,10 @@ export default function localizedTargetReadRule({
     // Readable only where the translation being read says "emea".
     case "emea-only":
       return { region: { equals: "emea" } };
+    // A predicate naming only a field the MAIN table has. Nothing here needs a
+    // companion, so nothing should be looked up for it.
+    case "title-only":
+      return { title: { equals: "EMEA page" } };
     // A dotted path on the same localized field. Translation discards the
     // suffix and compares the base value, which is a DIFFERENT predicate rather
     // than a narrower one, so it must be refused however it is stored.

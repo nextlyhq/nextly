@@ -169,6 +169,58 @@ async function listedIds(
   return (result.data!.docs as { id: string }[]).map(doc => doc.id);
 }
 
+/**
+ * A status-enabled localized `pages` guarded by the same rule, with one row that
+ * `refs` points at. The main row's status is the caller's to choose, because
+ * status and per-locale status answer separately and each has to be pinned.
+ */
+async function bootStatusPages(mainStatus: "draft" | "published"): Promise<{
+  handler: CollectionsHandler;
+  pageId: string;
+  refId: string;
+}> {
+  current = await createTestNextly({
+    collections: [
+      defineCollection({
+        slug: "pages",
+        localized: true,
+        status: true,
+        access: { create: () => true, update: () => true },
+        fields: [
+          text({ name: "title", localized: false }),
+          text({ name: "region" }),
+        ],
+      }),
+      defineCollection({
+        slug: "refs",
+        fields: [
+          text({ name: "name" }),
+          relationship({ name: "targets", relationTo: "pages", hasMany: true }),
+        ],
+      }),
+    ],
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+  });
+  const handler = current.getService<CollectionsHandler>("collectionsHandler");
+
+  const page = await handler.createEntry(
+    { collectionName: "pages", overrideAccess: true },
+    { title: "Page", region: "apac", status: mainStatus }
+  );
+  const pageId = (page.data as { id: string }).id;
+  const ref = await handler.createEntry(
+    { collectionName: "refs", overrideAccess: true },
+    { name: "r", targets: [pageId] }
+  );
+  const refId = (ref.data as { id: string }).id;
+  await current.adapter.update(
+    "dynamic_collections",
+    { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+    { and: [{ column: "slug", op: "=", value: "pages" }] }
+  );
+  return { handler, pageId, refId };
+}
+
 describe("localized target read predicates (integration)", () => {
   it("populates a row its target's localized predicate admits", async () => {
     const { handler, emeaId, refId } = await boot();
@@ -237,57 +289,13 @@ describe("localized target read predicates (integration)", () => {
     // it. Expansion has to do the same: a draft translation holding the
     // permitted value would otherwise make population the more permissive way
     // in, which is the shape of every bug in this area.
-    current = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug: "pages",
-          localized: true,
-          status: true,
-          access: { create: () => true, update: () => true },
-          fields: [
-            text({ name: "title", localized: false }),
-            text({ name: "region" }),
-          ],
-        }),
-        defineCollection({
-          slug: "refs",
-          fields: [
-            text({ name: "name" }),
-            relationship({
-              name: "targets",
-              relationTo: "pages",
-              hasMany: true,
-            }),
-          ],
-        }),
-      ],
-      localization: { locales: ["en", "de"], defaultLocale: "en" },
-    });
-    const handler =
-      current.getService<CollectionsHandler>("collectionsHandler");
-
-    const page = await handler.createEntry(
-      { collectionName: "pages", overrideAccess: true },
-      { title: "Page", region: "apac", status: "published" }
-    );
-    const pageId = (page.data as { id: string }).id;
-    const ref = await handler.createEntry(
-      { collectionName: "refs", overrideAccess: true },
-      { name: "r", targets: [pageId] }
-    );
-    const refId = (ref.data as { id: string }).id;
-    await current.adapter.update(
-      "dynamic_collections",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "pages" }] }
-    );
+    const { handler, pageId, refId } = await bootStatusPages("published");
 
     // The German translation carries the permitted value and is NOT published.
-    // Written into the migration-owned companion table directly, through the
-    // typed adapter: the write path cannot currently produce this state (a
-    // localized update of a status-enabled collection fails), and the state is
-    // the premise of the test rather than the thing under test.
-    await current.adapter.insert("dc_pages_locales", {
+    // Seeded straight into the migration-owned companion through the typed
+    // adapter: the test needs one exact per-locale state, and stating it beats
+    // arranging a sequence of writes that happens to produce it.
+    await current!.adapter.insert("dc_pages_locales", {
       _parent: pageId,
       _locale: "de",
       _status: "draft",
@@ -297,7 +305,7 @@ describe("localized target read predicates (integration)", () => {
     // Asserted, not assumed: the row has to be there AND be a draft, or the
     // withholding below would prove nothing (an absent row withholds too).
     const seeded = (
-      (await current.adapter.select("dc_pages_locales")) as Record<
+      (await current!.adapter.select("dc_pages_locales")) as Record<
         string,
         unknown
       >[]
@@ -327,6 +335,48 @@ describe("localized target read predicates (integration)", () => {
     ]);
   });
 
+  it("does not admit a draft row whose published translation satisfies the rule", async () => {
+    // The other half of the status question, and the one the first version of
+    // this change got wrong: the companion EXISTS was constrained by the
+    // resolved status while the query selecting the MAIN row was not. A row
+    // whose main record is a draft but whose translation is published then
+    // satisfied the filter and came back, though the target's own list read
+    // excludes it for having a draft main row.
+    const { handler, pageId, refId } = await bootStatusPages("draft");
+
+    await current!.adapter.insert("dc_pages_locales", {
+      _parent: pageId,
+      _locale: "de",
+      _status: "published",
+      region: "emea",
+    });
+
+    // The disagreement, stated as the premise: the collection that owns this row
+    // does not serve it to this caller.
+    expect(await listedIds(handler, "emea-only", "de")).toEqual([]);
+    // So expansion must not serve it either.
+    expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([]);
+  });
+
+  it("still admits a published row whose published translation satisfies the rule", async () => {
+    // The mirror. Filtering the main row by status must not withhold the rows
+    // that pass it, which is what a status predicate applied to the wrong
+    // column — or to a collection without the column — would do.
+    const { handler, pageId, refId } = await bootStatusPages("published");
+
+    await current!.adapter.insert("dc_pages_locales", {
+      _parent: pageId,
+      _locale: "de",
+      _status: "published",
+      region: "emea",
+    });
+
+    expect(await listedIds(handler, "emea-only", "de")).toEqual([pageId]);
+    expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([
+      pageId,
+    ]);
+  });
+
   it("looks the target's companion schema up once for the whole expansion", async () => {
     // Pinned by measurement rather than by intent. The built companion table is
     // cached inside the file manager, but every lookup still costs a collection
@@ -350,6 +400,32 @@ describe("localized target read predicates (integration)", () => {
         call => call[0] === "pages"
       ).length;
       expect(pagesLookups).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("looks up no companion for a predicate naming only real columns", async () => {
+    // The ordinary case, and the one that must stay free: an owner or tenant
+    // predicate on a plain column has nothing to resolve in a companion, so a
+    // localized application should not pay a metadata read per target for the
+    // possibility. Counted rather than reasoned about, for the same reason as
+    // the test above.
+    const { handler, emeaId, refId } = await boot();
+    const spy = vi.spyOn(
+      CollectionFileManager.prototype,
+      "loadCompanionSchema"
+    );
+    try {
+      // The predicate really ran — without this the zero below would also be
+      // satisfied by a rule that never reached the narrowing at all.
+      expect(await populatedIds(handler, refId, "title-only")).toEqual([
+        emeaId,
+      ]);
+
+      expect(spy.mock.calls.filter(call => call[0] === "pages")).toHaveLength(
+        0
+      );
     } finally {
       spy.mockRestore();
     }
