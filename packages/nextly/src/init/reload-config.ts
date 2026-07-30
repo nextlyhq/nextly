@@ -631,9 +631,13 @@ async function ensureLocalizedCompanionsForReload(
    * columns a reconcile would be looking for.
    */
   phase: "beforeApply" | "afterApply" = "afterApply"
-): Promise<void> {
+): Promise<{ preservationFailed: string[] }> {
+  // Entities whose content could not be copied into their companion. The caller must not let the
+  // apply run for these: the copy is the only thing standing between the apply's DROP and the
+  // values it would take with it.
+  const preservationFailed: string[] = [];
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
-  if (process.env.NODE_ENV === "production") return;
+  if (process.env.NODE_ENV === "production") return { preservationFailed };
 
   const { ensureCompanionTable, reconcileCompanionColumns, mainTableExists } =
     await import("../domains/i18n/runtime/companion-io");
@@ -680,9 +684,8 @@ async function ensureLocalizedCompanionsForReload(
   const { resolveTransitionRecorder } = await import(
     "../domains/i18n/migration/transition-recorder"
   );
-  const { beginI18nTransition, readI18nTransitionState } = await import(
-    "../domains/i18n/migration/transition-state"
-  );
+  const { beginI18nTransition, readI18nTransitionState, settleI18nTransition } =
+    await import("../domains/i18n/migration/transition-state");
   const transitions = await resolveTransitionRecorder(config, adapter);
 
   for (const [kind, entities, resolveTableName] of groups) {
@@ -724,12 +727,26 @@ async function ensureLocalizedCompanionsForReload(
           // Lets an existing companion be finished rather than skipped. A record still reading
           // `enabling` means an earlier run created the table and did not complete the copy.
           seedIncomplete: transitions
-            ? async () =>
-                (await readI18nTransitionState(transitions, kind, entity.slug!))
-                  .status === "enabling"
+            ? async () => {
+                const recorded = await readI18nTransitionState(
+                  transitions,
+                  kind,
+                  entity.slug!
+                );
+                // The locale the interrupted run recorded, so the resume labels the values with
+                // the language they were actually written in rather than today's default.
+                return recorded.status === "enabling"
+                  ? recorded.sourceLocale
+                  : null;
+              }
+            : undefined,
+          settleTransition: transitions
+            ? () =>
+                settleI18nTransition(transitions, { kind, slug: entity.slug! })
             : undefined,
         },
         error => {
+          if (phase === "beforeApply") preservationFailed.push(entity.slug!);
           console.warn(
             `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
               `Writes in a non-default locale will be refused until it exists: ` +
@@ -770,6 +787,8 @@ async function ensureLocalizedCompanionsForReload(
       );
     }
   }
+
+  return { preservationFailed };
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -1608,12 +1627,28 @@ async function applyReload(opts?: {
   // Before the apply, so an entity gaining localization has its existing content copied into the
   // companion while the main table still carries it. The apply's DROP of those columns is then a
   // cleanup rather than a loss, and it no longer matters whether the operator confirms it.
-  await ensureLocalizedCompanionsForReload(
+  const preservation = await ensureLocalizedCompanionsForReload(
     adapter,
     newConfig,
     deferredEntities,
     "beforeApply"
   );
+
+  // The apply is what removes the translatable columns from the main table. Running it after a
+  // copy that did not complete would take the only remaining copy of those values with it, and no
+  // later resume could reconstruct them — introspection would no longer find the columns to read.
+  // So the whole apply waits rather than proceeding entity by entity: the schema stays as it is,
+  // the content stays where it is, and the next save retries the copy from a position that still
+  // has everything.
+  if (preservation.preservationFailed.length > 0) {
+    const names = preservation.preservationFailed.join(", ");
+    logger.error(
+      `[nextly] Schema changes were not applied: existing content could not be copied into the ` +
+        `translations table for ${names}. Applying now would drop the columns holding that ` +
+        `content. Fix the error above and save again.`
+    );
+    return;
+  }
 
   const applyResult = await apply(desired, "code", {
     promptChannel: "terminal",

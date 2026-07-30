@@ -18,6 +18,7 @@ import { resolveTransitionRecorder } from "../../domains/i18n/migration/transiti
 import {
   beginI18nTransition,
   readI18nTransitionState,
+  settleI18nTransition,
   type I18nTransitionKind,
 } from "../../domains/i18n/migration/transition-state";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
@@ -932,9 +933,22 @@ export async function ensureLocalizedCompanions(
           // Lets an existing companion be finished rather than skipped. A record still reading
           // `enabling` means an earlier run created the table and did not complete the copy.
           seedIncomplete: transitions
-            ? async () =>
-                (await readI18nTransitionState(transitions, kind, entity.slug!))
-                  .status === "enabling"
+            ? async () => {
+                const recorded = await readI18nTransitionState(
+                  transitions,
+                  kind,
+                  entity.slug!
+                );
+                // The locale the interrupted run recorded, so the resume labels the values with
+                // the language they were actually written in rather than today's default.
+                return recorded.status === "enabling"
+                  ? recorded.sourceLocale
+                  : null;
+              }
+            : undefined,
+          settleTransition: transitions
+            ? () =>
+                settleI18nTransition(transitions, { kind, slug: entity.slug! })
             : undefined,
         },
         error => {

@@ -554,6 +554,7 @@ async function resumeInterruptedSeed(
     dialect: SupportedDialect;
     status?: boolean;
     sourceLocale?: string;
+    settleTransition?: () => Promise<void>;
   },
   newLocalized: CompanionFieldLike[],
   companionTableName: string,
@@ -583,6 +584,8 @@ async function resumeInterruptedSeed(
         statement.startsWith("INSERT INTO") ? `${statement}${guard}` : statement
       );
     }
+    // The interrupted run's debt is discharged, so the record stops describing one.
+    await args.settleTransition?.();
     return true;
   } catch (error) {
     onError?.(error);
@@ -736,7 +739,15 @@ export async function ensureCompanionTable(
      * Returning true makes this call finish what the interrupted one started, so a reported
      * failure is fixed by running `db:sync` again rather than by hand-editing `nextly_meta`.
      */
-    seedIncomplete?: () => Promise<boolean>;
+    seedIncomplete?: () => Promise<string | null>;
+    /**
+     * Record that the copy finished, so a later pass stops treating it as owed.
+     *
+     * Without it the marker stays `enabling` forever and every `db:sync` or reload re-runs the
+     * copy — harmless for the rows it already made, but it keeps manufacturing default-locale rows
+     * for entries that were deliberately created in another locale only.
+     */
+    settleTransition?: () => Promise<void>;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -756,10 +767,14 @@ export async function ensureCompanionTable(
     if (await companionTableExists(adapter, companionTableName)) {
       // An existing companion normally means there is nothing to do. It means the opposite when a
       // transition was recorded and never settled: the table is real and its content is not.
-      if (args.sourceLocale && (await args.seedIncomplete?.()) === true) {
+      // The RECORDED locale, not the one configured now. A default locale that changed since the
+      // interrupted run must not relabel values written under the old one — that is the whole
+      // reason the transition is recorded rather than inferred.
+      const owedLocale = (await args.seedIncomplete?.()) ?? null;
+      if (owedLocale !== null) {
         return await resumeInterruptedSeed(
           adapter,
-          args,
+          { ...args, sourceLocale: owedLocale },
           newLocalized,
           companionTableName,
           onError
@@ -816,6 +831,10 @@ export async function ensureCompanionTable(
       await adapter.executeQuery(stmt);
       created = true;
     }
+    // Only once every statement landed. Settling earlier would mark a copy complete that a later
+    // statement could still fail, and the record would then say the content is in the companion
+    // when it is not.
+    await args.settleTransition?.();
     return true;
   } catch (error) {
     // Another process may have created it between the probe and the CREATE — `db:sync` and a

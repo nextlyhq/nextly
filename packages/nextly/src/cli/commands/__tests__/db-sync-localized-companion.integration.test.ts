@@ -35,7 +35,11 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
-import { readI18nTransitionState } from "../../../domains/i18n/migration/transition-state";
+import {
+  beginI18nTransition,
+  forgetI18nTransition,
+  readI18nTransitionState,
+} from "../../../domains/i18n/migration/transition-state";
 import { MetaService } from "../../../domains/meta/services/meta-service";
 import { getDialectTables } from "../../../database/index";
 import { SchemaRegistry } from "../../../database/schema-registry";
@@ -117,6 +121,24 @@ async function runSync(config: LoadConfigResult["config"]): Promise<void> {
   await ensureLocalizedCompanions(config, cli, context);
 }
 
+/** The production store, so tests act on the same rows the runtime does. */
+async function transitionStore(): Promise<
+  Parameters<typeof readI18nTransitionState>[0]
+> {
+  const noop = () => {};
+  const meta = new MetaService(adapter as unknown as DrizzleAdapter, {
+    info: noop,
+    warn: noop,
+    error: noop,
+    debug: noop,
+  });
+  return {
+    getEntry: key => meta.getEntry(key),
+    set: (key, v) => meta.set(key, v),
+    delete: key => meta.delete(key),
+  };
+}
+
 /**
  * The recorded transition for an entity, read through the production reader.
  *
@@ -127,18 +149,7 @@ async function readTransition(
   kind: Parameters<typeof readI18nTransitionState>[1],
   slug: string
 ): Promise<Awaited<ReturnType<typeof readI18nTransitionState>>> {
-  const noop = () => {};
-  const meta = new MetaService(adapter as unknown as DrizzleAdapter, {
-    info: noop,
-    warn: noop,
-    error: noop,
-    debug: noop,
-  });
-  return readI18nTransitionState(
-    { getEntry: key => meta.getEntry(key), set: (key, v) => meta.set(key, v) },
-    kind,
-    slug
-  );
+  return readI18nTransitionState(await transitionStore(), kind, slug);
 }
 
 describe("db:sync creates localized companion tables in-process (integration)", () => {
@@ -225,10 +236,12 @@ describe("db:sync creates localized companion tables in-process (integration)", 
 
     // Nothing on disk can say this afterwards: the main table's values were written
     // under whatever default was in force, and the default can change.
+    // Settled, because the copy completed in the same run. What has to survive is the language:
+    // it is the one in force at the transition, not whatever the default becomes later.
     await expect(
       readTransition("collection", "dbsync_marked")
     ).resolves.toEqual({
-      status: "enabling",
+      status: "seeded",
       sourceLocale: "de",
     });
   });
@@ -254,7 +267,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     await runSync(config("en"));
 
     await expect(readTransition("collection", "dbsync_once")).resolves.toEqual({
-      status: "enabling",
+      status: "seeded",
       sourceLocale: "de",
     });
   });
@@ -409,9 +422,16 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     );
     await runSync(localized);
 
-    // Reproduce the interrupted state: the companion exists and the transition is recorded, but
-    // the copy left nothing behind.
+    // Reproduce the interrupted state faithfully: a run that created the companion and died before
+    // finishing the copy leaves the table present, the rows absent, and the record still owed.
     await adapter?.executeQuery(`DELETE FROM "dc_dbsync_resume_locales"`);
+    const store = await transitionStore();
+    await forgetI18nTransition(store, "collection", "dbsync_resume");
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "dbsync_resume",
+      sourceLocale: "en",
+    });
     expect(
       await adapter?.executeQuery(`SELECT * FROM "dc_dbsync_resume_locales"`)
     ).toEqual([]);
