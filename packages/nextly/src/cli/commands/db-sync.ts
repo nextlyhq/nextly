@@ -62,6 +62,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
@@ -276,6 +277,19 @@ export async function runDbSync(
     // Uses drizzle-kit pushSchema() to create ALL tables from the Drizzle
     // schema definitions, guaranteeing they match 100%.
     await ensureCoreTables(adapter, options, context);
+
+    // Step 3.55: Refuse while a field group storage migration is in flight.
+    //
+    // Mid-run the database is in a shape neither the old config nor the new one
+    // describes: some tables carry pre-rename names, some post-rename, and the
+    // registry pointers move one step at a time. Everything below reconciles the
+    // config against that, and `--remove-orphaned` deletes what it cannot
+    // account for. Placed after the core tables so the marker's own table is
+    // guaranteed to exist, and before anything that reads or changes schema.
+    await assertNoMigrationInFlight({
+      adapter: adapter as unknown as DrizzleAdapter,
+      logger,
+    });
 
     // Step 4-5.5: Sync collections, singles and components.
     //
