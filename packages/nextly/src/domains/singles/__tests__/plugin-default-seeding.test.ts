@@ -54,6 +54,47 @@ describe("getDefaultValue for plugin field types", () => {
     expect(getDefaultValue(field("slugish"))).toBe("");
   });
 
+  it("seeds a required timestamp-backed type with a real date", () => {
+    registerFieldType({
+      type: "occurred",
+      storage: "timestamp",
+      component: "c",
+      surfaces: ["entries", "singles"],
+    });
+
+    // A required field's column is NOT NULL, so null fails the insert and the
+    // single is never created on first read.
+    const required = {
+      name: "at",
+      type: "occurred",
+      required: true,
+    } as unknown as FieldConfig;
+
+    expect(getDefaultValue(required)).toBeInstanceOf(Date);
+  });
+
+  it("still seeds an optional timestamp with null", () => {
+    registerFieldType({
+      type: "occurred2",
+      storage: "timestamp",
+      component: "c",
+      surfaces: ["entries", "singles"],
+    });
+
+    // Its column is nullable, and null is what "no value yet" means there.
+    expect(getDefaultValue(field("occurred2"))).toBeNull();
+  });
+
+  it("seeds a required built-in date the same way", () => {
+    const required = {
+      name: "at",
+      type: "date",
+      required: true,
+    } as unknown as FieldConfig;
+
+    expect(getDefaultValue(required)).toBeInstanceOf(Date);
+  });
+
   it("still seeds a built-in by its own type", () => {
     expect(getDefaultValue(field("number"))).toBe(0);
     expect(getDefaultValue(field("text"))).toBe("");

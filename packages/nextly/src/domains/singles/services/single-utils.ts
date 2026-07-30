@@ -243,7 +243,12 @@ export function getDefaultValue(field: FieldConfig): unknown {
       return "";
 
     case "date":
-      return null;
+      // A required field's column is NOT NULL — `getColumnDescriptor` derives
+      // that from `required` — so seeding null there fails the insert and the
+      // single is never auto-created on first read. The other required
+      // primitives seed an empty value of their own kind; for a timestamp the
+      // only bindable one is a real date.
+      return "required" in field && field.required ? new Date() : null;
 
     case "relationship":
     case "upload":
