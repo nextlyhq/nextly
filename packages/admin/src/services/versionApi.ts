@@ -86,6 +86,8 @@ export interface ListVersionsParams {
    * not an opaque token.
    */
   cursor?: number;
+  /** Scope the listing to one locale's versions. Absent lists every locale. */
+  locale?: string;
 }
 
 /** Base path for a scope's history. */
@@ -123,6 +125,8 @@ export const versionApi = {
     // so an absent one must stay absent rather than become "undefined".
     if (params.cursor !== undefined)
       search.set("cursor", String(params.cursor));
+    // Only sent when a locale filter is active; absent lists every locale.
+    if (params.locale !== undefined) search.set("locale", params.locale);
 
     const query = search.toString();
     return protectedApi.get<VersionListResponse>(

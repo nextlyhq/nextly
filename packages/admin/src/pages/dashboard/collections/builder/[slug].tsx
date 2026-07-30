@@ -207,6 +207,14 @@ export default function CollectionBuilderEditPage({
       versions:
         (collection as { versions?: { enabled?: boolean } | null }).versions
           ?.enabled === true,
+      // Retention: the stored resolved config always carries the effective
+      // count (`false` = unlimited), so the select reflects the true setting. A
+      // config left at the framework default reads back as its concrete number.
+      versionsMaxPerDoc: (
+        collection as {
+          versions?: { maxPerDoc?: number | false } | null;
+        }
+      ).versions?.maxPerDoc,
       // Cache revalidation is on unless the stored config disables it, so the
       // switch reflects on for both null (default) and an absent-disable config.
       revalidate: collection.revalidate?.disable !== true,
@@ -331,6 +339,8 @@ export default function CollectionBuilderEditPage({
                   status: settings.status === true,
                   localized: settings.i18n === true,
                   versions: settings.versions === true,
+                  // Retention forwarded with the switch; the server resolves it.
+                  versionsMaxPerDoc: settings.versionsMaxPerDoc,
                   // Cache revalidation: on unless explicitly turned off; the
                   // server normalizes the boolean into the stored config.
                   revalidate: settings.revalidate !== false,
@@ -422,6 +432,8 @@ export default function CollectionBuilderEditPage({
             // Version history: the server normalizes this into the resolved
             // config the registry column holds.
             versions: settings.versions === true,
+            // Retention forwarded with the switch; resolved into the config.
+            versionsMaxPerDoc: settings.versionsMaxPerDoc,
             // Cache revalidation: on unless explicitly turned off.
             revalidate: settings.revalidate !== false,
             // Webhook recording: on unless explicitly turned off.

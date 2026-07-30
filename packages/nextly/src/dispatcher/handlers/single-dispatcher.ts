@@ -362,6 +362,7 @@ export const SINGLE_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+        locale: p.locale !== undefined ? String(p.locale) : undefined,
       });
       return respondList(result.items, result.meta);
     },
@@ -545,6 +546,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             localized?: boolean;
             // Version history opt-in; persists to dynamic_singles.versions.
             versions?: boolean;
+            // Retention: durable versions kept per document (`false` = unlimited,
+            // a number = keep that many, undefined = the default 50).
+            versionsMaxPerDoc?: number | false;
             // Cache-revalidation opt-out; persists to dynamic_singles.revalidate.
             revalidate?: boolean;
             // Webhook recording opt-out; persists to dynamic_singles.webhooks.
@@ -725,8 +729,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         localized: isLocalized,
         // Persist version history from the create payload; without it a Single
         // created with the switch on is written unversioned and the switch
-        // reads as off the moment the editor loads.
-        versions: resolveBuilderVersions(b.versions),
+        // reads as off the moment the editor loads. Retention rides along.
+        versions: resolveBuilderVersions(b.versions, b.versionsMaxPerDoc),
         // Cache-revalidation opt-out from the create payload (null = standard
         // tags, { disable: true } = off), so the write path reads it back.
         revalidate: resolveBuilderRevalidate(b.revalidate),
@@ -1025,6 +1029,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Version history toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.versions.
             versions?: boolean;
+            // Retention: durable versions kept per document (`false` = unlimited,
+            // a number = keep that many, undefined = the default 50).
+            versionsMaxPerDoc?: number | false;
             // Cache-revalidation toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.revalidate.
             revalidate?: boolean;
@@ -1062,8 +1069,25 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // stored; off writes null. `status` is deliberately not passed to the
       // resolver: it aliases to a versioned config for back-compat, which would
       // stop the toggle from turning versioning off on a Draft/Published single.
+      // Retention without the on/off switch is ambiguous — the resolver needs
+      // the enabled state — so a retention-only patch is rejected rather than
+      // silently ignored. Mirrors the schema-detail routes.
+      if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "versionsMaxPerDoc",
+              code: "MISSING_DEPENDENCY",
+              message: "versionsMaxPerDoc requires versions to be set.",
+            },
+          ],
+        });
+      }
       if (b.versions !== undefined) {
-        updateData.versions = resolveBuilderVersions(b.versions);
+        updateData.versions = resolveBuilderVersions(
+          b.versions,
+          b.versionsMaxPerDoc
+        );
       }
       // Cache-revalidation toggle, normalized to the resolved config the write
       // path reads; on writes null (standard tags), off writes the disable config.
