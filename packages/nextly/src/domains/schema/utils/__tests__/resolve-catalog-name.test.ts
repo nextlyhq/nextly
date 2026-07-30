@@ -19,18 +19,20 @@ describe("identifierCaseRules", () => {
     });
   });
 
-  it("folds both on sqlite, where names match case-insensitively", () => {
+  // SQLite understands upper/lower case for ASCII only, so its fold must not be
+  // Unicode-aware.
+  it("folds ASCII only on sqlite", () => {
     expect(identifierCaseRules({ dialect: "sqlite" })).toEqual({
-      tables: "fold",
-      columns: "fold",
+      tables: "fold-ascii",
+      columns: "fold-ascii",
     });
   });
 
   // MySQL's table behaviour is server configuration; only 0 is case-sensitive.
   it.each([
     [0, "preserve"],
-    [1, "fold"],
-    [2, "fold"],
+    [1, "fold-unicode"],
+    [2, "fold-unicode"],
   ])(
     "reads mysql lower_case_table_names=%i as %s for tables",
     (setting, expected) => {
@@ -51,14 +53,14 @@ describe("identifierCaseRules", () => {
       expect(
         identifierCaseRules({ dialect: "mysql", lowerCaseTableNames: setting })
           .columns
-      ).toBe("fold");
+      ).toBe("fold-unicode");
     }
   );
 });
 
 describe("resolveCatalogName", () => {
   it("returns the exact name when the catalog reports it verbatim", () => {
-    const catalog = indexCatalog(["comp_hero"], "fold");
+    const catalog = indexCatalog(["comp_hero"], "fold-ascii");
     expect(resolveCatalogName(catalog, "comp_hero")).toBe("comp_hero");
   });
 
@@ -71,7 +73,7 @@ describe("resolveCatalogName", () => {
   // as `seo_meta`, so an exact-only lookup would call a table that exists
   // missing and orphan its rows.
   it("falls back to a case-different entry where the server folds", () => {
-    const catalog = indexCatalog(["seo_meta"], "fold");
+    const catalog = indexCatalog(["seo_meta"], "fold-unicode");
     expect(resolveCatalogName(catalog, "SEO_META")).toBe("seo_meta");
   });
 
@@ -95,26 +97,28 @@ describe("resolveCatalogName", () => {
   // With an ambiguous fold and no exact hit, the lookup must be stable rather
   // than alternating between two real tables.
   it("resolves an ambiguous fold to the first catalog entry, consistently", () => {
-    const catalog = indexCatalog(["SEO_META", "seo_META"], "fold");
+    const catalog = indexCatalog(["SEO_META", "seo_META"], "fold-ascii");
     const first = resolveCatalogName(catalog, "Seo_Meta");
     expect(first).toBe("SEO_META");
     expect(resolveCatalogName(catalog, "Seo_Meta")).toBe(first);
   });
 
   it("returns undefined when nothing matches either way", () => {
-    const catalog = indexCatalog(["comp_hero"], "fold");
+    const catalog = indexCatalog(["comp_hero"], "fold-ascii");
     expect(resolveCatalogName(catalog, "comp_other")).toBeUndefined();
   });
 
   // The resolved value is what later statements must address, so it is always
   // the catalog's spelling and never the caller's.
   it("returns the catalog's spelling, not the requested one", () => {
-    const catalog = indexCatalog(["Comp_Hero"], "fold");
+    const catalog = indexCatalog(["Comp_Hero"], "fold-ascii");
     expect(resolveCatalogName(catalog, "comp_hero")).toBe("Comp_Hero");
   });
 
   it("handles an empty catalog", () => {
-    expect(resolveCatalogName(indexCatalog([], "fold"), "x")).toBeUndefined();
+    expect(
+      resolveCatalogName(indexCatalog([], "fold-ascii"), "x")
+    ).toBeUndefined();
   });
 });
 
@@ -167,4 +171,30 @@ describe("parseLowerCaseTableNames", () => {
       expect.fail("expected a refusal");
     }
   );
+});
+
+describe("dialect-specific fold width", () => {
+  // SQLite keeps `Ä` and `ä` as separate tables and cannot query one through the
+  // other's spelling, so a Unicode fold here would resolve a registry row to an
+  // unrelated table — and in teardown that means deleting its rows.
+  it("does not merge non-ASCII case under an ASCII fold", () => {
+    const catalog = indexCatalog(["comp_\u00e4rea"], "fold-ascii");
+    expect(resolveCatalogName(catalog, "comp_\u00c4rea")).toBeUndefined();
+  });
+
+  // MySQL lowercases names using the system character set, so the same pair must
+  // resolve there or a legitimate upgrade is refused.
+  it("merges non-ASCII case under a Unicode fold", () => {
+    const catalog = indexCatalog(["comp_\u00e4rea"], "fold-unicode");
+    expect(resolveCatalogName(catalog, "comp_\u00c4rea")).toBe(
+      "comp_\u00e4rea"
+    );
+  });
+
+  // ASCII folding still has to work, or the SQLite fix would break the ordinary
+  // case it exists to serve.
+  it("still folds ASCII case under an ASCII fold", () => {
+    const catalog = indexCatalog(["comp_hero"], "fold-ascii");
+    expect(resolveCatalogName(catalog, "COMP_HERO")).toBe("comp_hero");
+  });
 });

@@ -32,7 +32,7 @@ import {
   type ManifestEntry,
   type RegistryRow,
 } from "./manifest";
-import type { MigrationDirection } from "./state";
+import type { MigrationDirection, StorageGeneration } from "./state";
 
 /** The columns one table carries, as the database reported them. */
 export interface TableColumns {
@@ -139,15 +139,21 @@ export function probeStorage(args: {
   tables: readonly string[];
   columns: readonly TableColumns[];
   identifierCase: IdentifierCaseRules;
-  typeColumn: string;
+  generation: StorageGeneration;
 }): StorageProbe {
-  const { identifierCase, typeColumn } = args;
+  const { identifierCase, generation } = args;
+  // Derived from the generation rather than passed alongside it, so the column
+  // required and the names required cannot disagree.
+  const typeColumn =
+    generation === "field-groups-v2"
+      ? MIGRATION_TARGET.columnType
+      : STORAGE_FORMAT.columns.type;
   const catalog = indexCatalog(args.tables, identifierCase.tables);
   const columns = indexColumns(args.columns, identifierCase);
   const missing: string[] = [];
 
   for (const row of args.rows) {
-    for (const object of expectedStorage(row)) {
+    for (const object of expectedStorage(row, generation)) {
       const found = resolveAny(catalog, object.names);
       if (found === undefined) {
         missing.push(object.names[0]);
@@ -187,6 +193,17 @@ interface ExpectedObject {
 }
 
 /**
+ * Which physical names count as satisfying a row.
+ *
+ * `either` is for reconciling a run in flight, where a row is under its stored
+ * name until its rename commits and under the migrated name afterwards. The two
+ * generation values are for *verifying a settled marker*, where only one name is
+ * acceptable — accepting both there would report a migration complete that never
+ * renamed anything.
+ */
+type StorageNaming = "either" | StorageGeneration;
+
+/**
  * Every object a registry row requires to exist.
  *
  * The single definition of that question. Two callers ask it — the up-front
@@ -205,11 +222,14 @@ interface ExpectedObject {
  * unexplained target: `reconcileRename` still refuses a target that no recorded
  * progress accounts for, and does it with a message that names the conflict.
  */
-function expectedStorage(row: RegistryRow): ExpectedObject[] {
+function expectedStorage(
+  row: RegistryRow,
+  naming: StorageNaming
+): ExpectedObject[] {
   const target = retargetName(row);
   const suffix = STORAGE_FORMAT.companionSuffix;
 
-  const base = [row.tableName, ...(target === null ? [] : [target])];
+  const base = namesFor(row, target, naming);
   const objects: ExpectedObject[] = [{ names: base, isBase: true }];
   if (row.hasCompanion) {
     objects.push({
@@ -218,6 +238,25 @@ function expectedStorage(row: RegistryRow): ExpectedObject[] {
     });
   }
   return objects;
+}
+
+/**
+ * The base names acceptable for a row under a given naming mode.
+ *
+ * For `field-groups-v2` the retargeted name is **required**: a settled marker
+ * plus a row still naming its legacy table means the rename never happened, and
+ * accepting the legacy name there would authorise migrated storage that does not
+ * exist. A row with no retarget — a custom name this migration leaves alone — is
+ * already at its final name, so that name is the required one.
+ */
+function namesFor(
+  row: RegistryRow,
+  target: string | null,
+  naming: StorageNaming
+): string[] {
+  if (naming === "legacy") return [row.tableName];
+  if (naming === "field-groups-v2") return [target ?? row.tableName];
+  return [row.tableName, ...(target === null ? [] : [target])];
 }
 
 function resolveAny(
@@ -268,7 +307,7 @@ function assertEveryRowHasStorage(
   const caseVariants: Record<string, string> = {};
 
   for (const row of rows) {
-    for (const object of expectedStorage(row)) {
+    for (const object of expectedStorage(row, "either")) {
       if (resolveAny(catalog, object.names) !== undefined) continue;
       missing.push(object.names[0]);
       // A name present under a different case is a different object on this
@@ -296,6 +335,19 @@ function assertEveryRowHasStorage(
  */
 function acceptsApplied(position: number, run: RunRecord): boolean {
   return run.recorded && position <= run.step + 1;
+}
+
+/**
+ * Whether the marker claims this position's postcondition already verified.
+ *
+ * Stricter than `acceptsApplied` by exactly the crash window: a position at or
+ * below the recorded step was verified and **will never run again**, because the
+ * guard resumes at `step + 1`. So finding its source still in place is not
+ * outstanding work — nothing will pick it up — it is the marker and the database
+ * contradicting each other.
+ */
+function recordedAsDone(position: number, run: RunRecord): boolean {
+  return run.recorded && position <= run.step;
 }
 
 /**
@@ -353,7 +405,21 @@ function reconcileColumn(
     });
   }
 
-  if (hasFrom) return entry;
+  if (hasFrom) {
+    if (recordedAsDone(position, run)) {
+      throw refuse(
+        "a column rename the marker records as verified has not been applied",
+        {
+          table: current,
+          from: entry.from,
+          to: entry.to,
+          position,
+          recordedStep: run.recorded ? run.step : null,
+        }
+      );
+    }
+    return entry;
+  }
 
   if (hasTo) {
     if (!acceptsApplied(position, run)) {
@@ -398,7 +464,20 @@ function reconcileRename(
     });
   }
 
-  if (source !== undefined) return entry;
+  if (source !== undefined) {
+    if (recordedAsDone(position, run)) {
+      throw refuse(
+        "a rename the marker records as verified has not been applied",
+        {
+          from: entry.from,
+          to: entry.to,
+          position,
+          recordedStep: run.recorded ? run.step : null,
+        }
+      );
+    }
+    return entry;
+  }
 
   if (target !== undefined) {
     // Source gone, target present. Only progress that reached this position

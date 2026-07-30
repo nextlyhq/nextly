@@ -101,11 +101,12 @@ describe("field-group migration reconciliation", () => {
   });
 
   it("accepts an occupied target when recorded progress reaches it", () => {
-    const tables = ["comp_hero", "dynamic_field_groups"];
+    // A world consistent with that progress: the table and column steps really
+    // did run, so only the registry rename sits in the crash window.
+    const tables = ["fg_hero", "dynamic_field_groups"];
     const out = untouched({
       tables,
-      columns: columnsFor(tables),
-      // The registry is the last entry, so progress must have reached it.
+      columns: columnsFor(tables, { fg_hero: [TARGET_COLUMN] }),
       run: { recorded: true, direction: "up", step: plan.length - 1 },
     });
     expect(out.find(e => e.kind === "registry")?.satisfied).toBe(true);
@@ -325,16 +326,22 @@ describe("recorded progress beyond the crash window", () => {
     row({ slug: "beta", tableName: "comp_beta" }),
   ];
   const plan = buildMigrationManifest(rows).entries;
-  // Ordered by stored table name, so beta's rename sits at position 3.
+  // Ordered by stored table name: 1 = alpha's table, 2 = alpha's column,
+  // 3 = beta's table, 4 = beta's column, 5 = the registry.
   const BETA_POSITION = 3;
-  const tables = ["dynamic_components", "comp_alpha", "fg_beta"];
 
-  function reconcile(step: number) {
+  /**
+   * Alpha is fully renamed and `fg_beta` exists, which is the ambiguity: it is
+   * this run's work only if recorded progress reached beta's position.
+   * `alphaColumn` keeps the world consistent with whichever step is claimed.
+   */
+  function reconcile(step: number, alphaColumn: string) {
+    const tables = ["dynamic_components", "fg_alpha", "fg_beta"];
     return reconcilePlan({
       entries: plan,
       rows,
       tables,
-      columns: columnsFor(tables),
+      columns: columnsFor(tables, { fg_alpha: [alphaColumn] }),
       run: { recorded: true, direction: "up", step },
       direction: "up",
       identifierCase: PRESERVING,
@@ -344,13 +351,13 @@ describe("recorded progress beyond the crash window", () => {
   // A marker recording step 1 says nothing about step 3. Treating any run record
   // as blanket permission adopts a table this run never created.
   it("refuses a target beyond the recorded step and its crash window", () => {
-    const refusal = capture(() => reconcile(1));
+    const refusal = capture(() => reconcile(1, LEGACY_COLUMN));
     expect(refusal.logContext?.reason).toMatch(/no recorded progress/);
     expect(refusal.logContext?.position).toBe(BETA_POSITION);
   });
 
   it("accepts the same target once progress reaches its crash window", () => {
-    const out = reconcile(BETA_POSITION - 1);
+    const out = reconcile(BETA_POSITION - 1, TARGET_COLUMN);
     expect(out[BETA_POSITION - 1]).toMatchObject({
       kind: "table",
       satisfied: true,
@@ -365,7 +372,7 @@ describe("field-group storage probe", () => {
       tables: BEFORE,
       columns: columnsFor(BEFORE),
       identifierCase: PRESERVING,
-      typeColumn: LEGACY_COLUMN,
+      generation: "legacy",
       ...over,
     });
   }
@@ -421,7 +428,7 @@ describe("field-group storage probe", () => {
         rows: [row({ tableName: "fg_hero" })],
         tables: AFTER,
         columns: columnsFor(AFTER),
-        typeColumn: TARGET_COLUMN,
+        generation: "field-groups-v2",
       }).migratedObjects
     ).toEqual({
       complete: false,
@@ -435,7 +442,7 @@ describe("field-group storage probe", () => {
         rows: [row({ tableName: "fg_hero" })],
         tables: AFTER,
         columns: columnsFor(AFTER, { fg_hero: [TARGET_COLUMN] }),
-        typeColumn: TARGET_COLUMN,
+        generation: "field-groups-v2",
       }).migratedObjects
     ).toEqual({ complete: true });
   });
@@ -450,6 +457,119 @@ describe("field-group storage probe", () => {
         rows: [row({ hasCompanion: true })],
         tables,
         columns: columnsFor(tables, { comp_hero_locales: ["title"] }),
+      }).migratedObjects
+    ).toEqual({ complete: true });
+  });
+});
+
+describe("marker and catalog contradicting each other", () => {
+  const rows = [row()];
+  const plan = buildMigrationManifest(rows).entries;
+
+  // The guard resumes at `step + 1`, so a position at or below the recorded step
+  // never runs again. Reporting it as outstanding is a claim nothing acts on: the
+  // rename would be skipped silently and every later step would run against a
+  // schema the plan believes has already moved.
+  it("refuses a rename the marker records as verified but that never happened", () => {
+    const refusal = capture(() =>
+      reconcilePlan({
+        entries: plan,
+        rows,
+        tables: BEFORE,
+        columns: columnsFor(BEFORE),
+        // Step 1 is the table rename, and `comp_hero` is still there.
+        run: { recorded: true, direction: "up", step: 1 },
+        direction: "up",
+        identifierCase: PRESERVING,
+      })
+    );
+    expect(refusal.logContext?.reason).toMatch(
+      /records as verified has not been applied/
+    );
+    expect(refusal.logContext?.position).toBe(1);
+  });
+
+  // Same contradiction one level down: the table moved, the column did not, and
+  // the marker claims the column step verified.
+  it("refuses a column rename the marker records as verified but that never happened", () => {
+    const tables = ["dynamic_components", "fg_hero"];
+    const refusal = capture(() =>
+      reconcilePlan({
+        entries: plan,
+        rows,
+        tables,
+        columns: columnsFor(tables),
+        // Step 2 is the column rename; `fg_hero` still carries the legacy column.
+        run: { recorded: true, direction: "up", step: 2 },
+        direction: "up",
+        identifierCase: PRESERVING,
+      })
+    );
+    expect(refusal.logContext?.reason).toMatch(
+      /column rename the marker records as verified/
+    );
+  });
+
+  // The crash window is the boundary and must stay accepting: at `step + 1` the
+  // statement may simply not have committed, and the runner re-runs it.
+  it("accepts an unapplied rename sitting in the crash window", () => {
+    expect(() =>
+      reconcilePlan({
+        entries: plan,
+        rows,
+        tables: BEFORE,
+        columns: columnsFor(BEFORE),
+        run: { recorded: true, direction: "up", step: 0 },
+        direction: "up",
+        identifierCase: PRESERVING,
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("probing a settled generation", () => {
+  // A completed marker plus a row still naming its legacy table means the rename
+  // never happened. Accepting either name would report that complete and let
+  // `resolveStorageVerdict` authorise v2 storage that does not exist.
+  it("requires the migrated name when probing field-groups-v2", () => {
+    const tables = ["dynamic_field_groups", "comp_hero"];
+    expect(
+      probeStorage({
+        rows: [row()],
+        tables,
+        columns: columnsFor(tables, { comp_hero: [TARGET_COLUMN] }),
+        identifierCase: PRESERVING,
+        generation: "field-groups-v2",
+      }).migratedObjects
+    ).toEqual({ complete: false, missing: ["fg_hero"] });
+  });
+
+  // The legacy probe is the mirror image: the migrated name must not satisfy it.
+  it("requires the stored name when probing legacy", () => {
+    const tables = ["dynamic_components", "fg_hero"];
+    expect(
+      probeStorage({
+        rows: [row()],
+        tables,
+        columns: columnsFor(tables),
+        identifierCase: PRESERVING,
+        generation: "legacy",
+      }).migratedObjects
+    ).toEqual({ complete: false, missing: ["comp_hero"] });
+  });
+
+  // A custom-named row is already at its final name, so it satisfies a v2 probe
+  // as it stands rather than being reported missing forever.
+  it("accepts a custom-named row under its own name when probing v2", () => {
+    const custom = [row({ slug: "seo", tableName: "my_seo_block" })];
+    const tables = ["dynamic_field_groups", "my_seo_block"];
+    expect(
+      probeStorage({
+        rows: custom,
+        tables,
+        columns: columnsFor(tables, { my_seo_block: [TARGET_COLUMN] }),
+        identifierCase: PRESERVING,
+        generation: "field-groups-v2",
       }).migratedObjects
     ).toEqual({ complete: true });
   });

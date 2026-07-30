@@ -311,11 +311,16 @@ describe("teardownEntityComponentData catalog case folding", () => {
         deleted.push(table);
         return 1;
       }),
-      executeQuery: vi.fn(async (sql: string) =>
-        sql.includes("lower_case_table_names")
-          ? [{ lower_case_table_names: lowerCaseTableNames }]
-          : [{ n: 0 }]
-      ),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      // The variable read goes through Drizzle's `sql` template, so the mock
+      // answers on the Drizzle handle and returns the mysql2 `[rows, fields]`
+      // shape the real driver produces.
+      getDrizzle: vi.fn(() => ({
+        execute: vi.fn(async () => [
+          [{ lower_case_table_names: lowerCaseTableNames }],
+          [],
+        ]),
+      })),
       select: vi.fn(async (table: string) => {
         if (table === "dynamic_components") {
           return [{ slug: "seo", table_name: "SEO_META" }];

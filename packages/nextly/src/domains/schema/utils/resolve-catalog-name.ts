@@ -22,10 +22,34 @@ import { NextlyError } from "../../../errors/nextly-error";
  * - `preserve` — case is significant. `SEO_META` and `seo_meta` are two
  *   different objects, and a stored name absent from the catalog is genuinely
  *   absent no matter what else the catalog holds.
- * - `fold` — case is not significant. The two spellings are one object, so a
- *   stored name is found under whatever case the catalog reports it in.
+ * - `fold-ascii` — case is not significant, but **only for `A`–`Z`**. This is
+ *   SQLite, which documents that it understands upper and lower case for ASCII
+ *   characters only: `Ä` and `ä` are two distinct tables there, and neither can
+ *   be queried through the other's spelling.
+ * - `fold-unicode` — case is not significant across the character set. This is
+ *   MySQL, which lowercases names using the system character set rather than
+ *   ASCII rules.
+ *
+ * The two folds are separate because collapsing them is wrong in both
+ * directions: Unicode-folding on SQLite merges two real tables, and
+ * ASCII-folding on MySQL fails to find a table the server itself lowercased.
+ * Nextly's own identifiers are ASCII (`normalizeIdentifier` strips everything
+ * else), so the distinction only bites on a name an author chose.
  */
-export type IdentifierCase = "preserve" | "fold";
+export type IdentifierCase = "preserve" | "fold-ascii" | "fold-unicode";
+
+/**
+ * Fold a name for lookup, under the server's rules.
+ *
+ * `preserve` never reaches here — a preserving server has no folded lookup — so
+ * the two folding modes are the whole domain.
+ */
+function foldName(name: string, mode: "fold-ascii" | "fold-unicode"): string {
+  if (mode === "fold-unicode") return name.toLowerCase();
+  // Deliberately not `toLowerCase()`, which maps `Ä` to `ä` and would merge two
+  // names SQLite keeps apart.
+  return name.replace(/[A-Z]/g, character => character.toLowerCase());
+}
 
 /**
  * A server's rules, which differ between tables and columns on MySQL.
@@ -60,8 +84,9 @@ export type IdentifierCaseServer =
  * - **Postgres** preserves both. Every identifier Nextly emits is quoted
  *   (`quoteIdent`), so the server stores exactly the name it was given and never
  *   folds it. Comparing folded here would merge two genuinely distinct tables.
- * - **SQLite** folds both: table and column names match case-insensitively, so
- *   two names differing only in case cannot coexist and folding is exact.
+ * - **SQLite** folds both, but **ASCII-only**: it understands upper and lower
+ *   case for `A`–`Z` and nothing else, so `Ä` and `ä` are two distinct tables
+ *   there and a Unicode fold would merge them.
  * - **MySQL** folds columns always. Its tables follow `lower_case_table_names`:
  *   `0` stores and compares case-sensitively, `1` lowercases names on creation,
  *   and `2` stores them as given but compares case-insensitively. Only `0`
@@ -75,11 +100,11 @@ export function identifierCaseRules(
     return { tables: "preserve", columns: "preserve" };
   }
   if (server.dialect === "sqlite") {
-    return { tables: "fold", columns: "fold" };
+    return { tables: "fold-ascii", columns: "fold-ascii" };
   }
   return {
-    tables: server.lowerCaseTableNames === 0 ? "preserve" : "fold",
-    columns: "fold",
+    tables: server.lowerCaseTableNames === 0 ? "preserve" : "fold-unicode",
+    columns: "fold-unicode",
   };
 }
 
@@ -109,7 +134,13 @@ export function indexCatalog(
   const exact = new Set(names);
   const folded = new Map<string, string>();
   for (const name of names) {
-    const key = name.toLowerCase();
+    // A preserving server has no folded lookup, so the index it would feed is
+    // never consulted for resolution; ASCII rules are used to build it anyway so
+    // `findCaseVariant` can still name a near-miss in a refusal.
+    const key = foldName(
+      name,
+      identifierCase === "preserve" ? "fold-ascii" : identifierCase
+    );
     // First writer wins, so an ambiguous fold cannot silently retarget an
     // object: if a case-preserving server holds both `SEO_META` and `seo_meta`,
     // a folded lookup keeps pointing at whichever the catalog listed first
@@ -145,7 +176,7 @@ export function resolveCatalogName(
 ): string | undefined {
   if (catalog.exact.has(storedName)) return storedName;
   if (catalog.identifierCase === "preserve") return undefined;
-  return catalog.folded.get(storedName.toLowerCase());
+  return catalog.folded.get(foldName(storedName, catalog.identifierCase));
 }
 
 /**
@@ -162,7 +193,14 @@ export function findCaseVariant(
   storedName: string
 ): string | undefined {
   if (catalog.exact.has(storedName)) return undefined;
-  const variant = catalog.folded.get(storedName.toLowerCase());
+  const variant = catalog.folded.get(
+    foldName(
+      storedName,
+      catalog.identifierCase === "preserve"
+        ? "fold-ascii"
+        : catalog.identifierCase
+    )
+  );
   return variant === storedName ? undefined : variant;
 }
 

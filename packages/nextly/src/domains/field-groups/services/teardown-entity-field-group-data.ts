@@ -62,6 +62,7 @@ export interface TeardownComponentDataAdapter {
   ): Promise<T[]>;
   delete(table: string, where: WhereClause): Promise<number>;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+  getDrizzle<T = unknown>(): T;
   tableExists(tableName: string): Promise<boolean>;
   listTables(): Promise<string[]>;
 }
