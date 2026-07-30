@@ -386,23 +386,27 @@ describe("field-group migration session", () => {
   // process resume the same run against a database the first is still writing.
   it("keeps a migration's claim held when the process is interrupted", async () => {
     const h = createAdapter({ heldBy: null });
+    // Restored in `finally`: a failure before the restore would otherwise leave
+    // the global mocked for every later test in the file.
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      let ownerAfterSignal: string | null = null;
+      await withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          process.emit("SIGINT");
+          await new Promise(resolve => setImmediate(resolve));
+          ownerAfterSignal = h.owner();
+        }
+      );
 
-    let ownerAfterSignal: string | null = null;
-    await withMigrationSession(
-      { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
-      async () => {
-        process.emit("SIGINT");
-        await new Promise(resolve => setImmediate(resolve));
-        ownerAfterSignal = h.owner();
-      }
-    );
-
-    // Still held while the run was in flight, and released only by the ordinary
-    // exit path afterwards.
-    expect(ownerAfterSignal).not.toBeNull();
-    expect(kill).not.toHaveBeenCalled();
-    kill.mockRestore();
+      // Still held while the run was in flight, and released only by the ordinary
+      // exit path afterwards.
+      expect(ownerAfterSignal).not.toBeNull();
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it("uses a lock table distinct from the schema pipeline's", () => {

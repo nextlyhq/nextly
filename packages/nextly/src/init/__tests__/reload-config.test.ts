@@ -12,6 +12,8 @@
 import { getColumns } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
+
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 
@@ -111,8 +113,14 @@ describe("reloadNextlyConfig", () => {
     }>;
     /** Force the metadata-only collection sync to reject, so its scope is unsynced. */
     failCollectionMetaSync?: boolean;
+    /** Seed a `nextly_meta` migration marker the storage guard will read. */
+    migrationMarker?: unknown;
   }) {
     const withAdapter = opts?.withAdapter ?? true;
+    const lockDouble = createLockingAdapter({
+      lockTableExists: false,
+      marker: opts?.migrationMarker,
+    });
     const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
     const registerDynamicSchemaSpy = vi.fn();
     const updateCollectionMigrationStatusSpy = vi
@@ -124,17 +132,16 @@ describe("reloadNextlyConfig", () => {
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       // The DI key is "adapter" (renamed from "databaseAdapter" — see the
       // comment in reload-config.ts line ~205 for the history).
+      // The reload holds the migration lock for its duration, so the fake has
+      // to answer the whole exclusion rather than just the marker read. Shared
+      // with the session's own suite so the two cannot drift into disagreeing
+      // about what the lock does.
       adapter: withAdapter
-        ? {
-            // dialect is a readonly property on DrizzleAdapter, not a
-            // method. Fakes must match.
+        ? Object.assign(lockDouble.adapter, {
             dialect: "sqlite" as const,
-            getDrizzle: () => ({}),
-            // The real adapter has this, and the storage guard asks it whether
-            // the marker table exists before reading it. A fake without it
-            // would make every reload look like a refused one.
-            tableExists: vi.fn().mockResolvedValue(false),
-          }
+            getCapabilities: () => ({ dialect: "sqlite" }),
+            getDrizzle: lockDouble.adapter.getDrizzle.bind(lockDouble.adapter),
+          })
         : undefined,
       collectionRegistryService: {
         syncCodeFirstCollections: opts?.failCollectionMetaSync
@@ -251,47 +258,23 @@ describe("reloadNextlyConfig", () => {
         ],
       },
     });
-    const resolver = buildResolver();
-    // A marker the storage guard reads as an in-flight run.
-    const adapter = (await resolver("adapter")) as {
-      tableExists: ReturnType<typeof vi.fn>;
-      getDrizzle: () => unknown;
-      getCapabilities?: () => { dialect: string };
-    };
-    adapter.tableExists.mockResolvedValue(true);
-    // `MetaService` picks its dialect-specific table through this; without it
-    // the read throws and the test would exercise the unexpected-error path
-    // while claiming to cover the refusal.
-    adapter.getCapabilities = () => ({ dialect: "sqlite" });
-    adapter.getDrizzle = () => ({
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: () =>
-              Promise.resolve([
-                {
-                  key: "field_groups.storage_migration",
-                  value: JSON.stringify({
-                    version: 2,
-                    status: "migrating",
-                    direction: "up",
-                    migrationId: "run-1",
-                    step: 1,
-                    registryHash: "r",
-                    manifestHash: "m",
-                    appliedManifest: [
-                      {
-                        kind: "registry",
-                        from: "dynamic_components",
-                        to: "dynamic_field_groups",
-                      },
-                    ],
-                  }),
-                },
-              ]),
-          }),
-        }),
-      }),
+    const resolver = buildResolver({
+      migrationMarker: {
+        version: 2,
+        status: "migrating",
+        direction: "up",
+        migrationId: "run-1",
+        step: 1,
+        registryHash: "r",
+        manifestHash: "m",
+        appliedManifest: [
+          {
+            kind: "registry",
+            from: "dynamic_components",
+            to: "dynamic_field_groups",
+          },
+        ],
+      },
     });
 
     const { reloadNextlyConfig } = await import("../reload-config");
