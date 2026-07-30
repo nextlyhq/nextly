@@ -16,6 +16,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
+import {
+  indexCatalog,
+  resolveCatalogName,
+  type IdentifierCaseRules,
+} from "../../schema/utils/resolve-catalog-name";
 
 import type { ObservedColumn, StorageObserver } from "./steps";
 
@@ -24,7 +29,8 @@ const REGISTRY_TABLE_NAME_COLUMN = "table_name";
 
 /** Observe a live database through the schema pipeline's introspection. */
 export function createStorageObserver(
-  adapter: DrizzleAdapter
+  adapter: DrizzleAdapter,
+  identifierCase: IdentifierCaseRules
 ): StorageObserver {
   const dialect = adapter.getCapabilities().dialect;
 
@@ -34,7 +40,18 @@ export function createStorageObserver(
       dialect,
       [table]
     );
-    return snapshot.tables.find(entry => entry.name === table);
+    // Matched under the server's own rules, not by exact spelling. MySQL with
+    // `lower_case_table_names=1` answers a query for a mixed-case name while
+    // `information_schema` reports the lowercased one, so an exact comparison
+    // discards a snapshot that describes the very table that was asked for --
+    // and the caller then reads an existing table as missing.
+    const catalog = indexCatalog(
+      snapshot.tables.map(entry => entry.name),
+      identifierCase.tables
+    );
+    const resolved = resolveCatalogName(catalog, table);
+    if (resolved === undefined) return undefined;
+    return snapshot.tables.find(entry => entry.name === resolved);
   }
 
   return {
