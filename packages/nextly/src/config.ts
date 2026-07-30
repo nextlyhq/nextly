@@ -114,6 +114,15 @@ export {
   option,
 } from "./collections/fields/helpers";
 
+// The factory a contributed field type is declared through. A value, not a
+// type: the block above this one re-exports the field types with `export type`,
+// which carries no runtime binding, so a caller would resolve the symbol at
+// compile time and find nothing at run time.
+export {
+  pluginField,
+  pluginFieldBrand,
+} from "./collections/fields/types/plugin-field";
+
 export {
   isTextField,
   isTextareaField,
