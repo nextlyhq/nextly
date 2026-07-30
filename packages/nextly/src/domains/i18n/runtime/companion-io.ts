@@ -210,13 +210,6 @@ export async function reconcileCompanionColumns(
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
-    /**
-     * The configured default locale. Needed only when `_status` has to be ADDed: the builder
-     * backfills the default-locale companion row's status from the main row, which is the row
-     * whose status it actually is. Omitting it leaves already-published content reading as
-     * draft.
-     */
-    defaultLocale?: string;
   },
   onError?: (error: unknown) => void
 ): Promise<void> {
@@ -243,20 +236,25 @@ export async function reconcileCompanionColumns(
         .find(t => t.name === companionTableName)
         ?.columns.map(c => c.name) ?? []
     );
-    // `_status` is tracked alongside the translatable columns: switching Draft/Published on
-    // AFTER the companion was created leaves it without the column, and later per-locale
-    // status writes then target something that is not there.
+    // `_status` is deliberately NOT reconciled here. Adding the column is one statement and
+    // backfilling the default-locale row from the main row is another, and the pair cannot be
+    // made retryable from physical shape alone: when the ADD lands and the backfill does not,
+    // every later run sees the column present, concludes the companion is in step, and leaves
+    // previously published content reading as draft while reporting success. MySQL commits DDL
+    // implicitly, so the two cannot be made atomic there either.
+    //
+    // Deciding it correctly needs a record of whether the backfill has run — the localization
+    // transition state this codebase does not keep yet. Until it does, switching Draft/Published
+    // on for an already-localized entity belongs to the migration path, which fails loudly on a
+    // missing column rather than silently hiding published rows.
+    //
+    // The localized-column reconcile below has no such weakness: a missing column is visible on
+    // every run, so a partial apply simply finishes on the next one.
     const hasStatus = present.has("_status");
-    const wantStatus = args.status === true;
 
-    // Nothing missing — the overwhelmingly common case, and worth leaving before the
-    // statement builder runs. `_status` only counts as missing when it is wanted and absent;
-    // wanted-and-present and unwanted are both already in step.
-    if (
-      desired.every(f => present.has(toColumn(f.name))) &&
-      !(wantStatus && !hasStatus)
-    )
-      return;
+    // Nothing missing — the overwhelmingly common case, and worth leaving before the statement
+    // builder runs.
+    if (desired.every(f => present.has(toColumn(f.name)))) return;
 
     // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
     // emits is exactly the difference. `old` is a subset of `new` by construction here, which
@@ -270,20 +268,10 @@ export async function reconcileCompanionColumns(
       oldLocalized: desired.filter(f => present.has(toColumn(f.name))),
       newLocalized: desired,
       dialect: args.dialect,
-      // Report status as wanted whenever the column is already there, so the builder can ADD a
-      // missing `_status` but never DROP an existing one. Draft/Published being switched OFF
-      // must not delete per-locale status from an unattended sync: `db:sync` persists registry
-      // metadata BEFORE its destructive prompt, so the drop would run even for an operator who
-      // went on to decline it. Removing it stays the gated pipeline's job.
-      status: wantStatus || hasStatus,
+      // Report the companion's ACTUAL status shape on both sides, so the builder sees no status
+      // change and emits only the column difference — never an ADD or DROP of `_status`.
+      status: hasStatus,
       companionHasStatus: hasStatus,
-      // Required for the builder to emit its default-locale status backfill. ADD COLUMN seeds
-      // every existing companion row at 'draft', including the default-locale row — but the
-      // default locale's status IS the main row's, which may already be 'published'. Without
-      // this, enabling Draft/Published on an entity that already has content makes all of it
-      // read as draft and vanish from published localized reads until each row is republished
-      // by hand.
-      defaultLocale: args.defaultLocale,
       companionExists: true,
     });
     for (const stmt of statements) {

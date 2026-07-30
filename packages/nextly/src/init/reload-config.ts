@@ -672,10 +672,6 @@ async function ensureLocalizedCompanionsForReload(
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
           status: entity.status === true,
-          // Lets the reconcile backfill the default-locale row's status from the main row
-          // when `_status` has to be added; without it, already-published content reads as
-          // draft and drops out of published localized reads.
-          defaultLocale: config.localization?.defaultLocale,
         },
         error => {
           console.warn(
