@@ -21,7 +21,10 @@ import {
   describeUntranslatableConstraint,
   stripNoOpConstraintMembers,
 } from "../../../services/access/constraint-shape";
-import type { CollectionFileManager } from "../../../services/collection-file-manager";
+import type {
+  CollectionFileManager,
+  CompanionSchema,
+} from "../../../services/collection-file-manager";
 import {
   buildDrizzleCondition,
   buildLocalizedWhereExists,
@@ -113,6 +116,18 @@ interface RelatedRowAccess {
    */
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
   /**
+   * Companion schemas already looked up during this expansion, for the same
+   * reason {@link RelatedRowAccess.targetPolicies} exists.
+   *
+   * Loading one costs a collection-metadata read even though the built table is
+   * itself cached, and a `hasMany` relationship on the single-entry path
+   * confirms one reference at a time — so resolving per confirmation turns a
+   * relationship with hundreds of values into hundreds of metadata reads.
+   * Populated only when a rule actually needs a companion filter, so a target
+   * without one pays nothing.
+   */
+  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
+  /**
    * The language the surrounding read resolved to, used when a target
    * collection's read rule filters on a localized field.
    *
@@ -201,6 +216,14 @@ export interface RelationshipExpansionOptions {
    * @internal
    */
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
+
+  /**
+   * Companion schemas already looked up during this expansion, carried by a
+   * nested hop for the same reason the policy map is.
+   *
+   * @internal
+   */
+  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
 
   /**
    * The caller's authenticated scope, when one applies.
@@ -1293,6 +1316,25 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * The target collection's companion schema, looked up once per expansion.
+   *
+   * The PENDING lookup is cached rather than its result: references are
+   * confirmed concurrently, so every one of them reaches this point before the
+   * first has anything to store, and caching only the settled value leaves each
+   * issuing its own metadata read.
+   */
+  private resolveTargetCompanion(
+    targetCollection: string,
+    access: RelatedRowAccess
+  ): Promise<CompanionSchema | null> {
+    const cached = access.targetCompanions?.get(targetCollection);
+    if (cached) return cached;
+    const pending = this.fileManager.loadCompanionSchema(targetCollection);
+    access.targetCompanions?.set(targetCollection, pending);
+    return pending;
+  }
+
+  /**
    * The companion context a predicate on a localized field of the TARGET
    * collection needs, or null when there is none to build.
    *
@@ -1315,8 +1357,10 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess
   ): Promise<LocalizedQueryContext | null> {
     if (!access.locale || isSystemEntity(targetCollection)) return null;
-    const companion =
-      await this.fileManager.loadCompanionSchema(targetCollection);
+    const companion = await this.resolveTargetCompanion(
+      targetCollection,
+      access
+    );
     if (!companion || companion.localizedFields.length === 0) return null;
 
     // The status an untrusted read of this target resolves to, asked of the
@@ -1589,6 +1633,10 @@ export class CollectionRelationshipService extends BaseService {
       // the outermost call, because a collection's rules can change between
       // requests.
       targetPolicies: options.targetPolicies ?? new Map(),
+      // Shared and inherited exactly as the policy map is, for the same reason:
+      // a nested hop starting its own would re-read the metadata of a collection
+      // an ancestor already looked up.
+      targetCompanions: options.targetCompanions ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -2242,6 +2290,10 @@ export class CollectionRelationshipService extends BaseService {
       // the outermost call, because a collection's rules can change between
       // requests.
       targetPolicies: options.targetPolicies ?? new Map(),
+      // Shared and inherited exactly as the policy map is, for the same reason:
+      // a nested hop starting its own would re-read the metadata of a collection
+      // an ancestor already looked up.
+      targetCompanions: options.targetCompanions ?? new Map(),
     };
 
     // Clamp depth to valid range

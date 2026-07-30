@@ -846,6 +846,7 @@ export class SingleQueryService extends BaseService {
             // too, and the rows of one population share a policy cache.
             withheldByAccess: params.withheldByAccess,
             targetPolicies: new Map(),
+            targetCompanions: new Map(),
             authenticatedScope: options.authenticatedScope,
             locale: readLocale,
           },

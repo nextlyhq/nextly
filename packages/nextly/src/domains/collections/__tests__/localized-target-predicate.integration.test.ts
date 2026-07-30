@@ -15,13 +15,14 @@
  * was missing is the language, and it can only come from the read that asked.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, relationship, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 let current: TestNextly | undefined;
@@ -320,6 +321,34 @@ describe("localized target read predicates (integration)", () => {
     expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([
       pageId,
     ]);
+  });
+
+  it("looks the target's companion schema up once for the whole expansion", async () => {
+    // Pinned by measurement rather than by intent. The built companion table is
+    // cached inside the file manager, but every lookup still costs a collection
+    // metadata read — and the single-entry `hasMany` path confirms one reference
+    // at a time, so an uncached lookup scales with the number of references
+    // rather than the number of target collections.
+    const { handler, refId } = await boot();
+    // Spied after boot so only what the read does is counted, and on the
+    // prototype because the file manager is built inside the collection
+    // service's factory rather than registered under its own name.
+    const spy = vi.spyOn(
+      CollectionFileManager.prototype,
+      "loadCompanionSchema"
+    );
+    try {
+      // Both references are confirmed, so the count describes a real walk over
+      // more than one value rather than a single-reference shortcut.
+      expect(await populatedIds(handler, refId, "emea-only")).toHaveLength(1);
+
+      const pagesLookups = spy.mock.calls.filter(
+        call => call[0] === "pages"
+      ).length;
+      expect(pagesLookups).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("withholds a localized predicate that cannot be translated exactly", async () => {

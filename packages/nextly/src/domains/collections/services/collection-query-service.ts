@@ -1100,6 +1100,7 @@ export class CollectionQueryService extends BaseService {
               // Shared across every component row this listing expands, so
               // rows pointing at the same target resolve its policy once.
               targetPolicies: new Map(),
+              targetCompanions: new Map(),
               // A relationship inside a component points at a collection whose
               // read rule may filter on one of its own localized fields.
               locale: localeChain?.[0],
