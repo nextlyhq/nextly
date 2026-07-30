@@ -52,6 +52,7 @@ import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
+import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
@@ -501,6 +502,26 @@ export class UserMutationService extends BaseService {
         });
       };
 
+      // Record a `user.created` webhook event inside the same transaction that
+      // inserts the account, so a subscriber observes the account exactly when
+      // it becomes real (and never for a rolled-back create). The payload is
+      // deliberately PII-safe: identity and roles only, never the password hash
+      // or the invite-token hash. Roles reflect what was REQUESTED — they are
+      // assigned post-commit — which is what a creation event conveys.
+      const recordCreatedEvent = (txDb: DrizzleTransactionLike) =>
+        recordMutationEventInTx(txDb, this.dialect, {
+          type: "user.created",
+          resource: { kind: "user", id: newUserId },
+          data: {
+            id: newUserId,
+            email: userData.email,
+            name: userData.name ?? null,
+            roles: userData.roles ?? [],
+          },
+          fields: [],
+          actor: null,
+        });
+
       // Wrap user + user_ext + invite inserts in a transaction for atomicity.
       // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
       // BetterSQLite3Transaction depending on dialect) that exposes the same
@@ -522,6 +543,7 @@ export class UserMutationService extends BaseService {
           }
 
           await insertInviteToken(txDb);
+          await recordCreatedEvent(txDb);
         });
       } catch (txErr) {
         // Self-healing: if user_ext is configured but the user_ext insert blew
@@ -540,6 +562,7 @@ export class UserMutationService extends BaseService {
             const txDb = tx as DrizzleTransactionLike;
             await txDb.insert(users).values(values);
             await insertInviteToken(txDb);
+            await recordCreatedEvent(txDb);
           });
         } else {
           throw txErr;
@@ -1009,12 +1032,14 @@ export class UserMutationService extends BaseService {
   async deleteUser(userId: number | string): Promise<void> {
     const { users, accounts, userRoles } = this.tables;
 
-    // Check if user exists
+    // Check if user exists. Email and name are read too so the delete event can
+    // identify the removed account to external systems (which routinely key on
+    // email), not just by an opaque id.
     let user;
     try {
       user = await this.db.query.users.findFirst({
         where: { id: userId },
-        columns: { id: true },
+        columns: { id: true, email: true, name: true },
       });
     } catch (err) {
       // Normalise raw driver errors so the DB kind is preserved.
@@ -1063,6 +1088,21 @@ export class UserMutationService extends BaseService {
 
         // Delete user
         await txDb.delete(users).where(eq(users.id, userId));
+
+        // Record a `user.deleted` event in the same transaction, so it commits
+        // with the removal and never fires for a rolled-back delete. PII-safe
+        // identity only; a delete carries no secret to strip.
+        await recordMutationEventInTx(txDb, this.dialect, {
+          type: "user.deleted",
+          resource: { kind: "user", id: String(userId) },
+          data: {
+            id: user.id,
+            email: user.email ?? null,
+            name: user.name ?? null,
+          },
+          fields: [],
+          actor: null,
+        });
       });
     } catch (err) {
       if (NextlyError.is(err)) throw err;

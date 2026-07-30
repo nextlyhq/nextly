@@ -40,6 +40,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
 import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
 import { users as usersSqlite } from "../../../schemas/users/sqlite";
+import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
@@ -73,7 +74,14 @@ async function usersDdl(): Promise<string[]> {
   const kit = await getSQLiteDrizzleKit();
   const statements = await kit.generateMigration(
     await kit.generateDrizzleJson({}),
-    await kit.generateDrizzleJson({ users: usersSqlite })
+    // `nextly_events` is included because createLocalUser now records a
+    // `user.created` outbox event in the same transaction (a core system table
+    // that always exists in a migrated app; recording is not resilient to its
+    // absence, matching the content write paths).
+    await kit.generateDrizzleJson({
+      users: usersSqlite,
+      nextlyEvents: eventsSqlite,
+    })
   );
   return splitStatements(statements);
 }

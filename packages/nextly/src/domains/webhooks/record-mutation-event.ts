@@ -12,12 +12,19 @@
  * @module domains/webhooks/record-mutation-event
  */
 
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import type { RequestActor } from "../../auth/request-actor";
 
 import { buildEnvelope } from "./envelope";
-import { recordEvent } from "./record-event";
+import {
+  recordEvent,
+  recordEventInTx,
+  type DrizzleEventTx,
+} from "./record-event";
 import {
   endpointsPresent,
   isWebhookAuditEnabled,
@@ -28,7 +35,7 @@ import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
-import type { WebhookEventType, WebhookResource } from "./types";
+import type { WebhookEvent, WebhookEventType, WebhookResource } from "./types";
 
 /**
  * Whether the changed resource opted out of webhook recording. Resolves the
@@ -73,39 +80,26 @@ export interface RecordMutationEventArgs {
 }
 
 /**
- * Build the envelope for one mutation and append it to the outbox inside `tx`.
+ * Run the recording gates and build the envelope, or return null when the
+ * mutation records nothing. Shared by both recorders so the policy (opt-out,
+ * endpoint/audit gate, envelope assembly, secret stripping) lives in ONE place
+ * regardless of which transaction mechanism appends the row.
  *
- * The insert shares the caller's transaction, so the event commits with the
- * content change and is never recorded for a write that later rolls back.
- *
- * @returns `true` when an outbox event was appended; `false` when the resource
- * opted out of recording. Callers gate their post-commit webhook work (fast
- * drain, retention pass) on this, so an opted-out write schedules nothing.
+ * The gate inputs are read synchronously with NO database access — safe inside
+ * a write transaction, where a read would deadlock a single-connection pool,
+ * cache a stale snapshot, or poison the transaction. The opt-out keeps
+ * PII-bearing content (e.g. form submissions) out of the outbox entirely; the
+ * endpoint/audit gate avoids paying the INSERT + full serialization for an event
+ * no subscriber would receive. Both fail open until primed and reconcile within
+ * the flag TTL across processes; a few events recorded just before the last
+ * endpoint is removed are pruned by retention.
  */
-export async function recordMutationEvent(
-  tx: TransactionContext,
+function prepareMutationEnvelope(
   args: RecordMutationEventArgs
-): Promise<boolean> {
-  // Collection/single opt-out: a resource whose entity set `webhooks: false`
-  // records nothing, so PII-bearing content (e.g. form submissions carrying
-  // ipAddress/userAgent) never enters the outbox or the delivery path. Enforced
-  // here at the single seam so every write path inherits it.
+): WebhookEvent | null {
   if (!resourceRecordingEnabled(args.resource)) {
-    return false;
+    return null;
   }
-
-  // Endpoint/audit gate: an install with no enabled endpoint and the audit seam
-  // off records nothing, so a mutation never pays the outbox INSERT + full
-  // document serialization for an event no subscriber would receive. Both inputs
-  // are read synchronously with NO database access — safe inside this write
-  // transaction, where a read would deadlock a single-connection pool, cache a
-  // stale transaction snapshot, or poison the transaction on failure. Endpoint
-  // presence is a flag refreshed out of band (boot, endpoint CRUD, and a stale-
-  // read background reload), and fails open until primed. Race contract: a same-
-  // process endpoint change refreshes the flag immediately; an endpoint changed
-  // in another process is picked up within the flag TTL; a few events recorded
-  // just before the last endpoint is removed may remain and are pruned by
-  // retention.
   if (
     !shouldRecordEvent({
       collectionAllows: true,
@@ -113,10 +107,10 @@ export async function recordMutationEvent(
       hasEndpoints: endpointsPresent(),
     })
   ) {
-    return false;
+    return null;
   }
 
-  const envelope = buildEnvelope({
+  return buildEnvelope({
     id: (args.newId ?? (() => crypto.randomUUID()))(),
     type: args.type,
     timestamp: args.timestamp ?? new Date(),
@@ -130,7 +124,32 @@ export async function recordMutationEvent(
       ? { statusChange: args.statusChange }
       : {}),
   });
+}
 
+export async function recordMutationEvent(
+  tx: TransactionContext,
+  args: RecordMutationEventArgs
+): Promise<boolean> {
+  const envelope = prepareMutationEnvelope(args);
+  if (!envelope) return false;
   await recordEvent(tx, { envelope });
+  return true;
+}
+
+/**
+ * Drizzle-transaction variant of {@link recordMutationEvent}, for services that
+ * write through `BaseService.withTransaction` (a Drizzle transaction) instead of
+ * the adapter's positional `TransactionContext` — the auth/user service and
+ * plugin write paths. Same gates, same envelope, same atomicity; only the row
+ * append differs (Drizzle fluent insert vs. the positional context).
+ */
+export async function recordMutationEventInTx(
+  tx: DrizzleEventTx,
+  dialect: SupportedDialect,
+  args: RecordMutationEventArgs
+): Promise<boolean> {
+  const envelope = prepareMutationEnvelope(args);
+  if (!envelope) return false;
+  await recordEventInTx(tx, dialect, { envelope });
   return true;
 }
