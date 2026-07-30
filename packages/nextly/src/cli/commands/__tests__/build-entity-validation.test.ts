@@ -8,6 +8,10 @@
  * the "nothing to build" shortcut returns before the later validation step and
  * a project can be made entirely of singles and field groups.
  */
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, it, expect, vi, afterEach } from "vitest";
 
 import {
@@ -154,5 +158,37 @@ describe("nextly build validates every entity kind", () => {
     // the build: the single's types are exactly what this run has to write.
     expect(lines.join("\n")).toContain("No collections defined in config");
     expect(lines.join("\n")).not.toContain("Add collections to your");
+  });
+
+  it("narrows PermissionSlug in a build with no collections", async () => {
+    // A singles-only project is exactly what the schema gate now builds for,
+    // and it is where the names matter most: without them the written file
+    // declares `PermissionSlug` as bare `string`, so a deployment build widens
+    // what a development run had narrowed.
+    const cwd = mkdtempSync(join(tmpdir(), "nextly-build-"));
+    try {
+      stubConfig({
+        collections: [],
+        singles: [
+          { slug: "homepage", fields: [{ name: "title", type: "text" }] },
+        ],
+        typescript: { outputFile: "nextly-types.ts" },
+      });
+
+      const { logger, lines } = createCaptureLogger();
+      const context: CommandContext = { logger, options: {}, cwd };
+
+      // `generateAllFiles` resolves output against `options.cwd`, not the
+      // command context, so the temp directory has to be passed here.
+      await runBuild({ zod: false, cwd }, context);
+
+      const report = lines.join("\n");
+      expect(report).not.toContain("No schema defined in config");
+      const written = readFileSync(join(cwd, "nextly-types.ts"), "utf-8");
+      expect(written).toContain('"read-homepage"');
+      expect(written).not.toMatch(/PermissionSlug\s*=\s*string\s*;/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
