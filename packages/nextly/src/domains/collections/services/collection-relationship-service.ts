@@ -1041,6 +1041,57 @@ export class CollectionRelationshipService extends BaseService {
    * has not been given the caller yet would judge everyone anonymous and hide
    * rows from entitled callers.
    */
+  /**
+   * Read the rows a relationship points at, as this caller may see them.
+   *
+   * The only place a related row is fetched. Six call sites used to repeat the
+   * same five steps — resolve the schema, select by id, normalize timestamps,
+   * apply the target collection's read rules, redact its protected fields — and
+   * every capability a related row was missing had to be added to each of them
+   * and then audited for the one that was forgotten. That audit has been run
+   * three times: for the caller's scope, for the read locale, and for two
+   * caches. Behind one seam each of those becomes a single change.
+   *
+   * System entities keep the lean path deliberately: they have no collection
+   * record, so no stored rules and no hooks apply, and their secrets are
+   * stripped by column name during redaction instead.
+   *
+   * Returns only the rows this caller may read. A refused row is simply absent —
+   * one unreadable reference must not refuse the whole parent read — so callers
+   * must not assume the result lines up with the ids they asked for.
+   */
+  private async readTargetRows(
+    targetCollection: string,
+    ids: string[],
+    access: RelatedRowAccess
+  ): Promise<Record<string, unknown>[]> {
+    if (ids.length === 0) return [];
+
+    const schema = isSystemEntity(targetCollection)
+      ? getSystemEntityTable(targetCollection)
+      : await this.fileManager.loadDynamicSchema(targetCollection);
+    if (!schema) return [];
+
+    const entries = (await this.db
+      .select()
+      .from(schema)
+      .where(inArray(schema.id, ids))) as Record<string, unknown>[];
+
+    const rows = entries.map(entry =>
+      convertTimestampsToCamelCase({ ...entry })
+    );
+    const readable = await this.filterRowsByCollectionAccess(
+      targetCollection,
+      rows,
+      access
+    );
+    // Redaction runs before any caller derives a label from a row: a label
+    // copies a field's value under another key, so one taken from an unredacted
+    // row survives the redaction of its own source field.
+    await this.redactRelatedRows(targetCollection, readable, access);
+    return readable;
+  }
+
   private async filterRowsByCollectionAccess(
     targetCollection: string,
     rows: Record<string, unknown>[],
@@ -2062,24 +2113,11 @@ export class CollectionRelationshipService extends BaseService {
           field.options?.targetLabelField
         );
 
-        // Batch fetch all entries from system entity
-        const entries = await this.db
-          .select()
-          .from(targetSchema)
-          .where(inArray(targetSchema.id, relatedIds));
-
-        // Redact before labelling, for the same reason as the dynamic branch
-        // below: the label copies a field value under another key, so it must
-        // be taken from a row that has already been stripped.
-        const rows = entries.map((entry: Record<string, unknown>) =>
-          convertTimestampsToCamelCase({ ...entry })
-        );
-        const readable = await this.filterRowsByCollectionAccess(
+        const readable = await this.readTargetRows(
           targetCollection,
-          rows,
+          relatedIds,
           access
         );
-        await this.redactRelatedRows(targetCollection, readable, access);
         for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
@@ -2088,32 +2126,16 @@ export class CollectionRelationshipService extends BaseService {
         }
       } else {
         // Handle dynamic collections
-        const targetSchema =
-          await this.fileManager.loadDynamicSchema(targetCollection);
         const labelField = await this.getBestLabelField(
           targetCollection,
           field.options?.targetLabelField
         );
 
-        // Batch fetch all entries using Drizzle's inArray helper
-        const entries = await this.db
-          .select()
-          .from(targetSchema)
-          .where(inArray(targetSchema.id, relatedIds));
-
-        // Redact BEFORE deriving the label. The label is a copy of a field's
-        // value under a different key, so a label taken from a row that has not
-        // been redacted yet survives the redaction of its own source field and
-        // hands back the protected value under `label`.
-        const rows = entries.map((entry: Record<string, unknown>) =>
-          convertTimestampsToCamelCase({ ...entry })
-        );
-        const readable = await this.filterRowsByCollectionAccess(
+        const readable = await this.readTargetRows(
           targetCollection,
-          rows,
+          relatedIds,
           access
         );
-        await this.redactRelatedRows(targetCollection, readable, access);
         for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
@@ -2211,48 +2233,13 @@ export class CollectionRelationshipService extends BaseService {
         return resultMap;
       }
 
-      // Batch fetch all target entries
-      const targetSchema =
-        await this.fileManager.loadDynamicSchema(targetCollectionName);
       const labelField = await this.getBestLabelField(
         targetCollectionName,
         field.options?.targetLabelField
       );
-
-      console.log(
-        `[ManyToMany Expand] Target collection: ${targetCollectionName}, Label field: ${labelField}`
-      );
-
-      // Batch fetch all target entries using Drizzle's inArray
-      const targetEntries = await this.db
-        .select()
-        .from(targetSchema)
-        .where(inArray(targetSchema.id, allTargetIds));
-
-      console.log(
-        `[ManyToMany Expand] Fetched ${targetEntries.length} target entries`
-      );
-      if (targetEntries.length > 0) {
-        console.log(
-          `[ManyToMany Expand] Sample entry:`,
-          JSON.stringify(targetEntries[0], null, 2)
-        );
-      }
-
-      // Redact before labelling: the label copies a field's value under
-      // another key, so taking it from an unredacted row would return a
-      // protected value that the redaction of its source field cannot reach.
-      const targetRows = targetEntries.map((entry: Record<string, unknown>) =>
-        convertTimestampsToCamelCase({ ...entry })
-      );
-      const readableTargetRows = await this.filterRowsByCollectionAccess(
+      const readableTargetRows = await this.readTargetRows(
         targetCollectionName,
-        targetRows,
-        access
-      );
-      await this.redactRelatedRows(
-        targetCollectionName,
-        readableTargetRows,
+        allTargetIds,
         access
       );
 
@@ -2262,9 +2249,6 @@ export class CollectionRelationshipService extends BaseService {
           // Falls back to the id when the label's source field did not survive
           // redaction.
           const label = row[labelField] || row.id;
-          console.log(
-            `[ManyToMany Expand] Entry ${String(row.id)}: labelField="${labelField}", value="${String(label)}"`
-          );
           return [row.id, { ...row, label }];
         })
       );
@@ -2894,55 +2878,15 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess = {}
   ): Promise<Record<string, unknown> | null> {
     try {
-      // Check if this is a system entity (like "users")
-      if (isSystemEntity(collectionName)) {
-        const targetSchema = getSystemEntityTable(collectionName);
-        if (!targetSchema) {
-          return null;
-        }
-
-        const [entry] = await this.db
-          .select()
-          .from(targetSchema)
-          .where(eq(targetSchema.id, entryId))
-          .limit(1);
-
-        if (!entry) return null;
-        const normalized = convertTimestampsToCamelCase({ ...entry });
-        const [readable] = await this.filterRowsByCollectionAccess(
-          collectionName,
-          [normalized],
-          access
-        );
-        // Reads as absent rather than as an error: one unreadable reference
-        // must not refuse the whole parent read, and the caller learns no more
-        // than a reference pointing at nothing would tell them.
-        if (!readable) return null;
-        await this.redactRelatedRows(collectionName, [readable], access);
-        return readable;
-      } else {
-        // Handle dynamic collections
-        const schema = await this.fileManager.loadDynamicSchema(collectionName);
-        const [entry] = await this.db
-          .select()
-          .from(schema)
-          .where(eq(schema.id, entryId))
-          .limit(1);
-
-        if (!entry) return null;
-        const normalized = convertTimestampsToCamelCase({ ...entry });
-        const [readable] = await this.filterRowsByCollectionAccess(
-          collectionName,
-          [normalized],
-          access
-        );
-        // Reads as absent rather than as an error: one unreadable reference
-        // must not refuse the whole parent read, and the caller learns no more
-        // than a reference pointing at nothing would tell them.
-        if (!readable) return null;
-        await this.redactRelatedRows(collectionName, [readable], access);
-        return readable;
-      }
+      const [readable] = await this.readTargetRows(
+        collectionName,
+        [entryId],
+        access
+      );
+      // Reads as absent rather than as an error: one unreadable reference must
+      // not refuse the whole parent read, and the caller learns no more than a
+      // reference pointing at nothing would tell them.
+      return readable ?? null;
     } catch {
       return null;
     }
@@ -3055,32 +2999,15 @@ export class CollectionRelationshipService extends BaseService {
         return [];
       }
 
-      // Fetch the actual entries using MySQL-compatible IN clause
-      const targetSchema =
-        await this.fileManager.loadDynamicSchema(targetCollectionName);
-
-      // Build IN clause with parameterized values for MySQL compatibility
-      const placeholders = sql.join(
-        relatedIds.map((id: string) => sql`${id}`),
-        sql.raw(", ")
-      );
-
-      const entries = await this.db
-        .select()
-        .from(targetSchema)
-        .where(sql`${targetSchema.id} IN (${placeholders})`);
-
-      const normalized = (entries || []).map((entry: Record<string, unknown>) =>
-        convertTimestampsToCamelCase({ ...entry })
-      );
-      const readable = await this.filterRowsByCollectionAccess(
+      // Through the shared reader, which binds the id list with Drizzle's
+      // `inArray` rather than assembling the IN clause by hand. The sibling
+      // many-to-many batch path has always used `inArray` and passes on MySQL,
+      // so the hand-built list this replaces was not buying compatibility.
+      return await this.readTargetRows(
         targetCollectionName,
-        normalized,
+        relatedIds,
         access
       );
-      // Strip related-row secrets before rows are spread into responses.
-      await this.redactRelatedRows(targetCollectionName, readable, access);
-      return readable;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];
