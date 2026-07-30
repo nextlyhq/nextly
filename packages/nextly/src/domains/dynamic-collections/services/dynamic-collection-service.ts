@@ -413,7 +413,7 @@ export class DynamicCollectionService extends BaseService {
         this.adapter,
         args.tableName,
         args.oldFields
-      ),
+      ).then(cols => cols.map(c => c.name)),
     });
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
     // is split on `--> statement-breakpoint` and each chunk is run as ONE statement, so a

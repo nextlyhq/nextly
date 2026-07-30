@@ -461,11 +461,21 @@ export async function companionHasStatusColumn(
  * Both are the same physical fact, so they read it the same way rather than each introspecting
  * to its own shape.
  */
+/** One translatable column the main table carries, and whether it accepts nulls. */
+export interface MainColumnPresence {
+  name: string;
+  /**
+   * False for a column that was required before localization. Once the companion exists its value
+   * is written there instead, so the main insert omits it and the constraint fails every create.
+   */
+  nullable: boolean;
+}
+
 export async function localizedColumnsOnMain(
   adapter: CompanionIntrospectAdapter,
   tableName: string,
   localized: readonly CompanionFieldLike[]
-): Promise<string[]> {
+): Promise<MainColumnPresence[]> {
   if (localized.length === 0) return [];
   const { introspectLiveSnapshot } = await import(
     "../../schema/pipeline/diff/introspect-live"
@@ -475,13 +485,15 @@ export async function localizedColumnsOnMain(
     adapter.dialect,
     [tableName]
   );
-  const present = new Set(
-    snapshot.tables.find(t => t.name === tableName)?.columns.map(c => c.name) ??
-      []
+  const present = new Map(
+    snapshot.tables
+      .find(t => t.name === tableName)
+      ?.columns.map(c => [c.name, c.nullable !== false] as const) ?? []
   );
   return localized
     .map(f => toColumn(f.name))
-    .filter(column => present.has(column));
+    .filter(column => present.has(column))
+    .map(name => ({ name, nullable: present.get(name) === true }));
 }
 
 /**
@@ -540,9 +552,12 @@ async function buildSeedingCreateStatements(
 ): Promise<string[] | null> {
   if (!args.sourceLocale) return null;
 
-  const present = new Set(
-    await localizedColumnsOnMain(adapter, args.tableName, newLocalized)
+  const onMain = await localizedColumnsOnMain(
+    adapter,
+    args.tableName,
+    newLocalized
   );
+  const present = new Set(onMain.map(c => c.name));
 
   const { deriveCompanionSpec } = await import(
     "../migration/derive-companion-spec"
@@ -575,7 +590,12 @@ async function buildSeedingCreateStatements(
   // through the companion, and `nextly migrate` removes them under supervision.
   return buildLocalizationUpStatements(
     { ...spec, columnsOnMain },
-    { dropSeededColumns: false }
+    {
+      dropSeededColumns: false,
+      // Retained columns that were required must stop being so, or the first create after this
+      // transition fails: the value now goes to the companion, so the main insert omits it.
+      relaxColumns: onMain.filter(c => !c.nullable).map(c => c.name),
+    }
   );
 }
 
@@ -640,10 +660,16 @@ export async function ensureCompanionTable(
     // win decides. Boot-time provisioning has no locale to offer, so it defers here and leaves the
     // entity to the path that does; #382's write guard keeps a non-default write from doing damage
     // in the meantime.
+    // `args.status` counts as something to seed even with no column to copy: a Draft/Published
+    // entity needs a default-locale companion row carrying the main row's status, or its published
+    // rows drop out of locale-aware published reads. The seeding plan already treats status that
+    // way, so this guard has to agree or a locale-less caller creates the very companion the plan
+    // would have populated.
     if (
       !args.sourceLocale &&
-      (await localizedColumnsOnMain(adapter, args.tableName, newLocalized))
-        .length > 0
+      (args.status === true ||
+        (await localizedColumnsOnMain(adapter, args.tableName, newLocalized))
+          .length > 0)
     ) {
       onError?.(
         new Error(

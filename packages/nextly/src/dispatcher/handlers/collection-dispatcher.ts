@@ -802,7 +802,7 @@ const COLLECTIONS_METHODS: Record<
               adapter,
               tableName,
               oldFields
-            ),
+            ).then(cols => cols.map(c => c.name)),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is

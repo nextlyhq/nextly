@@ -252,7 +252,7 @@ async function reconcileComponentCompanion(args: {
       adapter,
       tableName,
       oldFields
-    ),
+    ).then(cols => cols.map(c => c.name)),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first

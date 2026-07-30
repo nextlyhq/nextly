@@ -75,6 +75,15 @@ export interface LocalizationUpOptions {
    * `nextly migrate` can remove them under supervision. Redundant beats unrecoverable.
    */
   dropSeededColumns?: boolean;
+  /**
+   * Retained columns that are NOT NULL on the main table and must stop being so.
+   *
+   * Only meaningful with `dropSeededColumns: false`. A field that was required before localization
+   * leaves a NOT NULL column behind, and once the companion exists its value is written there
+   * instead — so the main insert omits it and every subsequent create fails the constraint. The
+   * column has to be relaxed or removed; leaving it as-is breaks writes outright.
+   */
+  relaxColumns?: readonly string[];
 }
 
 /**
@@ -122,13 +131,48 @@ export function buildLocalizationUpStatements(
         ]
       : [];
 
-  const drops =
-    options.dropSeededColumns === false
-      ? []
-      : onMain.map(
-          c =>
-            `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
-        );
+  const retaining = options.dropSeededColumns === false;
+  const mustRelax = new Set(options.relaxColumns ?? []);
+  const constrained = onMain.filter(c => mustRelax.has(c.name));
 
-  return [create, ...seed, ...drops];
+  // SQLite cannot change a column's nullability — the schema pipeline refuses `change_column_nullable`
+  // for it, and the only alternative is rebuilding the table. So a retained NOT NULL column is
+  // dropped there instead: its value has just been copied into the companion, whereas leaving it
+  // would fail every create from this point on. Retaining is a safety measure, and a column that
+  // breaks writes is not the safe option.
+  const relaxations = retaining
+    ? constrained.map(c =>
+        dialect === "sqlite"
+          ? `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
+          : relaxNotNull(mainTable, c, dialect)
+      )
+    : [];
+
+  const drops = retaining
+    ? []
+    : onMain.map(
+        c =>
+          `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
+      );
+
+  return [create, ...seed, ...relaxations, ...drops];
+}
+
+/**
+ * Make one main-table column nullable.
+ *
+ * PostgreSQL states the change directly; MySQL has no equivalent and must restate the whole
+ * column definition, which is why the type is rebuilt here rather than read back from the server.
+ * SQLite supports neither and never reaches this.
+ */
+function relaxNotNull(
+  mainTable: string,
+  col: Parameters<typeof ddlType>[0],
+  dialect: CompanionMigrationSpec["dialect"]
+): string {
+  const table = q(mainTable, dialect);
+  const name = q(col.name, dialect);
+  return dialect === "mysql"
+    ? `ALTER TABLE ${table} MODIFY COLUMN ${name} ${ddlType(col, dialect)} NULL`
+    : `ALTER TABLE ${table} ALTER COLUMN ${name} DROP NOT NULL`;
 }

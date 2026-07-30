@@ -121,3 +121,50 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     });
   }
 );
+
+describe("retained columns that were required", () => {
+  // A field that was required before localization leaves a NOT NULL column on main. Once the
+  // companion exists the value is written there instead, so the main insert omits it — and the
+  // constraint then fails every create. Retaining is a safety measure; a retained column that
+  // breaks writes is not the safe option.
+  const options = { dropSeededColumns: false, relaxColumns: ["title"] };
+
+  it("relaxes the constraint on postgres", () => {
+    const statements = buildLocalizationUpStatements(
+      spec("postgresql"),
+      options
+    );
+
+    expect(statements).toContain(
+      `ALTER TABLE "dc_pages" ALTER COLUMN "title" DROP NOT NULL`
+    );
+  });
+
+  it("restates the column to relax it on mysql, which has no direct form", () => {
+    const statements = buildLocalizationUpStatements(spec("mysql"), options);
+
+    expect(
+      statements.some(
+        s => s.includes("MODIFY COLUMN `title`") && s.endsWith("NULL")
+      )
+    ).toBe(true);
+  });
+
+  it("drops it on sqlite, which cannot change nullability at all", () => {
+    // The schema pipeline refuses `change_column_nullable` for SQLite and the only alternative is
+    // rebuilding the table. The value has just been copied into the companion, so dropping loses
+    // nothing — whereas retaining it fails every create from here on.
+    const statements = buildLocalizationUpStatements(spec("sqlite"), options);
+
+    expect(statements).toContain(`ALTER TABLE "dc_pages" DROP COLUMN "title"`);
+  });
+
+  it("leaves an already-nullable retained column alone", () => {
+    const statements = buildLocalizationUpStatements(spec("postgresql"), {
+      dropSeededColumns: false,
+    });
+
+    expect(statements.some(s => s.includes("DROP NOT NULL"))).toBe(false);
+    expect(statements.some(s => s.includes("DROP COLUMN"))).toBe(false);
+  });
+});
