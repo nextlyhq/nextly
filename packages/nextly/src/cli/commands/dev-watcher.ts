@@ -8,6 +8,9 @@
  * @module cli/commands/dev-watcher
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -73,6 +76,15 @@ export function createDebouncedSync(
         // type rejects — the state this check exists to keep out of the
         // database.
         assertPluginFieldDeclarations(configToSync.config);
+
+        // The same reasoning, for storage rather than declarations. A migration
+        // can begin after the watcher starts, so checking only at boot leaves
+        // every later save free to reconcile — and, with `--remove-orphaned`,
+        // delete — tables that are halfway through being renamed.
+        await assertNoMigrationInFlight({
+          adapter: adapter as unknown as DrizzleAdapter,
+          logger,
+        });
 
         // Unconditional, so the orphan scan still runs when the config declares none of a
         // type: deleting the last entry of a kind is precisely what orphans its table, making
