@@ -206,10 +206,14 @@ describe("localized target read predicates (integration)", () => {
   it("agrees with the target collection's own list read", async () => {
     const { handler, refId } = await boot();
 
-    // The property the whole change exists to establish: a row is readable
-    // through a relationship exactly when the collection that owns it says it
-    // is readable. Asserted per language, because the rule answers each one
-    // differently.
+    // What this change exists to establish: for a rule filtering on a localized
+    // field, expansion admits exactly the rows the collection's own list read
+    // admits. Asserted per language, because the rule answers each differently.
+    //
+    // Scoped to that rule deliberately. The two paths still differ elsewhere —
+    // a list read filters main rows by status and expansion does not, and
+    // `getEntry` applies no query predicate at all — so a blanket equality
+    // between them would be asserting something untrue.
     for (const locale of ["en", "de"]) {
       expect(await populatedIds(handler, refId, "emea-only", locale)).toEqual(
         await listedIds(handler, "emea-only", locale)
