@@ -90,13 +90,28 @@ async function boot(): Promise<Seeded> {
 
   // The German translation of the permitted page says something else, so the
   // language the filter names decides whether it is readable.
-  await handler.updateEntry({
-    collectionName: "pages",
-    entryId: emeaId,
-    data: { region: "apac" },
-    locale: "de",
-    overrideAccess: true,
-  });
+  const translated = await handler.updateEntry(
+    {
+      collectionName: "pages",
+      entryId: emeaId,
+      locale: "de",
+      overrideAccess: true,
+    },
+    { region: "apac" }
+  );
+  expect(translated.success, "the German translation should be written").toBe(
+    true
+  );
+  // Asserted because an absent translation withholds for the same reason a
+  // non-matching one does: without this, a test asserting "German withholds"
+  // would pass on a page that simply has no German row.
+  const german = (
+    (await current.adapter.select("dc_pages_locales")) as Record<
+      string,
+      unknown
+    >[]
+  ).find(row => row._parent === emeaId && row._locale === "de");
+  expect(german?.region).toBe("apac");
 
   const ref = await handler.createEntry(
     { collectionName: "refs", overrideAccess: true },
