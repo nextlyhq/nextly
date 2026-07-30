@@ -239,6 +239,15 @@ let watcherReloadOptions: LoadConfigOptions | null = null;
  */
 let watcherGeneration = 0;
 
+/**
+ * The field-type registry the currently installed config loaded.
+ *
+ * A superseded reload finishing last leaves its own registrations live. This is
+ * what it has to put back — the set belonging to whoever is watching now, not
+ * whatever the registry happened to hold before that reload started.
+ */
+let installedFieldTypes: ReadonlyMap<string, PluginFieldType> | null = null;
+
 const changeCallbacks: Set<ConfigChangeCallback> = new Set();
 
 function findConfigFile(cwd: string): string | undefined {
@@ -286,7 +295,17 @@ async function runWatchReload(options: LoadConfigOptions): Promise<void> {
     // flight, so this result describes a config nothing is watching. Delivering
     // it would hand the replacement watcher's callbacks the previous config,
     // which they would apply until the replacement's own reload arrived.
-    if (generation !== watcherGeneration) return;
+    if (generation !== watcherGeneration) {
+      // The load cleared and rebuilt the live registry on its way through, so
+      // the set left behind is this obsolete config's. Put back whatever the
+      // watcher that is actually installed loaded, or every later lookup would
+      // classify its fields with the wrong storage primitives.
+      if (installedFieldTypes) restoreFieldTypes(installedFieldTypes);
+      return;
+    }
+
+    // This reload is the live one, so its registry is the authoritative set.
+    installedFieldTypes = result.fieldTypes ?? snapshotFieldTypes();
 
     for (const callback of changeCallbacks) {
       try {
@@ -338,6 +357,11 @@ function scheduleWatchReload(options: LoadConfigOptions): void {
       scheduleWatchReload(watcherReloadOptions);
     }
   });
+}
+
+/** Record the registry a freshly installed config left live. */
+function markInstalledFieldTypes(result: LoadConfigResult): void {
+  installedFieldTypes = result.fieldTypes ?? snapshotFieldTypes();
 }
 
 function stopWatching(): void {
@@ -625,6 +649,9 @@ export async function loadConfig(
   const result = await loadConfigInternal(options);
 
   cachedConfig = result;
+  // This config is now the installed one, so its registry is what a superseded
+  // reload has to put back if it finishes after the swap.
+  markInstalledFieldTypes(result);
 
   if (options.watch && result.configPath) {
     startWatching(result.configPath, options);

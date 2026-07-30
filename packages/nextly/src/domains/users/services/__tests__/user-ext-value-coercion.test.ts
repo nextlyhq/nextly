@@ -128,6 +128,35 @@ describe("coerceUserExtValue", () => {
     );
   });
 
+  it("refuses a JSON value that cannot be serialized", () => {
+    registerFieldType({
+      type: "blobby",
+      storage: "json",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    // `JSON.stringify` throws on a cycle and on a BigInt, and yields undefined
+    // for a function — each reaching the column as a failure the create path
+    // reads as a missing table.
+    expect(() =>
+      coerceUserExtValue(cyclic, { name: "b", type: "blobby" })
+    ).toThrow(NextlyError);
+    expect(() =>
+      coerceUserExtValue(10n, { name: "b", type: "blobby" })
+    ).toThrow(NextlyError);
+    expect(() =>
+      coerceUserExtValue(() => 1, { name: "b", type: "blobby" })
+    ).toThrow(NextlyError);
+    // A representable document still passes.
+    expect(coerceUserExtValue({ a: 1 }, { name: "b", type: "blobby" })).toEqual(
+      { a: 1 }
+    );
+  });
+
   it("refuses an Invalid Date object", () => {
     registerFieldType({
       type: "occurred3",

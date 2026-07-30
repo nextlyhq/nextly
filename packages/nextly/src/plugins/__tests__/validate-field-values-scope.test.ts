@@ -45,4 +45,17 @@ describe("validateFieldValues scope", () => {
 
     expect(issues).toEqual([]);
   });
+
+  it("refuses a declaration whose type nothing knows", async () => {
+    // The internal validator assumes its declarations were already
+    // config-validated, so an unknown token reaches its default branch and any
+    // value passes. A caller writing declarations by hand has had nothing check
+    // them, so a typo would read as a clean pass.
+    const issues = await validateFieldValues({ score: "anything" }, [
+      { name: "score", type: "numbre" },
+    ]);
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe("score");
+  });
 });

@@ -345,8 +345,17 @@ export async function runDbSync(
       await performPermissionSeeding(adapter, options, context);
     });
 
-    // Step 7: Watch mode (only makes sense with collections or singles)
-    if (options.watch && (collectionCount > 0 || singleCount > 0)) {
+    // Step 7: Watch mode. Gated on any entity kind this command syncs, not just
+    // collections and singles: `loadConfig({ watch: true })` has already opened
+    // the file watcher, so a user-fields-only project stayed alive with no
+    // callback registered and never re-synced `user_ext` on a later edit.
+    if (
+      options.watch &&
+      (collectionCount > 0 ||
+        singleCount > 0 ||
+        componentCount > 0 ||
+        userFieldCount > 0)
+    ) {
       logger.newline();
       logger.divider();
       logger.info("Watching for config changes... (press Ctrl+C to stop)");

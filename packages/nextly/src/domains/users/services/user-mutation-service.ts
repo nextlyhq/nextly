@@ -213,6 +213,20 @@ export function coerceUserExtValue(
     ) {
       throw userExtValueError(name, "text");
     }
+    // A JSON column stores what `JSON.stringify` can represent. A BigInt or a
+    // cycle throws there, a function or symbol silently becomes `undefined`,
+    // and either way the failure is read as the extension table being absent —
+    // so the value is answered for here instead of vanishing.
+    if (token === "json") {
+      try {
+        if (JSON.stringify(value) === undefined) {
+          throw userExtValueError(name, "a JSON value");
+        }
+      } catch (error) {
+        if (NextlyError.isValidation(error)) throw error;
+        throw userExtValueError(name, "a JSON value");
+      }
+    }
   }
 
   if (typeof value !== "string") return value;

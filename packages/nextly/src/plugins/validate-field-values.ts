@@ -16,11 +16,18 @@
  *
  * @module plugins/validate-field-values
  */
+import { ALL_FIELD_TYPES } from "../collections/fields/types";
+import { hasFieldType } from "../domains/schema/field-types/field-type-registry";
 import type {
   ValidatableField,
   ValidationIssue,
 } from "../shared/lib/entry-validation";
 import { validateEntryData } from "../shared/lib/entry-validation";
+
+/** Canonical tokens, for telling a typo apart from a plugin's own type. */
+const BUILT_IN_FIELD_TYPES = new Set<string>(
+  ALL_FIELD_TYPES as readonly string[]
+);
 
 export type { ValidationIssue };
 
@@ -120,6 +127,29 @@ export async function validateFieldValues(
   fields: readonly FieldValueDeclarationInput[],
   options: ValidateFieldValuesOptions = {}
 ): Promise<ValidationIssue[]> {
+  // The internal validator assumes its declarations already passed config
+  // validation, so a token it does not know reaches its default branch and any
+  // value for that field is reported as valid. A caller writing declarations by
+  // hand has had nothing check them, so a typo would read as a clean pass.
+  const unknownTypes = fields.filter(field => {
+    const type = (field as { type?: unknown }).type;
+    return (
+      typeof type !== "string" ||
+      !(BUILT_IN_FIELD_TYPES.has(type) || hasFieldType(type))
+    );
+  });
+  if (unknownTypes.length > 0) {
+    return unknownTypes.map(field => {
+      const name = (field as { name?: unknown }).name;
+      const path = typeof name === "string" ? name : "fields";
+      return {
+        path,
+        code: "INVALID_FIELD_TYPE",
+        message: `${path} declares an unknown field type.`,
+      };
+    });
+  }
+
   // Both arms describe the same field, one open for authoring and one the
   // minimal shape existing configs already satisfy; the validator reads only
   // what the minimal shape names.
