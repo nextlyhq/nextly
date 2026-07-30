@@ -110,6 +110,13 @@ export function withoutDisabledBehavior(
   // makes generation fall back to the storage primitive, which is declarative
   // and is what the retained schema means.
   delete declarative.codegen;
+  // `emptyValue` is behavior on the same terms: it is the plugin's code, run
+  // when a column is backfilled and when a single is seeded on first read.
+  // Left in place, disabling a plugin could still fail a migration or a read
+  // through a callback that depends on services the plugin no longer starts.
+  // Dropping it falls back to the storage primitive's own empty, which is the
+  // declarative meaning of a retained schema.
+  delete declarative.emptyValue;
   return declarative;
 }
 

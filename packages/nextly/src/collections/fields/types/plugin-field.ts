@@ -86,7 +86,13 @@ export function pluginField<const T extends PluginFieldInput>(
           type: "this is a built-in field type; declare it with its own factory so its shape is checked";
         }
       : unknown)
-): PluginDataFieldConfig {
+): T & PluginDataFieldConfig {
+  // The declared shape is carried through rather than collapsed to the marker
+  // interface. A plugin's own factory wraps this call, so returning only the
+  // marker would erase the config type it was given: `blocks(...).blocks` would
+  // read as `unknown`, and annotating a reusable declaration with the plugin's
+  // own config type would stop compiling.
+  //
   // Built rather than asserted, so the value really carries what its type says.
   // A symbol key is invisible to `JSON.stringify` and to `Object.keys`, so the
   // declaration serializes and enumerates exactly as it was written.

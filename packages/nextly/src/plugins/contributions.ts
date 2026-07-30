@@ -4,7 +4,7 @@ import type {
   FieldSurface,
   FieldTypeCategory,
 } from "../collections/fields/catalog";
-import type { FieldConfig } from "../collections/fields/types";
+import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { EmailProviderAdapter } from "../domains/email/types";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -441,8 +441,18 @@ export interface PluginContributions {
   singles?: SingleConfig[];
   /** @public Plugin-owned field groups. */
   fieldGroups?: FieldGroupConfig[];
-  /** @public Add fields to existing entities by slug. */
-  extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
+  /**
+   * @public Add fields to existing entities by slug.
+   *
+   * Authored fields, not canonical ones: `collections`, `singles` and
+   * `fieldGroups` each arrive through a `define*` call that has already
+   * narrowed them, while these are written inline with nothing to narrow them,
+   * so a plugin's own contributed type has to be nameable here.
+   */
+  extend?: Array<{
+    target: string | string[];
+    fields: AuthorableFieldConfig[];
+  }>;
   /** @public Custom permissions; CRUD is auto-seeded separately. */
   permissions?: PluginPermission[];
   /** @experimental Role bundles — named sets of permissions, seeded on boot. */

@@ -626,6 +626,21 @@ export {
 // Component field type (also exported from ./collections/fields via barrel export)
 export type { FieldGroupFieldConfig } from "./collections/fields/types/component";
 
+// Declares an entry field whose type a plugin contributed. `FieldConfig` is a
+// closed union whose arms carry each built-in type's own errors, so it cannot
+// admit a contributed type without losing them; the brand opens the authoring
+// surfaces alone. The users surface solves the same problem the same way with
+// `pluginUserField` below.
+export {
+  pluginField,
+  pluginFieldBrand,
+} from "./collections/fields/types/plugin-field";
+export type {
+  AuthorableFieldConfig,
+  PluginDataFieldConfig,
+  PluginFieldInput,
+} from "./collections/fields/types/plugin-field";
+
 // ============================================================
 // USER MANAGEMENT
 // ============================================================

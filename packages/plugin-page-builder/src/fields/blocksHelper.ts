@@ -9,7 +9,7 @@
  * @module fields/blocksHelper
  */
 
-import { pluginField } from "nextly/config";
+import { pluginField } from "@nextlyhq/plugin-sdk";
 
 import type { BlocksFieldConfig } from "./blocks-options";
 import { BLOCKS_TYPE } from "./blocksField";

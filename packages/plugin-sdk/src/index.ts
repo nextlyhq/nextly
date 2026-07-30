@@ -61,6 +61,20 @@ export { text, textarea, checkbox, upload, group } from "nextly";
 export type { FieldConfig } from "nextly";
 
 /**
+ * Declaring a field of a type the plugin itself contributes. The built-in
+ * factories cover only the built-in types, so a contributed type has no factory
+ * to build its field with; `pluginField` brands one so the authoring surfaces
+ * accept it without widening the canonical union every internal reader holds.
+ * @public Exercised by `plugin-page-builder` (its `blocks()` factory).
+ */
+export { pluginField } from "nextly";
+export type {
+  AuthorableFieldConfig,
+  PluginDataFieldConfig,
+  PluginFieldInput,
+} from "nextly";
+
+/**
  * Validating values against field declarations. A plugin storing structured
  * content of its own — block props, form submissions — applies the same rules a
  * write does instead of reimplementing `required`, the per-type checks and
