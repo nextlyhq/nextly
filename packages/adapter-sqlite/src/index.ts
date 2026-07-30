@@ -727,6 +727,12 @@ export class SqliteAdapter extends DrizzleAdapter {
         return Promise.resolve();
       },
 
+      // `all`, not `run`: this is the reading half, and better-sqlite3 returns
+      // rows only from `all`. Synchronous, so the promise is already settled.
+      queryStatement: <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => Promise.resolve(txDb().all(statement)),
+
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
         sql: string,

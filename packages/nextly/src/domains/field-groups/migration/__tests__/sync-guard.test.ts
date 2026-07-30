@@ -1,4 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -171,12 +173,40 @@ function lockingAdapter(options: {
   };
   const ddl: string[] = [];
 
-  function matches(where: unknown): boolean {
-    const clauses =
-      (where as { and?: { column: string; value: unknown }[] }).and ?? [];
-    return clauses.every(clause =>
-      clause.column === "owner" ? lock.owner === clause.value : true
-    );
+  // Compiled through a real dialect, so the double interprets the SQL and the
+  // bound parameters an adapter would hand its driver rather than a
+  // query-builder call the lock no longer makes.
+  function interpret(statement: SQL): Record<string, unknown>[] {
+    const { sql: text, params } = new PgDialect().sqlToQuery(statement);
+    const flat = text.replace(/\s+/g, " ").trim();
+
+    if (
+      /^SELECT "\w+" FROM "nextly_field_group_lock" WHERE "id" = \$1$/.test(
+        flat
+      )
+    ) {
+      return lock.seeded ? [{ id: 1, owner: lock.owner }] : [];
+    }
+    if (
+      /^UPDATE "nextly_field_group_lock" SET "owner" = \$1 WHERE "id" = \$2$/.test(
+        flat
+      )
+    ) {
+      // An occupied row refuses a new claim, exactly as the real one does:
+      // `acquire` reads back what it wrote, so a double that overwrote a held
+      // lock would report a successful claim over a live migration.
+      if (lock.owner === null) lock.owner = params[0] as string | null;
+      return [];
+    }
+    if (
+      /^UPDATE "nextly_field_group_lock" SET "owner" = NULL WHERE "id" = \$1 AND "owner" = \$2$/.test(
+        flat
+      )
+    ) {
+      if (lock.owner === params[1]) lock.owner = null;
+      return [];
+    }
+    throw new Error(`unrecognised statement: ${flat}`);
   }
 
   const adapter = {
@@ -197,6 +227,7 @@ function lockingAdapter(options: {
       ddl.push(sql);
       return [];
     },
+    queryStatement: async (statement: SQL) => interpret(statement),
     tableExists: async (name: string) =>
       name === "nextly_field_group_lock"
         ? (options.lockTableExists ?? true)
@@ -204,24 +235,15 @@ function lockingAdapter(options: {
     transaction: async (work: (ctx: unknown) => Promise<unknown>) =>
       work({
         lockRow: async () => undefined,
-        selectOne: async () =>
-          lock.seeded ? { id: 1, owner: lock.owner } : null,
         insert: async (_table: string, data: { owner: string | null }) => {
           lock.seeded = true;
           lock.owner = data.owner;
           return data;
         },
-        update: async (
-          _table: string,
-          data: { owner: string | null },
-          where: unknown
-        ) => {
-          // An occupied row refuses a new claim, exactly as the real one does:
-          // `acquire` reads back what it wrote, so a double that overwrote a
-          // held lock would report a successful claim over a live migration.
-          if (matches(where)) lock.owner = data.owner;
-          return [];
+        runStatement: async (statement: SQL) => {
+          interpret(statement);
         },
+        queryStatement: async (statement: SQL) => interpret(statement),
       }),
   } as unknown as DrizzleAdapter;
 

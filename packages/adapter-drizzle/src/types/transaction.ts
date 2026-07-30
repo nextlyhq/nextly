@@ -106,6 +106,21 @@ export interface TransactionContext {
   runStatement(statement: SQL): Promise<void>;
 
   /**
+   * Run a Drizzle-built statement within the transaction and return its rows.
+   *
+   * @remarks
+   * The reading half of `runStatement`, for the same reason: a table the schema
+   * registry does not declare cannot be reached through the typed CRUD methods,
+   * which reject the name outright. Implemented per adapter because the drivers
+   * disagree about both the call and the result — node-postgres answers
+   * `{ rows }`, mysql2 a `[rows, fields]` tuple, and better-sqlite3 needs `all`.
+   *
+   * @param statement - Drizzle `sql` template to run
+   * @returns Rows the statement produced
+   */
+  queryStatement<T = Record<string, unknown>>(statement: SQL): Promise<T[]>;
+
+  /**
    * Take an exclusive lock on a single row for the rest of this transaction.
    *
    * @remarks

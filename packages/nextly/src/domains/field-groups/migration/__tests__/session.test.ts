@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -10,18 +12,60 @@ import {
   type MigrationDialect,
 } from "../session";
 
-type Where = {
-  and?: { column: string; op: string; value: unknown }[];
-};
+/**
+ * Interpret a statement the way a driver would, against a one-row lock table.
+ *
+ * The statement is compiled through a real `PgDialect` first, so the double is
+ * exercising the SQL and the bound parameters an adapter would actually hand
+ * its driver. Reimplementing the query-builder calls instead is what let this
+ * module pass its tests while being unable to run at all: the typed CRUD path
+ * resolves a table through the schema registry, which has never declared this
+ * one.
+ */
+function interpret(
+  statement: SQL,
+  rows: Map<number, { id: number; owner: string | null }>
+): Record<string, unknown>[] {
+  const { sql: text, params } = new PgDialect().sqlToQuery(statement);
+  const flat = text.replace(/\s+/g, " ").trim();
 
-/** Reads the structured predicate the adapter API uses back into plain fields. */
-function readWhere(where?: Where): { id?: number; owner?: string | null } {
-  const out: { id?: number; owner?: string | null } = {};
-  for (const c of where?.and ?? []) {
-    if (c.column === "id") out.id = c.value as number;
-    if (c.column === "owner") out.owner = c.value as string | null;
+  const select = /^SELECT "(\w+)" FROM "([^"]+)" WHERE "id" = \$1$/.exec(flat);
+  if (select) {
+    assertLockTable(select[2]);
+    const row = rows.get(params[0] as number);
+    return row === undefined ? [] : [{ ...row }];
   }
-  return out;
+
+  const claim = /^UPDATE "([^"]+)" SET "owner" = \$1 WHERE "id" = \$2$/.exec(
+    flat
+  );
+  if (claim) {
+    assertLockTable(claim[1]);
+    const row = rows.get(params[1] as number);
+    if (row === undefined) return [];
+    row.owner = params[0] as string | null;
+    return [];
+  }
+
+  const release =
+    /^UPDATE "([^"]+)" SET "owner" = NULL WHERE "id" = \$1 AND "owner" = \$2$/.exec(
+      flat
+    );
+  if (release) {
+    assertLockTable(release[1]);
+    const row = rows.get(params[0] as number);
+    // A release naming an owner must not clear a row held by someone else.
+    if (row !== undefined && row.owner === params[1]) row.owner = null;
+    return [];
+  }
+
+  throw new Error(`unrecognised statement: ${flat}`);
+}
+
+function assertLockTable(name: string | undefined): void {
+  if (name !== MIGRATION_LOCK_TABLE) {
+    throw new Error(`relation "${String(name)}" does not exist`);
+  }
 }
 
 /**
@@ -44,27 +88,16 @@ function createAdapter(options: { heldBy?: string | null } = {}) {
 
   const ctx = {
     lockRow: vi.fn(async () => undefined),
-    selectOne: vi.fn(async (_t: string, o?: { where?: Where }) => {
-      const row = rows.get(readWhere(o?.where).id ?? 1);
-      return row ? { ...row } : null;
-    }),
     insert: vi.fn(async (_t: string, data: Record<string, unknown>) => {
       const id = data.id as number;
       if (rows.has(id)) throw new Error("duplicate key");
       rows.set(id, { id, owner: (data.owner as string | null) ?? null });
       return data;
     }),
-    update: vi.fn(
-      async (_t: string, data: Record<string, unknown>, where: Where) => {
-        const cond = readWhere(where);
-        const row = rows.get(cond.id ?? 1);
-        if (!row) return [];
-        // A `where` naming an owner must not match a row held by someone else.
-        if (cond.owner !== undefined && row.owner !== cond.owner) return [];
-        row.owner = (data.owner as string | null) ?? null;
-        return [row];
-      }
-    ),
+    runStatement: vi.fn(async (statement: SQL) => {
+      interpret(statement, rows);
+    }),
+    queryStatement: vi.fn(async (statement: SQL) => interpret(statement, rows)),
   };
 
   const adapter = {
@@ -72,6 +105,10 @@ function createAdapter(options: { heldBy?: string | null } = {}) {
       ddl.push(sql);
       return [];
     }),
+    // The seed read runs outside any transaction, so it goes through the
+    // adapter rather than the transaction context.
+    queryStatement: vi.fn(async (statement: SQL) => interpret(statement, rows)),
+    tableExists: vi.fn(async () => true),
     transaction: vi.fn(async (work: (c: unknown) => Promise<unknown>) => {
       open += 1;
       peakOpen = Math.max(peakOpen, open);
@@ -93,6 +130,11 @@ function createAdapter(options: { heldBy?: string | null } = {}) {
     ctx,
     ddl,
     owner: () => rows.get(1)?.owner ?? null,
+    /** Model another process claiming the row mid-run. */
+    takeOver: (owner: string | null) => {
+      const row = rows.get(1);
+      if (row !== undefined) row.owner = owner;
+    },
     peakOpen: () => peakOpen,
   };
 }
@@ -256,11 +298,7 @@ describe("field-group migration session", () => {
       { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
       async () => {
         // Someone else takes the row over while this run is in flight.
-        h.ctx.update(
-          MIGRATION_LOCK_TABLE,
-          { owner: "run-2" },
-          { and: [{ column: "id", op: "=", value: 1 }] }
-        );
+        h.takeOver("run-2");
       }
     );
     expect(h.owner()).toBe("run-2");
@@ -329,7 +367,9 @@ describe("field-group migration session", () => {
   // the update would run the migration believing it held a lock it never took.
   it("refuses when the claim does not actually land on the row", async () => {
     const h = createAdapter({ heldBy: null });
-    h.ctx.update.mockImplementation(async () => []);
+    // The claim write silently affects nothing, which is what a lost row or a
+    // predicate that matched no rows looks like from the caller's side.
+    h.ctx.runStatement.mockImplementation(async () => undefined);
     const ran = vi.fn();
     await expect(
       withMigrationSession(

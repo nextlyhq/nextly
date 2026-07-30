@@ -942,6 +942,15 @@ export class PostgresAdapter extends DrizzleAdapter {
         await txDb().execute(statement);
       },
 
+      // node-postgres answers `{ rows }`; the transaction-bound instance keeps
+      // the read inside this transaction so it sees its uncommitted writes.
+      queryStatement: async <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => {
+        const result = await txDb().execute(statement);
+        return result.rows as T[];
+      },
+
       lockRow: async (table: string, id: SqlParam): Promise<void> => {
         const idColumn = this.escapeIdentifier("id");
         await client.query(

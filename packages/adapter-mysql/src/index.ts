@@ -786,6 +786,17 @@ export class MySqlAdapter extends DrizzleAdapter {
         await txDb().execute(statement);
       },
 
+      // mysql2 answers a `[rows, fields]` tuple; the transaction-bound instance
+      // keeps the read inside this transaction so it sees its uncommitted writes.
+      queryStatement: async <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => {
+        const result = await txDb().execute(statement);
+        // A tuple's first element is the rows; anything else is a result
+        // header from a statement that returned none.
+        return (Array.isArray(result) ? result[0] : []) as unknown as T[];
+      },
+
       lockRow: async (table: string, id: SqlParam): Promise<void> => {
         const idColumn = this.escapeIdentifier("id");
         await connection.query(

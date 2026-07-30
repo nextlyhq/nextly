@@ -25,10 +25,8 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type {
-  TransactionContext,
-  WhereClause,
-} from "@nextlyhq/adapter-drizzle/types";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
@@ -47,16 +45,34 @@ export const MIGRATION_LOCK_TABLE = "nextly_field_group_lock";
 /** The lock is a single row; its key never varies. */
 const LOCK_ROW_ID = 1;
 
-/** The lock row, addressed the way the adapter's query builder expects. */
-function lockRowWhere(owner?: string): WhereClause {
-  const and: WhereClause["and"] = [
-    { column: "id", op: "=", value: LOCK_ROW_ID },
-  ];
-  // Naming the owner as well makes a release affect only a row we still hold.
-  if (owner !== undefined) {
-    and.push({ column: "owner", op: "=", value: owner });
-  }
-  return { and };
+/**
+ * Read the lock row's owner inside a transaction.
+ *
+ * Issued as a Drizzle statement rather than through the typed query builder:
+ * that resolves a table through the schema registry and rejects any name the
+ * ORM does not declare, and this table is created on demand by the migration
+ * rather than declared in the static schema — the same shape the schema
+ * pipeline's own `nextly_migrate_lock` has.
+ */
+async function readOwner(
+  ctx: TransactionContext
+): Promise<{ owner: string | null } | undefined> {
+  const rows = await ctx.queryStatement<{ owner: string | null }>(
+    sql`SELECT ${sql.identifier("owner")}
+        FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+        WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+  );
+  return rows[0];
+}
+
+/** Whether the single lock row is present, read outside any transaction. */
+async function lockRowExists(adapter: DrizzleAdapter): Promise<boolean> {
+  const rows = await adapter.queryStatement(
+    sql`SELECT ${sql.identifier("id")}
+        FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+        WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+  );
+  return rows.length > 0;
 }
 
 /** What a step is handed to do its work. */
@@ -207,12 +223,7 @@ async function ensureLockRow(
  * still establish the row it needs to contend for.
  */
 async function seedLockRow(adapter: DrizzleAdapter): Promise<void> {
-  const existing = await adapter.transaction(async ctx =>
-    ctx.selectOne<{ id: number }>(MIGRATION_LOCK_TABLE, {
-      where: lockRowWhere(),
-    })
-  );
-  if (existing) return;
+  if (await lockRowExists(adapter)) return;
 
   try {
     await adapter.transaction(async ctx =>
@@ -226,12 +237,7 @@ async function seedLockRow(adapter: DrizzleAdapter): Promise<void> {
     // error the row is re-read below and required to exist.
   }
 
-  const seeded = await adapter.transaction(async ctx =>
-    ctx.selectOne<{ id: number }>(MIGRATION_LOCK_TABLE, {
-      where: lockRowWhere(),
-    })
-  );
-  if (!seeded) {
+  if (!(await lockRowExists(adapter))) {
     // Continuing here would leave nothing to lock, and a claim written against
     // an absent row would update nothing while still looking successful.
     throw NextlyError.serviceUnavailable({
@@ -259,28 +265,26 @@ async function acquire(
     // ends, so the read below cannot be overtaken between reading and writing.
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
 
-    const row = await ctx.selectOne<{ owner: string | null }>(
-      MIGRATION_LOCK_TABLE,
-      { where: lockRowWhere() }
-    );
+    const row = await readOwner(ctx);
 
     // Any occupied row refuses, including one that appears to be ours. Claims
     // are unique per invocation, so a match would mean something other than
     // this call wrote it.
-    if (row === null || row.owner !== null) {
+    if (row === undefined || row.owner !== null) {
       return { ok: false, heldBy: row?.owner ?? null };
     }
 
-    await ctx.update(MIGRATION_LOCK_TABLE, { owner: claim }, lockRowWhere());
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = ${claim}
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+    );
 
-    // Read back rather than trusting the write. `update` reports affected rows
+    // Read back rather than trusting the write. An update reports affected rows
     // inconsistently across dialects, and an absent row would otherwise update
     // nothing and still look like a successful claim, running the migration
     // with no exclusion at all.
-    const after = await ctx.selectOne<{ owner: string | null }>(
-      MIGRATION_LOCK_TABLE,
-      { where: lockRowWhere() }
-    );
+    const after = await readOwner(ctx);
     if (after?.owner !== claim) {
       return { ok: false, heldBy: after?.owner ?? null };
     }
@@ -292,10 +296,12 @@ async function acquire(
 async function release(adapter: DrizzleAdapter, claim: string): Promise<void> {
   await adapter.transaction(async ctx => {
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
-    await ctx.update(
-      MIGRATION_LOCK_TABLE,
-      { owner: null },
-      lockRowWhere(claim)
+    // Naming the owner as well makes a release affect only a row we still hold.
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = NULL
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} = ${claim}`
     );
   });
 }
