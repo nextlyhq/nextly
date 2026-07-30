@@ -15,7 +15,10 @@ import { existsSync, watch } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { clearFieldTypes } from "../../domains/schema/field-types/field-type-registry";
+import {
+  clearFieldTypes,
+  getFieldType,
+} from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { clearConfigCache, loadConfig, watchConfig } from "./config-loader";
@@ -47,6 +50,29 @@ function capturedListener(): (event: string) => void {
 }
 
 const loaded = { mod: { default: { plugins: [] } }, dependencies: [] };
+
+/** A config whose single plugin contributes one field type. */
+function configContributing(type: string): typeof loaded {
+  return {
+    mod: {
+      default: {
+        plugins: [
+          {
+            name: `@t/${type}`,
+            version: "1.0.0",
+            nextly: ">=0.0.0",
+            contributes: {
+              fieldTypes: [
+                { type, storage: "number", component: `@t/${type}#Input` },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    dependencies: [],
+  } as unknown as typeof loaded;
+}
 
 beforeEach(() => {
   vi.mocked(existsSync).mockImplementation(
@@ -181,5 +207,46 @@ describe("watched config reloads", () => {
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(seen).not.toContain(CONFIG_PATH);
+  });
+
+  it("leaves the installed config's field types live after a superseded reload", async () => {
+    bundleAndRequire.mockResolvedValue(configContributing("first-type"));
+    await loadConfig({ configPath: CONFIG_PATH, cwd: "/virtual", watch: true });
+    const fireFirst = capturedListener();
+
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let call = 0;
+    bundleAndRequire.mockImplementation(async () => {
+      call += 1;
+      // Hold the first reload open so the watcher is replaced underneath it,
+      // and let it finish LAST so its registrations are the ones left behind.
+      if (call === 1) {
+        await gate;
+        return configContributing("first-type");
+      }
+      return configContributing("second-type");
+    });
+
+    fireFirst("change");
+
+    clearConfigCache();
+    await loadConfig({
+      configPath: OTHER_CONFIG_PATH,
+      cwd: "/virtual",
+      watch: true,
+    });
+
+    release();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // The superseded reload rebuilt the live registry on its way through. What
+    // has to remain is the set belonging to the config now installed, or every
+    // later lookup classifies its fields with the obsolete storage mappings.
+    expect(getFieldType("second-type")).toBeDefined();
+    expect(getFieldType("first-type")).toBeUndefined();
   });
 });
