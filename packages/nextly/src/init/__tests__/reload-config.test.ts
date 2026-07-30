@@ -130,6 +130,10 @@ describe("reloadNextlyConfig", () => {
             // method. Fakes must match.
             dialect: "sqlite" as const,
             getDrizzle: () => ({}),
+            // The real adapter has this, and the storage guard asks it whether
+            // the marker table exists before reading it. A fake without it
+            // would make every reload look like a refused one.
+            tableExists: vi.fn().mockResolvedValue(false),
           }
         : undefined,
       collectionRegistryService: {
@@ -228,6 +232,75 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver: buildResolver() });
     expect(clearConfigCacheSpy).toHaveBeenCalledTimes(1);
     expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // `next dev` routes config edits here rather than through the CLI watcher, so
+  // this is the schema-applying path most users are on. Mid-migration the
+  // database has some tables under pre-rename names and some under post-rename
+  // ones, and the apply below runs DDL plus a pre-cleanup that issues UPDATE and
+  // DELETE — work that cannot be reasoned about against half-renamed storage.
+  it("abandons the reload while a field-group migration is in flight", async () => {
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "body", type: "text" }],
+          },
+        ],
+      },
+    });
+    const resolver = buildResolver();
+    // A marker the storage guard reads as an in-flight run.
+    const adapter = (await resolver("adapter")) as {
+      tableExists: ReturnType<typeof vi.fn>;
+      getDrizzle: () => unknown;
+      getCapabilities?: () => { dialect: string };
+    };
+    adapter.tableExists.mockResolvedValue(true);
+    // `MetaService` picks its dialect-specific table through this; without it
+    // the read throws and the test would exercise the unexpected-error path
+    // while claiming to cover the refusal.
+    adapter.getCapabilities = () => ({ dialect: "sqlite" });
+    adapter.getDrizzle = () => ({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () =>
+              Promise.resolve([
+                {
+                  key: "field_groups.storage_migration",
+                  value: JSON.stringify({
+                    version: 2,
+                    status: "migrating",
+                    direction: "up",
+                    migrationId: "run-1",
+                    step: 1,
+                    registryHash: "r",
+                    manifestHash: "m",
+                    appliedManifest: [
+                      {
+                        kind: "registry",
+                        from: "dynamic_components",
+                        to: "dynamic_field_groups",
+                      },
+                    ],
+                  }),
+                },
+              ]),
+          }),
+        }),
+      }),
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("schema reload skipped")
+    );
   });
 
   it("introspects all desired tables in ONE batched call", async () => {

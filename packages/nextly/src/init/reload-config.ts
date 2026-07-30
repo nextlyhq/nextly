@@ -21,8 +21,10 @@
 //     which the pipeline maps to CONFIRMATION_REQUIRED_NO_TTY. We log
 //     that and keep the dev server alive.
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { assertNoMigrationInFlight } from "../domains/field-groups/migration/sync-guard";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -71,6 +73,8 @@ import {
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
+import { describeError } from "../errors/index";
+import { NextlyError } from "../errors/nextly-error";
 import type { PluginFieldType } from "../plugins/contributions";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
@@ -932,6 +936,44 @@ async function runReload(opts?: {
   // Resolution can succeed and still hand back no adapter, which is the same
   // outcome as it throwing: nothing below runs, so the reload never lands.
   if (!adapter) {
+    abandonReload();
+    return;
+  }
+
+  // `next dev` routes config edits here rather than through the CLI watcher, so
+  // this is the schema-applying path most users are on — and mid-migration it
+  // would be reading a database where some tables carry pre-rename names, some
+  // post-rename, and the registry pointers move one step at a time. The apply
+  // below runs DDL and a pre-cleanup that issues UPDATE and DELETE, so a reload
+  // in that window can act on storage it cannot account for.
+  //
+  // Abandoned rather than thrown: a reload that refuses leaves the previous
+  // config in place, which is the safe outcome, whereas an exception here
+  // reaches the dev server and turns every later request into a 500.
+  try {
+    await assertNoMigrationInFlight({
+      // `AdapterLike` is a narrow view of the registered adapter, which is a
+      // `DrizzleAdapter` at runtime.
+      adapter: adapter as unknown as DrizzleAdapter,
+      logger: logger as unknown as Parameters<
+        typeof assertNoMigrationInFlight
+      >[0]["logger"],
+    });
+  } catch (error) {
+    // Either way the reload is abandoned, because applying schema over storage
+    // whose state could not be established is the thing being prevented. They
+    // are logged differently on purpose: a refusal is routine and expected,
+    // while anything else means the check itself could not run, which would
+    // otherwise disable schema applies silently and look like nothing happened.
+    if (NextlyError.is(error)) {
+      logger.warn(
+        `[Nextly HMR] schema reload skipped: ${describeError(error)}`
+      );
+    } else {
+      logger.error(
+        `[Nextly HMR] could not determine migration state, skipping schema reload: ${describeError(error)}`
+      );
+    }
     abandonReload();
     return;
   }
