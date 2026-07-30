@@ -1,5 +1,6 @@
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
 interface UserBreadcrumbsProps {
   /**
@@ -34,12 +35,18 @@ const PAGE_LABELS = {
  */
 export function UserBreadcrumbs({ currentPage }: UserBreadcrumbsProps) {
   const currentLabel = PAGE_LABELS[currentPage];
+  const { hasPermission } = useCurrentUserPermissions();
 
   // User Management lives under the Settings section now, so the trail nests
-  // under a "Settings" parent crumb before the "Users" item.
+  // under a "Settings" parent crumb before the "Users" item. A users-only role
+  // can't open the manage-settings-guarded General page, so point the crumb at
+  // the first Settings subpage it can reach (Users here).
+  const settingsHref = hasPermission("manage-settings")
+    ? ROUTES.SETTINGS
+    : ROUTES.USERS;
   const items: BreadcrumbItem[] = [
     { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-    { label: "Settings", href: ROUTES.SETTINGS },
+    { label: "Settings", href: settingsHref },
   ];
 
   if (currentPage === "list") {

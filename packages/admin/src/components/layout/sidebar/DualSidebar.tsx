@@ -103,7 +103,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         .replace(/^-+|-+$/g, "");
       const iconName = sp.appearance?.icon || "Database";
       const IconComponent = iconMap[iconName] || Database;
-      const anchor = sp.after || "plugins";
+      // The former top-level Users icon is gone; User Management now lives
+      // under Settings, so a plugin still declaring `after: "users"` is anchored
+      // next to Settings instead of falling through to the end of the rail.
+      const rawAnchor = sp.after || "plugins";
+      const anchor = rawAnchor === "users" ? "settings" : rawAnchor;
 
       const entry = {
         item: {
