@@ -52,6 +52,11 @@ export interface FieldDisplay {
   relationTo?: string | string[];
   options?: { label?: string; value?: unknown }[];
   admin?: { date?: { pickerAppearance?: string } };
+  /**
+   * The relationship's configured display column (`targetLabelField`), carried
+   * so reference hydration can honor it instead of the default label candidates.
+   */
+  labelField?: string;
 }
 
 /** Non-text scalars hand back both sides raw; the client renders each side. */
@@ -63,6 +68,11 @@ export interface ValueFieldDiff extends FieldDiffBase {
    * Display config for the field, so the client renders cardinality, option
    * labels, and date formatting faithfully. Absent when the field carries no
    * display-relevant configuration.
+   *
+   * A relationship or upload node's `before`/`after` is resolved in place to the
+   * value kit's display shape (`{ id, label }` or `{ id, filename, ... }`) one
+   * layer up, so the client renders it through the same kit as a live value with
+   * no reference-specific field on this node.
    */
   display?: FieldDisplay;
 }
@@ -92,6 +102,12 @@ export interface GroupFieldDiff extends FieldDiffBase {
 export interface RelationTarget {
   id: string;
   relationTo?: string;
+  /**
+   * The target resolved to a display label, attached additively when hydrated.
+   * Null when the target is unreadable or unlabelled, leaving the id as the
+   * fallback the renderer shows.
+   */
+  label?: string | null;
 }
 
 /** A many relationship field: a set difference of targets by identity. */
@@ -99,6 +115,14 @@ export interface SetFieldDiff extends FieldDiffBase {
   kind: "set";
   added: RelationTarget[];
   removed: RelationTarget[];
+  /**
+   * Display config for the field, chiefly its `relationTo` target(s), so the
+   * client and the reference hydrator know which collection a non-polymorphic
+   * target belongs to without re-deriving it from the live schema (a target
+   * carries its own `relationTo` only when the relation is polymorphic). Absent
+   * when the field carries no display-relevant configuration.
+   */
+  display?: FieldDisplay;
 }
 
 /**

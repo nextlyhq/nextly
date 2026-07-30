@@ -132,11 +132,12 @@ function ValueSide({
 }
 
 /**
- * The before/after presentation shared by scalar and dropped-field values:
- * added shows one value, removed shows one struck value, changed shows both
- * labelled, and unchanged shows the value once. `renderValue` decides how a
- * single side is drawn (the typed kit for a live field, raw text for a dropped
- * one), so the labelling stays in one place.
+ * The before/after presentation shared by every value node: added shows one
+ * value, removed shows one struck value, changed shows both labelled, and
+ * unchanged shows the value once. `renderValue` draws a single side through the
+ * typed value kit, so the labelling stays in one place. A relationship or upload
+ * value is resolved into the kit's display shape upstream, so the kit renders
+ * its label with no reference-specific handling here.
  */
 function BeforeAfter({
   status,
@@ -173,8 +174,19 @@ function BeforeAfter({
   );
 }
 
+/** Stable React key for a target: its identity, not its (possibly shared) label. */
+function targetKey(target: RelationTarget): string {
+  return target.relationTo ? `${target.relationTo}:${target.id}` : target.id;
+}
+
+/**
+ * A target's display text: its resolved label when readable, otherwise its id.
+ * A polymorphic target keeps its collection prefix so the same id in different
+ * collections stays distinguishable.
+ */
 function targetLabel(target: RelationTarget): string {
-  return target.relationTo ? `${target.relationTo}: ${target.id}` : target.id;
+  const display = target.label ?? target.id;
+  return target.relationTo ? `${target.relationTo}: ${display}` : display;
 }
 
 export function FieldDiffNode({ node }: { node: FieldDiff }) {
@@ -195,6 +207,8 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
       // The value is already normalized by the engine, so the kit renders it
       // without normalizing a second time. A schema-less container never reaches
       // here: the engine emits it as an unknown node so its value stays hidden.
+      // A relationship or upload value arrives resolved to the kit's display
+      // shape, so the same kit renders its label with no special-casing here.
       const field = renderField(node);
       return (
         <FieldRow label={node.label} status={node.status}>
@@ -218,7 +232,7 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">Removed</span>
                 {node.removed.map(target => (
-                  <Badge key={targetLabel(target)} variant="destructive">
+                  <Badge key={targetKey(target)} variant="destructive">
                     {targetLabel(target)}
                   </Badge>
                 ))}
@@ -228,7 +242,7 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">Added</span>
                 {node.added.map(target => (
-                  <Badge key={targetLabel(target)} variant="success">
+                  <Badge key={targetKey(target)} variant="success">
                     {targetLabel(target)}
                   </Badge>
                 ))}
