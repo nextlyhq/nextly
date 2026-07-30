@@ -23,3 +23,5 @@
 ---
 
 Integration tests now fail when a PostgreSQL transaction is left aborted, which catches a class of bug that previously only showed up in production. Checking whether something exists by running a query and catching the failure works on SQLite and MySQL, but on PostgreSQL the failed query poisons the whole transaction, so every statement after it fails too. The suite could be green on two databases and quietly broken on the third.
+
+Transactions opened through `createTestNextly` (`nextly/testing`) are now checked once after the callback returns, so an abort is still detected when the callback catches the failure itself and returns normally. That case leaves PostgreSQL accepting the commit as a rollback, so the write silently keeps nothing. Test-only: nothing on the request path changes.
