@@ -8,6 +8,7 @@ import {
   registerKnownPlugin,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import { BlocksSummary } from "./BlocksSummary";
 import { registerDefaultControls } from "./controls/registerDefaultControls";
 import { PageBuilderEditView } from "./PageBuilderEditView";
 import { PageBuilderField } from "./PageBuilderField";
@@ -26,11 +27,15 @@ const TOGGLE_PATH = "@nextlyhq/plugin-page-builder/admin#PageBuilderToggle";
 // Entry-form toolbar slot component (contributes.admin.entryFormToolbarSlot).
 const MODE_TOGGLE_PATH =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderModeToggle";
+// The blocks field's editor-form control. Must match BLOCKS_FIELD_COMPONENT
+// exported from the "." entry (blocksField).
+const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
 const COMPONENTS = {
   [EDIT_VIEW_PATH]: PageBuilderEditView,
   [FIELD_PATH]: PageBuilderField,
   [TOGGLE_PATH]: PageBuilderToggle,
   [MODE_TOGGLE_PATH]: PageBuilderModeToggle,
+  [BLOCKS_SUMMARY_PATH]: BlocksSummary,
 };
 
 // Eager registration on module load.
@@ -46,4 +51,5 @@ export { PageBuilderEditView };
 export { PageBuilderField };
 export { PageBuilderToggle };
 export { PageBuilderModeToggle };
+export { BlocksSummary };
 export type { CustomEditViewProps } from "./types";

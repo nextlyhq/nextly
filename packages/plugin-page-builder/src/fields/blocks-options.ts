@@ -20,6 +20,8 @@ import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
 import type { FieldConfig } from "@nextlyhq/plugin-sdk";
 import type { FieldAdminOptions, RequestContext } from "nextly";
 
+import type { BLOCKS_TYPE } from "./blocksField";
+
 /**
  * The parts of a field declaration this type adds to.
  *
@@ -80,7 +82,7 @@ export interface BlocksFieldConfig
   /**
    * Field type identifier. Must be 'blocks'.
    */
-  type: "blocks";
+  type: typeof BLOCKS_TYPE;
 
   /**
    * Which blocks and document kinds this field accepts.

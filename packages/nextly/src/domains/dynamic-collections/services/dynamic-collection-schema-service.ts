@@ -1008,7 +1008,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "text", // JSON stored as text in SQLite
         chips: "text", // Chips stored as JSON text in SQLite
-        blocks: "text", // A page document is JSON, stored as text in SQLite
         relationship: "text", // Store foreign key as text (UUID or ID)
       };
       return sqliteTypeMap[type] || "text";
@@ -1031,7 +1030,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "json", // MySQL uses 'json' type, not 'jsonb'
         chips: "json", // Chips stored as JSON array
-        blocks: "json", // A page document is one JSON value
         relationship: "varchar(36)", // Store foreign key as varchar(36) for UUIDs
       };
       return mysqlTypeMap[type] || "text";
@@ -1053,7 +1051,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       richText: "text",
       json: "jsonb",
       chips: "jsonb", // Chips stored as JSON array
-      blocks: "jsonb", // A page document is one JSON value
       relationship: "text", // Store foreign key as text (UUID or ID)
     };
     return typeMap[type] || "text";
@@ -1137,7 +1134,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     }
 
     // Handle JSON (needs to be a quoted JSON string)
-    if (type === "json" || type === "blocks") {
+    if (type === "json") {
       return quoteJsonSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect

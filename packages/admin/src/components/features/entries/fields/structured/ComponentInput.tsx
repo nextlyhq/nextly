@@ -42,8 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import type { FieldConfig, DocumentKind } from "nextly/config";
-import { emptyBlockDocument } from "nextly/config";
+import type { FieldConfig } from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 import {
   useFieldArray,
@@ -230,19 +229,6 @@ function createDefaultComponentValues(
         case "repeater":
           defaultValues[fieldName] = [];
           break;
-        case "blocks": {
-          // The blocks control is read-only, so a required nested field left
-          // null could never be filled in — the instance would be
-          // unsubmittable the moment it is added.
-          const blocksField = subField as {
-            required?: boolean;
-            blocks?: { kinds?: DocumentKind[] };
-          };
-          defaultValues[fieldName] = blocksField.required
-            ? emptyBlockDocument(blocksField.blocks?.kinds)
-            : null;
-          break;
-        }
         case "group":
           if ("fields" in subField) {
             defaultValues[fieldName] = createDefaultComponentValues(

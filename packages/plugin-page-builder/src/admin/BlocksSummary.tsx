@@ -14,7 +14,8 @@
  * @module components/entries/fields/structured/BlocksSummary
  */
 
-import type { BlockDocument, BlockNode } from "nextly/config";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import { LayoutGrid } from "lucide-react";
 import { useMemo } from "react";
 import {
   useWatch,
@@ -22,8 +23,6 @@ import {
   type FieldValues,
   type Path,
 } from "react-hook-form";
-
-import { LayoutGrid } from "@admin/components/icons";
 
 export interface BlocksSummaryProps<
   TFieldValues extends FieldValues = FieldValues,
