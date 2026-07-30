@@ -41,6 +41,7 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
@@ -52,6 +53,8 @@ import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
+import { affectedRowCount } from "../../auth/services/auth-service";
+import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
@@ -94,6 +97,40 @@ interface DrizzleTransactionLike {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+  select(fields: unknown): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        // `.for("update")` exists on the Postgres/MySQL builders (SQLite has no
+        // row lock); it is only invoked off SQLite, and the query is awaitable
+        // either way.
+        limit(count: number): Promise<Record<string, unknown>[]> & {
+          for(strength: "update"): Promise<Record<string, unknown>[]>;
+        };
+      };
+    };
+  };
+}
+
+/**
+ * The single capability the user write paths need from the webhook fast-path
+ * drain: a synchronous, self-gating kick that runs a bounded delivery after the
+ * response. Declared as this narrow interface — which `WebhookFastDrainScheduler`
+ * satisfies — rather than the concrete scheduler so the dependency is exactly
+ * the method called, and a test can supply a spy without reconstructing the
+ * scheduler's private state.
+ */
+interface WebhookDrainOffer {
+  offer(): void;
+}
+
+/**
+ * The single capability the user write paths need from the webhook retention
+ * runner: a bounded, self-gating prune offered after a committed write. Narrow
+ * (which `WebhookRetentionRunner` satisfies) for the same reason as
+ * {@link WebhookDrainOffer}.
+ */
+interface WebhookRetentionOffer {
+  maybeRun(maxBatches?: number): Promise<void>;
 }
 
 /**
@@ -198,13 +235,21 @@ export class UserMutationService extends BaseService {
     logger: Logger,
     userConfig?: UserConfig,
     userExtSchemaService?: UserExtSchemaService,
-    emailService?: EmailService
+    emailService?: EmailService,
+    // Optional so a bare service (CLI, seed, unit test) still records events and
+    // simply relies on the scheduled drain; wired from DI on the request paths.
+    fastDrainScheduler?: WebhookDrainOffer,
+    // Optional bounded outbox prune offered after committed writes; absent when
+    // webhook retention is not configured, where the scheduled drain prunes.
+    retentionRunner?: WebhookRetentionOffer
   ) {
     super(adapter, logger);
 
     this.userConfig = userConfig;
     this.userExtSchemaService = userExtSchemaService;
     this.emailService = emailService;
+    this.fastDrainScheduler = fastDrainScheduler;
+    this.retentionRunner = retentionRunner;
 
     // Build merged Zod schemas when custom fields are configured
     if (userConfig?.fields && userConfig.fields.length > 0) {
@@ -344,6 +389,19 @@ export class UserMutationService extends BaseService {
 
   private readonly emailService?: EmailService;
 
+  // Post-commit fast-path drain kick, shared with the collection/single/media
+  // write paths. Absent on bare services, where the scheduled drain delivers.
+  private readonly fastDrainScheduler?: WebhookDrainOffer;
+
+  // Post-commit bounded outbox prune, shared with the same write paths. Absent
+  // when webhook retention is not configured, where the scheduled drain prunes.
+  private readonly retentionRunner?: WebhookRetentionOffer;
+
+  // Cap the write-path prune so a user write that happens to win the retention
+  // gate is never held up by a large backlog; the scheduled drain owns bulk
+  // pruning. Matches the collection/single write-path bound.
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
   /**
    * Create a new local user with password authentication.
    *
@@ -352,12 +410,16 @@ export class UserMutationService extends BaseService {
    * NextlyError.duplicate(). Validation errors carry per-field paths but
    * never echo values; identifiers go to logContext.
    *
+   * @param actor - Who initiated the write, recorded for event attribution.
+   *   Omitted for genuinely internal calls (seed, self-registration), which
+   *   record no actor.
    * @throws NextlyError(VALIDATION_ERROR) on input validation / invalid role ids.
    * @throws NextlyError(DUPLICATE) when the email is already registered.
    * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async createLocalUser(
-    userData: CreateLocalUserData
+    userData: CreateLocalUserData,
+    actor?: RequestActor
   ): Promise<UserMutationResponse> {
     try {
       // Determine if this is the very first user in the database (existence check)
@@ -501,10 +563,47 @@ export class UserMutationService extends BaseService {
         });
       };
 
+      // Record a `user.created` webhook event inside the same transaction that
+      // inserts the account, so a subscriber observes the account exactly when
+      // it becomes real (and never for a rolled-back create). The payload is
+      // deliberately PII-safe: identity only, never the password hash or the
+      // invite-token hash. Roles are omitted on purpose: they are assigned after
+      // this transaction commits (and the first user's super-admin role is too),
+      // so no committed role state exists to report here without a false claim —
+      // a creation event asserts identity, and role changes are their own
+      // concern. `userCreatedRecorded` captures whether a row was written so the
+      // fast drain is offered only for a real event, and only after commit.
+      let userCreatedRecorded = false;
+      const recordCreatedEvent = async (txDb: DrizzleTransactionLike) => {
+        userCreatedRecorded = await recordMutationEventInTx(
+          txDb,
+          this.dialect,
+          {
+            type: "user.created",
+            resource: { kind: "user", id: newUserId },
+            data: {
+              id: newUserId,
+              email: userData.email,
+              name: userData.name ?? null,
+            },
+            fields: [],
+            actor: actor ?? null,
+          }
+        );
+      };
+
       // Wrap user + user_ext + invite inserts in a transaction for atomicity.
       // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
       // BetterSQLite3Transaction depending on dialect) that exposes the same
       // fluent query API as this.db. See BaseService.withTransaction.
+      //
+      // Only the user_ext insert self-heals (a missing user_ext table on a fresh
+      // DB). A flag records that it was the failing statement, so an unrelated
+      // failure — the invite token or the outbox event — propagates as a real
+      // error instead of being misdiagnosed as schema drift and silently retried
+      // WITHOUT the custom-field data (which would report a created user while
+      // dropping its custom fields).
+      let userExtInsertFailed = false;
       try {
         await this.withTransaction(async tx => {
           const txDb = tx as DrizzleTransactionLike;
@@ -512,25 +611,33 @@ export class UserMutationService extends BaseService {
 
           // Always create a user_ext row when custom fields are configured
           if (hasExt && userExtTable) {
-            await txDb.insert(userExtTable).values({
-              id: randomUUID(),
-              user_id: newUserId,
-              ...customFieldValues,
-              created_at: now,
-              updated_at: now,
-            });
+            try {
+              await txDb.insert(userExtTable).values({
+                id: randomUUID(),
+                user_id: newUserId,
+                ...customFieldValues,
+                created_at: now,
+                updated_at: now,
+              });
+            } catch (extErr) {
+              // Mark user_ext as the failing statement and abort the transaction
+              // so the outer catch retries without it. Aborting rather than
+              // continuing is required: PostgreSQL poisons the whole transaction
+              // after any statement error.
+              userExtInsertFailed = true;
+              throw extErr;
+            }
           }
 
           await insertInviteToken(txDb);
+          await recordCreatedEvent(txDb);
         });
       } catch (txErr) {
-        // Self-healing: if user_ext is configured but the user_ext insert blew
-        // up (typical on a fresh DB before the user_ext table is created), log
-        // the cause, disable user_ext for the rest of this process, and retry
-        // the user insert alone so the caller still gets a created user. If
-        // user_ext is NOT configured, the failure is unrelated to the schema
-        // drift and must propagate.
-        if (hasExt && userExtTable) {
+        // Self-healing is scoped to a genuine user_ext insert failure (typical on
+        // a fresh DB before the user_ext table exists): disable user_ext for this
+        // process and retry the user insert alone so the caller still gets a
+        // created user. Any other failure is unrelated and must propagate.
+        if (userExtInsertFailed && userExtTable) {
           const cause = txErr instanceof Error ? txErr.message : String(txErr);
           this.logger.warn(
             `user_ext insert failed during createLocalUser; disabling user_ext for this process: ${cause}`
@@ -540,11 +647,25 @@ export class UserMutationService extends BaseService {
             const txDb = tx as DrizzleTransactionLike;
             await txDb.insert(users).values(values);
             await insertInviteToken(txDb);
+            await recordCreatedEvent(txDb);
           });
         } else {
           throw txErr;
         }
       }
+
+      // With the account and its outbox row committed, offer the shared
+      // post-commit hooks, mirroring the collection/single/media write paths: a
+      // bounded retention pass trims old outbox rows even on a
+      // user-management-only install that relies on write-triggered maintenance,
+      // and the fast-path drain delivers the recorded event immediately instead
+      // of at the next scheduled trigger. Both are no-ops when unconfigured;
+      // retention runs regardless of a recording, the drain only when one
+      // happened.
+      await this.retentionRunner?.maybeRun(
+        UserMutationService.WRITE_PATH_PRUNE_BATCHES
+      );
+      if (userCreatedRecorded) this.fastDrainScheduler?.offer();
 
       // Fetch created user
       const user = await this.db.query.users.findFirst({
@@ -1003,38 +1124,54 @@ export class UserMutationService extends BaseService {
    * §13.8 + spec note: user existence is sensitive (account enumeration);
    * the public message stays generic. The id flows only through logContext.
    *
+   * @param actor - Who initiated the delete, recorded for event attribution.
    * @throws NextlyError(NOT_FOUND) when the user does not exist.
    * @throws NextlyError on DB errors via fromDatabaseError.
    */
-  async deleteUser(userId: number | string): Promise<void> {
+  async deleteUser(
+    userId: number | string,
+    actor?: RequestActor
+  ): Promise<void> {
     const { users, accounts, userRoles } = this.tables;
 
-    // Check if user exists
-    let user;
-    try {
-      user = await this.db.query.users.findFirst({
-        where: { id: userId },
-        columns: { id: true },
-      });
-    } catch (err) {
-      // Normalise raw driver errors so the DB kind is preserved.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-    }
-
-    if (!user) {
-      throw NextlyError.notFound({
-        logContext: { entity: "user", id: userId },
-      });
-    }
-
     // Delete user and related data in a single Drizzle transaction so that
-    // partial deletes can't leave orphaned rows. The tx alias is `any` because
-    // BaseService.withTransaction yields `unknown` (it can't reference the
-    // dialect-specific Drizzle transaction type without binding to all three
-    // driver packages); the fluent query API is identical across dialects.
+    // partial deletes can't leave orphaned rows. The tx alias is a structural
+    // type because BaseService.withTransaction yields `unknown` (it can't
+    // reference the dialect-specific Drizzle transaction type without binding to
+    // all three driver packages); the fluent query API is identical across
+    // dialects.
+    let userDeletedRecorded = false;
     try {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
+
+        // Read the removed account's identity INSIDE the transaction, right
+        // before the delete, so the event reports the row actually being
+        // removed. Email and name are read (external systems key on email, not
+        // an opaque id). On Postgres/MySQL the read takes a FOR UPDATE row lock,
+        // so a concurrent `updateUser` cannot commit between this read and the
+        // delete and make the event advertise a stale address; the lock is held
+        // until this transaction commits with the removal. SQLite has no row
+        // lock, but a write transaction serializes writers, so its transaction
+        // already excludes that race. Absence is the NOT_FOUND case — thrown
+        // inside the tx, which rolls back and surfaces unchanged through the
+        // catch below.
+        const preimageQuery = txDb
+          .select({ id: users.id, email: users.email, name: users.name })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        const preimage = (
+          this.dialect === "sqlite"
+            ? await preimageQuery
+            : await preimageQuery.for("update")
+        )[0];
+        if (!preimage) {
+          throw NextlyError.notFound({
+            logContext: { entity: "user", id: userId },
+          });
+        }
+
         // Delete user_ext row if custom fields are configured
         if (this.hasCustomFields()) {
           const userExtTable = this.getUserExtTable();
@@ -1061,13 +1198,49 @@ export class UserMutationService extends BaseService {
         // Delete user accounts
         await txDb.delete(accounts).where(eq(accounts.userId, userId));
 
-        // Delete user
-        await txDb.delete(users).where(eq(users.id, userId));
+        // Delete user, capturing how many rows it removed.
+        const deleteResult = await txDb
+          .delete(users)
+          .where(eq(users.id, userId));
+
+        // Record `user.deleted` only when THIS transaction actually removed the
+        // account, in the same transaction so it commits with the removal and
+        // never fires for a rolled-back delete. Two concurrent deletes both read
+        // the identity above, but only one deletes a row; without this guard the
+        // loser would emit a duplicate event with a fresh id that downstream
+        // idempotency cannot collapse. PII-safe identity only.
+        if (affectedRowCount(deleteResult, this.dialect) > 0) {
+          userDeletedRecorded = await recordMutationEventInTx(
+            txDb,
+            this.dialect,
+            {
+              type: "user.deleted",
+              resource: { kind: "user", id: String(userId) },
+              data: {
+                id: preimage.id,
+                email: preimage.email ?? null,
+                name: preimage.name ?? null,
+              },
+              fields: [],
+              actor: actor ?? null,
+            }
+          );
+        }
       });
     } catch (err) {
       if (NextlyError.is(err)) throw err;
       // Normalise raw driver errors so fk/etc. produce the right NextlyError kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
+
+    // With the removal and its outbox row committed, offer the same post-commit
+    // hooks as createLocalUser: a bounded retention prune (so user churn on a
+    // write-triggered-maintenance install still trims the outbox) and the
+    // fast-path drain for the recorded event (same rationale as createLocalUser).
+    // Retention runs regardless of a recording, the drain only when one happened.
+    await this.retentionRunner?.maybeRun(
+      UserMutationService.WRITE_PATH_PRUNE_BATCHES
+    );
+    if (userDeletedRecorded) this.fastDrainScheduler?.offer();
   }
 }
