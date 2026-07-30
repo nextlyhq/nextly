@@ -62,6 +62,27 @@ export interface RegisterCollectionHooksResult {
  * (beforeChange/afterChange) which needs to be mapped to the
  * HookRegistry types (beforeCreate/beforeUpdate, etc.)
  */
+/**
+ * What this module has already registered, per registry.
+ *
+ * Held here rather than in the registry because the registry deliberately
+ * allows the same function to be subscribed more than once: two plugins may
+ * share a handler, and one unsubscribing must not silence the other. Only this
+ * path can tell that a second call describes declarations it already
+ * registered.
+ *
+ * Weakly keyed, so a registry that goes out of scope -- one per test, for
+ * instance -- takes its bookkeeping with it.
+ */
+const registeredByRegistry = new WeakMap<
+  HookRegistry,
+  Map<string, Set<HookHandler>>
+>();
+
+function registrationKey(hookType: HookType, collection: string): string {
+  return `${hookType}:${collection}`;
+}
+
 const HOOK_TYPE_MAPPINGS: Record<keyof CollectionHooks, HookType[]> = {
   beforeOperation: ["beforeOperation"],
   beforeValidate: ["beforeCreate", "beforeUpdate"], // Validate runs before create/update
@@ -127,6 +148,25 @@ export function registerCollectionHooks(
   collections: CollectionConfig[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterCollectionHooksResult {
+  let registered = registeredByRegistry.get(registry);
+  if (!registered) {
+    registered = new Map<string, Set<HookHandler>>();
+    registeredByRegistry.set(registry, registered);
+  }
+  const rememberRegistration = (
+    hookType: HookType,
+    collection: string,
+    handler: HookHandler
+  ): void => {
+    const key = registrationKey(hookType, collection);
+    let handlers = registered.get(key);
+    if (!handlers) {
+      handlers = new Set<HookHandler>();
+      registered.set(key, handlers);
+    }
+    handlers.add(handler);
+  };
+
   const result: RegisterCollectionHooksResult = {
     collections: [],
     totalHooks: 0,
@@ -146,21 +186,47 @@ export function registerCollectionHooks(
 
     let collectionHookCount = 0;
 
-    // Register each hook type
-    for (const [hookKey, handlers] of Object.entries(collection.hooks)) {
+    // Driven by the mapping's own order, not the config object's. Two phases
+    // can map onto the same queue -- `beforeValidate` and `beforeChange` both
+    // become `beforeCreate`/`beforeUpdate` -- so the order they are registered
+    // in IS their runtime order. Iterating the author's object would make that
+    // depend on which key they happened to type first, and a collection
+    // declaring `beforeChange` above `beforeValidate` would run its validation
+    // transformation after the write hook that expects it. The mapping is
+    // declared in the documented execution order, so following it keeps the
+    // two in step.
+    for (const hookKey of Object.keys(
+      HOOK_TYPE_MAPPINGS
+    ) as (keyof CollectionHooks)[]) {
+      const handlers = collection.hooks[hookKey];
       if (!handlers || !Array.isArray(handlers) || handlers.length === 0) {
         continue;
       }
 
-      const hookTypes = HOOK_TYPE_MAPPINGS[hookKey as keyof CollectionHooks];
-      if (!hookTypes) {
-        continue;
-      }
+      const hookTypes = HOOK_TYPE_MAPPINGS[hookKey];
 
       // Register handlers for each mapped hook type
       for (const hookType of hookTypes) {
         for (const handler of handlers) {
-          registry.register(hookType, collection.slug, handler as HookHandler);
+          // A scaffolded app registers its collections' hooks itself and then
+          // boots, which registers the same config again. Appending both copies
+          // runs every hook twice: a transformation applied twice, and any side
+          // effect duplicated.
+          //
+          // Skipped here rather than in the registry, which deliberately allows
+          // the same function to be subscribed more than once -- two plugins may
+          // share a handler, and one unsubscribing must not silence the other.
+          // This path is different: it re-registers declarations that are
+          // already registered, so the second copy is redundant rather than
+          // additional. Identity comparison, so two distinct functions that
+          // happen to do the same thing both still register.
+          const alreadyRegistered = registered
+            .get(registrationKey(hookType, collection.slug))
+            ?.has(handler);
+          if (alreadyRegistered) continue;
+
+          registry.register(hookType, collection.slug, handler);
+          rememberRegistration(hookType, collection.slug, handler);
           collectionHookCount++;
         }
       }
