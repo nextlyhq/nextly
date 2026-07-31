@@ -99,6 +99,9 @@ async function boot(): Promise<TestNextly> {
         fields: [
           text({ name: "title" }),
           relationship({ name: "author", relationTo: AUTHORS }),
+          // The blog template's shape: a relationship to the built-in users
+          // entity, which has no dynamic-collection record.
+          relationship({ name: "owner", relationTo: "users" }),
           // A relationship inside a container. Expansion populates it, so the
           // walk has to descend through the container to reach it.
           group({
@@ -277,5 +280,34 @@ describe("a target's field hooks apply to rows reached through a relationship", 
       // "HIDDEN", not "HIDDENHIDDEN" -- the marker of a second pass.
       expect(author.token).toBe("HIDDEN");
     }
+  });
+
+  it("walks a populated system-entity target without failing the read", async () => {
+    // `users` has no dynamic-collection record, so the schema lookup finds
+    // nothing. Reading that as an untrustworthy lookup and refusing turned an
+    // ordinary expansion -- the blog template's `author -> users` -- into an
+    // internal error. A system entity registers no field hooks, so there is
+    // nothing to fail closed over.
+    //
+    // Driven through the walk directly with an already-expanded document: that
+    // is the state the failure occurs in, and `users` cannot be seeded through
+    // the collections API.
+    const t = await boot();
+    const service = t.getService("relationshipService") as unknown as {
+      applyNestedFieldHooks: (
+        entry: Record<string, unknown>,
+        collection: string,
+        access: Record<string, unknown>
+      ) => Promise<void>;
+    };
+
+    const doc = {
+      title: "owned",
+      owner: { id: "u1", email: "owner@example.test" },
+    };
+
+    await expect(
+      service.applyNestedFieldHooks(doc, POSTS, { enforceFieldAccess: true })
+    ).resolves.toBeUndefined();
   });
 });

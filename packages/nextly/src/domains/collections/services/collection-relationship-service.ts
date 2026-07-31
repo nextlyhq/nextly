@@ -102,27 +102,32 @@ function createNestedHookState(): NestedHookState {
  */
 function resolveNestedTarget(
   row: Record<string, unknown>,
-  field: { relationTo?: unknown }
+  field: FieldDefinition
 ): { collection: string; row: Record<string, unknown> } | null {
-  const declared = field.relationTo;
+  // The same resolver expansion uses, so a Schema Builder relationship -- whose
+  // target lives in `options.target` with no `relationTo` at all -- is walked
+  // rather than skipped.
+  const targets = declaredTargets(field);
+  if (targets.length === 0) return null;
 
-  const discriminator = row.relationTo;
-  if (typeof discriminator === "string") {
+  // Whether a value is discriminated is a property of the FIELD: only a field
+  // declaring several targets stores `{ relationTo, value }`, because an id
+  // alone would not say which table it belongs to. Reading it off the row
+  // instead would mistake a target that legitimately has its own string
+  // `relationTo` field for a wrapper, and skip its hooks entirely.
+  if (targets.length > 1) {
+    const named = row.relationTo;
     const inner = row.value;
+    if (typeof named !== "string") return null;
     if (typeof inner !== "object" || inner === null) return null;
-    const permitted = Array.isArray(declared)
-      ? declared.includes(discriminator)
-      : declared === discriminator;
-    if (!permitted) return null;
-    return {
-      collection: discriminator,
-      row: inner as Record<string, unknown>,
-    };
+    // Validated against what the field declares: nothing checks the stored
+    // slug on the way in, so an unvalidated one would let a writer aim another
+    // collection's hooks at this row.
+    if (!targets.includes(named)) return null;
+    return { collection: named, row: inner as Record<string, unknown> };
   }
 
-  // A single-target relationship carries the row directly.
-  if (typeof declared === "string") return { collection: declared, row };
-  return null;
+  return { collection: targets[0], row };
 }
 
 /**
@@ -2892,6 +2897,16 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<FieldDefinition[]> {
     const cached = state.fields.get(collectionName);
     if (cached) return cached;
+
+    // A system entity has no dynamic-collection record and no registered field
+    // hooks, so there is nothing to look up and nothing to fail closed over.
+    // `getCollectionFields` already reads it this way; the redaction helper
+    // does not, and treating its `null` as untrustworthy turned an ordinary
+    // `author -> users` expansion into an internal error.
+    if (isSystemEntity(collectionName)) {
+      state.fields.set(collectionName, []);
+      return [];
+    }
 
     const fields = await this.getRedactionFields(collectionName);
     if (fields === null) {
