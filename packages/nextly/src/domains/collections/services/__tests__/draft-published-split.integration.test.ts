@@ -1222,6 +1222,50 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("gives afterUpdate the prior working draft as originalData on a repeat save", async () => {
+    const seen: unknown[] = [];
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          hooks: {
+            // Config `afterChange` maps to the runtime `afterUpdate` phase.
+            afterChange: [
+              ctx => {
+                seen.push(ctx.originalData);
+              },
+            ],
+          },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      body: "b",
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // The first status-less save stores the draft (title becomes draft1).
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft1" });
+    // The second save touches only body. The afterUpdate hook's originalData must
+    // be the PRIOR draft (title=draft1), not the unchanged published row.
+    seen.length = 0;
+    await entries.updateEntry({ ...ctx, entryId: id }, { body: "b2" });
+
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as { title?: string }).title).toBe("draft1");
+  });
+
   it("deletes the working-draft sidecar when the entry is deleted", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };

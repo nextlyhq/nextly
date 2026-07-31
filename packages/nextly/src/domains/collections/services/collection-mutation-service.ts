@@ -1549,6 +1549,50 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Shape a working-draft snapshot into the read document the response and hooks
+   * see, the same way the read overlay does: prune it to the current schema
+   * (dropping a field a later change removed and the single-component type markers
+   * the persisted snapshot keeps for promotion), copy back the immutable id and
+   * timestamp columns `buildRestorePayload` holds out, and rehydrate JSON date
+   * strings to Date at every depth. Used for the newly accumulated draft and for
+   * the prior draft the afterUpdate hooks compare against.
+   */
+  private shapeDraftForResponse(
+    rawDraft: Record<string, unknown>,
+    fields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null,
+    collectionHasStatus: boolean,
+    isPluginCollection: boolean
+  ): Record<string, unknown> {
+    const { payload } = buildRestorePayload(rawDraft, fields, {
+      hasStatus: collectionHasStatus,
+      hasSlug: !isPluginCollection || fields.some(f => f.name === "slug"),
+      hasTitle: !isPluginCollection || fields.some(f => f.name === "title"),
+      componentSchemas: componentSchemas ?? undefined,
+      documentLocalized: false,
+      localeUnknown: false,
+    });
+    for (const key of [
+      "id",
+      "createdAt",
+      "created_at",
+      "updatedAt",
+      "updated_at",
+    ]) {
+      if (key in rawDraft) payload[key] = rawDraft[key];
+    }
+    for (const key of ["createdAt", "updatedAt"]) {
+      const value = payload[key];
+      if (typeof value === "string") {
+        const parsed = new Date(value);
+        if (!Number.isNaN(parsed.getTime())) payload[key] = parsed;
+      }
+    }
+    rehydrateSnapshotDates(payload, fields, componentSchemas);
+    return payload;
+  }
+
+  /**
    * Overlay `patch` onto `base`, recursively merging single (non-repeatable)
    * component objects instead of replacing them.
    *
@@ -4787,6 +4831,10 @@ export class CollectionMutationService extends BaseService {
       // instead, and the public revalidation and reaction event are skipped
       // because the live document a visitor sees did not change.
       let workingDraftDocument: Record<string, unknown> | undefined;
+      // The prior working draft (shaped like a read), set only when a later
+      // status-less save accumulates onto an existing draft, so the afterUpdate
+      // hooks diff against it rather than the unchanged published row.
+      let priorWorkingDraftDocument: Record<string, unknown> | undefined;
       // Verify every localized field group in this payload can actually be written
       // BEFORE the transaction opens. Inside it the probes would borrow a second
       // connection and deadlock a single-connection pool, and a NextlyError raised in
@@ -5589,65 +5637,34 @@ export class CollectionMutationService extends BaseService {
                 );
                 // The response and hooks see the draft as an ordinary read, so
                 // shape the accumulated snapshot through the current schema the
-                // same way the read overlay does: a field a later schema change
-                // removed or renamed (which the persisted snapshot still carries)
-                // is pruned, single-component type markers are dropped (a dynamic
-                // zone keeps its own row type, as a read carries it), and JSON
-                // date strings become Date at every depth. Without this the hooks
-                // and the mutation result would see an obsolete field or an ISO
-                // string where an ordinary update supplies a Date. The persisted
-                // `draftDocument` below keeps its markers for promotion.
+                // same way the read overlay does. The persisted `draftDocument`
+                // below keeps its markers for promotion.
                 const responseDeclaredFields =
                   fields as unknown as FieldConfig[];
                 const draftIsPluginCollection =
                   (collection as { admin?: { isPlugin?: boolean } }).admin
                     ?.isPlugin === true;
-                const { payload: shapedDraftDocument } = buildRestorePayload(
+                workingDraftDocument = this.shapeDraftForResponse(
                   draftDocument,
                   responseDeclaredFields,
-                  {
-                    hasStatus: collectionHasStatus,
-                    hasSlug:
-                      !draftIsPluginCollection ||
-                      responseDeclaredFields.some(f => f.name === "slug"),
-                    hasTitle:
-                      !draftIsPluginCollection ||
-                      responseDeclaredFields.some(f => f.name === "title"),
-                    componentSchemas: splitComponentSchemas ?? undefined,
-                    documentLocalized: false,
-                    localeUnknown: false,
-                  }
+                  splitComponentSchemas ?? null,
+                  collectionHasStatus,
+                  draftIsPluginCollection
                 );
-                // buildRestorePayload drops immutable system columns, but a
-                // mutation response and its hooks still expect the id and
-                // timestamps the snapshot carries, so copy them back and
-                // rehydrate the two system timestamps, mirroring the read overlay.
-                for (const key of [
-                  "id",
-                  "createdAt",
-                  "created_at",
-                  "updatedAt",
-                  "updated_at",
-                ]) {
-                  if (key in draftDocument) {
-                    shapedDraftDocument[key] = draftDocument[key];
-                  }
+                // The afterUpdate/afterChange hooks compare against the document
+                // BEFORE this save: the published row on the first draft save, but
+                // the prior working draft on a later one, so a hook diffing old and
+                // new does not see an earlier save's edits as changing again. Shape
+                // it the same way so the comparison is like-for-like.
+                if (existingDraft) {
+                  priorWorkingDraftDocument = this.shapeDraftForResponse(
+                    existingDraft.snapshot as Record<string, unknown>,
+                    responseDeclaredFields,
+                    splitComponentSchemas ?? null,
+                    collectionHasStatus,
+                    draftIsPluginCollection
+                  );
                 }
-                for (const key of ["createdAt", "updatedAt"]) {
-                  const value = shapedDraftDocument[key];
-                  if (typeof value === "string") {
-                    const parsed = new Date(value);
-                    if (!Number.isNaN(parsed.getTime())) {
-                      shapedDraftDocument[key] = parsed;
-                    }
-                  }
-                }
-                rehydrateSnapshotDates(
-                  shapedDraftDocument,
-                  responseDeclaredFields,
-                  splitComponentSchemas ?? null
-                );
-                workingDraftDocument = shapedDraftDocument;
                 await draftRepo.upsertWorkingDraft({
                   ref: draftRef,
                   // The split is non-localized only, so the working draft is one
@@ -5940,7 +5957,10 @@ export class CollectionMutationService extends BaseService {
         collection: params.collectionName,
         operation: "update" as const,
         data: responseSource,
-        originalData: existingEntry,
+        // On a repeat status-less save `responseSource` is the accumulated draft,
+        // so diff it against the prior draft rather than the unchanged published
+        // row; otherwise a hook reports an earlier save's fields as changing again.
+        originalData: priorWorkingDraftDocument ?? existingEntry,
         user: params.user,
         context: sharedContext, // Pass shared context from beforeUpdate
       });
