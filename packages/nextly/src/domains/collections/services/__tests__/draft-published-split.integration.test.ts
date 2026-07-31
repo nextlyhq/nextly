@@ -213,6 +213,57 @@ describe("draft/published split — updateEntry (integration)", () => {
     );
   });
 
+  it("flags the working draft with _isWorkingDraft on the save response and the draft read, but never the live row", async () => {
+    // The editor UI derives a "Changed / unpublished edits" state from this flag
+    // rather than from `status` (which the overlay keeps at the live parent's
+    // published value).
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A status-less save stores a working draft — its response carries the flag.
+    const saveRes = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited-in-draft" }
+    );
+    expect(
+      (saveRes.data as { _isWorkingDraft?: boolean })._isWorkingDraft
+    ).toBe(true);
+
+    // The trusted draft-view read carries the flag.
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    expect(
+      (draftRead.data as { _isWorkingDraft?: boolean })._isWorkingDraft
+    ).toBe(true);
+
+    // The published-view read returns the live row, which must NOT be flagged.
+    const publishedRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      status: "published",
+    });
+    expect(
+      (publishedRead.data as { _isWorkingDraft?: boolean })._isWorkingDraft
+    ).toBeUndefined();
+
+    // A publish promotes the draft to the live row; that live-write response is
+    // NOT a working draft, so it must not be flagged.
+    const publishRes = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { status: "published" }
+    );
+    expect(
+      (publishRes.data as { _isWorkingDraft?: boolean })._isWorkingDraft
+    ).toBeUndefined();
+  });
+
   it("makes the working draft reachable through the Direct API findByID draft option", async () => {
     // End-to-end reachability: the split engine's read overlay is dormant unless
     // a caller-facing surface forwards the opt-in. This drives the full
