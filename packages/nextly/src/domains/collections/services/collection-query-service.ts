@@ -2245,6 +2245,15 @@ export class CollectionQueryService extends BaseService {
         // no draft for a localized collection), so skip the lookup there rather
         // than issue a read that can only miss.
         (collectionForStatus as { localized?: boolean }).localized !== true &&
+        // Only when drafts are still enabled. If the collection turned drafts
+        // off after a working draft was written, the write path no longer
+        // promotes or deletes it, so surfacing it here would shadow the live
+        // document with a sidecar nothing can ever consume.
+        (
+          collectionForStatus as {
+            versions?: { drafts?: { enabled?: boolean } };
+          }
+        ).versions?.drafts?.enabled === true &&
         statusFilter === null &&
         (params.overrideAccess === true || params.routeAuthorized === true);
       if (draftView) {
@@ -2256,7 +2265,10 @@ export class CollectionQueryService extends BaseService {
             scopeSlug: params.collectionName,
             entryId,
           },
-          localeChain?.[0] ?? null
+          // Non-localized split: the draft is keyed under the unlocalized
+          // `locale IS NULL` slot, matching the store and promote, so it is
+          // found regardless of the request locale.
+          null
         );
         if (workingDraft) {
           expandedEntry = workingDraft.snapshot as Record<string, unknown>;

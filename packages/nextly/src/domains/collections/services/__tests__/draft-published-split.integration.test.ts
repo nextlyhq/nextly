@@ -271,4 +271,63 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(after.status).toBe("published");
     expect(await workingDraftCount(id)).toBe(0);
   });
+
+  it("requires publish permission to promote a draft on an already-published document", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const handler = handle.getService<CollectionsHandler>("collectionsHandler");
+
+    // Publish, then stash a pending draft via a trusted status-less edit.
+    const created = await handler.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      { title: "live-t", body: "live-b", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { title: "draft-t" }
+    );
+    expect(await workingDraftCount(id)).toBe(1);
+
+    // A route-authorized user without publish permission "re-publishes" the
+    // already-published row (a no-op status transition). Folding the draft is a
+    // publish, so it must be denied and leave the draft intact — otherwise an
+    // editor could push pending content live without publish permission.
+    const denied = await handler.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        userId: "user-no-publish",
+        routeAuthorized: true,
+      },
+      { status: "published" }
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    // Live content unchanged, the working draft still present.
+    const [live] = await handle.adapter.select<LiveRow>(TABLE);
+    expect(live.title).toBe("live-t");
+    expect(live.body).toBe("live-b");
+    expect(await workingDraftCount(id)).toBe(1);
+
+    // A trusted publish still promotes it — the gate enforces the missing
+    // permission, it does not blanket-block promotion.
+    const allowed = await handler.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { status: "published" }
+    );
+    expect(allowed.success).toBe(true);
+    const [promoted] = await handle.adapter.select<LiveRow>(TABLE);
+    expect(promoted.title).toBe("draft-t");
+    expect(await workingDraftCount(id)).toBe(0);
+  });
 });

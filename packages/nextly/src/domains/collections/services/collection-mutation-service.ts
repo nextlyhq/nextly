@@ -1510,9 +1510,19 @@ export class CollectionMutationService extends BaseService {
       : new Map<string, FieldConfig[]>();
     const resolve = (slug: string) => componentFields.get(slug);
 
+    const components = tagComponentTypes(parts.components, schema, resolve);
+    // A working draft stores the caller's RAW component input (the component
+    // saver that hashes nested passwords is skipped for a draft edit), so a
+    // password field inside a component would otherwise land in the snapshot in
+    // plaintext and leak on a trusted draft read. The normal capture path reads
+    // components back through the query layer, which already strips them, so
+    // this is a no-op there. Runs after tagging so a dynamic zone's per-instance
+    // `_componentType` resolves each row's own schema.
+    this.stripComponentPasswordsInPlace(components, schema, componentFields);
+
     return {
       ...parts,
-      components: tagComponentTypes(parts.components, schema, resolve),
+      components,
       // A component declared inside a group or repeater rides in that
       // container's JSON on the parent row rather than appearing as its own
       // key, so it has to be reached through the row.
@@ -1522,6 +1532,78 @@ export class CollectionMutationService extends BaseService {
         resolve
       ) as Record<string, unknown>,
     };
+  }
+
+  /**
+   * Delete password-field values from component instances in a snapshot's
+   * component map, descending through nested components. `stripPasswordFieldValues`
+   * handles a component instance's own passwords and any nested in a
+   * group/repeater, but cannot follow a component referenced by slug; this
+   * resolves each instance's schema (from the tagged `_componentType`, or the
+   * field's single declared component) and recurses so a password two components
+   * deep is removed too. Mutates in place: on every path that reaches here the
+   * component data has already been saved (promote) or will never be saved
+   * (draft edit), so stripping the snapshot copy cannot affect a live write.
+   */
+  private stripComponentPasswordsInPlace(
+    components: Record<string, unknown>,
+    schema: FieldConfig[],
+    componentFields: Map<string, FieldConfig[]>
+  ): void {
+    const declaredSlugs = (field: FieldConfig): string[] => {
+      const one = (field as { component?: unknown }).component;
+      const many = (field as { components?: unknown }).components;
+      const slugs: string[] = [];
+      if (typeof one === "string") slugs.push(one);
+      if (Array.isArray(many)) {
+        for (const s of many) if (typeof s === "string") slugs.push(s);
+      }
+      return slugs;
+    };
+    const stripInstance = (instance: unknown, cfields: FieldConfig[]): void => {
+      if (
+        !instance ||
+        typeof instance !== "object" ||
+        Array.isArray(instance)
+      ) {
+        return;
+      }
+      const rec = instance as Record<string, unknown>;
+      stripPasswordFieldValues(rec, cfields);
+      for (const child of cfields) {
+        const childSlugs = declaredSlugs(child);
+        if (childSlugs.length > 0) stripField(rec, child, childSlugs);
+      }
+    };
+    const stripField = (
+      owner: Record<string, unknown>,
+      field: FieldConfig,
+      slugs: string[]
+    ): void => {
+      if (!field.name) return;
+      const value = owner[field.name];
+      const instances = Array.isArray(value)
+        ? value
+        : value != null
+          ? [value]
+          : [];
+      for (const inst of instances) {
+        if (!inst || typeof inst !== "object") continue;
+        const tagged = (inst as Record<string, unknown>)._componentType;
+        const slug =
+          typeof tagged === "string"
+            ? tagged
+            : slugs.length === 1
+              ? slugs[0]
+              : undefined;
+        const cfields = slug ? componentFields.get(slug) : undefined;
+        if (cfields) stripInstance(inst, cfields);
+      }
+    };
+    for (const field of schema) {
+      const slugs = declaredSlugs(field);
+      if (slugs.length > 0) stripField(components, field, slugs);
+    }
   }
 
   private async buildFullSnapshotRelations(
@@ -4722,15 +4804,48 @@ export class CollectionMutationService extends BaseService {
           if (promotePossible && promoteRestoreCtx) {
             const workingDraft = await new VersionsRepository(
               tx
+              // The split is non-localized only, so the working draft is keyed
+              // under the unlocalized `locale IS NULL` slot — the same key the
+              // read overlay and the store use, so a publish under any request
+              // locale still finds the pending draft it would show the editor.
             ).findWorkingDraft(
               {
                 scopeKind: "collection",
                 scopeSlug: params.collectionName,
                 entryId: params.entryId,
               },
-              this.componentSnapshotLocale(params.locale)
+              null
             );
             if (workingDraft) {
+              // Promoting a working draft publishes (or unpublishes) its pending
+              // content, so it needs the same permission as a status transition
+              // even when the main-row status does not change: a
+              // published -> published re-publish is a no-op for the transition
+              // guard above, yet folding the draft still pushes pending content
+              // live. Enforce the pre-resolved guard here against the row-locked
+              // document. For a real transition the guard already fired and
+              // passed above, so this is a no-op re-check; for the no-op
+              // re-publish it is the only place the publish permission is
+              // enforced.
+              if (transitionGuard) {
+                if (transitionGuard.permissionDenied) {
+                  transitionDeniedResult = transitionGuard.permissionDenied;
+                  throw new StatusTransitionDeniedError();
+                }
+                if (transitionGuard.documentRule && preUpdateRow) {
+                  const promoteDenied =
+                    await this.accessService.evaluateTransitionDocumentRule(
+                      transitionGuard.documentRule.accessRules,
+                      transitionGuard.op,
+                      transitionGuard.documentRule.user,
+                      preUpdateRow as Record<string, unknown>
+                    );
+                  if (promoteDenied) {
+                    transitionDeniedResult = promoteDenied;
+                    throw new StatusTransitionDeniedError();
+                  }
+                }
+              }
               // The snapshot is stored read-shaped, so buildRestorePayload turns
               // it into a safe update input (immutable ids stripped, removed
               // columns and password fields dropped, component subtrees whose
@@ -5098,13 +5213,13 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  // The resolved request locale (null when localization is off),
-                  // which is exactly what the read overlay looks the draft up
-                  // under (`localeChain[0] ?? null`) and what a later publish uses
-                  // to promote it — so store, overlay, and promote never drift.
-                  // The split is non-localized-only, so this captures the single
-                  // per-locale component snapshot for one logical document.
-                  locale: this.componentSnapshotLocale(params.locale),
+                  // The split is non-localized only, so the working draft is one
+                  // logical document with no per-locale variant: key it under the
+                  // unlocalized `locale IS NULL` slot. Keying it by the resolved
+                  // request locale would orphan it when a later read or publish
+                  // arrives under a different locale in a localization-configured
+                  // app. The read overlay and promote use the same null key.
+                  locale: null,
                   snapshot: assembleDocument(draftParts),
                   createdBy: params.user?.id ?? null,
                 });
@@ -5123,7 +5238,8 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  this.componentSnapshotLocale(params.locale)
+                  // Same unlocalized key the fetch and store use.
+                  null
                 );
               }
 
