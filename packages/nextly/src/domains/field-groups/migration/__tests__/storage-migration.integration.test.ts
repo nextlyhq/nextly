@@ -59,6 +59,7 @@ import { DynamicCollectionSchemaService } from "../../../dynamic-collections/ser
 import { FieldGroupSchemaService } from "../../services/field-group-schema-service";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
+import { resolveTypeColumns } from "../../storage/resolve-storage-names";
 import { MIGRATION_LOCK_TABLE } from "../session";
 
 interface TestAdapter {
@@ -387,18 +388,31 @@ for (const entry of DIALECTS) {
       });
     }
 
-    /** Both spellings registered, so reads resolve before and after a run. */
-    function registerRuntimeSchemas(): void {
+    /**
+     * Both spellings registered, so reads resolve before and after a run.
+     *
+     * The discriminator is resolved from the live catalog rather than assumed,
+     * which is what a booting process does. Registered before a run it names
+     * the legacy column; re-registered after one it names the migrated column,
+     * from the same code and without being told which generation it is in.
+     */
+    async function registerRuntimeSchemas(): Promise<void> {
       const pairs: [string, { name: string; type: string }[]][] = [
         [outerTable, [{ name: "heading", type: "text" }]],
         [outerMigrated, [{ name: "heading", type: "text" }]],
         [innerTable, innerFields],
         [innerMigrated, innerFields],
       ];
+      const typeColumns = await resolveTypeColumns(
+        adapter as never,
+        pairs.map(([table]) => table)
+      );
       for (const [table, fields] of pairs) {
         registry.registerDynamicSchema(
           table,
-          schemaService.generateRuntimeSchema(table, fields as never)
+          schemaService.generateRuntimeSchema(table, fields as never, {
+            typeColumn: typeColumns.get(table) ?? STORAGE_FORMAT.columns.type,
+          })
         );
       }
     }
@@ -473,7 +487,7 @@ for (const entry of DIALECTS) {
         value: "Nested body",
       });
 
-      registerRuntimeSchemas();
+      await registerRuntimeSchemas();
     });
 
     afterAll(async () => {
@@ -504,6 +518,53 @@ for (const entry of DIALECTS) {
         field: "inner",
       });
       expect(after?.body).toBe("Nested body");
+    });
+
+    // 🔴 The assertion the reader-side expansion exists for, and the one the
+    // suite could not make before it: the SAME code reads content through the
+    // typed CRUD on both generations, choosing the discriminator from the
+    // catalog rather than being told which generation it is in. Before this
+    // resolution existed the post-migration read projected `_component_type`
+    // against a table carrying `_field_group_type` and failed outright.
+    it("reads content through the typed CRUD on either generation", async () => {
+      const readTyped = async (table: string, parent: string) => {
+        await registerRuntimeSchemas();
+        const rows = await adapter.select<Record<string, unknown>>(table, {
+          where: {
+            and: [
+              {
+                column: STORAGE_FORMAT.columns.parentId,
+                op: "=",
+                value: "outer-1",
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentTable,
+                op: "=",
+                value: parent,
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentField,
+                op: "=",
+                value: "inner",
+              },
+            ],
+          },
+        });
+        return rows[0];
+      };
+
+      const before = await readTyped(innerTable, outerTable);
+      expect(before?.body).toBe("Nested body");
+      // The discriminator comes back under its stable property key whichever
+      // physical column carries it, which is what keeps every consumer of a
+      // component row unchanged across the migration.
+      expect(before).toHaveProperty(STORAGE_FORMAT.columns.type);
+
+      await migrate("up");
+
+      const after = await readTyped(innerMigrated, outerMigrated);
+      expect(after?.body).toBe("Nested body");
+      expect(after).toHaveProperty(STORAGE_FORMAT.columns.type);
     });
 
     it("renames the registry, the tables and the discriminator", async () => {

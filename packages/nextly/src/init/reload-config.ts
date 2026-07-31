@@ -25,6 +25,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
+import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
@@ -58,6 +59,7 @@ import type {
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -79,6 +81,7 @@ import { NextlyError } from "../errors/nextly-error";
 import type { PluginFieldType } from "../plugins/contributions";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
 
@@ -1963,6 +1966,22 @@ async function applyReload(opts?: {
       // breaking every component read (filter by _parent_id) and write (insert
       // _parent_*) after an HMR config reload.
       const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
+      // The discriminator each component table actually carries, taken from the
+      // batched snapshot this reload already read rather than probed again. That
+      // snapshot covers every managed table including the component ones, so a
+      // second introspection here would be a duplicate round trip on the HMR
+      // path — and `chooseTypeColumns` needs nothing the snapshot does not hold.
+      const componentTypeColumns = chooseTypeColumns(
+        liveSnapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        Object.values(desiredComponents).map(comp => comp.tableName),
+        // Asked of the server, never assumed: MySQL's table-name folding is
+        // `lower_case_table_names`, which is server configuration, and a static
+        // guess is wrong in one direction or the other on every server.
+        await readIdentifierCaseRules(adapter)
+      );
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
         // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
@@ -1970,7 +1989,12 @@ async function applyReload(opts?: {
         const table = fieldGroupSchemaService.generateRuntimeSchema(
           comp.tableName,
           comp.fields,
-          { localized }
+          {
+            localized,
+            typeColumn:
+              componentTypeColumns.get(comp.tableName) ??
+              STORAGE_FORMAT.columns.type,
+          }
         );
         componentFreshTables.set(comp.tableName, table);
         if (localized) {

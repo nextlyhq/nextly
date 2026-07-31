@@ -43,6 +43,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import { resolveTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
 import {
@@ -635,6 +636,11 @@ export async function registerServices(
         changed: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
         loaded: LoadedBuilderEntity[],
         persist: (slug: string, fields: FieldConfig[]) => Promise<unknown>,
+        // Returns the runtime table, or a promise of one: the field-group
+        // implementation resolves its discriminator from the catalog first,
+        // while the collection and single ones are synchronous. Typed as
+        // `unknown` because a `unknown | Promise<unknown>` union collapses to
+        // `unknown` anyway; the call site awaits, which is correct for both.
         makeRuntime: (
           tableName: string,
           fields: FieldConfig[],
@@ -657,7 +663,7 @@ export async function registerServices(
             if (schemaRegistry) {
               schemaRegistry.registerDynamicSchema(
                 before.tableName,
-                makeRuntime(before.tableName, fields, before.status)
+                await makeRuntime(before.tableName, fields, before.status)
               );
             }
           } catch (err) {
@@ -731,8 +737,13 @@ export async function registerServices(
           compChanged,
           builderEntities.components,
           (slug, fields) => reg.updateComponent(slug, { fields: fields }),
-          (tableName, fields) =>
-            compSchema.generateRuntimeSchema(tableName, fields)
+          async (tableName, fields) =>
+            compSchema.generateRuntimeSchema(tableName, fields, {
+              typeColumn:
+                (await resolveTypeColumns(adapter, [tableName])).get(
+                  tableName
+                ) ?? STORAGE_FORMAT.columns.type,
+            })
         );
       }
     }
@@ -1172,10 +1183,19 @@ async function initializeSchemaRegistry(
           "../services/field-groups/field-group-schema-service"
         );
         const compSchemaService = new FieldGroupSchemaService(dialect);
+        // Resolved per table: the storage migration renames the discriminator,
+        // and a table an author named itself keeps its own table name while its
+        // column still moves, so the two generations can be mixed across the
+        // very set being registered here.
+        const typeColumns = await resolveTypeColumns(adapter, [tableName]);
         const runtimeTable = compSchemaService.generateRuntimeSchema(
           tableName,
           fields as FieldConfig[],
-          { localized }
+          {
+            localized,
+            typeColumn:
+              typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
+          }
         );
         registry.registerDynamicSchema(tableName, runtimeTable);
         if (localized) {
@@ -1938,7 +1958,13 @@ async function syncCodeFirstComponents(
             const compRuntimeTable = compSchemaService.generateRuntimeSchema(
               tableName,
               compConfig.fields,
-              { localized: compLocalized }
+              {
+                localized: compLocalized,
+                // This table was created by the DDL a few lines above, so it
+                // carries the spelling that generator writes. The same constant,
+                // read twice — not a guess, and not worth a catalog round trip.
+                typeColumn: STORAGE_FORMAT.columns.type,
+              }
             );
             const resolver = (
               adapter as unknown as {

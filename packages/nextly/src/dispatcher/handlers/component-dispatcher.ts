@@ -26,6 +26,7 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { resolveTypeColumns } from "../../domains/field-groups/storage/resolve-storage-names";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { localizedColumnsOnMain } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
@@ -135,7 +136,7 @@ async function executeMigrationStatements(
 
 // Refresh the cached Drizzle table so the next entry query joining this
 // component uses the new column layout without a server restart.
-function registerComponentRuntimeSchema(
+async function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
   tableName: string,
@@ -143,15 +144,22 @@ function registerComponentRuntimeSchema(
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
   localized = false
-): void {
+): Promise<void> {
   try {
     const fieldGroupSchemaService = new FieldGroupSchemaService(
       dialect as ConstructorParameters<typeof FieldGroupSchemaService>[0]
     );
+    // Asked of the catalog rather than assumed from the DDL just applied: the
+    // alter above changes user columns only, so the discriminator is whichever
+    // one the table already carried.
+    const typeColumns = await resolveTypeColumns(adapter, [tableName]);
     const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
       tableName,
       fields,
-      { localized }
+      {
+        localized,
+        typeColumn: typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
+      }
     );
     const companion = localized
       ? buildCompanionRuntimeTable({
@@ -384,7 +392,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           const tableExists = await diAdapter.tableExists(tableName);
           if (tableExists) {
             migrationStatus = "applied";
-            registerComponentRuntimeSchema(
+            await registerComponentRuntimeSchema(
               diAdapter,
               dialect,
               tableName,
@@ -537,7 +545,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         if (container.has("adapter")) {
           const adapter = container.get<DrizzleAdapter>("adapter");
           const newFields = b?.fields ?? existing.fields;
-          registerComponentRuntimeSchema(
+          await registerComponentRuntimeSchema(
             adapter,
             adapter.getCapabilities().dialect,
             existing.tableName,
@@ -828,7 +836,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // so the registered table includes component system columns
       // (_parent_id, _parent_table, _parent_field, _order, _component_type)
       // instead of collection columns (title, slug).
-      registerComponentRuntimeSchema(
+      await registerComponentRuntimeSchema(
         adapter,
         dialect,
         tableName,

@@ -49,16 +49,21 @@ import { MIGRATION_TARGET } from "../migration/manifest";
 import type { TableColumns } from "../migration/reconcile";
 
 /**
- * The adapter surface this module needs.
+ * What reading a table's columns needs.
  *
- * Declared structurally rather than importing `DrizzleAdapter` so a caller
- * holding a narrower adapter can still resolve, and so the wrappers can be
- * exercised without constructing one.
+ * Declared structurally rather than importing `DrizzleAdapter`, and kept
+ * separate from {@link StorageNameAdapter} because it genuinely needs less: the
+ * HMR reload path holds an adapter type with no `listTables`, and widening that
+ * type to satisfy a requirement this function does not have would be a fiction.
  */
-export interface StorageNameAdapter {
+export interface CatalogReadAdapter {
   dialect: SupportedDialect;
-  listTables(): Promise<string[]>;
   getDrizzle<T = unknown>(): T;
+}
+
+/** What choosing between the two registry names needs, on top of the above. */
+export interface StorageNameAdapter extends CatalogReadAdapter {
+  listTables(): Promise<string[]>;
 }
 
 /** The registry table a database holds, and whether it has been migrated. */
@@ -102,6 +107,21 @@ export function chooseRegistryTable(
     return { name: MIGRATION_TARGET.registryTable, migrated: true };
   }
   return { name: STORAGE_FORMAT.registryTable, migrated: false };
+}
+
+/**
+ * Whether a table name is the field-group registry, under either spelling.
+ *
+ * The registry has no `status` column where the collection and single
+ * registries do, so a caller that branches on "is this the field-group
+ * registry?" and only compares against the legacy name would select a column
+ * that does not exist the moment the storage migration has run.
+ */
+export function isFieldGroupRegistry(tableName: string): boolean {
+  return (
+    tableName === STORAGE_FORMAT.registryTable ||
+    tableName === MIGRATION_TARGET.registryTable
+  );
 }
 
 /**
@@ -238,7 +258,7 @@ export function forgetFieldGroupStorageNames(
  * every caller already holds the full list it cares about.
  */
 export async function resolveTypeColumns(
-  adapter: StorageNameAdapter,
+  adapter: CatalogReadAdapter,
   tables: readonly string[]
 ): Promise<Map<string, string>> {
   if (tables.length === 0) return new Map();

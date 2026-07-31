@@ -38,7 +38,13 @@ function makeAdapter(
     selectOne: vi.fn().mockResolvedValue(null),
     executeQuery: vi.fn().mockResolvedValue([]),
     listTables: vi.fn().mockResolvedValue(tables),
-    getDrizzle: () => ({}),
+    // The discriminator resolution introspects `information_schema` through the
+    // Drizzle handle. An empty result is a truthful answer here — the catalog
+    // describes none of these tables — and it exercises the documented fallback
+    // to the spelling the DDL writes. Whether a REAL catalog steers the
+    // generator to the migrated column is a question only a live server can
+    // answer, and the three-dialect matrix asks it there.
+    getDrizzle: () => ({ execute: async () => ({ rows: [] }) }),
   };
 }
 
