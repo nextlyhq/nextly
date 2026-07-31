@@ -11,6 +11,7 @@ import {
   defineCollection,
   group,
   relationship,
+  password,
   text,
   upload,
 } from "../../../config";
@@ -24,6 +25,9 @@ import {
 const ORGS = "nestedhook_orgs";
 const AUTHORS = "nestedhook_authors";
 const POSTS = "nestedhook_posts";
+
+// How many times the target's token hook ran, for the selection test.
+let tokenHookRuns = 0;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -72,14 +76,30 @@ async function boot(): Promise<TestNextly> {
           // Masks unconditionally, so it is testable on the list path too --
           // batch expansion does not recurse into a related row's OWN
           // relationships, so a hook needing that evidence cannot mask there.
+          password({ name: "passwordHash" }),
+          // Writes a secret back after the fetch stripped it. Only a second
+          // strip AFTER the hooks keeps it out of the response.
+          text({
+            name: "sneaky",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  (data as Record<string, unknown>).passwordHash = "$2yLEAKED";
+                  return value;
+                },
+              ],
+            },
+          }),
           text({
             name: "token",
             hooks: {
               afterRead: [
-                ({ value }) =>
-                  typeof value === "string" && value.startsWith("HIDDEN")
+                ({ value }) => {
+                  tokenHookRuns++;
+                  return typeof value === "string" && value.startsWith("HIDDEN")
                     ? `${value}HIDDEN`
-                    : "HIDDEN",
+                    : "HIDDEN";
+                },
               ],
             },
           }),
@@ -186,9 +206,8 @@ describe("a target's field hooks apply to rows reached through a relationship", 
   it("applies the target's field hooks to nested rows on a list too", async () => {
     // Asserted on a field whose hook needs no further expansion: the batch path
     // skips relationship fields when it recurses, so a related row's own
-    // relations are never expanded on a list at any depth. That gap is real and
-    // recorded in the spec, but it is not this one -- what matters here is that
-    // the walk reaches nested rows on the list path at all.
+    // relations are never expanded on a list at any depth. What this pins is
+    // that the walk reaches nested rows on the list path at all.
     const t = await boot();
     await seed(t);
 
@@ -347,5 +366,43 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(logged).not.toHaveBeenCalled();
 
     vi.restoreAllMocks();
+  });
+  it("strips a secret a hook wrote back onto a related row", async () => {
+    // The fetch strips a target's password before the hooks run, and a hook on
+    // a sibling field can put one back. The response-level defenses sanitize
+    // only the ROOT row, using the SOURCE collection's schema, so they never
+    // look at this row -- the strip has to happen here.
+    const t = await boot();
+    await seed(t);
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      overrideAccess: true,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    expect(author.passwordHash).toBeUndefined();
+  });
+
+  it("does not run a target's hooks for a relationship the caller excluded", async () => {
+    // Top-level field hooks run after selection and skip absent fields. A
+    // nested target's hooks running for an excluded relationship would fire
+    // side effects for a field that is not in the response at all.
+    const t = await boot();
+    await seed(t);
+
+    tokenHookRuns = 0;
+    await handlerOf(t).listEntries({
+      collectionName: POSTS,
+      overrideAccess: true,
+      depth: 2,
+      select: { title: true },
+    });
+
+    expect(tokenHookRuns).toBe(0);
   });
 });

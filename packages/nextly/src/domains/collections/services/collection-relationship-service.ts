@@ -2842,6 +2842,62 @@ export class CollectionRelationshipService extends BaseService {
    * either one: it runs against the SOURCE collection's field registry, which
    * never describes a related collection's fields.
    */
+  private async redactRelatedRows(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess = {}
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    // The system owner column must never ride along a populated relationship:
+    // a collection readable by non-creators would otherwise leak a related
+    // row's creator user id through the nested payload. Strip it from every
+    // related row up front (it's a reserved system column, so this can't touch
+    // a user field) — this runs at each expansion level, so nested relations
+    // are covered too.
+    for (const row of rows) {
+      stripSystemOwnerField(row);
+    }
+    // System entities expose secret columns that are not schema fields, so
+    // strip them by name. They carry no user-defined field rules, so there is
+    // nothing for the access pass below to evaluate.
+    if (isSystemEntity(targetCollection)) {
+      for (const row of rows) {
+        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) delete row[col];
+      }
+      return;
+    }
+    // Dynamic collections: drop password-type field values using the TARGET
+    // collection's schema — the source collection's fields never describe a
+    // related row. If the schema can't be resolved we cannot tell which
+    // fields are secret, so fail closed: strip every non-identity field
+    // rather than risk returning a row that carries a password hash.
+    const targetFields = await this.getRedactionFields(targetCollection);
+    if (targetFields === null) {
+      for (const row of rows) {
+        for (const key of Object.keys(row)) {
+          if (key !== "id" && key !== "label") delete row[key];
+        }
+        // Defense in depth: the label is normally a display field (never a
+        // password — a password can't be configured as a label), but a row
+        // migrated from before that guard could carry a bcrypt hash here, so
+        // drop a hash-shaped label rather than surface it.
+        if (typeof row.label === "string" && row.label.startsWith("$2")) {
+          delete row.label;
+        }
+      }
+      // Nothing but id/label survives, so there is no field left to judge.
+      return;
+    }
+    // Secrets first, and for every caller: a trusted read has no more use for a
+    // password hash than an anonymous one.
+    if (hasPasswordField(targetFields)) {
+      for (const row of rows) {
+        stripPasswordFieldValues(row, targetFields);
+      }
+    }
+    await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+  }
+
   /**
    * Apply each nested related row's OWN collection field `afterRead` hooks,
    * once the document is fully assembled.
@@ -3043,63 +3099,22 @@ export class CollectionRelationshipService extends BaseService {
         operation: "read",
         user: access.user,
       });
-    }
-  }
 
-  private async redactRelatedRows(
-    targetCollection: string,
-    rows: Record<string, unknown>[],
-    access: RelatedRowAccess = {}
-  ): Promise<void> {
-    if (rows.length === 0) return;
-    // The system owner column must never ride along a populated relationship:
-    // a collection readable by non-creators would otherwise leak a related
-    // row's creator user id through the nested payload. Strip it from every
-    // related row up front (it's a reserved system column, so this can't touch
-    // a user field) — this runs at each expansion level, so nested relations
-    // are covered too.
-    for (const row of rows) {
-      stripSystemOwnerField(row);
-    }
-    // System entities expose secret columns that are not schema fields, so
-    // strip them by name. They carry no user-defined field rules, so there is
-    // nothing for the access pass below to evaluate.
-    if (isSystemEntity(targetCollection)) {
-      for (const row of rows) {
-        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) delete row[col];
+      // Secrets are stripped from a related row when it is fetched, but a hook
+      // on a sibling field can write one back -- deliberately or by copying the
+      // row -- and the response-level defenses sanitize only the ROOT row,
+      // using the source collection's schema, so they would never look at this
+      // one. Stripped again here for the same reason a direct read strips after
+      // its own hooks.
+      const targetFields = await this.fieldsForNestedWalk(
+        resolved.collection,
+        state
+      );
+      if (hasPasswordField(targetFields)) {
+        stripPasswordFieldValues(resolved.row, targetFields);
       }
-      return;
+      stripSystemOwnerField(resolved.row);
     }
-    // Dynamic collections: drop password-type field values using the TARGET
-    // collection's schema — the source collection's fields never describe a
-    // related row. If the schema can't be resolved we cannot tell which
-    // fields are secret, so fail closed: strip every non-identity field
-    // rather than risk returning a row that carries a password hash.
-    const targetFields = await this.getRedactionFields(targetCollection);
-    if (targetFields === null) {
-      for (const row of rows) {
-        for (const key of Object.keys(row)) {
-          if (key !== "id" && key !== "label") delete row[key];
-        }
-        // Defense in depth: the label is normally a display field (never a
-        // password — a password can't be configured as a label), but a row
-        // migrated from before that guard could carry a bcrypt hash here, so
-        // drop a hash-shaped label rather than surface it.
-        if (typeof row.label === "string" && row.label.startsWith("$2")) {
-          delete row.label;
-        }
-      }
-      // Nothing but id/label survives, so there is no field left to judge.
-      return;
-    }
-    // Secrets first, and for every caller: a trusted read has no more use for a
-    // password hash than an anonymous one.
-    if (hasPasswordField(targetFields)) {
-      for (const row of rows) {
-        stripPasswordFieldValues(row, targetFields);
-      }
-    }
-    await this.applyRelatedRowReadAccess(targetCollection, rows, access);
   }
 
   /**
