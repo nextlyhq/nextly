@@ -19,6 +19,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
+import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
@@ -58,34 +59,13 @@ function legacyEnvelopeToFailureFields(result: {
   code?: string;
   message?: string;
 }): { code: string; message: string } {
-  const status = result.statusCode ?? 500;
-  if (status === 404) {
-    return { code: "NOT_FOUND", message: "Not found." };
-  }
-  if (status === 403) {
-    return {
-      code: "FORBIDDEN",
-      message: "You don't have permission to perform this action.",
-    };
-  }
-  if (status === 409) {
-    // Same disambiguation as unwrapServiceResult: 409 covers both a
-    // unique-constraint duplicate and an optimistic-concurrency conflict,
-    // and only the envelope's code can tell them apart. Staleness is the
-    // conservative default for a code-less envelope.
-    if (result.code === "DUPLICATE") {
-      return { code: "DUPLICATE", message: "Resource already exists." };
-    }
-    return {
-      code: "CONFLICT",
-      message:
-        "The resource has changed since you last loaded it. Please refresh and try again.",
-    };
-  }
-  if (status === 400) {
-    return { code: "VALIDATION_ERROR", message: "Validation failed." };
-  }
-  return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
+  // Rebuilt through the shared converter so a per-item failure reports the same
+  // code the single-item endpoint reports for the identical failure. This kept
+  // its own status table, which sent anything outside 400/403/404/409 to
+  // INTERNAL_ERROR -- so an item whose hook threw `rateLimited()` was a rate
+  // limit on the single endpoint and an internal error in bulk.
+  const rebuilt = errorFromServiceEnvelope(result);
+  return { code: String(rebuilt.code), message: rebuilt.publicMessage };
 }
 
 /**
@@ -274,6 +254,11 @@ export class CollectionBulkService extends BaseService {
 
       if (!sourceResult.success || !sourceResult.data) {
         return {
+          // Forwarded whole rather than rebuilt from two of its fields: the
+          // source read's failure is this operation's failure, and dropping its
+          // code left a rate limit on the source arriving as an internal error
+          // with no retry interval.
+          ...sourceResult,
           success: false,
           statusCode: sourceResult.statusCode || 404,
           message: sourceResult.message || "Source entry not found",
@@ -679,15 +664,13 @@ export class CollectionBulkService extends BaseService {
       // happen. This is a request-level failure (no items to partially
       // succeed on). Throw the canonical mapping so the dispatcher emits
       // an error envelope rather than a synthetic empty-id failure row.
-      const { code, message } = legacyEnvelopeToFailureFields(listResult);
-      throw new NextlyError({
-        code,
-        publicMessage: message,
-        logContext: {
-          op: "bulkUpdateByQuery",
-          collectionName: params.collectionName,
-          legacyMessage: listResult.message,
-        },
+      // The rebuilt error itself, not a reduction of it: taking only the code
+      // and message dropped the status (so a plugin code fell back to 500) and
+      // the public data a rate limit needs for `Retry-After`.
+      throw errorFromServiceEnvelope(listResult, {
+        op: "bulkUpdateByQuery",
+        collectionName: params.collectionName,
+        legacyMessage: listResult.message,
       });
     }
 
@@ -875,15 +858,13 @@ export class CollectionBulkService extends BaseService {
     });
 
     if (!listResult.success || !listResult.data) {
-      const { code, message } = legacyEnvelopeToFailureFields(listResult);
-      throw new NextlyError({
-        code,
-        publicMessage: message,
-        logContext: {
-          op: "bulkDeleteByQuery",
-          collectionName: params.collectionName,
-          legacyMessage: listResult.message,
-        },
+      // The rebuilt error itself, not a reduction of it: taking only the code
+      // and message dropped the status (so a plugin code fell back to 500) and
+      // the public data a rate limit needs for `Retry-After`.
+      throw errorFromServiceEnvelope(listResult, {
+        op: "bulkDeleteByQuery",
+        collectionName: params.collectionName,
+        legacyMessage: listResult.message,
       });
     }
 

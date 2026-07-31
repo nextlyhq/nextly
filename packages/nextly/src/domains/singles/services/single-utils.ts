@@ -17,6 +17,7 @@
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import type { ValidatableField } from "../../../shared/lib/entry-validation";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
@@ -657,7 +658,13 @@ export function buildSingleErrorResult(
       error.code === "VALIDATION_ERROR"
         ? (
             error.publicData as
-              | { errors?: Array<{ path: string; message: string }> }
+              | {
+                  errors?: Array<{
+                    path: string;
+                    code?: string;
+                    message: string;
+                  }>;
+                }
               | undefined
           )?.errors
         : undefined;
@@ -669,10 +676,19 @@ export function buildSingleErrorResult(
         ? {
             errors: validationErrors.map(e => ({
               field: e.path,
+              // The per-field reason travels with the issue. Without it a
+              // boundary normalising this array has to invent one, and a
+              // hook's `REQUIRED` arrives at the client as a generic
+              // `INVALID`.
+              ...(e.code !== undefined ? { code: e.code } : {}),
               message: e.message,
             })),
           }
         : {}),
+      // Without the code, a Single hook's `authRequired()` or `rateLimited()`
+      // took the boundary's status fallback and reached the caller as a
+      // generic 500, losing the rate-limit backoff with it.
+      ...typedErrorEnvelopeFields(error),
     };
   }
 

@@ -33,6 +33,7 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
+import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
@@ -237,6 +238,17 @@ function errorToServiceResult<T = unknown>(
       // The canonical code rides along so boundary translators can rebuild
       // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
       code: error.code,
+      // A localized error selects its message by key, so dropping it leaves a
+      // client unable to render anything but the default string.
+      ...(error.messageKey !== undefined
+        ? { messageKey: error.messageKey }
+        : {}),
+      // Public by definition -- it is what `toResponseJSON` puts on the wire --
+      // so it rides the envelope and the boundary can rebuild an error whose
+      // meaning lives in it rather than in its code.
+      ...(error.publicData !== undefined
+        ? { publicData: error.publicData }
+        : {}),
       message: error.publicMessage,
       data: null,
       ...(validationErrors ? { errors: validationErrors } : {}),
@@ -3948,6 +3960,10 @@ export class CollectionMutationService extends BaseService {
             ? error.message
             : "Failed to publish all languages",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
       };
     }
   }
@@ -6599,6 +6615,14 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a delete hook's refusal or rate limit as a server fault, and left a
+        // boundary nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
@@ -8028,6 +8052,10 @@ export class CollectionMutationService extends BaseService {
             ? error.message
             : "Failed to delete entry in transaction",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         revalidationIntent,
       };
     }
@@ -9575,6 +9603,10 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
       };
