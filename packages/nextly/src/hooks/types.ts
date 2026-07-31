@@ -316,6 +316,43 @@ export type HookHandler<T = any> = (
 ) => Promise<T | void> | T | void;
 
 /**
+ * What a FIELD-level hook is handed.
+ *
+ * A field hook is scoped to one field, so it is given that field's value and
+ * name alongside the row it belongs to. This is deliberately NOT
+ * {@link HookContext}: a collection-level hook receives the whole document as
+ * `data` and has no single field in view, while a field hook is called once per
+ * field and returns that field's replacement value.
+ */
+export interface FieldHookContext<T = unknown> {
+  /** Collection or single the field belongs to. */
+  collection: string;
+
+  /** Operation that triggered the hook. */
+  operation: "create" | "read" | "update" | "delete";
+
+  /** Name of the field this call is for. */
+  fieldName: string;
+
+  /** The field's current value. */
+  value: T;
+
+  /** The row the field belongs to, so a hook can read its siblings. */
+  data: Record<string, unknown>;
+
+  /** The authenticated caller, when there is one. */
+  user?: Record<string, unknown>;
+}
+
+/**
+ * A field-level hook. Returning a value replaces the field's value; returning
+ * nothing leaves it as it was.
+ */
+export type FieldHookHandler<T = unknown> = (
+  context: FieldHookContext<T>
+) => Promise<T | void> | T | void;
+
+/**
  * Hook registration options (for future extensibility)
  *
  * Reserved for future features like:
