@@ -1,5 +1,9 @@
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
+import {
+  BLOCK_SERVICE,
+  createBlockRegistrationService,
+} from "./blocks/registration-service";
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
@@ -36,6 +40,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         "Build pages visually from blocks with drag-and-drop editing",
     },
     contributes: {
+      // The channel another plugin adds blocks through. Core carries no
+      // `contributes.blocks` key — a plugin contributing blocks is contributing
+      // to the page builder, not to Nextly — so the registry is offered here and
+      // reached via `ctx.services.plugins`.
+      services: {
+        [BLOCK_SERVICE]: () => createBlockRegistrationService(),
+      },
       collections: [pagesCollection()],
       fieldTypes: [PAGE_BUILDER_FIELD_TYPE, BLOCKS_FIELD_TYPE],
       // No `publish` permission. One was declared here and nothing ever read

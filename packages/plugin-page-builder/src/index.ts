@@ -54,3 +54,21 @@ export type {
   PageBuilderAdminConfig,
   EditorMode,
 } from "./collections/pageBuilderEntry";
+
+/**
+ * Contributing blocks. `defineBlock` is re-exported here rather than reached
+ * through the core SDK: a block is a page-builder concept, and routing it
+ * through core's public surface would put the engine's types back into an API
+ * that deliberately no longer references them.
+ */
+export {
+  blockRegistry,
+  BLOCK_SERVICE,
+  PAGE_BUILDER_PLUGIN,
+} from "./blocks/registration-service";
+export type { BlockRegistrationService } from "./blocks/registration-service";
+export { defineBlock } from "@nextlyhq/blocks-engine";
+export type {
+  AnyBlockDefinition,
+  BlockDefinition,
+} from "@nextlyhq/blocks-engine";
