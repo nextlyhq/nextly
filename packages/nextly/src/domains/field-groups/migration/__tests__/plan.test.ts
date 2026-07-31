@@ -62,8 +62,12 @@ describe("assembling the steps one run executes", () => {
   // so those steps are only expressible before its rename.
   it("puts the data rewrites ahead of the renames going up", () => {
     const ids = plan("up");
-    const lastData = ids.findLastIndex(id => id.startsWith("data:"));
-    const firstRename = ids.findIndex(id => !id.startsWith("data:"));
+    // Written without `findLastIndex`, which needs a newer lib target than this
+    // package compiles against.
+    const lastData = ids
+      .map((id, index) => (id.startsWith("data:") ? index : -1))
+      .reduce((highest, index) => (index > highest ? index : highest), -1);
+    const firstRename = ids.findIndex((id: string) => !id.startsWith("data:"));
     expect(lastData).toBeLessThan(firstRename);
   });
 
