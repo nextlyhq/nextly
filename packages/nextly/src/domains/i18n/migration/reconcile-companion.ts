@@ -192,6 +192,20 @@ export interface CompanionTransitionArgs {
    * or a migration file leaves behind.
    */
   existingMainColumns?: readonly string[];
+  /**
+   * Whether the entity had Draft/Published BEFORE this change.
+   *
+   * A history fact, unlike {@link CompanionTransitionArgs.existingMainColumns}, which describes
+   * only the database in front of you and is deliberately stripped from the migration artefact.
+   * That distinction is what makes this the right signal for the disable restore: it is equally
+   * true for a database that has only ever replayed migrations.
+   *
+   * It answers exactly what that restore needs — did main carry `status` and the companion
+   * `_status` before this save. Deriving it from the DESIRED status instead would emit a copy from
+   * a `_status` the old companion never had, into a `status` main has not been given yet, because a
+   * disable deliberately runs the companion transition before the shared ALTER that adds it.
+   */
+  wasStatus?: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
 }
@@ -316,9 +330,10 @@ export function buildCompanionTransitionStatements(
         // would have this restore read a `_status` the old companion never had — and main receive
         // it before the shared ALTER that adds `status`, because a disable deliberately runs the
         // companion transition first. Both columns have to be there already.
-        restoreStatus:
-          args.companionHasStatus === true &&
-          (args.existingMainColumns?.includes("status") ?? false),
+        // Whether both sides HAD the column before this save. `existingMainColumns` cannot answer
+        // it: it is built from localized user fields, so it never contains `status`, and it is
+        // cleared for the artefact so a migration file cannot depend on local introspection.
+        restoreStatus: args.wasStatus === true,
       }),
       needsArchive: true,
       companionDropped: true,

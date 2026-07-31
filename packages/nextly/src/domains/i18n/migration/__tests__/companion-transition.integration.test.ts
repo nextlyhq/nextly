@@ -297,3 +297,102 @@ describe("buildCompanionTransitionStatements — disable", () => {
     expect(companionStillThere).toBeUndefined();
   });
 });
+
+/**
+ * Disabling localization must bring a row's publishing state back with its content.
+ *
+ * Publishing is per locale while an entity is localized, so a row published only under a
+ * non-default language carries that state on its companion row alone. This transition archives the
+ * other languages and then DROPS the companion, so content restored without the state it was
+ * published under cannot be corrected afterwards: a draft becomes publicly visible, or live content
+ * disappears.
+ *
+ * Driven against a real database rather than asserted on SQL text, because the defect this replaces
+ * was a condition that could never be true — a text assertion would have kept passing while the
+ * copy never ran.
+ */
+describe("buildCompanionTransitionStatements — disable with Draft/Published", () => {
+  const withStatus = (over: Record<string, unknown>) => ({
+    slug: "hero",
+    tableName: "single_hero",
+    dialect: "sqlite" as const,
+    defaultLocale: "en",
+    oldFields: FIELDS,
+    newFields: FIELDS,
+    ...over,
+  });
+
+  it("carries the restored row's publishing state onto main", () => {
+    // What the shared ALTER gives a status-enabled entity. The fixture builds the main table
+    // without it, and the transition statements deliberately do not add it — that is the other
+    // migration's job.
+    sqlite.prepare(`ALTER TABLE "single_hero" ADD COLUMN "status" text`).run();
+    // The seed copies main's status into the companion's NOT NULL `_status`, so main has to hold
+    // one before the enable runs.
+    sqlite.prepare(`UPDATE "single_hero" SET "status" = 'draft'`).run();
+    const enable = buildCompanionTransitionStatements(
+      withStatus({
+        status: true,
+        wasLocalized: false,
+        isLocalized: true,
+        companionExists: false,
+      })
+    );
+    run(enable.statements);
+    // Published under a language that is not the default, which is where main is deliberately left
+    // alone while the entity is localized.
+    sqlite
+      .prepare(
+        `UPDATE "single_hero_locales" SET "_status" = 'published' WHERE "_locale" = 'en'`
+      )
+      .run();
+    sqlite.prepare(`UPDATE "single_hero" SET "status" = 'draft'`).run();
+
+    const plan = buildCompanionTransitionStatements(
+      withStatus({
+        status: true,
+        wasStatus: true,
+        wasLocalized: true,
+        isLocalized: false,
+        companionExists: true,
+        companionHasStatus: true,
+      })
+    );
+    run(getI18nArchiveDdl("sqlite"));
+    run(plan.statements);
+
+    const row = sqlite
+      .prepare(`SELECT "status" FROM "single_hero" WHERE "id" = 'h1'`)
+      .get() as { status: string };
+    expect(row.status).toBe("published");
+  });
+
+  it("leaves status alone when the entity did not have it before this save", () => {
+    // Turning Draft/Published ON in the same save that disables localization. The old companion has
+    // no `_status` and main has not been given `status` yet — a disable runs the companion
+    // transition before the shared ALTER — so a copy here would fail the whole migration.
+    const enable = buildCompanionTransitionStatements(
+      withStatus({
+        status: false,
+        wasLocalized: false,
+        isLocalized: true,
+        companionExists: false,
+      })
+    );
+    run(enable.statements);
+
+    const plan = buildCompanionTransitionStatements(
+      withStatus({
+        status: true,
+        wasStatus: false,
+        wasLocalized: true,
+        isLocalized: false,
+        companionExists: true,
+      })
+    );
+    expect(plan.statements.join("\n")).not.toContain(`"_status"`);
+    run(getI18nArchiveDdl("sqlite"));
+    // Runs to completion rather than failing on a column neither table has yet.
+    expect(() => run(plan.statements)).not.toThrow();
+  });
+});
