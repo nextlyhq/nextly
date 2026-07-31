@@ -61,6 +61,28 @@ export const BLOCK_MANIFEST_VERSION = 1;
 export const MAX_DECLARED_BLOCK_VERSION = 1001;
 
 /**
+ * The shape of a block name: two slug segments joined by a slash, the second
+ * naming the block and the first the namespace that owns it.
+ *
+ * Namespacing is what keeps names collision-free across plugins nobody
+ * coordinates, which is also why the registry treats them as global.
+ *
+ * Restated from the engine for the reason {@link MAX_DECLARED_BLOCK_VERSION}
+ * is, and held to its behaviour by the same parity test.
+ */
+export const BLOCK_NAME_PATTERN =
+  /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Names the engine keeps for itself. A document node of this type is a
+ * component instance rather than a block, so a block answering to it would
+ * shadow the one type the renderer resolves without the registry.
+ */
+export const RESERVED_BLOCK_NAMES: readonly string[] = [
+  "nextly/component-instance",
+];
+
+/**
  * One block, as the manifest states it.
  *
  * Strict, and not optionally so: the JSON Schema derived from this object
@@ -88,7 +110,12 @@ export const MAX_DECLARED_BLOCK_VERSION = 1001;
  */
 export const blockManifestEntrySchema = z
   .object({
-    name: z.string().min(1),
+    /**
+     * Carries the namespaced-slug pattern so the published JSON Schema states
+     * it too, rather than leaving an outside reader to discover the rule by
+     * having a name rejected somewhere else.
+     */
+    name: z.string().regex(BLOCK_NAME_PATTERN),
     /**
      * The block's own schema version, stamped onto every node of its type.
      *
@@ -418,6 +445,16 @@ function declaredBlocks(value: unknown, source: string): DeclaredBlock[] {
     if (typeof definition.name !== "string" || definition.name.length === 0) {
       throw invalidDeclaration(
         `Plugin "${source}" declared a block at index ${index} with no name.`
+      );
+    }
+    if (!BLOCK_NAME_PATTERN.test(definition.name)) {
+      throw invalidDeclaration(
+        `Plugin "${source}" declared a block named "${definition.name}" at index ${index}; a block name is a namespaced slug like "core/heading".`
+      );
+    }
+    if (RESERVED_BLOCK_NAMES.includes(definition.name)) {
+      throw invalidDeclaration(
+        `Plugin "${source}" declared a block named "${definition.name}", which the engine reserves and no block may answer to.`
       );
     }
     if (typeof definition.version !== "number") {

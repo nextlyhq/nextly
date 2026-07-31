@@ -351,7 +351,7 @@ describe("the published JSON Schema", () => {
                   "type": "object",
                 },
                 "name": {
-                  "minLength": 1,
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                   "type": "string",
                 },
                 "props": {
