@@ -205,7 +205,7 @@ export interface SingleResult<T = SingleDocument> {
   publicData?: unknown;
 
   /** Error details (on failure) */
-  errors?: Array<{ field?: string; message: string }>;
+  errors?: Array<{ field?: string; code?: string; message: string }>;
 
   /**
    * Whether this write appended a durable outbox event, independent of

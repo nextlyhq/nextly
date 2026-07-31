@@ -151,3 +151,45 @@ describe("a localized validation error keeps its message and key", () => {
     expect(err.publicMessage).toBe("Validation failed.");
   });
 });
+
+describe("a code-less 400 does not put internal text on the wire", () => {
+  it("uses the canonical validation message, not the envelope's", () => {
+    // Legacy converters store a raw exception's `message` in a code-less 400.
+    // Promoting that to the public message would ship internal paths and driver
+    // detail to the client. Only an envelope that says VALIDATION_ERROR is
+    // trusted to carry public text.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      message: "ENOENT: no such file or directory, open '/srv/app/.nextly/x'",
+    });
+
+    expect(err.publicMessage).toBe("Validation failed.");
+    expect(err.publicMessage).not.toContain("/srv/app");
+  });
+
+  it("still trusts a typed validation envelope's message", () => {
+    // The mirror: the localized message a validation error legitimately
+    // carries must survive, which is what the code is for.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      message: "Le formulaire est invalide.",
+    });
+
+    expect(err.publicMessage).toBe("Le formulaire est invalide.");
+  });
+
+  it("keeps a per-field issue's own code through normalization", () => {
+    // The legacy Single array carries `{field, message}`; without the reason
+    // travelling with it, a hook's REQUIRED arrives as a generic INVALID.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      errors: [{ field: "title", code: "REQUIRED", message: "Required." }],
+    });
+
+    expect(
+      (err.publicData as { errors: { code: string }[] }).errors[0].code
+    ).toBe("REQUIRED");
+  });
+});

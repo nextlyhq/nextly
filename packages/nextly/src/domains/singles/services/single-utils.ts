@@ -658,7 +658,13 @@ export function buildSingleErrorResult(
       error.code === "VALIDATION_ERROR"
         ? (
             error.publicData as
-              | { errors?: Array<{ path: string; message: string }> }
+              | {
+                  errors?: Array<{
+                    path: string;
+                    code?: string;
+                    message: string;
+                  }>;
+                }
               | undefined
           )?.errors
         : undefined;
@@ -670,6 +676,11 @@ export function buildSingleErrorResult(
         ? {
             errors: validationErrors.map(e => ({
               field: e.path,
+              // The per-field reason travels with the issue. Without it a
+              // boundary normalising this array has to invent one, and a
+              // hook's `REQUIRED` arrives at the client as a generic
+              // `INVALID`.
+              ...(e.code !== undefined ? { code: e.code } : {}),
               message: e.message,
             })),
           }

@@ -74,9 +74,17 @@ function validationFromEnvelope(
   // fell back to the default string.
   return new NextlyError({
     code: "VALIDATION_ERROR",
-    publicMessage: envelope.message ?? "Validation failed.",
+    // The envelope's message is only trusted when the envelope says it came
+    // from a validation error. A code-less 400 reaches here from legacy
+    // converters that store a raw exception's text, and promoting that to the
+    // public message would put internal paths and driver detail on the wire.
+    publicMessage:
+      envelope.code === "VALIDATION_ERROR" && envelope.message
+        ? envelope.message
+        : "Validation failed.",
     statusCode: envelope.statusCode ?? 400,
-    messageKey: envelope.messageKey,
+    messageKey:
+      envelope.code === "VALIDATION_ERROR" ? envelope.messageKey : undefined,
     publicData: { errors: normalized },
     logContext,
   });

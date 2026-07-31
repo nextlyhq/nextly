@@ -254,6 +254,11 @@ export class CollectionBulkService extends BaseService {
 
       if (!sourceResult.success || !sourceResult.data) {
         return {
+          // Forwarded whole rather than rebuilt from two of its fields: the
+          // source read's failure is this operation's failure, and dropping its
+          // code left a rate limit on the source arriving as an internal error
+          // with no retry interval.
+          ...sourceResult,
           success: false,
           statusCode: sourceResult.statusCode || 404,
           message: sourceResult.message || "Source entry not found",

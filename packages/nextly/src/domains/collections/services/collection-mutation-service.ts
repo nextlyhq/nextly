@@ -33,6 +33,7 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
+import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
@@ -3959,6 +3960,10 @@ export class CollectionMutationService extends BaseService {
             ? error.message
             : "Failed to publish all languages",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
       };
     }
   }
@@ -6610,6 +6615,14 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a delete hook's refusal or rate limit as a server fault, and left a
+        // boundary nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
@@ -8039,6 +8052,10 @@ export class CollectionMutationService extends BaseService {
             ? error.message
             : "Failed to delete entry in transaction",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         revalidationIntent,
       };
     }
@@ -9586,6 +9603,10 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
       };

@@ -19,6 +19,8 @@ import type { RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
+import type { ServiceErrorEnvelope } from "../../errors/from-service-envelope";
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import {
   applyFieldReadAccess,
@@ -537,7 +539,10 @@ function assertWriteSucceeded(
   result: {
     success?: boolean;
     statusCode?: number;
+    code?: string;
     message?: string;
+    messageKey?: string;
+    publicData?: unknown;
     errors?: unknown;
   },
   args: RestoreVersionArgs
@@ -581,6 +586,19 @@ function assertWriteSucceeded(
   // since removed, a validator tightened since. Those are answers the editor can
   // act on, so the update's own message is preserved rather than flattened into
   // a server fault.
+  // A typed failure answers as itself. The 4xx branch below treats everything
+  // as a snapshot that failed today's validation rules, which is right for a
+  // stale select option and wrong for a rate limit -- that reached the client
+  // as a 400 with no retry interval.
+  if (result.code) {
+    throw errorFromServiceEnvelope(result as ServiceErrorEnvelope, {
+      reason: "restore-write-failed",
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    });
+  }
+
   if (status >= 400 && status < 500) {
     throw NextlyError.validation({
       errors: Array.isArray(result.errors)

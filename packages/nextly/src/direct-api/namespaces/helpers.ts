@@ -115,7 +115,7 @@ export interface SingleResultLike {
   messageKey?: string;
   /** The error's own public data -- a rate limit's retry interval, and such. */
   publicData?: unknown;
-  errors?: Array<{ field?: string; message: string }>;
+  errors?: Array<{ field?: string; code?: string; message: string }>;
 }
 
 /**

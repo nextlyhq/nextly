@@ -46,7 +46,12 @@ describe("buildSingleErrorResult records the typed fields", () => {
       "Failed to update single"
     );
 
-    expect(result.errors).toEqual([{ field: "title", message: "Required." }]);
+    // The reason travels with the issue: a boundary normalising this array
+    // would otherwise have to invent one, and REQUIRED would reach the client
+    // as a generic INVALID.
+    expect(result.errors).toEqual([
+      { field: "title", code: "REQUIRED", message: "Required." },
+    ]);
     expect(result.code).toBe("VALIDATION_ERROR");
   });
 
