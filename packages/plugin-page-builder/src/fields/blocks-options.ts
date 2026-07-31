@@ -17,6 +17,9 @@
  */
 
 import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
+// Taken from the SDK rather than the core entry: the SDK is the only import
+// surface a plugin author is offered, and a first-party plugin reaching past it
+// is the example third parties copy.
 import type {
   FieldAdminOptions,
   FieldConfig,

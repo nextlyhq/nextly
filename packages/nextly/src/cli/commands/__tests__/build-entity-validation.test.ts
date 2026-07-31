@@ -150,6 +150,10 @@ describe("nextly build refuses a field type no plugin offers", () => {
   });
 
   it("accepts a type that did opt into this surface", async () => {
+    // The refusals above are specific to a type the entries surface does not
+    // accept, so a type that did opt in has to stay accepted — otherwise the
+    // gate would reject every contributed collection field rather than the
+    // wrong-surface ones it exists to catch.
     registerFieldType({
       type: "rating",
       storage: "number",

@@ -17,7 +17,12 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
   definePlugin({
     name: "@nextlyhq/plugin-page-builder",
     version: "0.0.2-alpha.29",
-    nextly: ">=0.0.2-alpha.21",
+    // `blocks()` builds its field with `pluginField`, which core first exports
+    // in alpha.49. Against an earlier core that import resolves to `undefined`
+    // and every `blocks()` call throws while the config is evaluated, so the
+    // floor states the version carrying the API rather than the one this plugin
+    // was first published against.
+    nextly: ">=0.0.2-alpha.49",
     // Identity metadata for the admin plugins page, mirroring package.json.
     author: "Nextly",
     homepage: "https://nextlyhq.com",

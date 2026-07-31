@@ -52,6 +52,70 @@ const NORMALIZED_USER_FIELD_KEYS: readonly string[] = [
   "admin",
 ];
 
+/**
+ * Whether a carried option is one of the shapes JSON actually has.
+ *
+ * The options are persisted as JSON and read back to rebuild the field the
+ * plugin's editor is handed, so a value JSON cannot represent does not merely
+ * store awkwardly — it reaches the component as something else. A `Set` or
+ * `Map` becomes `{}`, a `Date` becomes a string, a function or `undefined`
+ * disappears, and a `BigInt` or a cycle throws mid-serialization and takes the
+ * whole code-field sync with it.
+ *
+ * Tested structurally rather than by round-tripping the encoding: `new Set()`
+ * and `{}` serialize to the same bytes, so a re-serialize comparison calls the
+ * lossy conversion a success. What matters is whether the value was already one
+ * of JSON's own shapes, not whether it can be coerced into one.
+ */
+function isJsonShape(value: unknown, seen: Set<object> = new Set()): boolean {
+  if (value === null) return true;
+  const kind = typeof value;
+  if (kind === "string" || kind === "boolean") return true;
+  if (kind === "number") return Number.isFinite(value);
+  if (kind !== "object") return false;
+
+  const asObject = value as object;
+  // A cycle cannot be serialized at all; guarding here reports it as a bad
+  // option instead of throwing out of the walk.
+  if (seen.has(asObject)) return false;
+  seen.add(asObject);
+
+  if (Array.isArray(value)) {
+    return value.every(entry => isJsonShape(entry, seen));
+  }
+  // Only a plain object: anything with a different prototype (Date, Set, Map, a
+  // class instance) loses what makes it that thing when serialized.
+  const proto = Object.getPrototypeOf(asObject);
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.values(asObject).every(entry => isJsonShape(entry, seen));
+}
+
+/**
+ * Refuse carried options the JSON column cannot hold unchanged.
+ *
+ * Raised where the options are folded rather than at the write, so codegen and
+ * the startup sync reject the same declaration for the same reason instead of
+ * one generating types for a field the other cannot store.
+ */
+function assertJsonSafeOptions(
+  carried: Record<string, unknown>,
+  fieldName: unknown
+): void {
+  const offending = Object.keys(carried).filter(
+    key => !isJsonShape(carried[key])
+  );
+  if (offending.length === 0) return;
+  throw NextlyError.validation({
+    errors: offending.map(key => ({
+      path: `users.fields.${String(fieldName)}.${key}`,
+      code: "INVALID_TYPE",
+      message:
+        `'${key}' cannot be stored: a user field's options are persisted as ` +
+        `JSON, and this value does not survive that unchanged`,
+    })),
+  });
+}
+
 /** The declared options a user field carries beyond the modelled set. */
 export function carriedUserFieldOptions(
   field: UserFieldConfig
@@ -108,5 +172,7 @@ export function carriedUserFieldOptions(
     for (const [key, value] of Object.entries(container)) collect(key, value);
   }
 
-  return Object.keys(carried).length > 0 ? carried : null;
+  if (Object.keys(carried).length === 0) return null;
+  assertJsonSafeOptions(carried, (field as { name?: unknown }).name);
+  return carried;
 }

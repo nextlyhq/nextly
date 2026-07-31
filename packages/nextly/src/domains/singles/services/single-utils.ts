@@ -155,6 +155,10 @@ export async function assertValidPluginDefault(
 
   const issues = await validateEntryData({ [name]: value }, [checked], {
     mode: "create",
+    // The value IS the default, so an empty one is what the column will hold
+    // rather than a field the writer left alone. Judged as an omission it
+    // skipped both the primitive check and the type's own rules.
+    emptyIsAValue: true,
   });
 
   if (issues.length === 0) return;

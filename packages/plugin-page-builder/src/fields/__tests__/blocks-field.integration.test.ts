@@ -54,6 +54,9 @@ interface SingleEntryService {
 }
 
 /** Every dialect the harness supports, so an unreachable one is skipped visibly. */
+// `postgresql` is the token `TestDialect` declares; the harness matches on it
+// exactly. Spelled `postgres` the leg matched nothing and silently never ran,
+// so this suite reported a coverage it did not have.
 const ALL_DIALECTS: readonly TestDialect[] = ["sqlite", "postgresql", "mysql"];
 
 /**

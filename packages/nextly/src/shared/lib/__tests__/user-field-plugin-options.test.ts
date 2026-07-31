@@ -50,6 +50,50 @@ describe("carriedUserFieldOptions", () => {
     expect(carried).toMatchObject({ min: 1, max: 5 });
   });
 
+  it("refuses an option the JSON column would reshape", () => {
+    // A Set becomes `{}` and a Date becomes a string once persisted, so the
+    // component is handed something other than what was declared. Refused at
+    // the declaration rather than discovered in the editor.
+    for (const value of [new Set([1]), new Map(), new Date()]) {
+      expect(() =>
+        carriedUserFieldOptions(
+          field({ name: "score", type: "rating", pluginOptions: { value } })
+        )
+      ).toThrow();
+    }
+  });
+
+  it("refuses an option that cannot be serialized at all", () => {
+    // These throw during serialization, which would take the whole code-field
+    // sync down rather than failing this one declaration.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    for (const value of [1n, cyclic]) {
+      expect(() =>
+        carriedUserFieldOptions(
+          field({ name: "score", type: "rating", pluginOptions: { value } })
+        )
+      ).toThrow();
+    }
+  });
+
+  it("accepts the JSON shapes an option is actually written in", () => {
+    expect(
+      carriedUserFieldOptions(
+        field({
+          name: "score",
+          type: "rating",
+          pluginOptions: {
+            scale: 5,
+            labels: ["low", "high"],
+            nested: { allow: true, note: null },
+          },
+        })
+      )
+    ).toMatchObject({ scale: 5 });
+  });
+
   it("refuses an option that would restate the field's identity", () => {
     // The folded record restates `type` and `name` as the identity a type is
     // handed, so an option under either would be replaced before the type that
