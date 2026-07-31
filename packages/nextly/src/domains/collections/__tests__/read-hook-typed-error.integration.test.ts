@@ -31,6 +31,7 @@ type Envelope = {
   statusCode?: number;
   code?: string;
   publicData?: unknown;
+  errors?: unknown;
 };
 
 function handlerOf(t: TestNextly) {
@@ -116,6 +117,39 @@ describe("a read hook's typed error survives the read path", () => {
       expect(got.code).toBe("FORBIDDEN");
     } finally {
       unregisterHook("beforeRead", SLUG, deny);
+    }
+  });
+
+  it("carries a validation hook's per-field issues into the envelope", async () => {
+    // Half of the round trip: the read path has to RECORD the issues, which it
+    // does inside `publicData` because that is where `NextlyError.validation`
+    // puts them. The other half -- a boundary reading them back out of that
+    // shape rather than only from a top-level `errors` array -- is asserted in
+    // `errors/__tests__/from-service-envelope.test.ts`, since the converter
+    // does not run at this layer.
+    const t = await boot();
+    const reject: HookHandler = () => {
+      throw NextlyError.validation({
+        errors: [
+          { path: "title", code: "TOO_SHORT", message: "Title is too short." },
+        ],
+      });
+    };
+    registerHook("beforeRead", SLUG, reject);
+
+    try {
+      const listed = await handlerOf(t).listEntries({
+        collectionName: SLUG,
+        overrideAccess: true,
+      });
+
+      expect(listed.success).toBe(false);
+      expect(listed.code).toBe("VALIDATION_ERROR");
+      expect((listed.publicData as { errors: unknown[] }).errors).toEqual([
+        { path: "title", code: "TOO_SHORT", message: "Title is too short." },
+      ]);
+    } finally {
+      unregisterHook("beforeRead", SLUG, reject);
     }
   });
 });

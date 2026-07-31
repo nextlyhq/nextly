@@ -39,9 +39,21 @@ export interface ServiceErrorEnvelope {
  * detail-less 400s.
  */
 function validationFromEnvelope(
-  errors: ServiceErrorEnvelope["errors"],
+  envelope: ServiceErrorEnvelope,
   logContext: Record<string, unknown>
 ): NextlyError {
+  // The issues reach this in one of two shapes. A write path lifts them onto
+  // the envelope's own `errors`, normalising the legacy `{field}` key on the
+  // way; a read path carries the error's `publicData` verbatim, which is where
+  // `NextlyError.validation` puts them. Reading only the first left a read
+  // hook's field paths replaced by the fabricated fallback below.
+  const errors =
+    envelope.errors ??
+    (
+      envelope.publicData as
+        | { errors?: ServiceErrorEnvelope["errors"] }
+        | undefined
+    )?.errors;
   return NextlyError.validation({
     errors: errors?.length
       ? errors.map(e => ({
@@ -85,7 +97,7 @@ export function errorFromServiceEnvelope(
     // Validation keeps its own path: it also normalises the legacy `{field}`
     // shape into the canonical `{path}` one the admin maps onto form fields.
     if (envelope.code === "VALIDATION_ERROR") {
-      return validationFromEnvelope(envelope.errors, logContext);
+      return validationFromEnvelope(envelope, logContext);
     }
     return new NextlyError({
       code: envelope.code,
@@ -108,8 +120,7 @@ export function errorFromServiceEnvelope(
     // refresh rather than implying the write itself was invalid.
     return NextlyError.conflict({ logContext });
   }
-  if (status === 400)
-    return validationFromEnvelope(envelope.errors, logContext);
+  if (status === 400) return validationFromEnvelope(envelope, logContext);
   return NextlyError.internal({ logContext });
 }
 

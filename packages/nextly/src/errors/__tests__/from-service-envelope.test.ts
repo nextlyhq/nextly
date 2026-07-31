@@ -79,3 +79,45 @@ describe("typedErrorEnvelopeFields", () => {
     expect(typedErrorEnvelopeFields(new Error("boom"))).toBeNull();
   });
 });
+
+describe("validation issues reach the caller in either envelope shape", () => {
+  it("reads them from publicData when that is where they are", () => {
+    // A read path carries the error's `publicData` verbatim -- that is where
+    // `NextlyError.validation` puts the issues. Reading only the top-level
+    // `errors` replaced a hook's field paths with a fabricated placeholder, so
+    // the admin mapped nothing onto its inputs.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [{ path: "title", code: "TOO_SHORT", message: "Too short." }],
+      },
+    });
+
+    expect((err.publicData as { errors: unknown[] }).errors).toEqual([
+      { path: "title", code: "TOO_SHORT", message: "Too short." },
+    ]);
+  });
+
+  it("prefers the envelope's own errors when a write path lifted them", () => {
+    // The write path normalises the legacy `{field}` key on the way out, so its
+    // array is the more canonical of the two when both are present.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      errors: [{ field: "slug", message: "Already taken." }],
+      publicData: { errors: [{ path: "ignored", message: "stale" }] },
+    });
+
+    expect((err.publicData as { errors: unknown[] }).errors).toEqual([
+      { path: "slug", code: "INVALID", message: "Already taken." },
+    ]);
+  });
+
+  it("still falls back when there are no issues at all", () => {
+    const err = errorFromServiceEnvelope({ statusCode: 400 });
+    expect(
+      (err.publicData as { errors: { path: string }[] }).errors[0].path
+    ).toBe("request");
+  });
+});
