@@ -507,13 +507,40 @@ describe("settleI18nTransition", () => {
       slug: "posts",
       token,
     });
+    // Reports success the second time, not a takeover: the marker keeps the owner across the move,
+    // so a settlement can tell its own finished work from someone else's claim.
     await expect(
       settleI18nTransition(store, {
         kind: "collection",
         slug: "posts",
         token,
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(true);
+  });
+
+  it("reports a settlement whose claim was taken over", async () => {
+    // The seed-side twin of the restore case. A run told nothing here goes on to report success,
+    // and the schema apply that follows may drop the main-table columns whose values the new
+    // claimant has not copied anywhere yet.
+    const store = fakeStore();
+    const displaced = await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+
+    await expect(
+      settleI18nTransition(store, {
+        kind: "collection",
+        slug: "posts",
+        token: displaced,
+      })
+    ).resolves.toBe(false);
   });
 });
 

@@ -48,10 +48,17 @@ export interface LocalizationDownOptions {
  * entity's config stops being localized, and must not drop anything — but the values it moves and
  * the direction it moves them in are identical, and two builders would drift.
  *
- * `WHERE EXISTS` matters in both. Without it a row that has no companion row in the default locale
- * — an entry authored only in another language, or one created while the transition was
- * incomplete — assigns SQL NULL, so restoring would blank the main column instead of leaving it
- * alone. There is nothing to restore for such a row, and nothing is what it should get.
+ * The default locale is a PREFERENCE, not a filter, and here that matters more than it does at
+ * runtime. This statement runs inside a disable migration that archives the other languages and
+ * then DROPS the companion, so a parent skipped by a default-only restore keeps whatever main held
+ * before it was ever localized while its actual content leaves with the table. Ranking the parent's
+ * rows — the default first, then deterministically by locale — brings every entry back from the row
+ * it has.
+ *
+ * `WHERE EXISTS` still matters, now on the parent rather than the locale. Without it a row with no
+ * companion row at all — one created after the transition, say — assigns SQL NULL, so restoring
+ * would blank a main column nothing ever translated. There is nothing to restore for such a row,
+ * and nothing is what it should get.
  *
  * ONE statement covering every column, not one per column. An entity with several translatable
  * fields would otherwise be restorable half-way: an `UPDATE` failing after earlier ones committed
@@ -71,18 +78,21 @@ export function buildDefaultLocaleRestoreStatements(
   const { dialect, mainTable, companionTable, defaultLocale } = spec;
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
-  const match =
-    `${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)} ` +
-    `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}`;
+  const parent = `${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)}`;
+  // One row per parent, chosen by rank. Every column reads from the SAME row, so a parent whose
+  // preferred translation leaves one field empty cannot take that field from another language.
+  const ordering =
+    `ORDER BY (${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}) DESC, ` +
+    `${comp}.${q("_locale", dialect)} ASC LIMIT 1`;
   const assignments = columnNames
     .map(name => {
       const col = q(name, dialect);
-      return `${col} = (SELECT ${col} FROM ${comp} WHERE ${match})`;
+      return `${col} = (SELECT ${col} FROM ${comp} WHERE ${parent} ${ordering})`;
     })
     .join(", ");
   return [
     `UPDATE ${main} SET ${assignments} ` +
-      `WHERE EXISTS (SELECT 1 FROM ${comp} WHERE ${match})`,
+      `WHERE EXISTS (SELECT 1 FROM ${comp} WHERE ${parent})`,
   ];
 }
 

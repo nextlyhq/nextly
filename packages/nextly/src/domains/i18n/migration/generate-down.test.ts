@@ -24,11 +24,22 @@ describe("buildLocalizationDownSql", () => {
     );
   });
 
-  it("restores the default-locale value back onto the main table", () => {
+  it("restores each parent from one row, preferring the default locale", () => {
+    // The default is a preference rather than a filter, because this statement runs immediately
+    // before the companion is archived and DROPPED: a parent skipped for having no default-locale
+    // row would keep its pre-localization value while its actual content left with the table.
+    // Ranked and limited to one row, so every column comes from the same translation.
     expect(buildLocalizationDownSql(spec)).toContain(
       `UPDATE "dc_pages" SET "title" = (SELECT "title" FROM "dc_pages_locales" ` +
         `WHERE "dc_pages_locales"."_parent" = "dc_pages"."id" ` +
-        `AND "dc_pages_locales"."_locale" = 'en')`
+        `ORDER BY ("dc_pages_locales"."_locale" = 'en') DESC, ` +
+        `"dc_pages_locales"."_locale" ASC LIMIT 1)`
+    );
+    // Guarded on the parent having any row at all, so one that never had a translation is left
+    // alone rather than blanked.
+    expect(buildLocalizationDownSql(spec)).toContain(
+      `WHERE EXISTS (SELECT 1 FROM "dc_pages_locales" ` +
+        `WHERE "dc_pages_locales"."_parent" = "dc_pages"."id")`
     );
   });
 

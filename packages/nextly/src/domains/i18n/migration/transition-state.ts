@@ -443,7 +443,7 @@ export async function settleI18nTransition(
      */
     token: string | undefined;
   }
-): Promise<void> {
+): Promise<boolean> {
   const key = markerKey(args.kind, args.slug);
   const current = await readI18nTransitionState(store, args.kind, args.slug);
   if (current.status === "untracked") {
@@ -467,13 +467,21 @@ export async function settleI18nTransition(
   // Anything else means the entity moved on under someone else's claim, which is not an error and
   // not this caller's to correct. The conditional write covers the same race happening between
   // this read and the write.
-  if (current.status !== "enabling") return;
+  // Reported rather than swallowed in every branch. The caller uses this to decide whether its
+  // copy is the one the record now describes, and a settlement that quietly did nothing lets a
+  // schema apply proceed to drop the main-table columns whose values may never have reached the
+  // companion.
+  // Already settled by this same claim. Retrying a pass that got as far as settling is ordinary,
+  // and the marker keeps the owner across the move, so a settlement can recognise its own work and
+  // report success rather than raising a takeover that never happened.
+  if (current.status === "seeded" && current.owner === args.token) return true;
+  if (current.status !== "enabling") return false;
   // Not ours. Someone took the transition over while this copy ran, and their claim is the one
   // that gets to say when it finished.
-  if (current.owner !== args.token) return;
+  if (current.owner !== args.token) return false;
 
   // The token travels with the settlement, so the record keeps saying which claim produced it.
-  await store.compareAndSet(
+  return store.compareAndSet(
     key,
     storedMarker(current),
     storedMarker({ ...current, status: "seeded" })

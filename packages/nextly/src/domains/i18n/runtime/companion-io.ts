@@ -13,6 +13,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { LocalizedFieldRef } from "../companion-join";
@@ -788,7 +789,7 @@ async function resumeInterruptedSeed(
     overwriteExisting?: boolean;
     requireColumnsOnMain?: boolean;
     claim?: () => Promise<CompanionClaim>;
-    settleTransition?: (token: string | undefined) => Promise<void>;
+    settleTransition?: (token: string | undefined) => Promise<boolean>;
   },
   newLocalized: CompanionFieldLike[],
   companionTableName: string,
@@ -859,7 +860,24 @@ async function resumeInterruptedSeed(
       );
     }
     // The interrupted run's debt is discharged, so the record stops describing one.
-    await args.settleTransition?.(claimed?.token);
+    // A settlement that did not land means this run no longer holds the transition: someone took
+    // it over while the copy ran. Reporting success would let the schema apply that follows drop
+    // the main-table columns, and the taker may not have copied their values anywhere yet.
+    if (
+      args.settleTransition &&
+      !(await args.settleTransition(claimed?.token))
+    ) {
+      onError?.(
+        NextlyError.conflict({
+          reason: "state",
+          message:
+            `Localization for "${args.slug}" was taken over by another process while its ` +
+            `content was being copied, so this run could not record that the copy finished.`,
+          logContext: { slug: args.slug },
+        })
+      );
+      return false;
+    }
     return true;
   } catch (error) {
     onError?.(error);
@@ -1036,7 +1054,7 @@ export async function ensureCompanionTable(
      * copy — harmless for the rows it already made, but it keeps manufacturing default-locale rows
      * for entries that were deliberately created in another locale only.
      */
-    settleTransition?: (token: string | undefined) => Promise<void>;
+    settleTransition?: (token: string | undefined) => Promise<boolean>;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -1130,7 +1148,20 @@ export async function ensureCompanionTable(
     // Only once every statement landed. Settling earlier would mark a copy complete that a later
     // statement could still fail, and the record would then say the content is in the companion
     // when it is not.
-    await args.settleTransition?.(claimToken);
+    // As in the resume path: a settlement that did not land means the transition moved on, and the
+    // apply that follows must not treat this copy as the one the record describes.
+    if (args.settleTransition && !(await args.settleTransition(claimToken))) {
+      onError?.(
+        NextlyError.conflict({
+          reason: "state",
+          message:
+            `Localization for "${args.slug}" was taken over by another process while its ` +
+            `content was being copied, so this run could not record that the copy finished.`,
+          logContext: { slug: args.slug },
+        })
+      );
+      return false;
+    }
     return true;
   } catch (error) {
     // Another process may have created it between the probe and the CREATE — `db:sync` and a
