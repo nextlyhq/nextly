@@ -5,6 +5,7 @@
  * @module errors/from-service-envelope
  */
 
+import { NEXTLY_ERROR_STATUS } from "./error-codes";
 import { NextlyError } from "./nextly-error";
 import type { PublicData } from "./public-data";
 
@@ -82,7 +83,7 @@ function validationFromEnvelope(
       envelope.code === "VALIDATION_ERROR" && envelope.message
         ? envelope.message
         : "Validation failed.",
-    statusCode: envelope.statusCode ?? 400,
+    statusCode: envelope.statusCode ?? NEXTLY_ERROR_STATUS.VALIDATION_ERROR,
     messageKey:
       envelope.code === "VALIDATION_ERROR" ? envelope.messageKey : undefined,
     publicData: { errors: normalized },
@@ -109,7 +110,10 @@ export function errorFromServiceEnvelope(
   envelope: ServiceErrorEnvelope,
   logContext: Record<string, unknown> = {}
 ): NextlyError {
-  const status = envelope.statusCode ?? 500;
+  // Read from the canonical map rather than repeated literals: this converter
+  // exists so one place decides how a status and a code correspond, and a
+  // literal here would drift the moment that map changed.
+  const status = envelope.statusCode ?? NEXTLY_ERROR_STATUS.INTERNAL_ERROR;
 
   if (envelope.code) {
     // Validation keeps its own path: it also normalises the legacy `{field}`
@@ -131,14 +135,20 @@ export function errorFromServiceEnvelope(
     });
   }
 
-  if (status === 404) return NextlyError.notFound({ logContext });
-  if (status === 403) return NextlyError.forbidden({ logContext });
-  if (status === 409) {
+  if (status === NEXTLY_ERROR_STATUS.NOT_FOUND) {
+    return NextlyError.notFound({ logContext });
+  }
+  if (status === NEXTLY_ERROR_STATUS.FORBIDDEN) {
+    return NextlyError.forbidden({ logContext });
+  }
+  if (status === NEXTLY_ERROR_STATUS.CONFLICT) {
     // Without a code, staleness is the safer default: it tells the user to
     // refresh rather than implying the write itself was invalid.
     return NextlyError.conflict({ logContext });
   }
-  if (status === 400) return validationFromEnvelope(envelope, logContext);
+  if (status === NEXTLY_ERROR_STATUS.VALIDATION_ERROR) {
+    return validationFromEnvelope(envelope, logContext);
+  }
   return NextlyError.internal({ logContext });
 }
 
