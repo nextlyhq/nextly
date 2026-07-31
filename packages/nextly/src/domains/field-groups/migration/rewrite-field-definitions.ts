@@ -118,8 +118,14 @@ function rewriteField(
     ) {
       // Normalised onto the canonical key, not renamed. A node carrying both
       // keeps the canonical value: the legacy one predates it, so the newer
-      // spelling is the one that was written deliberately.
-      if (!(from.refKeys.single in field)) {
+      // spelling is the one that was written deliberately. That holds for the
+      // canonical key in either vocabulary — the source spelling, which this
+      // node may still carry, and the target spelling, which is where the value
+      // is headed and which the source-key branches above equally protect.
+      if (
+        !(from.refKeys.single in field) &&
+        !keptUnderTarget(field, key, to.refKeys.single)
+      ) {
         setOwnProperty(rewritten, to.refKeys.single, value);
       }
       continue;

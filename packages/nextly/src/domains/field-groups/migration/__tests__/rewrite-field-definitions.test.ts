@@ -233,6 +233,26 @@ describe("deciding a reference-key collision rather than letting key order", () 
     expect(rewritten[0]).toEqual({ type: "fieldGroup", fieldGroups: ["b"] });
   });
 
+  // The legacy key normalises onto the canonical one, so it collides with the
+  // target spelling exactly as the source key does. Both orders again, because
+  // with the legacy key first the target simply overwrites it anyway.
+  it.each([
+    [
+      "legacy key first",
+      '[{"type":"component","componentSlug":"a","fieldGroup":"b"}]',
+    ],
+    [
+      "target key first",
+      '[{"type":"component","fieldGroup":"b","componentSlug":"a"}]',
+    ],
+  ])(
+    "keeps the target value when normalizing a legacy key (%s)",
+    (_label, stored) => {
+      const rewritten = up(JSON.parse(stored)) as Record<string, unknown>[];
+      expect(rewritten[0]).toEqual({ type: "fieldGroup", fieldGroup: "b" });
+    }
+  );
+
   // Rewriting a key onto itself is not a collision. Treating it as one would
   // drop the value entirely, which is why the guard compares the keys first.
   it("does not drop a reference when the vocabulary does not rename the key", () => {
