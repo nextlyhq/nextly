@@ -72,6 +72,7 @@ describe("schema sync guard", () => {
     "refuses while a %s migration is in flight",
     async direction => {
       const error = await assertNoMigrationInFlight({
+        action: "schema sync",
         adapter: adapterWith(migrating({ direction })),
         logger,
       }).catch((caught: unknown) => caught);
@@ -89,13 +90,18 @@ describe("schema sync guard", () => {
 
   it("allows a sync on a database with no marker", async () => {
     await expect(
-      assertNoMigrationInFlight({ adapter: adapterWith(undefined), logger })
+      assertNoMigrationInFlight({
+        action: "schema sync",
+        adapter: adapterWith(undefined),
+        logger,
+      })
     ).resolves.toBeUndefined();
   });
 
   it("allows a sync once a run has settled", async () => {
     await expect(
       assertNoMigrationInFlight({
+        action: "schema sync",
         adapter: adapterWith({
           version: MIGRATION_MARKER_VERSION,
           status: "settled",
@@ -113,6 +119,7 @@ describe("schema sync guard", () => {
   it("allows a sync on a database that has no meta table", async () => {
     await expect(
       assertNoMigrationInFlight({
+        action: "schema sync",
         adapter: adapterWith(migrating(), { metaTableExists: false }),
         logger,
       })
@@ -138,7 +145,11 @@ describe("schema sync guard", () => {
     } as unknown as DrizzleAdapter;
 
     await expect(
-      assertNoMigrationInFlight({ adapter, logger })
+      assertNoMigrationInFlight({
+        action: "schema sync",
+        adapter,
+        logger,
+      })
     ).rejects.toThrowError();
   });
 
@@ -148,6 +159,7 @@ describe("schema sync guard", () => {
   it("refuses on a marker it cannot read", async () => {
     await expect(
       assertNoMigrationInFlight({
+        action: "schema sync",
         adapter: adapterWith({ version: 999, status: "migrating" }),
         logger,
       })
