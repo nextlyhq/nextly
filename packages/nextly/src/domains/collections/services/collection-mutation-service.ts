@@ -5666,13 +5666,17 @@ export class CollectionMutationService extends BaseService {
               }
 
               // Invalidate a stale working draft when the split no longer applies
-              // to a status collection: drafts were turned off, or the collection
-              // became localized / password-bearing / gained an ineligible
-              // component after a draft was written. This write went straight to
-              // the live row, so a retained sidecar can never be promoted and,
-              // were the split re-enabled, would shadow the edits made meanwhile.
-              // A no-op when no sidecar exists.
-              if (!splitEnabled && collectionHasStatus) {
+              // to a versioned collection: drafts were turned off, the status
+              // lifecycle was removed, or the collection became localized /
+              // password-bearing / gained an ineligible component after a draft
+              // was written. Gated on versioning (a sidecar only ever exists under
+              // it) rather than the current status flag, so removing `status`
+              // itself — which clears `collectionHasStatus` — still drops the now
+              // unreachable sidecar. This write went straight to the live row, so a
+              // retained sidecar can never be promoted and, were the split re-
+              // enabled, would shadow the edits made meanwhile. A no-op when none
+              // exists.
+              if (!splitEnabled && versionsConfig?.enabled === true) {
                 await new VersionsRepository(tx).deleteWorkingDraft(
                   {
                     scopeKind: "collection",

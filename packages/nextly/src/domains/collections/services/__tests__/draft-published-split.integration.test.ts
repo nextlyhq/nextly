@@ -1596,6 +1596,49 @@ describe("draft/published split — schema and component eligibility (integratio
     expect("subtitle" in data).toBe(false);
   });
 
+  it("clears a stale working draft when the status lifecycle is removed", async () => {
+    const entries = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Store a working draft, then drop `status` from the schema (versioning stays
+    // on). `collectionHasStatus` is now false, so the old status-scoped guard left
+    // the sidecar behind; the next live write must drop it.
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "pending" });
+    expect(await workingDraftCount(id)).toBe(1);
+    await handle!.destroy();
+    handle = undefined;
+
+    const reopened = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    const res = await reopened.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited" }
+    );
+    expect(res.success).toBe(true);
+    expect(await workingDraftCount(id)).toBe(0);
+  });
+
   it("stops overlaying the draft when an embedded component becomes localized after the draft was written", async () => {
     const entries = await bootFile(withHero(false));
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
