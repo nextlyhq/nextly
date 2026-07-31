@@ -198,6 +198,19 @@ describe("draft/published split — updateEntry (integration)", () => {
       status: "published",
     });
     expect((publishedRead.data as { title?: string }).title).toBe("live");
+
+    // Explicit status=draft view WITH the opt-in: the live row stays published,
+    // so the draft-only status filter must not 404 before the overlay runs.
+    const draftStatusRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      status: "draft",
+      includeWorkingDraft: true,
+    });
+    expect(draftStatusRead.success).toBe(true);
+    expect((draftStatusRead.data as { title?: string }).title).toBe(
+      "edited-in-draft"
+    );
   });
 
   it("surfaces the working draft to an access-enforced authenticated editor, but not to an anonymous read", async () => {
@@ -1067,6 +1080,55 @@ describe("draft/published split — promote on publish (integration)", () => {
     const publishAt = (draftRead.data as { publishAt?: unknown }).publishAt;
     expect(publishAt instanceof Date).toBe(true);
     expect((publishAt as Date).toISOString()).toBe("2026-06-15T00:00:00.000Z");
+  });
+
+  it("rehydrates date fields nested inside a draft component", async () => {
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "event",
+          fields: [text({ name: "name" }), date({ name: "startsAt" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "event", component: "event" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      event: { name: "launch", startsAt: new Date("2026-03-01T00:00:00.000Z") },
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { event: { startsAt: new Date("2026-09-09T00:00:00.000Z") } }
+    );
+
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    // The date nested in the component comes back as a Date, like a live read.
+    const startsAt = (draftRead.data as { event?: { startsAt?: unknown } })
+      .event?.startsAt;
+    expect(startsAt instanceof Date).toBe(true);
   });
 });
 

@@ -101,6 +101,7 @@ import {
   type ComponentSchemas,
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
+import { addressableFields } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 
 import type { CollectionAccessService } from "./collection-access-service";
@@ -2107,8 +2108,22 @@ export class CollectionQueryService extends BaseService {
       const ownerCondition = ownerConstraint
         ? eq(schema[ownerConstraint.field], ownerConstraint.value)
         : null;
+      // An explicit `status: "draft"` view that opts into the working draft must
+      // not filter the live row to draft-only: the split keeps the main row
+      // published, so that predicate would 404 before the overlay below can
+      // surface the pending draft. Drop it for a drafts-enabled collection when
+      // `includeWorkingDraft` is set; the overlay returns the draft (or the live
+      // row when none exists). Every other status filter is applied as usual.
+      const suppressDraftStatusFilter =
+        params.includeWorkingDraft === true &&
+        statusFilter?.value === "draft" &&
+        (
+          collectionForStatus as {
+            versions?: { drafts?: { enabled?: boolean } };
+          }
+        ).versions?.drafts?.enabled === true;
       const statusCondition =
-        statusFilter && schema.status
+        statusFilter && schema.status && !suppressDraftStatusFilter
           ? eq(schema.status, statusFilter.value)
           : null;
       const whereParts = [idCondition, ownerCondition, statusCondition].filter(
@@ -2434,20 +2449,21 @@ export class CollectionQueryService extends BaseService {
           // Snapshot serialization turned Date values into ISO strings, but an
           // ordinary live read hands the afterRead hooks Drizzle-decoded Date
           // objects, so a hook that calls date methods would fail only for a
-          // drafted entry. Rehydrate the declared date fields and the system
-          // timestamps to Date before the read pipeline runs below.
-          for (const dateKey of [
-            ...declaredFields.filter(f => f.type === "date").map(f => f.name),
-            "createdAt",
-            "updatedAt",
-          ]) {
-            if (typeof dateKey !== "string") continue;
-            const value = draftEntry[dateKey];
+          // drafted entry. Rehydrate the system timestamps and every declared
+          // date field — including those nested inside components — to Date
+          // before the read pipeline runs below.
+          for (const key of ["createdAt", "updatedAt"]) {
+            const value = draftEntry[key];
             if (typeof value === "string") {
               const parsed = new Date(value);
-              if (!Number.isNaN(parsed.getTime())) draftEntry[dateKey] = parsed;
+              if (!Number.isNaN(parsed.getTime())) draftEntry[key] = parsed;
             }
           }
+          this.rehydrateComponentDates(
+            draftEntry,
+            declaredFields,
+            draftComponentSchemas
+          );
           expandedEntry = draftEntry;
         }
       }
@@ -2663,6 +2679,64 @@ export class CollectionQueryService extends BaseService {
       options
     );
     return expanded;
+  }
+
+  /**
+   * Convert serialized ISO date strings back to Date in place, descending into
+   * component values against their resolved schemas.
+   *
+   * The working-draft snapshot is JSON, so a `date` field — at the top level or
+   * nested in a single or dynamic-zone component — comes back as a string, while
+   * a live read hands the afterRead hooks a Drizzle-decoded Date. Unnamed
+   * presentational groups are flattened (matching the type tagger) so a date or
+   * component declared inside one is still reached.
+   */
+  private rehydrateComponentDates(
+    value: Record<string, unknown>,
+    fields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null
+  ): void {
+    for (const field of addressableFields(fields)) {
+      const name = (field as { name?: unknown }).name;
+      if (typeof name !== "string" || !(name in value)) continue;
+
+      if (field.type === "date") {
+        const raw = value[name];
+        if (typeof raw === "string") {
+          const parsed = new Date(raw);
+          if (!Number.isNaN(parsed.getTime())) value[name] = parsed;
+        }
+        continue;
+      }
+
+      const single = (field as { component?: unknown }).component;
+      const many = (field as { components?: unknown }).components;
+      if (typeof single !== "string" && !Array.isArray(many)) continue;
+
+      const compValue = value[name];
+      const instances = Array.isArray(compValue)
+        ? compValue
+        : compValue != null
+          ? [compValue]
+          : [];
+      for (const instance of instances) {
+        if (instance === null || typeof instance !== "object") continue;
+        const rec = instance as Record<string, unknown>;
+        const tagged = rec._componentType;
+        const slug =
+          typeof tagged === "string"
+            ? tagged
+            : typeof single === "string"
+              ? single
+              : undefined;
+        const compFields = slug
+          ? componentSchemas?.get(slug)?.fields
+          : undefined;
+        if (compFields) {
+          this.rehydrateComponentDates(rec, compFields, componentSchemas);
+        }
+      }
+    }
   }
 
   /**
