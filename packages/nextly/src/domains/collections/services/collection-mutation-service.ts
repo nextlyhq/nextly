@@ -1190,7 +1190,10 @@ export class CollectionMutationService extends BaseService {
       // Inside the caller's transaction, so the remembered verdict is read and never resolved:
       // resolving would query, and a query against a missing relation aborts the whole
       // transaction on PostgreSQL. The write path resolves before opening one.
-      readiness: cachedCompanionReadiness(companion.companionTableName),
+      readiness: cachedCompanionReadiness(
+        this.adapter,
+        companion.companionTableName
+      ),
     });
 
     const values: Record<string, unknown> = {};
@@ -1246,7 +1249,10 @@ export class CollectionMutationService extends BaseService {
         localizedFields: slugField,
         rows: [row],
         locales,
-        readiness: cachedCompanionReadiness(companion.companionTableName),
+        readiness: cachedCompanionReadiness(
+          this.adapter,
+          companion.companionTableName
+        ),
       });
 
       // row.slug is a `{ [locale]: slug | null }` map; collect the distinct
@@ -3010,7 +3016,10 @@ export class CollectionMutationService extends BaseService {
                     >(),
                     companion.table,
                     params.entryId,
-                    cachedCompanionReadiness(companion.companionTableName)
+                    cachedCompanionReadiness(
+                      this.adapter,
+                      companion.companionTableName
+                    )
                   )
                 : new Map<string, string | null>();
           } catch (err) {

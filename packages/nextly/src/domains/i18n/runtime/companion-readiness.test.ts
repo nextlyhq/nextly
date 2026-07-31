@@ -4,7 +4,7 @@
  * No database: both are decisions made from what has already been observed, and the point of the
  * cache is that the common case reaches no database at all.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   cachedCompanionReadiness,
@@ -13,8 +13,6 @@ import {
   isCompanionReady,
   resolveCompanionReadiness,
 } from "./companion-readiness";
-
-afterEach(() => forgetCompanionReadiness());
 
 /** Counts what actually reached the database, which is the property under test. */
 function countingAdapter(present: string[]) {
@@ -70,7 +68,7 @@ describe("companion readiness", () => {
   it("reports nothing remembered until something resolves it", () => {
     // What an in-transaction caller sees. Unknown must read as not-usable: guessing provisioned
     // issues the query that aborts the transaction.
-    expect(cachedCompanionReadiness("dc_posts_locales")).toBeUndefined();
+    expect(cachedCompanionReadiness({}, "dc_posts_locales")).toBeUndefined();
   });
 
   it("forgets a verdict when the companion goes away", async () => {
@@ -80,10 +78,28 @@ describe("companion readiness", () => {
       mainTableName: "dc_posts",
       localizedColumns: ["title"],
     });
-    expect(cachedCompanionReadiness("dc_posts_locales")).toBe("ready");
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
 
-    forgetCompanionReadiness("dc_posts_locales");
-    expect(cachedCompanionReadiness("dc_posts_locales")).toBeUndefined();
+    forgetCompanionReadiness(adapter, "dc_posts_locales");
+    expect(
+      cachedCompanionReadiness(adapter, "dc_posts_locales")
+    ).toBeUndefined();
+  });
+
+  it("does not let one connection vouch for another", async () => {
+    // A table name does not identify a table. Two adapters mean two databases, and the first one's
+    // verdict must not answer for a companion the second has never provisioned — otherwise its
+    // reads and writes address a table that is not there instead of taking the fallback.
+    const first = countingAdapter(["dc_posts_locales"]);
+    const second = countingAdapter([]);
+
+    expect(await isCompanionReady(first, "dc_posts_locales")).toBe(true);
+    expect(await isCompanionReady(second, "dc_posts_locales")).toBe(false);
+    expect(
+      cachedCompanionReadiness(second, "dc_posts_locales")
+    ).toBeUndefined();
+    // And the second connection's miss did not disturb the first's verdict.
+    expect(cachedCompanionReadiness(first, "dc_posts_locales")).toBe("ready");
   });
 });
 

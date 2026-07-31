@@ -85,7 +85,7 @@ async function dropCompanion(
 ): Promise<void> {
   const quoted = dialect === "mysql" ? `\`${table}\`` : `"${table}"`;
   await nextly.adapter.executeQuery(`DROP TABLE IF EXISTS ${quoted}`);
-  forgetCompanionReadiness(table);
+  forgetCompanionReadiness(nextly.adapter, table);
 }
 
 /** Same collection, with localization off (columns on main) or on (companion). */
@@ -150,7 +150,7 @@ async function enterWindow(): Promise<TestNextly> {
   await handle.adapter.executeQuery(
     "DROP TABLE IF EXISTS dc_i18nwin_posts_locales"
   );
-  forgetCompanionReadiness("dc_i18nwin_posts_locales");
+  forgetCompanionReadiness(handle.adapter, "dc_i18nwin_posts_locales");
   return handle;
 }
 

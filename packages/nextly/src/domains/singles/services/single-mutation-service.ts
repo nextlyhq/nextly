@@ -258,7 +258,10 @@ export class SingleMutationService extends BaseService {
       // on PostgreSQL. Every other failure now propagates unconditionally, which is what this read
       // needs — it feeds a durable webhook payload, and shipping nulled translations because a
       // transient error was swallowed would corrupt it.
-      readiness: cachedCompanionReadiness(companion.companionTableName),
+      readiness: cachedCompanionReadiness(
+        this.adapter,
+        companion.companionTableName
+      ),
     });
     const values: Record<string, unknown> = {};
     for (const f of companion.localizedFields) {
@@ -1234,6 +1237,7 @@ export class SingleMutationService extends BaseService {
                 // feeds the durable webhook `previous` payload, and a silently nulled `previous`
                 // would corrupt `changedFields`.
                 readiness: cachedCompanionReadiness(
+                  this.adapter,
                   companion.companionTableName
                 ),
               });
@@ -1256,7 +1260,10 @@ export class SingleMutationService extends BaseService {
                   companion.table,
                   existingDoc.id,
                   writeLocale,
-                  cachedCompanionReadiness(companion.companionTableName)
+                  cachedCompanionReadiness(
+                    this.adapter,
+                    companion.companionTableName
+                  )
                 );
                 // A status-bearing companion row always carries a non-null
                 // `_status`, so its presence already answers row existence — no
@@ -1272,7 +1279,10 @@ export class SingleMutationService extends BaseService {
                   companion.table,
                   existingDoc.id,
                   writeLocale,
-                  cachedCompanionReadiness(companion.companionTableName)
+                  cachedCompanionReadiness(
+                    this.adapter,
+                    companion.companionTableName
+                  )
                 );
               }
             }

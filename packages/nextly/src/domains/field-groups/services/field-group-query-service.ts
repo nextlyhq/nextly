@@ -234,7 +234,7 @@ export class FieldGroupQueryService extends BaseService {
   ): Promise<CompanionReadiness | undefined> | CompanionReadiness | undefined {
     return executor === undefined
       ? resolveCompanionSchemaReadiness(this.adapter, companion)
-      : cachedCompanionReadiness(companion.companionTableName);
+      : cachedCompanionReadiness(this.adapter, companion.companionTableName);
   }
 
   private readonly registryService: FieldGroupRegistryService;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  buildDefaultLocaleRestoreStatements,
   buildLocalizationDownSql,
   buildLocalizationDownStatements,
 } from "./generate-down";
@@ -83,5 +84,43 @@ describe("buildLocalizationDownStatements when main still carries the column", (
     const statements = buildLocalizationDownStatements(spec);
 
     expect(statements.some(s => s.includes(`ADD COLUMN "title"`))).toBe(true);
+  });
+});
+
+describe("buildDefaultLocaleRestoreStatements", () => {
+  const spec = {
+    dialect: "postgresql" as const,
+    mainTable: "dc_posts",
+    companionTable: "dc_posts_locales",
+    defaultLocale: "en",
+  };
+
+  it("restores every column in one statement", () => {
+    // Several statements can land half-applied: one failing after earlier ones committed leaves
+    // main carrying a mixture of restored and pre-localization values, with no record that a
+    // restore was attempted. The app then serves that mixture and accepts edits on it, and the
+    // next pass overwrites them from the now-stale companion.
+    const statements = buildDefaultLocaleRestoreStatements(spec, [
+      "title",
+      "body",
+      "excerpt",
+    ]);
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain('"title" = (SELECT "title"');
+    expect(statements[0]).toContain('"body" = (SELECT "body"');
+    expect(statements[0]).toContain('"excerpt" = (SELECT "excerpt"');
+  });
+
+  it("guards on the default-locale row existing", () => {
+    // Without it a row authored only in another language assigns SQL NULL, so the restore blanks
+    // the main column instead of leaving it alone. There is nothing to restore for such a row.
+    const [statement] = buildDefaultLocaleRestoreStatements(spec, ["title"]);
+
+    expect(statement).toContain("WHERE EXISTS (SELECT 1 FROM");
+  });
+
+  it("emits nothing when there is nothing to restore", () => {
+    expect(buildDefaultLocaleRestoreStatements(spec, [])).toEqual([]);
   });
 });

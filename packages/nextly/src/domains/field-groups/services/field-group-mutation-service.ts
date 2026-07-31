@@ -190,7 +190,7 @@ export class FieldGroupMutationService extends BaseService {
     // `assertLocalizedFieldGroupsWritable` has already resolved every slug this payload writes, so
     // an unknown answer here also means the two paths have drifted.
     const readiness = tx
-      ? cachedCompanionReadiness(schema.companionTableName)
+      ? cachedCompanionReadiness(this.adapter, schema.companionTableName)
       : await resolveCompanionReadiness(this.adapter, {
           companionTableName: schema.companionTableName,
           mainTableName: meta.tableName,

@@ -1,11 +1,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
 import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
 import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { affectedRowCount } from "../../auth/services/auth-service";
 
 /**
  * A key's stored value plus whether the key exists.
@@ -138,6 +139,41 @@ export class MetaService extends BaseService {
       return;
     }
     await insert;
+  }
+
+  /**
+   * Replace a key's value only if it still holds `expected`, reporting whether it did.
+   *
+   * The missing half of {@link insertIfAbsent}. That one settles a race to CREATE a key; this one
+   * settles a race to MOVE one, which is a different problem and equally unserved by `set`: two
+   * processes that both read the same value and both write leave whichever landed last, with
+   * neither able to tell that it lost.
+   *
+   * Compares the serialised form rather than the decoded value, so the check is the same string
+   * equality the database can perform in the `WHERE` clause — no read, no window between the
+   * comparison and the write.
+   *
+   * False means the row has moved on: it was deleted, or someone else already claimed it. Callers
+   * re-read and decide, because "someone else won" and "someone else won with the same intent" are
+   * not the same outcome.
+   */
+  async compareAndSet(
+    key: string,
+    expected: unknown,
+    next: unknown
+  ): Promise<boolean> {
+    const result = await this.drizzle
+      .update(this.table)
+      .set({ value: JSON.stringify(next), updatedAt: new Date() })
+      .where(
+        and(
+          eq(this.table.key, key),
+          eq(this.table.value, JSON.stringify(expected))
+        )
+      );
+    // Each driver reports the affected count somewhere different, and mysql2 nests it inside a
+    // result tuple, so the shared dialect-aware reader owns that knowledge.
+    return affectedRowCount(result, this.dialect) > 0;
   }
 
   async delete(key: string): Promise<void> {

@@ -1,6 +1,5 @@
 import { beforeAll, afterAll, afterEach, expect } from "vitest";
 
-import { forgetCompanionReadiness } from "../domains/i18n/runtime/companion-readiness";
 import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
 beforeAll(() => {
@@ -26,11 +25,6 @@ beforeAll(() => {
  * only the assertion differs, because each runner reports its own best.
  */
 afterEach(() => {
-  // Companion readiness is remembered on `globalThis` so it survives Turbopack's module
-  // re-execution. Integration files share one fork, and companion table names repeat across them,
-  // so a verdict left behind would let one file's provisioned companion vouch for another file's
-  // dropped one. Cleared before the assertion below, which can end the callback early.
-  forgetCompanionReadiness();
   const aborted = describeAbortedTransactions();
   if (aborted) expect.fail(aborted);
 });

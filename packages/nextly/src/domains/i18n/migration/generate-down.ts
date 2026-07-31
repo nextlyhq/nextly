@@ -52,24 +52,38 @@ export interface LocalizationDownOptions {
  * — an entry authored only in another language, or one created while the transition was
  * incomplete — assigns SQL NULL, so restoring would blank the main column instead of leaving it
  * alone. There is nothing to restore for such a row, and nothing is what it should get.
+ *
+ * ONE statement covering every column, not one per column. An entity with several translatable
+ * fields would otherwise be restorable half-way: an `UPDATE` failing after earlier ones committed
+ * leaves main carrying some restored values and some pre-localization ones, with no record that a
+ * restore was even attempted. The application then serves that mixture and accepts edits on it, and
+ * the next pass repeats every column from the now-stale companion, overwriting them. A single
+ * statement cannot land partially, so the restore either happened or it did not.
+ *
+ * Returned as an array with at most one element, because the callers run a statement list and the
+ * empty case (nothing to restore) has to stay expressible.
  */
 export function buildDefaultLocaleRestoreStatements(
   spec: CompanionCopyRef,
   columnNames: readonly string[]
 ): string[] {
+  if (columnNames.length === 0) return [];
   const { dialect, mainTable, companionTable, defaultLocale } = spec;
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
   const match =
     `${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)} ` +
     `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}`;
-  return columnNames.map(name => {
-    const col = q(name, dialect);
-    return (
-      `UPDATE ${main} SET ${col} = (SELECT ${col} FROM ${comp} WHERE ${match}) ` +
-      `WHERE EXISTS (SELECT 1 FROM ${comp} WHERE ${match})`
-    );
-  });
+  const assignments = columnNames
+    .map(name => {
+      const col = q(name, dialect);
+      return `${col} = (SELECT ${col} FROM ${comp} WHERE ${match})`;
+    })
+    .join(", ");
+  return [
+    `UPDATE ${main} SET ${assignments} ` +
+      `WHERE EXISTS (SELECT 1 FROM ${comp} WHERE ${match})`,
+  ];
 }
 
 export function buildLocalizationDownStatements(

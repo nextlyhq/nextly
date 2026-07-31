@@ -72,6 +72,8 @@ export async function resolveTransitionStore(
     getEntry: key => meta.getEntry(key),
     set: (key, value) => meta.set(key, value),
     insertIfAbsent: (key, value) => meta.insertIfAbsent(key, value),
+    compareAndSet: (key, expected, next) =>
+      meta.compareAndSet(key, expected, next),
     delete: key => meta.delete(key),
   };
 }

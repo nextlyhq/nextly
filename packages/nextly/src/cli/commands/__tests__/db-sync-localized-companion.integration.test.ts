@@ -156,6 +156,8 @@ async function transitionStore(): Promise<
     getEntry: key => meta.getEntry(key),
     set: (key, v) => meta.set(key, v),
     insertIfAbsent: (key, v) => meta.insertIfAbsent(key, v),
+    compareAndSet: (key, expected, next) =>
+      meta.compareAndSet(key, expected, next),
     delete: key => meta.delete(key),
   };
 }

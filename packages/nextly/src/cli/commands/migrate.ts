@@ -285,7 +285,7 @@ export async function runMigrate(
       process.exit(1);
     }
 
-    // Localization companions, after the schema is in step.
+    // Localization companions, once the schema is in step.
     //
     // The push pipeline does not manage companion tables, so a localized entity can be fully
     // migrated and still have nowhere to store translations — and in production nothing else may
@@ -295,15 +295,36 @@ export async function runMigrate(
     //
     // After the migrations, not before: a companion carries a foreign key to its main table, and
     // the columns it seeds from are whatever the migrations have just left in place.
+    //
+    // Skipped entirely while any migration is still pending, which `--step` is precisely for. The
+    // config describes the FINAL schema, so provisioning against it now would create a companion
+    // that a later pending migration is going to create for itself — and that migration's
+    // unconditional `CREATE TABLE` then fails on a table that already exists. Deriving the work
+    // from the applied subset instead is not worth it: the operator stepping through migrations
+    // will reach the end, and the run that gets there does the provisioning.
     try {
-      const { ensureLocalizedCompanions } = await import("./dev-build");
-      await ensureLocalizedCompanions(
-        configResult.config,
+      const stillPending = await findPendingFiles(
         adapter,
-        context,
-        "afterApply",
-        { supervised: true }
+        db,
+        dialect,
+        appMigrationsDir,
+        logger
       );
+      if (stillPending.length > 0) {
+        logger.info(
+          `Skipping translation-table provisioning: ${formatCount(stillPending.length, "migration")} still pending. ` +
+            `Run \`nextly migrate\` without --step to finish.`
+        );
+      } else {
+        const { ensureLocalizedCompanions } = await import("./dev-build");
+        await ensureLocalizedCompanions(
+          configResult.config,
+          adapter,
+          context,
+          "afterApply",
+          { supervised: true }
+        );
+      }
     } catch (err) {
       logger.error(describeError(err));
       process.exit(1);

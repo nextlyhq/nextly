@@ -41,6 +41,15 @@ export interface TransitionStateStore {
    * {@link beginI18nTransition}.
    */
   insertIfAbsent(key: string, value: unknown): Promise<void>;
+  /**
+   * Move a key only if it still holds `expected`. What makes taking over an
+   * existing record a claim too — see {@link beginI18nTransition}.
+   */
+  compareAndSet(
+    key: string,
+    expected: unknown,
+    next: unknown
+  ): Promise<boolean>;
   delete(key: string): Promise<void>;
 }
 
@@ -268,10 +277,28 @@ export async function beginI18nTransition(
     sourceLocale: args.sourceLocale,
   };
 
-  // A record that already exists is being retried or superseded by this same caller's own history,
-  // so writing over it is safe and the read above has already refused the states where it is not.
+  // Taking over an existing record is a claim too, not a write.
+  //
+  // `enabling` over `enabling` is a retry with the locale the read above already checked, so the
+  // write is idempotent and needs nothing further. `restored` is where it matters: two processes
+  // re-enabling the same entity during a default-locale rollout both read `restored`, and an
+  // unconditional write would let each proceed under its own locale — labelling one main table's
+  // content as two languages, with the marker recording whichever landed last.
+  //
+  // A conditional move settles it in the database. Losing means the row has gone somewhere else,
+  // so the loser re-reads and validates below rather than assuming.
   if (current.status !== "untracked") {
-    await store.set(key, marker);
+    const claimed = await store.compareAndSet(
+      key,
+      {
+        version: I18N_TRANSITION_MARKER_VERSION,
+        status: current.status,
+        sourceLocale: current.sourceLocale,
+      } satisfies StoredMarker,
+      marker
+    );
+    if (claimed) return;
+    await confirmClaim(store, args, key);
     return;
   }
 
@@ -281,11 +308,22 @@ export async function beginI18nTransition(
   // would then name a locale the seed never used, which defeats the only fact this whole mechanism
   // exists to keep.
   await store.insertIfAbsent(key, marker);
+  await confirmClaim(store, args, key);
+}
 
-  // Then confirm what actually landed. Losing to a caller that recorded the same locale is not a
-  // loss worth reporting: the transition proceeds under a language both agree on. Losing to a
-  // different one is fatal, because whichever companion gets seeded will be labelled with the
-  // winner's locale and this caller must not go on believing its own.
+/**
+ * Check what actually landed after a claim this caller may not have won.
+ *
+ * Losing to a caller that recorded the same locale is not a loss worth reporting: the transition
+ * proceeds under a language both agree on, which is the ordinary case for two processes reading one
+ * configuration. Losing to a different one is fatal — whichever companion gets seeded will be
+ * labelled with the winner's locale, and this caller must not go on believing its own.
+ */
+async function confirmClaim(
+  store: TransitionStateStore,
+  args: { kind: I18nTransitionKind; slug: string; sourceLocale: string },
+  key: string
+): Promise<void> {
   const claimed = await readI18nTransitionState(store, args.kind, args.slug);
   if (
     claimed.status !== "untracked" &&

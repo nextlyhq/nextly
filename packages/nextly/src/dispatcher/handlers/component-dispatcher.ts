@@ -287,7 +287,7 @@ async function reconcileComponentCompanion(args: {
     const { forgetCompanionReadiness } = await import(
       "../../domains/i18n/runtime/companion-readiness"
     );
-    forgetCompanionReadiness(`${tableName}_locales`);
+    forgetCompanionReadiness(adapter, `${tableName}_locales`);
     const { resolveTransitionStore } = await import(
       "../../domains/i18n/migration/transition-recorder"
     );

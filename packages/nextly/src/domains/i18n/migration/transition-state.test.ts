@@ -21,6 +21,7 @@ import {
   beginI18nTransition,
   forgetI18nTransition,
   readI18nTransitionState,
+  recordI18nRestore,
   settleI18nTransition,
   type TransitionStateStore,
 } from "./transition-state";
@@ -45,6 +46,20 @@ function fakeStore(seed: Record<string, unknown> = {}): TransitionStateStore & {
     insertIfAbsent(key: string, value: unknown): Promise<void> {
       if (!rows.has(key)) rows.set(key, value);
       return Promise.resolve();
+    },
+    // Compares the serialised form, exactly as the database does in its WHERE clause. A fake that
+    // compared by reference would report a match the real store never makes.
+    compareAndSet(
+      key: string,
+      expected: unknown,
+      next: unknown
+    ): Promise<boolean> {
+      if (!rows.has(key)) return Promise.resolve(false);
+      if (JSON.stringify(rows.get(key)) !== JSON.stringify(expected)) {
+        return Promise.resolve(false);
+      }
+      rows.set(key, next);
+      return Promise.resolve(true);
     },
     delete(key: string): Promise<void> {
       rows.delete(key);
@@ -267,6 +282,42 @@ describe("beginI18nTransition", () => {
     await expect(
       readI18nTransitionState(store, "collection", "posts")
     ).resolves.toEqual({ status: "enabling", sourceLocale: "en" });
+  });
+
+  it("claims a restored entity too, rather than writing over a concurrent re-enable", async () => {
+    // A default-locale rollout is when this bites: two processes both read `restored` and both
+    // re-enable. An unconditional write would let each proceed under its own locale, labelling one
+    // main table's content as two languages while the marker records whichever landed last.
+    const store = fakeStore();
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    await settleI18nTransition(store, { kind: "collection", slug: "posts" });
+    await recordI18nRestore(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+
+    // Interleaved deliberately: both read `restored` before either writes.
+    const winner = beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "de",
+    });
+    const loser = beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "fr",
+    });
+
+    await expect(winner).resolves.toBeUndefined();
+    await expect(loser).rejects.toThrow(NextlyError);
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toEqual({ status: "enabling", sourceLocale: "de" });
   });
 
   it("refuses a slug containing a dot", async () => {

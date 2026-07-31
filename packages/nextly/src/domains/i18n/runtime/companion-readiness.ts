@@ -57,20 +57,41 @@ import type { CompanionIntrospectAdapter } from "./companion-io";
 export type CompanionReadiness = "ready" | "pre-migration" | "broken";
 
 /**
- * Remembered `ready` verdicts, by companion table name.
+ * Remembered `ready` verdicts, per adapter, by companion table name.
+ *
+ * Keyed on the adapter rather than on the table name alone, because a table name does not identify
+ * a table. One process can hold two adapters — a second database, a test harness booting a fresh
+ * one, an instance replaced on reload — and `dc_posts_locales` in each is a different object. A
+ * verdict shared between them lets the first database vouch for a companion the second has never
+ * provisioned, and the reads and writes that follow address a table that is not there instead of
+ * taking the pre-migration fallback.
+ *
+ * A `WeakMap` rather than a keyed record, so identity does the scoping and a discarded adapter
+ * takes its verdicts with it. There is nothing to clear on shutdown and nothing to leak.
  *
  * On `globalThis` for the same reason the schema-snapshot caches are: Turbopack re-executes
  * modules on every HMR cycle, so a module-scoped map would be emptied constantly and the cache
- * would never pay for itself.
+ * would never pay for itself — while the adapters it keys on survive that re-execution.
  */
 interface ReadinessCacheBag {
-  __nextly_companionReadiness?: Set<string>;
+  __nextly_companionReadiness?: WeakMap<object, Set<string>>;
 }
 
-function readyTables(): Set<string> {
+/**
+ * Anything that identifies one database connection. Narrower than the adapter on purpose: the
+ * cache needs identity, not capability, so every caller can pass what it already holds.
+ */
+export type ReadinessScope = object;
+
+function readyTables(scope: ReadinessScope): Set<string> {
   const bag = globalThis as ReadinessCacheBag;
-  bag.__nextly_companionReadiness ??= new Set<string>();
-  return bag.__nextly_companionReadiness;
+  bag.__nextly_companionReadiness ??= new WeakMap<object, Set<string>>();
+  let tables = bag.__nextly_companionReadiness.get(scope);
+  if (!tables) {
+    tables = new Set<string>();
+    bag.__nextly_companionReadiness.set(scope, tables);
+  }
+  return tables;
 }
 
 /**
@@ -83,9 +104,10 @@ function readyTables(): Set<string> {
  * resolves readiness before opening it.
  */
 export function cachedCompanionReadiness(
+  scope: ReadinessScope,
   companionTableName: string
 ): CompanionReadiness | undefined {
-  return readyTables().has(companionTableName) ? "ready" : undefined;
+  return readyTables(scope).has(companionTableName) ? "ready" : undefined;
 }
 
 /**
@@ -106,7 +128,7 @@ export async function resolveCompanionReadiness(
     localizedColumns: readonly string[];
   }
 ): Promise<CompanionReadiness> {
-  const cached = cachedCompanionReadiness(args.companionTableName);
+  const cached = cachedCompanionReadiness(adapter, args.companionTableName);
   if (cached) return cached;
 
   if (await isCompanionReady(adapter, args.companionTableName)) return "ready";
@@ -137,10 +159,10 @@ export async function isCompanionReady(
   adapter: CompanionIntrospectAdapter,
   companionTableName: string
 ): Promise<boolean> {
-  if (cachedCompanionReadiness(companionTableName)) return true;
+  if (cachedCompanionReadiness(adapter, companionTableName)) return true;
   const { companionTableExists } = await import("./companion-io");
   if (!(await companionTableExists(adapter, companionTableName))) return false;
-  readyTables().add(companionTableName);
+  readyTables(adapter).add(companionTableName);
   return true;
 }
 
@@ -195,17 +217,23 @@ export function resolveCompanionSchemaReadiness(
 }
 
 /**
- * Forget a remembered verdict, or all of them when given no name.
+ * Forget a remembered verdict for one connection, or all of that connection's when given no name.
  *
  * Called by anything that removes or replaces a companion — disabling localization, tearing an
  * entity down, a migration reset. Creating one needs no call: `ready` is only ever recorded by
  * observing the table, so an entity that has just gained a companion simply has nothing remembered
  * and resolves on its next write.
+ *
+ * Only ever affects the connection passed in. Another adapter's verdicts describe another
+ * database and are not this caller's to discard.
  */
-export function forgetCompanionReadiness(companionTableName?: string): void {
+export function forgetCompanionReadiness(
+  scope: ReadinessScope,
+  companionTableName?: string
+): void {
   if (companionTableName === undefined) {
-    readyTables().clear();
+    readyTables(scope).clear();
     return;
   }
-  readyTables().delete(companionTableName);
+  readyTables(scope).delete(companionTableName);
 }

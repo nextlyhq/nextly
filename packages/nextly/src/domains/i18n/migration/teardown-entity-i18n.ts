@@ -133,7 +133,7 @@ export async function teardownEntityI18n(
     const { forgetCompanionReadiness } = await import(
       "../runtime/companion-readiness"
     );
-    forgetCompanionReadiness(companionTable);
+    forgetCompanionReadiness(adapter, companionTable);
   }
 
   // The archive table is created lazily on the first localization disable, so its absence is
