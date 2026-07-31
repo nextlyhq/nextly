@@ -81,6 +81,12 @@ export interface UserCustomFieldsProps {
  */
 function toFieldConfig(def: UserFieldDefinitionRecord): FieldConfig {
   const base = {
+    // Whatever a contributed type declared for itself, spread first so the
+    // modelled properties below always win. A type states what it needs to
+    // render — a rating's scale, a picker's source — and those keys have no
+    // column of their own, so a config rebuilt without them hands the plugin's
+    // own editor a field stripped of its declaration.
+    ...(def.pluginOptions ?? {}),
     name: def.name,
     label: def.label,
     type: def.type,
@@ -94,10 +100,10 @@ function toFieldConfig(def: UserFieldDefinitionRecord): FieldConfig {
 
   // Add options for select/radio fields
   if ((def.type === "select" || def.type === "radio") && def.options) {
-    return { ...base, options: def.options } as unknown as FieldConfig;
+    return { ...base, options: def.options } as FieldConfig;
   }
 
-  return base as unknown as FieldConfig;
+  return base as FieldConfig;
 }
 
 /**
