@@ -246,8 +246,12 @@ export function getHookCount(hookType: HookType, collection: string): number {
   return registry.getHookCount(hookType, collection);
 }
 
-// Re-export types for consumer convenience
+// Re-export types for consumer convenience. The `BeforeOperation*` trio travels
+// together: a consumer typing a standalone handler needs the context it
+// receives and the args it returns, not just the handler signature.
 export type {
+  BeforeOperationArgs,
+  BeforeOperationContext,
   BeforeOperationHandler,
   HookContextPhase,
   HookType,

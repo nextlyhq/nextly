@@ -300,3 +300,60 @@ describe("published examples do not instruct a call that now throws", () => {
     }
   });
 });
+
+describe("execute() refuses the phase it cannot run", () => {
+  it("throws rather than reporting no hooks when handed beforeOperation", async () => {
+    // `execute` reads only the data-phase store, so reaching it with this phase
+    // would return `context.data` having run nothing -- indistinguishable from
+    // "no hooks are registered", even though one is.
+    const registry = new HookRegistry();
+    let ran = false;
+    registry.registerBeforeOperation("posts", () => {
+      ran = true;
+    });
+
+    const thrown = await registry
+      .execute(
+        "beforeOperation" as never,
+        {
+          collection: "posts",
+          operation: "read",
+          data: { id: "1" },
+        } as never
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect(String((thrown as Error).message)).toContain(
+      "executeBeforeOperation"
+    );
+    // The registered handler is genuinely reachable -- through the right method.
+    expect(ran).toBe(false);
+    await registry.executeBeforeOperation({
+      collection: "posts",
+      operation: "read",
+      args: {},
+    } as BeforeOperationContext);
+    expect(ran).toBe(true);
+  });
+
+  it("still executes the data phases normally", async () => {
+    // The mirror: the guard must reject one phase, not narrow the method.
+    const registry = new HookRegistry();
+    registry.register("beforeCreate", "posts", ctx => ({
+      ...(ctx.data as Args),
+      touched: true,
+    }));
+
+    const result = await registry.execute("beforeCreate", {
+      collection: "posts",
+      operation: "create",
+      data: {},
+    } as never);
+
+    expect(result).toEqual({ touched: true });
+  });
+});

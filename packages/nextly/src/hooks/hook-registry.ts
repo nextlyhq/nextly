@@ -375,9 +375,15 @@ export class HookRegistry {
    * ```
    */
   async execute<T>(
-    hookType: HookType,
+    hookType: HookContextPhase,
     context: HookContext<T>
   ): Promise<T | void> {
+    // `beforeOperation` handlers live in the other store and take a different
+    // context, so this method cannot run them. Reaching here with that phase
+    // would return `context.data` having executed nothing, which reads as "no
+    // hooks are registered" rather than "this is the wrong method".
+    this.rejectBeforeOperation(hookType, "execute", "executeBeforeOperation");
+
     // Get hooks for specific collection + global hooks
     const specificKey = this.makeKey(hookType, context.collection);
     const globalKey = this.makeKey(hookType, "*");
