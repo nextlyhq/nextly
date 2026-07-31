@@ -45,7 +45,12 @@ export function EntryMetaStrip({
     <div className="px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground">
       {showStatusPill && <StatusPill status={status} />}
       {showSlug && (
-        <SlugInlineEditor slugField={slugField} readOnly={lockSlug} />
+        <SlugInlineEditor
+          slugField={slugField}
+          readOnly={lockSlug}
+          // Only a published entry has a URL anyone could already be holding.
+          warnOnChange={hasStatus === true && status === "published"}
+        />
       )}
     </div>
   );
@@ -73,13 +78,34 @@ function StatusPill({ status }: { status: string }) {
 function SlugInlineEditor({
   slugField,
   readOnly = false,
+  warnOnChange = false,
 }: {
   slugField: FieldConfig;
   readOnly?: boolean;
+  /**
+   * Say so when this edit will change a live public address.
+   *
+   * Changing a published entry's slug is legitimate and stays available — but it retires the URL
+   * that is already in links, feeds, sitemaps and search results, and nothing in the editor
+   * otherwise distinguishes that from renaming a draft. Most CMSs say nothing here; the cost of
+   * silence is an author discovering it from a 404 someone else hit.
+   */
+  warnOnChange?: boolean;
 }) {
   const form = useFormContext();
   const slugName = "name" in slugField ? (slugField.name as string) : "slug";
   const liveValue = form?.watch(slugName) as string | undefined;
+  // The value the entry was loaded with, so the notice tracks "differs from what is published"
+  // rather than "was touched" — typing a change and undoing it should clear it again.
+  const publishedValue = useRef<string | undefined>(undefined);
+  if (publishedValue.current === undefined && typeof liveValue === "string") {
+    publishedValue.current = liveValue;
+  }
+  const urlWillChange =
+    warnOnChange &&
+    typeof liveValue === "string" &&
+    publishedValue.current !== undefined &&
+    liveValue !== publishedValue.current;
   const errorMsg = (
     form?.formState.errors[slugName] as { message?: string } | undefined
   )?.message;
@@ -163,6 +189,11 @@ function SlugInlineEditor({
       {errorMsg && (
         <span className="text-xs text-destructive-600 shrink-0" role="alert">
           {errorMsg}
+        </span>
+      )}
+      {!errorMsg && urlWillChange && (
+        <span className="text-xs text-muted-foreground shrink-0" role="status">
+          Changes the public URL — the old one will stop working
         </span>
       )}
     </div>

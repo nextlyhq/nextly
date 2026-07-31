@@ -290,11 +290,18 @@ export function EntryForm({
   // slug-gen logic that used to live in TextInput never fired for the
   // configured title. Mounting the hook here closes that gap and follows the
   // configured title field name (not a hardcoded "title"/"name").
+  // A published entry's slug stops following its title. The URL is public by then — in links,
+  // feeds, sitemaps and search results — so re-deriving it from an edited title retires an address
+  // the author never chose to change, and the old one 404s. Editing the slug directly still works;
+  // this only stops the automatic rewrite.
+  const isPublished = hasStatus && entry?.status === "published";
+
   useAutoSlug({
     form,
     titleFieldName: titleField?.name ?? "title",
     slugFieldName: slugField?.name ?? "slug",
     enabled: !!titleField && !!slugField,
+    frozen: isPublished,
   });
 
   // ---------------------------------------------------------------------------
