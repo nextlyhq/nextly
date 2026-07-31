@@ -192,6 +192,25 @@ export interface CompanionTransitionArgs {
    * or a migration file leaves behind.
    */
   existingMainColumns?: readonly string[];
+  /**
+   * Whether the entity had Draft/Published BEFORE this change.
+   *
+   * A history fact, unlike {@link CompanionTransitionArgs.existingMainColumns}, which describes
+   * only the database in front of you and is deliberately stripped from the migration artefact.
+   * That distinction is what makes this the right signal for the disable restore: it is equally
+   * true for a database that has only ever replayed migrations.
+   *
+   * It answers exactly what that restore needs — did main carry `status` and the companion
+   * `_status` before this save. Deriving it from the DESIRED status instead would emit a copy from
+   * a `_status` the old companion never had, into a `status` main has not been given yet, because a
+   * disable deliberately runs the companion transition before the shared ALTER that adds it.
+   *
+   * REQUIRED rather than optional, and that is the point. An optional history signal is one a
+   * caller can omit without noticing, and the copy it gates then silently stops happening for that
+   * caller alone — which is exactly how this went wrong once already. `undefined` is not a
+   * shorthand for "no status"; a caller that genuinely has none says `false`.
+   */
+  wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
 }
@@ -316,9 +335,19 @@ export function buildCompanionTransitionStatements(
         // would have this restore read a `_status` the old companion never had — and main receive
         // it before the shared ALTER that adds `status`, because a disable deliberately runs the
         // companion transition first. Both columns have to be there already.
-        restoreStatus:
-          args.companionHasStatus === true &&
-          (args.existingMainColumns?.includes("status") ?? false),
+        // The column has to be there BEFORE this save and still be there after.
+        //
+        // Before, because the copy reads the companion's `_status` and writes main's `status`, and
+        // neither exists for an entity that did not have Draft/Published. `existingMainColumns`
+        // cannot answer that: it is built from localized user fields, so it never contains
+        // `status`, and it is cleared for the artefact so a migration file cannot depend on local
+        // introspection.
+        //
+        // After, because turning Draft/Published off in the same save drops main's `status`, and
+        // whether that ALTER lands before or after this plan differs by flow — the single schema
+        // path runs it first, the collection path runs it second. Restoring into a column that is
+        // being removed is pointless in both, and fatal in the one that removes it first.
+        restoreStatus: args.wasStatus === true && status === true,
       }),
       needsArchive: true,
       companionDropped: true,
