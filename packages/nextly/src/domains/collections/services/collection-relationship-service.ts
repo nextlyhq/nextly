@@ -39,7 +39,10 @@ import type {
 } from "../../../services/collections/related-row-read-context";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -2836,7 +2839,38 @@ export class CollectionRelationshipService extends BaseService {
         stripPasswordFieldValues(row, targetFields);
       }
     }
+    await this.runRelatedRowFieldHooks(targetCollection, rows, access);
     await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+  }
+
+  /**
+   * Run the TARGET collection's field-level `afterRead` hooks over related rows.
+   *
+   * These hooks are how a field masks or rewrites itself on the way out -- the
+   * transforming half of the same pair whose access half is
+   * `applyRelatedRowReadAccess`. A direct read of the target runs both, so
+   * skipping them here hands a caller through a relationship the value the
+   * target's own endpoint would never return.
+   *
+   * Ordered before the access pass, exactly as a direct read orders them, so a
+   * field the rules deny is dropped after its hook has run rather than being
+   * transformed once it is already gone.
+   */
+  private async runRelatedRowFieldHooks(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess
+  ): Promise<void> {
+    for (const row of rows) {
+      await runFieldHooks({
+        kind: "collection",
+        slug: targetCollection,
+        phase: "afterRead",
+        data: row,
+        operation: "read",
+        user: access.user,
+      });
+    }
   }
 
   /**

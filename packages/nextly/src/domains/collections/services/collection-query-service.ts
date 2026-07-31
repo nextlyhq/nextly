@@ -347,16 +347,53 @@ export class CollectionQueryService extends BaseService {
    * caller's filter reaches the query untouched.
    */
   /**
-   * Marks that a read's hooks are running on this async call stack.
+   * The collections whose read hooks are running on this async call stack.
    *
-   * A `beforeRead` handler may call `nextly.count()` -- for a quota check, or
-   * for related state -- and that was safe while the count ran no hooks. Now
-   * that it does, the nested count would run the same handler again, and that
-   * handler would count again. The guard makes a nested read use the filter it
-   * was given and run no hooks, which is the behaviour such handlers were
-   * written against.
+   * A read handler may read again -- a `count()` for a quota, a `findByID()`
+   * for related state -- and that was safe while a count ran no hooks. Now
+   * that every read path runs them, a nested read of the collection the
+   * handler is already running for would call that handler a second time, and
+   * so on without end.
+   *
+   * Scoped per collection, not per call stack: a nested read of a DIFFERENT
+   * collection is an ordinary read and must run that collection's own hooks.
+   * Those hooks may be what scopes it to a tenant or hides soft-deleted rows,
+   * so suppressing them would hand the handler rows the other collection
+   * withholds -- a silent widening, which is worse than the recursion this
+   * guards against.
+   *
+   * Keyed by collection rather than by individual handler because handlers can
+   * cycle in pairs (a handler on A reads B, a handler on B reads A) and only a
+   * per-collection key breaks that. The cost is that a handler re-reading its
+   * own collection runs unhooked, which is what such handlers were written
+   * against.
    */
-  private static readonly readHooksRunning = new AsyncLocalStorage<true>();
+  private static readonly activeReadHookCollections = new AsyncLocalStorage<
+    ReadonlySet<string>
+  >();
+
+  /** True when this collection's read hooks are already running up-stack. */
+  private static readHooksActiveFor(collectionName: string): boolean {
+    return (
+      CollectionQueryService.activeReadHookCollections
+        .getStore()
+        ?.has(collectionName) ?? false
+    );
+  }
+
+  /**
+   * Runs `run` with this collection marked active, preserving any collection
+   * already marked so an A-reads-B-reads-A cycle still terminates.
+   */
+  private static withReadHookScope<T>(
+    collectionName: string,
+    run: () => Promise<T>
+  ): Promise<T> {
+    const active = CollectionQueryService.activeReadHookCollections.getStore();
+    const nested = new Set(active ?? []);
+    nested.add(collectionName);
+    return CollectionQueryService.activeReadHookCollections.run(nested, run);
+  }
 
   private async resolveReadWhere(params: {
     collectionName: string;
@@ -364,63 +401,164 @@ export class CollectionQueryService extends BaseService {
     user?: UserContext;
     sharedContext: Record<string, unknown>;
   }): Promise<WhereFilter | undefined> {
-    // Already inside a read's hooks: this call came from a handler, so it uses
-    // the filter it was given and runs nothing.
-    if (CollectionQueryService.readHooksRunning.getStore()) {
+    // Already inside this collection's read hooks: the call came from one of
+    // its own handlers, so it uses the filter it was given and runs nothing.
+    if (CollectionQueryService.readHooksActiveFor(params.collectionName)) {
       return params.where;
     }
     const seededWhere = params.where ?? {};
-    return CollectionQueryService.readHooksRunning.run(true, async () => {
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "read",
-          // An object, for the same reason `beforeRead` gets one below: a
-          // handler scoping in place (`ctx.args.where.tenant = ...`) would
-          // otherwise throw on every unfiltered read instead of adding its
-          // predicate. The settled filter keeps `undefined` as its own value.
-          args: { where: seededWhere },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: params.sharedContext,
-        });
+    return CollectionQueryService.withReadHookScope(
+      params.collectionName,
+      async () => {
+        const beforeOpArgs =
+          await this.hookService.hookRegistry.executeBeforeOperation({
+            collection: params.collectionName,
+            operation: "read",
+            // An object, for the same reason `beforeRead` gets one below: a
+            // handler scoping in place (`ctx.args.where.tenant = ...`) would
+            // otherwise throw on every unfiltered read instead of adding its
+            // predicate. The settled filter keeps `undefined` as its own value.
+            args: { where: seededWhere },
+            user: params.user
+              ? { id: params.user.id, email: params.user.email }
+              : undefined,
+            context: params.sharedContext,
+          });
 
-      // Returning an args object replaces the arguments wholesale, so a handler
-      // that omits `where` -- or sets it to `undefined` -- is clearing the filter,
-      // not declining to change it. Only the absence of a returned object leaves
-      // the caller's filter in place.
-      // The seeded object is an input convenience, not a filter. If it comes
-      // back untouched and still empty, the read has no filter -- turning that
-      // into `{}` would make every downstream `if (where)` believe one exists.
-      const returnedWhere = beforeOpArgs ? beforeOpArgs.where : params.where;
-      const afterBeforeOperation = (
-        returnedWhere === seededWhere && Object.keys(seededWhere).length === 0
-          ? params.where
-          : returnedWhere
-      ) as WhereFilter | undefined;
+        // Returning an args object replaces the arguments wholesale, so a handler
+        // that omits `where` -- or sets it to `undefined` -- is clearing the filter,
+        // not declining to change it. Only the absence of a returned object leaves
+        // the caller's filter in place.
+        // The seeded object is an input convenience, not a filter. If it comes
+        // back untouched and still empty, the read has no filter -- turning that
+        // into `{}` would make every downstream `if (where)` believe one exists.
+        const returnedWhere = beforeOpArgs ? beforeOpArgs.where : params.where;
+        const afterBeforeOperation = (
+          returnedWhere === seededWhere && Object.keys(seededWhere).length === 0
+            ? params.where
+            : returnedWhere
+        ) as WhereFilter | undefined;
 
-      const beforeReadResult = await this.hookService.hookRegistry.execute(
-        "beforeRead",
-        this.hookService.buildHookContext({
-          collection: params.collectionName,
-          operation: "read" as const,
-          // Always an object: handlers documented as "modify query parameters"
-          // assign onto it in place, and handing them `undefined` would throw on
-          // every unfiltered read rather than adding their predicate.
-          data: afterBeforeOperation ?? {},
-          user: params.user,
-          context: params.sharedContext,
-        })
-      );
+        const beforeReadResult = await this.hookService.hookRegistry.execute(
+          "beforeRead",
+          this.hookService.buildHookContext({
+            collection: params.collectionName,
+            operation: "read" as const,
+            // Always an object: handlers documented as "modify query parameters"
+            // assign onto it in place, and handing them `undefined` would throw on
+            // every unfiltered read rather than adding their predicate.
+            data: afterBeforeOperation ?? {},
+            user: params.user,
+            context: params.sharedContext,
+          })
+        );
 
-      // `undefined` means the hook returned nothing, so the filter is unchanged;
-      // `null` is a deliberate return the registry preserves, and it means the
-      // hook cleared the filter. Collapsing the two would leave a hook unable to
-      // widen a read it had decided should not be narrowed.
-      if (beforeReadResult === undefined) return afterBeforeOperation;
-      return beforeReadResult ?? undefined;
-    });
+        // `undefined` means the hook returned nothing, so the filter is unchanged;
+        // `null` is a deliberate return the registry preserves, and it means the
+        // hook cleared the filter. Collapsing the two would leave a hook unable to
+        // widen a read it had decided should not be narrowed.
+        if (beforeReadResult === undefined) return afterBeforeOperation;
+        return beforeReadResult ?? undefined;
+      }
+    );
+  }
+
+  /**
+   * Turns storage-encoded JSON columns back into the values the field was
+   * configured with.
+   *
+   * SQLite has no JSON type, so richtext, blocks, array, group and json fields
+   * come back as strings. Every consumer after this point -- hooks, field-level
+   * access, the caller -- is documented against the configured value, so the
+   * decode belongs before the first of them rather than between them.
+   */
+  private decodeJsonFieldValues(
+    entries: Record<string, unknown>[],
+    fields: FieldDefinition[],
+    locale: string | undefined
+  ): void {
+    for (const entry of entries) {
+      for (const field of fields) {
+        if (!isJsonFieldType(field.type, field)) continue;
+        const value = entry[field.name];
+        if (typeof value === "string") {
+          try {
+            entry[field.name] = JSON.parse(value);
+          } catch {
+            // Not JSON after all; the stored string is the value.
+          }
+        } else if (
+          locale === "all" &&
+          value !== null &&
+          typeof value === "object"
+        ) {
+          // `locale=all` yields a language-keyed map of raw companion values, so
+          // each locale's string is decoded to match the shape a single-locale
+          // read returns.
+          const keyed = value as Record<string, unknown>;
+          for (const code of Object.keys(keyed)) {
+            if (typeof keyed[code] === "string") {
+              try {
+                keyed[code] = JSON.parse(keyed[code]);
+              } catch {
+                // Not JSON after all; the stored string is the value.
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * The detail read's half of {@link resolveReadWhere}: runs `beforeOperation`
+   * and `beforeRead` for a read by id and returns the id they settled on.
+   *
+   * Deliberately the same check-then-enter shape as the list half. A detail
+   * read reached from another read's handler must skip its hooks for the same
+   * reason a nested list does, and holding both to one shape is what keeps the
+   * guard from being applied to one path and not the other.
+   */
+  private async resolveReadEntryId(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    sharedContext: Record<string, unknown>;
+  }): Promise<string> {
+    if (CollectionQueryService.readHooksActiveFor(params.collectionName)) {
+      return params.entryId;
+    }
+    return CollectionQueryService.withReadHookScope(
+      params.collectionName,
+      async () => {
+        const beforeOpArgs =
+          await this.hookService.hookRegistry.executeBeforeOperation({
+            collection: params.collectionName,
+            operation: "read",
+            args: { id: params.entryId },
+            user: params.user
+              ? { id: params.user.id, email: params.user.email }
+              : undefined,
+            context: params.sharedContext,
+          });
+
+        // Use the modified id when beforeOperation returned one.
+        const resolvedId = beforeOpArgs?.id ?? params.entryId;
+
+        await this.hookService.hookRegistry.execute(
+          "beforeRead",
+          this.hookService.buildHookContext({
+            collection: params.collectionName,
+            operation: "read" as const,
+            data: { entryId: resolvedId },
+            user: params.user,
+            context: params.sharedContext,
+          })
+        );
+
+        return resolvedId;
+      }
+    );
   }
 
   private buildLocalizedQueryContext(
@@ -1271,6 +1409,11 @@ export class CollectionQueryService extends BaseService {
         stripSystemOwnerField(entry);
       }
 
+      // Decode before any afterRead hook runs. A hook is documented against the
+      // configured value, and on SQLite these columns are strings, so decoding
+      // after the hooks handed every one of them the storage encoding instead.
+      this.decodeJsonFieldValues(expandedEntries, fields, params.locale);
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -1328,40 +1471,13 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
-      // Deserialize JSON fields (richtext, blocks, array, group, json) for all entries
-      finalData = (finalData as Record<string, unknown>[]).map(entry => {
-        fields.forEach(field => {
-          if (!isJsonFieldType(field.type, field)) return;
-          const value = entry[field.name];
-          if (typeof value === "string") {
-            try {
-              entry[field.name] = JSON.parse(value);
-            } catch {
-              // If parsing fails, keep as string
-            }
-          } else if (
-            params.locale === "all" &&
-            value !== null &&
-            typeof value === "object"
-          ) {
-            // locale=all yields a language-keyed map of raw companion values;
-            // parse each locale's JSON string so nested shapes match the
-            // parsed objects a single-locale read returns.
-            const keyed = value as Record<string, unknown>;
-            for (const code of Object.keys(keyed)) {
-              if (typeof keyed[code] === "string") {
-                try {
-                  keyed[code] = JSON.parse(keyed[code]);
-                } catch {
-                  // If parsing fails, keep as string
-                }
-              }
-            }
-          }
-        });
-
-        return entry;
-      });
+      // A hook may return values it built itself, so the decode runs again over
+      // what they settled on. Already-decoded values are left alone.
+      this.decodeJsonFieldValues(
+        finalData as Record<string, unknown>[],
+        fields,
+        params.locale
+      );
 
       // Field-level afterRead hooks + read access (code-first functions
       // resolved via the field-level registry): hooks may transform values;
@@ -1988,46 +2104,14 @@ export class CollectionQueryService extends BaseService {
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments (id) or throw to abort
-      // Marked for the whole detail read, not only the list one: a handler here
-      // may call `nextly.count()` too, and an unguarded detail path lets it
-      // re-enter its own hook through the count that now runs them.
-      const entryId = await CollectionQueryService.readHooksRunning.run(
-        true,
-        async () => {
-          const beforeOpArgs =
-            await this.hookService.hookRegistry.executeBeforeOperation({
-              collection: params.collectionName,
-              operation: "read",
-              args: { id: params.entryId },
-              user: params.user
-                ? { id: params.user.id, email: params.user.email }
-                : undefined,
-              context: sharedContext,
-            });
-
-          // Use modified id if returned by beforeOperation
-          const resolvedId = beforeOpArgs?.id ?? params.entryId;
-
-          // Execute beforeRead hooks
-          // Hooks can be used to modify query parameters or add filters
-          const beforeContext = this.hookService.buildHookContext({
-            collection: params.collectionName,
-            operation: "read" as const,
-            data: { entryId: resolvedId },
-            user: params.user,
-            context: sharedContext,
-          });
-
-          await this.hookService.hookRegistry.execute(
-            "beforeRead",
-            beforeContext
-          );
-
-          return resolvedId;
-        }
-      );
+      // `beforeOperation` runs first and may rewrite the id, then `beforeRead`
+      // sees the id it settled on.
+      const entryId = await this.resolveReadEntryId({
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        user: params.user,
+        sharedContext,
+      });
 
       // When read access is `owner-only`, fold the ownership
       // predicate into the SQL WHERE clause. A non-owner gets a 404
@@ -2209,6 +2293,11 @@ export class CollectionQueryService extends BaseService {
       // Always strip the system owner column (see listEntries).
       stripSystemOwnerField(expandedEntry);
 
+      // Decode before any afterRead hook runs, for the same reason as the list
+      // path: a hook is documented against the configured value, not the
+      // storage encoding SQLite hands back.
+      this.decodeJsonFieldValues([expandedEntry], fields, params.locale);
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -2262,36 +2351,9 @@ export class CollectionQueryService extends BaseService {
       // Same defense in depth for the owner column.
       stripSystemOwnerField(finalData);
 
-      // Deserialize JSON fields (richtext, blocks, array, group, json) for response
-      fields.forEach(field => {
-        if (!isJsonFieldType(field.type, field)) return;
-        const value = finalData[field.name];
-        if (typeof value === "string") {
-          try {
-            finalData[field.name] = JSON.parse(value);
-          } catch {
-            // If parsing fails, keep as string
-          }
-        } else if (
-          params.locale === "all" &&
-          value !== null &&
-          typeof value === "object"
-        ) {
-          // locale=all yields a language-keyed map of raw companion values;
-          // parse each locale's JSON string so nested shapes match the parsed
-          // objects a single-locale read returns.
-          const keyed = value as Record<string, unknown>;
-          for (const code of Object.keys(keyed)) {
-            if (typeof keyed[code] === "string") {
-              try {
-                keyed[code] = JSON.parse(keyed[code]);
-              } catch {
-                // If parsing fails, keep as string
-              }
-            }
-          }
-        }
-      });
+      // A hook may return values it built itself, so the decode runs again over
+      // what they settled on. Already-decoded values are left alone.
+      this.decodeJsonFieldValues([finalData], fields, params.locale);
 
       // Field-level afterRead hooks + read access — same semantics as the
       // list path above.
