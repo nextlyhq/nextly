@@ -264,7 +264,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     // it is the one in force at the transition, not whatever the default becomes later.
     await expect(
       readTransition("collection", "dbsync_marked")
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       status: "seeded",
       sourceLocale: "de",
     });
@@ -290,7 +290,9 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     await runSync(config("de"));
     await runSync(config("en"));
 
-    await expect(readTransition("collection", "dbsync_once")).resolves.toEqual({
+    await expect(
+      readTransition("collection", "dbsync_once")
+    ).resolves.toMatchObject({
       status: "seeded",
       sourceLocale: "de",
     });
@@ -679,7 +681,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     );
     await expect(
       readTransition("collection", "dbsync_roundtrip")
-    ).resolves.toEqual({ status: "restored", sourceLocale: "en" });
+    ).resolves.toMatchObject({ status: "restored", sourceLocale: "en" });
 
     await runSync(localized);
 
@@ -736,7 +738,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     // And the record now describes the transition that just happened, not the one before it.
     await expect(
       readTransition("collection", "dbsync_relocale")
-    ).resolves.toEqual({ status: "seeded", sourceLocale: "de" });
+    ).resolves.toMatchObject({ status: "seeded", sourceLocale: "de" });
   });
 
   it("repairs an install whose companion predates transition records", async () => {
@@ -798,7 +800,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     // the command and repeat identically on every retry.
     await expect(
       readTransition("collection", "dbsync_legacy")
-    ).resolves.toEqual({ status: "seeded", sourceLocale: "en" });
+    ).resolves.toMatchObject({ status: "seeded", sourceLocale: "en" });
   });
 
   it("does not repair an untracked companion unless asked to", async () => {
@@ -901,6 +903,136 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(rows).toEqual([{ _status: "published" }]);
   });
 
+  it("leaves an explicitly shared field alone when every other field localizes by default", async () => {
+    // The per-field flag is only half the story: a text field with no flag at all localizes,
+    // because that is the default for its type. So the fields that still belong to the companion
+    // need not carry `localized: true` — and reading the flag literally finds nothing claimed,
+    // falls back to treating every field as restorable, and copies the abandoned companion value
+    // straight over the shared field's current one.
+    const localizedBoth = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_smartshared",
+          localized: true,
+          // Neither carries a flag, so both localize by the text default.
+          fields: [text({ name: "title" }), text({ name: "sku" })],
+        }),
+      ],
+    });
+    // `sku` becomes shared. Nothing else gains a flag, so nothing is explicitly claimed.
+    const skuShared = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_smartshared",
+          localized: true,
+          fields: [
+            text({ name: "title" }),
+            text({ name: "sku", localized: false }),
+          ],
+        }),
+      ],
+    });
+
+    await runSync(localizedBoth);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_smartshared" ("id", "slug") VALUES ('row1', 'r1')`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_smartshared_locales" ("_parent", "_locale", "title", "sku") VALUES ('row1', 'en', 'Widget', 'OLD-SKU')`
+    );
+
+    await runSync(skuShared);
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_smartshared" SET "sku" = 'NEW-SKU' WHERE "id" = 'row1'`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_smartshared",
+            fields: [
+              text({ name: "title" }),
+              text({ name: "sku", localized: false }),
+            ],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ title: string; sku: string }>(
+      `SELECT "title", "sku" FROM "dc_dbsync_smartshared" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Widget", sku: "NEW-SKU" }]);
+  });
+
+  it("restores the publishing state of the locale it restores content from", async () => {
+    // Publishing is per locale while an entity is localized: a publish under a locale that is not
+    // the default updates that companion row and deliberately leaves main's `status` alone. If
+    // the default has since moved away from the locale an entry was actually authored in, the
+    // restore falls back to that locale for its content — and bringing the content across without
+    // the state it was published under either makes a draft public or makes live content vanish.
+    const localizedInDe = defineConfig({
+      localization: { locales: ["de", "en"], defaultLocale: "de" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_locstatus",
+          localized: true,
+          status: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    // Localization off, and the default has moved to a locale this entry was never authored in.
+    const disabledInEn = defineConfig({
+      localization: { locales: ["de", "en"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_locstatus",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    await runSync(
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_locstatus",
+            status: true,
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_locstatus" ("id", "slug", "title", "status") VALUES ('row1', 'r1', 'Entwurf', 'draft')`
+    );
+    // Localized with `de` as the default, so the content and its draft state land on the `de`
+    // companion row.
+    await runSync(localizedInDe);
+    // Published in `de`, which is where this entry actually lives.
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_locstatus_locales" SET "_status" = 'published' WHERE "_locale" = 'de'`
+    );
+
+    // The default moves to a locale this entry has no translation in, and localization is then
+    // turned off — so the restore falls back to `de` for the content.
+    await runSync(disabledInEn);
+
+    const main = await adapter?.executeQuery<{
+      title: string;
+      status: string;
+    }>(
+      `SELECT "title", "status" FROM "dc_dbsync_locstatus" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Entwurf", status: "published" }]);
+  });
+
   it("restores from the recorded locale when the configured default has no translation", async () => {
     // The restore is guarded on a matching companion row, so preferring the configured default
     // unconditionally copies nothing for an entity only ever authored under the locale the
@@ -972,7 +1104,9 @@ describe("db:sync creates localized companion tables in-process (integration)", 
         }),
       ],
     });
-    // `sku` becomes shared; the entity stays localized.
+    // `sku` becomes shared; the entity stays localized. Spelled out rather than left to the
+    // per-type default, which for a text field is to localize — dropping the flag would leave it
+    // localized, not share it.
     const skuShared = defineConfig({
       localization: { locales: ["en", "es"], defaultLocale: "en" },
       collections: [
@@ -981,7 +1115,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
           localized: true,
           fields: [
             text({ name: "title", localized: true }),
-            text({ name: "sku" }),
+            text({ name: "sku", localized: false }),
           ],
         }),
       ],
@@ -1012,7 +1146,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
             slug: "dbsync_shared",
             fields: [
               text({ name: "title", localized: true }),
-              text({ name: "sku" }),
+              text({ name: "sku", localized: false }),
             ],
           }),
         ],

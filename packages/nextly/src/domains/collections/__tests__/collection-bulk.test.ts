@@ -118,6 +118,12 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
   let schema: ReturnType<typeof createMockSchema>;
   let selectData: { rows: unknown[] };
   let mockDb: ReturnType<typeof createMockDb>;
+  // Held at suite scope so the ordering test can watch the boundary between them: the readiness
+  // resolution has to land on the pool BEFORE the batch transaction opens.
+  let mockAdapter: ReturnType<typeof createMockAdapter>;
+  let mockComponentDataService: ReturnType<
+    typeof createMockComponentDataService
+  >;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -125,13 +131,13 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
     schema = createMockSchema();
     selectData = { rows: [] };
     mockDb = createMockDb(selectData);
-    const mockAdapter = createMockAdapter(mockDb);
+    mockAdapter = createMockAdapter(mockDb);
     const mockFileManager = createMockFileManager(schema);
     const mockCollectionService = createMockCollectionService();
     const mockRelationshipService = createMockRelationshipService();
     const mockHookRegistry = createMockHookRegistry();
     const mockAccessControlService = createMockAccessControlService();
-    const mockComponentDataService = createMockComponentDataService();
+    mockComponentDataService = createMockComponentDataService();
 
     service = new CollectionEntryService(
       mockAdapter as never,
@@ -144,6 +150,85 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       mockComponentDataService as never,
       undefined
     );
+  });
+
+  // ── companion readiness ───────────────────────────────────────────────
+
+  describe("localized readiness", () => {
+    /**
+     * Each batch runs its rows inside ONE transaction it opens itself, and every row's snapshot
+     * reads the localized component overlays through that transaction. There a companion verdict
+     * can only be read: resolving one issues a query, and a query against a missing relation
+     * aborts the whole transaction on PostgreSQL. On a worker whose first act is a batch, nothing
+     * has resolved anything yet — and an unresolved verdict reads as unusable, so the rows commit
+     * while their durable version snapshots and outbound events silently lose every translated
+     * value.
+     */
+    const warmsBeforeItsTransaction = async (
+      run: () => Promise<unknown>
+    ): Promise<string[]> => {
+      const order: string[] = [];
+      mockComponentDataService.assertLocalizedFieldGroupsWritable.mockImplementation(
+        () => {
+          order.push("resolve");
+          return Promise.resolve(new Map<string, boolean>());
+        }
+      );
+      const openTransaction = mockAdapter.transaction as ReturnType<
+        typeof vi.fn
+      >;
+      const realTransaction = openTransaction.getMockImplementation();
+      openTransaction.mockImplementation(
+        (fn: (tx: unknown) => Promise<unknown>) => {
+          order.push("transaction");
+          return realTransaction?.(fn) as Promise<unknown>;
+        }
+      );
+      await run();
+      return order;
+    };
+
+    it("resolves readiness before a batch update opens its transaction", async () => {
+      const order = await warmsBeforeItsTransaction(() =>
+        service.updateEntries({ collectionName: "posts" }, [
+          { id: "entry-1", data: { title: "Updated" } },
+        ])
+      );
+
+      expect(order).toContain("transaction");
+      expect(order.indexOf("resolve")).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("resolve")).toBeLessThan(
+        order.indexOf("transaction")
+      );
+    });
+
+    it("resolves readiness before a batch delete opens its transaction", async () => {
+      // The delete case is the one with no second chance: the snapshot it builds is the last
+      // record of the row there will ever be.
+      const order = await warmsBeforeItsTransaction(() =>
+        service.deleteEntries({ collectionName: "posts" }, ["entry-1"])
+      );
+
+      expect(order).toContain("transaction");
+      expect(order.indexOf("resolve")).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("resolve")).toBeLessThan(
+        order.indexOf("transaction")
+      );
+    });
+
+    it("resolves readiness before a batch create opens its transaction", async () => {
+      const order = await warmsBeforeItsTransaction(() =>
+        service.createEntries({ collectionName: "posts" }, [
+          { title: "New", slug: "new" },
+        ])
+      );
+
+      expect(order).toContain("transaction");
+      expect(order.indexOf("resolve")).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("resolve")).toBeLessThan(
+        order.indexOf("transaction")
+      );
+    });
   });
 
   // ── bulkDeleteEntries ─────────────────────────────────────────────────

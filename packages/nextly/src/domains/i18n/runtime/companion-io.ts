@@ -517,7 +517,20 @@ export async function localizedColumnsOnBothTables(
   tableName: string,
   companionTableName: string,
   fields: readonly CompanionFieldLike[]
-): Promise<{ companionExists: boolean; columns: string[] }> {
+): Promise<{
+  companionExists: boolean;
+  columns: string[];
+  /**
+   * Whether main carries `status` AND the companion carries `_status`.
+   *
+   * Publishing state is per-locale while an entity is localized, so it moves in the same
+   * directions the values do and has to travel with them. Reported from this snapshot rather
+   * than probed separately, for the reason the whole helper exists: an entity can gain or lose
+   * Draft/Published in the same edit that changes its localization, and a status answer taken at
+   * a different moment than the column list can describe a different table.
+   */
+  statusOnBoth: boolean;
+}> {
   const { introspectLiveSnapshot } = await import(
     "../../schema/pipeline/diff/introspect-live"
   );
@@ -543,6 +556,7 @@ export async function localizedColumnsOnBothTables(
       .map(f => fieldToLocalizedColumnSpec(f, adapter.dialect)?.name)
       .filter((name): name is string => typeof name === "string")
       .filter(name => onMain.has(name) && onCompanion.has(name)),
+    statusOnBoth: onMain.has("status") && onCompanion.has("_status"),
   };
 }
 
@@ -769,7 +783,7 @@ async function resumeInterruptedSeed(
     // that there is something for it to describe.
     await args.claim?.();
     if (args.overwriteExisting) {
-      const { columns } = await localizedColumnsOnBothTables(
+      const { columns, statusOnBoth } = await localizedColumnsOnBothTables(
         adapter,
         args.tableName,
         companionTableName,
@@ -778,11 +792,9 @@ async function resumeInterruptedSeed(
       // Publishing state moves while localization is off too, and the surviving companion row
       // keeps whatever `_status` it held when it was last the authority. Refreshed alongside the
       // values, and only when BOTH tables physically carry the column — the entity may have gained
-      // or lost Draft/Published in the same period.
-      const refreshStatus =
-        args.status === true &&
-        (await mainTableHasColumns(adapter, args.tableName, ["status"])) &&
-        (await companionHasStatusColumn(adapter, companionTableName));
+      // or lost Draft/Published in the same period. Read from the same snapshot as the columns, so
+      // the two cannot describe the table at different moments.
+      const refreshStatus = args.status === true && statusOnBoth;
       if (columns.length > 0 || refreshStatus) {
         // Through the query builder, not a generated statement string: this is a runtime data
         // move, and only the migration FILE needs SQL text. The seed statements below still go

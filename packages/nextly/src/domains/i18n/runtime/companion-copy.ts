@@ -49,8 +49,9 @@ interface CopyArgs {
 /**
  * The two table objects plus the field/column pairs that exist on both sides.
  *
- * Returns null when there is nothing to copy, which is the caller's cue to do nothing rather than
- * issue an empty statement.
+ * Returns null only when the companion cannot be described at all. An empty `pairs` is a real
+ * answer, not a failure: an entity can have no translatable VALUE column on both sides and still
+ * owe a publishing-status copy, and collapsing that onto null would silently skip it.
  */
 async function resolveCopyShape(args: CopyArgs): Promise<{
   mainTable: unknown;
@@ -100,7 +101,6 @@ async function resolveCopyShape(args: CopyArgs): Promise<{
       (p): p is { field: string; column: string } =>
         typeof p.column === "string" && wanted.has(p.column)
     );
-  if (pairs.length === 0) return null;
 
   return {
     mainTable,
@@ -134,18 +134,6 @@ interface UpdatableDb {
  * query builder: identifiers come from the generated table objects rather than hand-quoting, and
  * the locale is bound rather than embedded.
  *
- * One statement covering every column. Several can land half-way, leaving main carrying a mixture
- * of restored and pre-localization values with nothing recording that a restore was attempted —
- * after which the app serves that mixture, accepts edits on it, and the next pass overwrites them
- * from the now-stale companion.
- *
- * `WHERE EXISTS` matters as much: without it a row that has no companion row in the default locale
- * — an entry authored only in another language — assigns SQL NULL, so restoring would blank the
- * main column instead of leaving it alone. There is nothing to restore for such a row.
- */
-/**
- * Copy the default locale's companion values back onto the main row.
- *
  * ONE statement covering every column. Several can land half-way, leaving main carrying a mixture
  * of restored and pre-localization values with nothing recording that a restore was attempted —
  * after which the app serves that mixture, accepts edits on it, and the next pass overwrites them
@@ -154,6 +142,11 @@ interface UpdatableDb {
  * `WHERE EXISTS` matters as much: without it a row with no companion row in this locale — an entry
  * authored only in another language — assigns SQL NULL, so restoring would blank the main column
  * instead of leaving it alone. There is nothing to restore for such a row.
+ *
+ * `status` carries the selected row's `_status` back with its values. While an entity is
+ * localized, publishing is per locale: a publish under a non-default locale updates that
+ * companion row and deliberately leaves main alone. Restoring the values without the status they
+ * were published under is what makes draft content public, or makes published content vanish.
  */
 export async function copyDefaultLocaleOntoMain(
   adapter: CompanionIntrospectAdapter,
@@ -161,6 +154,7 @@ export async function copyDefaultLocaleOntoMain(
 ): Promise<void> {
   const shape = await resolveCopyShape(args);
   if (!shape) return;
+  if (shape.pairs.length === 0 && args.status !== true) return;
 
   // Each parent is restored from `locale` when it has a row there and from `fallbackLocale`
   // otherwise. One entity-wide choice is not enough: the configured default can move while an
@@ -177,14 +171,22 @@ export async function copyDefaultLocaleOntoMain(
       eq(shape.companion._parent as never, shape.main.id as never),
       eq(shape.companion._locale as never, locale)
     );
-  const values: Record<string, unknown> = {};
-  for (const pair of shape.pairs) {
-    values[pair.field] = locales
+  // The same per-parent choice for every column: first locale that has a row for this parent
+  // wins. Written once so a column and the status beside it cannot come from different rows.
+  const fromFirstMatchingRow = (companionColumn: unknown) =>
+    locales
       .map(
         locale =>
-          sql`(select ${shape.companion[pair.column]} from ${shape.companionTable} where ${rowFor(locale)})`
+          sql`(select ${companionColumn} from ${shape.companionTable} where ${rowFor(locale)})`
       )
       .reduce((first, next) => sql`coalesce(${first}, ${next})`);
+
+  const values: Record<string, unknown> = {};
+  for (const pair of shape.pairs) {
+    values[pair.field] = fromFirstMatchingRow(shape.companion[pair.column]);
+  }
+  if (args.status === true) {
+    values.status = fromFirstMatchingRow(shape.companion._status);
   }
 
   // Guarded on ANY of them existing: a parent with a row in neither locale — an entry authored in
@@ -222,10 +224,9 @@ export async function refreshDefaultLocaleFromMain(
   adapter: CompanionIntrospectAdapter,
   args: CopyArgs & { refreshStatus?: boolean }
 ): Promise<void> {
-  const shape = await resolveCopyShape(args);
-  if (!shape && !args.refreshStatus) return;
-  const resolved = shape ?? (await resolveCopyShape({ ...args, columns: [] }));
+  const resolved = await resolveCopyShape(args);
   if (!resolved) return;
+  if (resolved.pairs.length === 0 && !args.refreshStatus) return;
 
   const correlate = eq(
     resolved.main.id as never,
@@ -246,19 +247,4 @@ export async function refreshDefaultLocaleFromMain(
     .update(resolved.companionTable)
     .set(values)
     .where(eq(resolved.companion._locale as never, args.locale));
-}
-
-/**
- * The slice of Drizzle these copies drive.
- *
- * Declared structurally, the way the companion read helpers declare theirs, because the table
- * objects are built per entity at runtime and their dialect-specific types differ — naming only the
- * calls used keeps the dialect out of the port and needs no `any`.
- */
-interface UpdatableDb {
-  update(table: unknown): {
-    set(values: Record<string, unknown>): {
-      where(condition: unknown): Promise<unknown>;
-    };
-  };
 }

@@ -154,7 +154,7 @@ describe("beginI18nTransition", () => {
 
     await expect(
       readI18nTransitionState(store, "collection", "posts")
-    ).resolves.toEqual({ status: "enabling", sourceLocale: "de" });
+    ).resolves.toMatchObject({ status: "enabling", sourceLocale: "de" });
   });
 
   it("writes a marker its own reader accepts", async () => {
@@ -257,16 +257,17 @@ describe("beginI18nTransition", () => {
     // The claim stands, so the copy and the record agree on one language.
     await expect(
       readI18nTransitionState(store, "collection", "posts")
-    ).resolves.toEqual({ status: "enabling", sourceLocale: "de" });
+    ).resolves.toMatchObject({ status: "enabling", sourceLocale: "de" });
   });
 
-  it("lets a concurrent claim naming the same locale through", async () => {
-    // Losing the race is only a problem when the winner recorded something else. Two callers
-    // reading the same configured default agree about the language, so failing the second would
-    // turn an ordinary two-process dev setup into a hard error.
+  it("refuses a concurrent claim that agrees about the locale", async () => {
+    // Two callers reading one configuration necessarily agree about the language, so agreement
+    // says nothing about who holds the transition. Accepting it lets both run the work — and for
+    // a re-enable that work is a destructive refresh, whose second pass lands after the winner
+    // has settled and copies stale main-table values over translations written since.
     const store = fakeStore();
 
-    await Promise.all([
+    const outcomes = await Promise.allSettled([
       beginI18nTransition(store, {
         kind: "collection",
         slug: "posts",
@@ -279,9 +280,15 @@ describe("beginI18nTransition", () => {
       }),
     ]);
 
-    await expect(
-      readI18nTransitionState(store, "collection", "posts")
-    ).resolves.toEqual({ status: "enabling", sourceLocale: "en" });
+    expect(outcomes.filter(o => o.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find(o => o.status === "rejected");
+    expect(rejected?.reason).toBeInstanceOf(NextlyError);
+    // One holder, and the record names it.
+    const held = await readI18nTransitionState(store, "collection", "posts");
+    expect(held).toMatchObject({ status: "enabling", sourceLocale: "en" });
+    expect(held.status === "untracked" ? undefined : held.owner).toEqual(
+      expect.any(String)
+    );
   });
 
   it("claims a restored entity too, rather than writing over a concurrent re-enable", async () => {
@@ -317,7 +324,68 @@ describe("beginI18nTransition", () => {
     await expect(loser).rejects.toThrow(NextlyError);
     await expect(
       readI18nTransitionState(store, "collection", "posts")
-    ).resolves.toEqual({ status: "enabling", sourceLocale: "de" });
+    ).resolves.toMatchObject({ status: "enabling", sourceLocale: "de" });
+  });
+
+  it("refuses a same-locale re-enable that lost the race for a restored entity", async () => {
+    // The destructive case. A companion that outlived a disable holds stale rows, so re-enabling
+    // overwrites them from main — and two processes doing that from one configuration agree about
+    // the locale, which is all the loser used to check. It would then run the overwrite a second
+    // time, after the winner had settled and a translator had edited what it seeded.
+    const store = fakeStore();
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    await settleI18nTransition(store, { kind: "collection", slug: "posts" });
+    await recordI18nRestore(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+
+    // Interleaved deliberately: both read `restored` before either writes, and both name the
+    // configured default.
+    const first = beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    const second = beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+
+    const outcomes = await Promise.allSettled([first, second]);
+    expect(outcomes.filter(o => o.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.find(o => o.status === "rejected")?.reason).toBeInstanceOf(
+      NextlyError
+    );
+  });
+
+  it("claims a marker written before claims carried a token", async () => {
+    // Markers already in `nextly_meta` have no owner. Refusing to take one over would strand every
+    // entity mid-transition at the moment this build ships, so an absent token means unheld — the
+    // conditional write decides, as it always did.
+    const store = fakeStore({
+      "i18n.transition.collection.posts": {
+        version: I18N_TRANSITION_MARKER_VERSION,
+        status: "restored",
+        sourceLocale: "en",
+      },
+    });
+
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "de",
+    });
+
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toMatchObject({ status: "enabling", sourceLocale: "de" });
   });
 
   it("refuses a slug containing a dot", async () => {
@@ -350,7 +418,7 @@ describe("settleI18nTransition", () => {
 
     await expect(
       readI18nTransitionState(store, "single", "homepage")
-    ).resolves.toEqual({ status: "seeded", sourceLocale: "de" });
+    ).resolves.toMatchObject({ status: "seeded", sourceLocale: "de" });
   });
 
   it("refuses to settle a transition that never began", async () => {
@@ -399,7 +467,7 @@ describe("forgetI18nTransition", () => {
     ).resolves.toBeUndefined();
     await expect(
       readI18nTransitionState(store, "collection", "posts")
-    ).resolves.toEqual({ status: "enabling", sourceLocale: "fr" });
+    ).resolves.toMatchObject({ status: "enabling", sourceLocale: "fr" });
   });
 
   it("releases a settled entity too, so disabling does not block re-enabling", async () => {

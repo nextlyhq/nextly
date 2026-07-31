@@ -23,6 +23,8 @@
  * @module domains/i18n/migration/transition-state
  */
 
+import { randomUUID } from "crypto";
+
 import { NextlyError } from "../../../errors/nextly-error";
 import type { MetaEntry } from "../../meta/services/meta-service";
 
@@ -91,12 +93,16 @@ export interface UntrackedTransition {
 export interface EnablingTransition {
   status: "enabling";
   sourceLocale: string;
+  /** See {@link StoredMarker.owner}. Absent on a marker written before tokens existed. */
+  owner?: string;
 }
 
 /** The copy finished. Nothing further is owed for this entity. */
 export interface SeededTransition {
   status: "seeded";
   sourceLocale: string;
+  /** See {@link StoredMarker.owner}. */
+  owner?: string;
 }
 
 /**
@@ -117,6 +123,8 @@ export interface SeededTransition {
 export interface RestoredTransition {
   status: "restored";
   sourceLocale: string;
+  /** See {@link StoredMarker.owner}. */
+  owner?: string;
 }
 
 export type I18nTransitionState =
@@ -130,6 +138,40 @@ interface StoredMarker {
   version: number;
   status: "enabling" | "seeded" | "restored";
   sourceLocale?: string;
+  /**
+   * Which caller holds this transition. Unique per claim attempt.
+   *
+   * Agreeing about the source locale is not the same as owning the transition, and only the
+   * second one authorises the work. Two processes re-enabling the same entity from one
+   * configuration necessarily agree about the locale, so a loser that checked only the locale
+   * would see the winner's record, accept it as its own, and go on to run the same destructive
+   * refresh a second time — after the winner had settled and a translator had edited what it
+   * seeded.
+   *
+   * Optional because it is not in markers written before the token existed. A marker without one
+   * is claimable by whoever moves it first, which is what the compare-and-set already decides.
+   */
+  owner?: string;
+}
+
+/**
+ * Rebuild a stored marker exactly as it sits in the row.
+ *
+ * A compare-and-set names the value it expects by its serialised form, so the reconstruction has
+ * to agree with the original key for key — including leaving `owner` out entirely for a marker
+ * written before tokens existed, rather than writing it as null or undefined.
+ */
+function storedMarker(state: {
+  status: StoredMarker["status"];
+  sourceLocale: string;
+  owner?: string;
+}): StoredMarker {
+  return {
+    version: I18N_TRANSITION_MARKER_VERSION,
+    status: state.status,
+    sourceLocale: state.sourceLocale,
+    ...(state.owner === undefined ? {} : { owner: state.owner }),
+  };
 }
 
 /** The stored statuses, in one place so the reader's validation cannot drift from the writers. */
@@ -213,7 +255,15 @@ export async function readI18nTransitionState(
     throw markerCorrupt(key, "marker carries no source locale");
   }
 
-  return { status: marker.status, sourceLocale: marker.sourceLocale };
+  // The token is carried through unvalidated beyond its type: an unreadable one is not a reason to
+  // refuse service, it only means nobody can prove ownership and the compare-and-set decides.
+  return {
+    status: marker.status,
+    sourceLocale: marker.sourceLocale,
+    ...(typeof marker.owner === "string" && marker.owner.length > 0
+      ? { owner: marker.owner }
+      : {}),
+  };
 }
 
 /**
@@ -271,11 +321,15 @@ export async function beginI18nTransition(
     });
   }
 
-  const marker: StoredMarker = {
-    version: I18N_TRANSITION_MARKER_VERSION,
+  // Fresh on every attempt, including a retry of one this same process abandoned. The token
+  // identifies the CLAIM, not the process: a previous attempt that crashed mid-transition left its
+  // token in the row, and taking over from it is exactly what the conditional writes below do.
+  const owner = randomUUID();
+  const marker = storedMarker({
     status: "enabling",
     sourceLocale: args.sourceLocale,
-  };
+    owner,
+  });
 
   // Taking over an existing record is a claim too, not a write.
   //
@@ -290,15 +344,11 @@ export async function beginI18nTransition(
   if (current.status !== "untracked") {
     const claimed = await store.compareAndSet(
       key,
-      {
-        version: I18N_TRANSITION_MARKER_VERSION,
-        status: current.status,
-        sourceLocale: current.sourceLocale,
-      } satisfies StoredMarker,
+      storedMarker(current),
       marker
     );
     if (claimed) return;
-    await confirmClaim(store, args, key);
+    await confirmClaim(store, args, key, owner);
     return;
   }
 
@@ -308,21 +358,28 @@ export async function beginI18nTransition(
   // would then name a locale the seed never used, which defeats the only fact this whole mechanism
   // exists to keep.
   await store.insertIfAbsent(key, marker);
-  await confirmClaim(store, args, key);
+  await confirmClaim(store, args, key, owner);
 }
 
 /**
  * Check what actually landed after a claim this caller may not have won.
  *
- * Losing to a caller that recorded the same locale is not a loss worth reporting: the transition
- * proceeds under a language both agree on, which is the ordinary case for two processes reading one
- * configuration. Losing to a different one is fatal — whichever companion gets seeded will be
- * labelled with the winner's locale, and this caller must not go on believing its own.
+ * Whoever holds the row decides, and the token is the only thing that says so. Agreement about the
+ * source locale is not evidence: two processes acting on one configuration necessarily agree, so a
+ * loser reading the winner's record finds its own locale looking back and would take that as
+ * permission to do the work a second time. When the work is the destructive refresh a re-enable
+ * runs over a companion that outlived a disable, the second pass lands after the winner has
+ * settled and copies stale main-table values over translations written since.
+ *
+ * Failing here is the point. The loser has nothing to do — the winner is doing it — and stopping
+ * with an explanation is better than the alternatives it used to reach: a duplicate-key collision
+ * from two concurrent seeds, or a silent second overwrite.
  */
 async function confirmClaim(
   store: TransitionStateStore,
   args: { kind: I18nTransitionKind; slug: string; sourceLocale: string },
-  key: string
+  key: string,
+  owner: string
 ): Promise<void> {
   const claimed = await readI18nTransitionState(store, args.kind, args.slug);
   // The STATUS has to be `enabling`, not just the locale. A conditional write can fail to match
@@ -332,16 +389,21 @@ async function confirmClaim(
   // the failure the claim exists to prevent.
   if (
     claimed.status !== "enabling" ||
-    claimed.sourceLocale !== args.sourceLocale
+    claimed.sourceLocale !== args.sourceLocale ||
+    claimed.owner !== owner
   ) {
     throw NextlyError.internal({
       logContext: {
-        reason: "localization transition was claimed by another process",
+        reason: "localization transition is held by another process",
         key,
         recordedStatus: claimed.status,
         recorded:
           claimed.status === "untracked" ? undefined : claimed.sourceLocale,
         received: args.sourceLocale,
+        // Named rather than compared in the message: what matters to whoever reads this is that
+        // the row is somebody else's, not which token won.
+        heldByAnother:
+          claimed.status !== "untracked" && claimed.owner !== owner,
       },
     });
   }
@@ -383,18 +445,11 @@ export async function settleI18nTransition(
   // this read and the write.
   if (current.status !== "enabling") return;
 
+  // The token travels with the settlement, so the record keeps saying which claim produced it.
   await store.compareAndSet(
     key,
-    {
-      version: I18N_TRANSITION_MARKER_VERSION,
-      status: "enabling",
-      sourceLocale: current.sourceLocale,
-    } satisfies StoredMarker,
-    {
-      version: I18N_TRANSITION_MARKER_VERSION,
-      status: "seeded",
-      sourceLocale: current.sourceLocale,
-    } satisfies StoredMarker
+    storedMarker(current),
+    storedMarker({ ...current, status: "seeded" })
   );
 }
 
@@ -431,6 +486,8 @@ export async function recordI18nRestore(
     expect?: {
       status: "enabling" | "seeded" | "restored";
       sourceLocale: string;
+      /** Carried so the comparison names the row exactly as it was observed. */
+      owner?: string;
     };
   }
 ): Promise<void> {
@@ -446,26 +503,17 @@ export async function recordI18nRestore(
     });
   }
 
-  const marker: StoredMarker = {
-    version: I18N_TRANSITION_MARKER_VERSION,
-    status: "restored",
-    sourceLocale: args.sourceLocale,
-  };
   // Conditional against the state the copy was based on, not the one visible now: re-reading here
   // would accept whatever another transition established while the copy ran. Losing means the
   // entity moved on under someone else's claim, which is not an error.
-  const expected = args.expect ?? {
-    status: current.status,
-    sourceLocale: current.sourceLocale,
-  };
+  const expected = args.expect ?? current;
   await store.compareAndSet(
     key,
-    {
-      version: I18N_TRANSITION_MARKER_VERSION,
-      status: expected.status,
-      sourceLocale: expected.sourceLocale,
-    } satisfies StoredMarker,
-    marker
+    storedMarker(expected),
+    // The restore ends the transition rather than continuing it, so the completed claim's token
+    // does not travel onto the new record: whoever enables localization again is starting
+    // something of their own and claims it then.
+    storedMarker({ status: "restored", sourceLocale: args.sourceLocale })
   );
 }
 

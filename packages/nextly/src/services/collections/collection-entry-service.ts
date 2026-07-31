@@ -550,6 +550,21 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
+  /**
+   * Resolve this collection's localized companion verdicts on the pooled connection.
+   *
+   * Call it BEFORE opening a transaction whose body uses the `*InTransaction` methods below.
+   * Those cannot do it themselves: resolving issues a query, a query against a missing relation
+   * aborts the whole transaction on PostgreSQL, and a pooled probe taken while a transaction is
+   * open waits for a connection that transaction will not release.
+   *
+   * Skipping it throws nothing. The write commits and its durable version snapshot and outbound
+   * event silently omit every localized component value.
+   */
+  async warmLocalizedReadiness(collectionName: string): Promise<void> {
+    return this.mutationService.warmLocalizedReadiness(collectionName);
+  }
+
   async createEntryInTransaction(
     tx: TransactionContext,
     params: { collectionName: string; user?: UserContext },

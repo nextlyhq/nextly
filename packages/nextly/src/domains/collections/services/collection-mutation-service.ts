@@ -1236,6 +1236,47 @@ export class CollectionMutationService extends BaseService {
     });
   }
 
+  /**
+   * Resolve, on the pooled connection, every companion verdict a write for this collection needs:
+   * the collection's own, and one for each field-group type its schema can hold.
+   *
+   * Public because the only place this can run is somewhere the caller controls. A method that
+   * receives a transaction cannot do it for itself: resolving issues a query, a query against a
+   * missing relation aborts the whole transaction on PostgreSQL, and a pooled probe taken while a
+   * transaction is open waits for a connection that transaction will not release until it ends.
+   * So it has to happen before the transaction opens.
+   *
+   * Skipping it is exactly what makes it worth calling. Nothing throws — an unresolved verdict
+   * reads as unusable, so the write commits normally while its durable version snapshot and its
+   * outbound event quietly omit every localized component value. That omission surfaces from a
+   * consumer of the event, long after the snapshot has become the historical record and stopped
+   * being reconstructable.
+   *
+   * Read-only and idempotent: safe to call more than once, and for a collection that is not
+   * localized at all.
+   */
+  async warmLocalizedReadiness(collectionName: string): Promise<void> {
+    await this.warmCompanionReadiness(collectionName);
+    if (!this.fieldGroupDataService) return;
+    const collection =
+      await this.collectionService.getCollection(collectionName);
+    const fields =
+      ((
+        (collection as Record<string, unknown>).schemaDefinition as
+          | Record<string, unknown>
+          | undefined
+      )?.fields as FieldDefinition[]) ||
+      ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
+      [];
+    await this.fieldGroupDataService.assertLocalizedFieldGroupsWritable({
+      fields: fields as unknown as FieldConfig[],
+      // Nothing is being written, so nothing is judged: this call is here purely for the verdicts
+      // it leaves behind.
+      data: {},
+      locale: undefined,
+    });
+  }
+
   private async readCompanionSlugsAllLocales(
     db: CompanionReadDb,
     collectionName: string,

@@ -30,6 +30,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
+import { resolveLocalizedFieldNames } from "../classify-fields";
 import type {
   I18nTransitionKind,
   TransitionStateStore,
@@ -107,13 +108,16 @@ export async function restoreDisabledCompanion(
 
   const companionTableName = `${args.tableName}_locales`;
   try {
-    const { companionExists, columns: present } =
-      await localizedColumnsOnBothTables(
-        adapter,
-        args.tableName,
-        companionTableName,
-        restorableFields(args.fields)
-      );
+    const {
+      companionExists,
+      columns: present,
+      statusOnBoth,
+    } = await localizedColumnsOnBothTables(
+      adapter,
+      args.tableName,
+      companionTableName,
+      restorableFields(args.fields)
+    );
     // Confirmed through the write path's own probe before anything is forgotten. The snapshot
     // above answers from introspection, and a false negative here is not recoverable: the record
     // it deletes carries the source locale, which is the one fact nothing else can supply.
@@ -141,7 +145,7 @@ export async function restoreDisabledCompanion(
       recorded: recorded.sourceLocale,
     });
 
-    if (present.length > 0) {
+    if (present.length > 0 || statusOnBoth) {
       await copyDefaultLocaleOntoMain(adapter, {
         tableName: args.tableName,
         companionTableName,
@@ -155,6 +159,13 @@ export async function restoreDisabledCompanion(
             ? args.defaultLocale
             : recorded.sourceLocale,
         columns: present,
+        // Decided by the physical tables, not the configuration. Publishing is per locale while
+        // an entity is localized, so a row published only under a non-default locale carries that
+        // state on its companion row alone; restoring its values without it would publish a draft
+        // or unpublish live content. The desired schema does not say whether the columns are
+        // there yet — the entity may have gained or lost Draft/Published in this same edit — so
+        // the snapshot above answers instead.
+        status: statusOnBoth,
       });
     }
 
@@ -166,13 +177,16 @@ export async function restoreDisabledCompanion(
       slug: args.slug,
       sourceLocale: restoreLocale,
       // The state read before the copy, so a re-enable that claimed this entity while it ran keeps
-      // its claim rather than having it overwritten by a completion it never saw.
+      // its claim rather than having it overwritten by a completion it never saw. The claim token
+      // travels with it: a re-enable that took the row over left its own token there, and a
+      // comparison that omitted the one observed here would match no row at all.
       expect: {
         status: recorded.status,
         sourceLocale: recorded.sourceLocale,
+        owner: recorded.owner,
       },
     });
-    return present.length > 0;
+    return present.length > 0 || statusOnBoth;
   } catch (error) {
     // Reported rather than thrown, for the same reason the create path reports: provisioning must
     // not refuse to start over one entity. The record is left untouched, so the next pass tries
@@ -183,21 +197,34 @@ export async function restoreDisabledCompanion(
 }
 
 /**
- * The fields whose values the companion actually owns.
+ * The fields whose values the companion is still entitled to supply.
  *
- * A field can be made shared (`localized: false`) while its entity stays localized. Reconciliation
- * is additive, so its companion column survives while writes correctly go to the restored
- * main-table column — and a later entity-level disable would then copy that abandoned companion
- * value over the current one.
+ * A field can be made shared while its entity stays localized. Reconciliation is additive, so its
+ * companion column survives while writes correctly go to the restored main-table column — and a
+ * later entity-level disable would then copy that abandoned companion value over the current one.
  *
- * The flags decide when any of them are set, which is the case that produces the hazard. When none
- * are — the ordinary shape after turning localization off, where the per-field flags are usually
- * cleared along with the entity's — every field is a candidate and the physical intersection with
- * the companion decides instead.
+ * Answered by the same classifier the schema pipeline uses to decide which columns the companion
+ * gets in the first place, so the two cannot disagree about what "shared" means. That matters
+ * because sharing has two spellings and only one of them is written down: `localized: false` says
+ * it outright, while a field that simply carries no flag is shared or not according to a per-type
+ * default. Reading the flag alone treats a defaulted field as unclaimed, which — for an entity
+ * whose remaining fields all rely on the default — leaves nothing claimed at all and hands back
+ * every field including the one explicitly marked shared.
+ *
+ * The physical intersection with the companion narrows this further, and is what actually decides
+ * a field the configuration no longer mentions.
  */
 function restorableFields(fields: RestorableField[]): RestorableField[] {
-  const claimed = fields.filter(f => f.localized === true);
-  return claimed.length > 0 ? claimed : fields;
+  // Classified as if the entity were still localized: it is being turned off, and the question is
+  // which columns the companion owned while it was on.
+  const owned = new Set(resolveLocalizedFieldNames(fields, true));
+  // Nothing localized under those rules means every field was marked shared in the same edit that
+  // disabled the entity — flags cleared wholesale, saying nothing about what the companion held
+  // while it was on. There is no per-field split to honour, so every field is a candidate and the
+  // physical intersection decides. A genuine split, where some fields still classify as localized,
+  // is a statement about the entity's shape and is honoured as one.
+  if (owned.size === 0) return fields;
+  return fields.filter(f => owned.has(f.name));
 }
 
 /**
