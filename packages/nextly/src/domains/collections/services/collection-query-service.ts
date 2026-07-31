@@ -1975,31 +1975,44 @@ export class CollectionQueryService extends BaseService {
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments (id) or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "read",
-          args: { id: params.entryId },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-        });
+      // Marked for the whole detail read, not only the list one: a handler here
+      // may call `nextly.count()` too, and an unguarded detail path lets it
+      // re-enter its own hook through the count that now runs them.
+      const entryId = await CollectionQueryService.readHooksRunning.run(
+        true,
+        async () => {
+          const beforeOpArgs =
+            await this.hookService.hookRegistry.executeBeforeOperation({
+              collection: params.collectionName,
+              operation: "read",
+              args: { id: params.entryId },
+              user: params.user
+                ? { id: params.user.id, email: params.user.email }
+                : undefined,
+              context: sharedContext,
+            });
 
-      // Use modified id if returned by beforeOperation
-      const entryId = beforeOpArgs?.id ?? params.entryId;
+          // Use modified id if returned by beforeOperation
+          const resolvedId = beforeOpArgs?.id ?? params.entryId;
 
-      // Execute beforeRead hooks
-      // Hooks can be used to modify query parameters or add filters
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "read" as const,
-        data: { entryId },
-        user: params.user,
-        context: sharedContext,
-      });
+          // Execute beforeRead hooks
+          // Hooks can be used to modify query parameters or add filters
+          const beforeContext = this.hookService.buildHookContext({
+            collection: params.collectionName,
+            operation: "read" as const,
+            data: { entryId: resolvedId },
+            user: params.user,
+            context: sharedContext,
+          });
 
-      await this.hookService.hookRegistry.execute("beforeRead", beforeContext);
+          await this.hookService.hookRegistry.execute(
+            "beforeRead",
+            beforeContext
+          );
+
+          return resolvedId;
+        }
+      );
 
       // When read access is `owner-only`, fold the ownership
       // predicate into the SQL WHERE clause. A non-owner gets a 404
