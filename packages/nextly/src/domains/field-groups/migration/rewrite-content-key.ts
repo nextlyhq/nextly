@@ -15,10 +15,20 @@
  * the ones a rename most needs to reach. A guided walk would leave them behind
  * while reporting success.
  *
- * So this targets the key itself, everywhere in the document. The exposure is
- * an author's own JSON holding a key of the same name; the key is underscore
- * prefixed and reserved by the storage format, which is what makes that
- * acceptable rather than merely unlikely.
+ * So this targets the key itself, everywhere in the document, and the exposure
+ * is real rather than hypothetical: a `json` field accepts anything JSON can
+ * represent and nothing more (`shared/lib/entry-validation.ts:561-575`), so an
+ * author's own object holding this key is valid content and would be renamed
+ * with the rest. The key is underscore-prefixed and documented as belonging to
+ * the storage format, but that is a convention here, not something enforced.
+ *
+ * It is accepted rather than solved because the alternative is worse. Guiding
+ * the walk by the entry's field definitions would skip exactly the rows a
+ * complete rename most needs to reach, for the reason above, while reporting
+ * success — a silent partial rename is a worse failure than a rare collision
+ * that is visible in the data. The trade is recorded in
+ * `tasks/011-B1-4-DESIGN.md` §0.1, and it rests on there being no production
+ * data yet.
  *
  * @module domains/field-groups/migration/rewrite-content-key
  */
