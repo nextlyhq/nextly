@@ -30,6 +30,6 @@ collection withholds. A hook reading the collection it is already running for
 still skips them, which is what stops it calling itself without end.
 
 `afterRead` is now handed decoded JSON values rather than the storage encoding
-SQLite returns, and a related row now gets the target collection's own field
-`afterRead` hooks, so a field masked on the target's endpoint stays masked when
-it is reached through a relationship.
+SQLite returns, so a hook reads the value the field was configured with instead
+of a string. Field hooks are also declared with the context they are actually
+given, which includes the field's value and name.

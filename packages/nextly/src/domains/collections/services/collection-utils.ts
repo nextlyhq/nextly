@@ -9,6 +9,7 @@
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 
 /**
  * Field types that are always stored as JSON in the database.
@@ -376,7 +377,12 @@ export function getMinSearchLength(
  * decode belongs before the first of them.
  *
  * The `locale=all` shape is a language-keyed map, but only a LOCALIZED field
- * is ever read that way. A shared JSON field is a plain object on a driver that
+ * is ever read that way, and localization is a CLASSIFICATION rather than a
+ * flag: text-like types (including `richText`) localize by default in a
+ * localized collection without ever materializing `localized: true`. Reading
+ * the raw flag would leave those maps encoded. The master switch is passed as
+ * enabled because a shared field still classifies as not localized, so a
+ * collection that never opted in has no maps to mistake. A shared JSON field is a plain object on a driver that
  * parses JSON, so treating every object as a locale map would parse its own
  * string properties and hand back values the row never held.
  *
@@ -408,7 +414,7 @@ export function decodeJsonFieldValues(
         }
       } else if (
         locale === "all" &&
-        field.localized === true &&
+        isFieldLocalized(field, true) &&
         value !== null &&
         typeof value === "object"
       ) {

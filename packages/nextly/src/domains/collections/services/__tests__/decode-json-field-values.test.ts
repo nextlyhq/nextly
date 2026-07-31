@@ -44,4 +44,24 @@ describe("decodeJsonFieldValues", () => {
     decodeJsonFieldValues(rows, [jsonField("config")]);
     expect(rows[0].config).toBe("not json");
   });
+
+  it("decodes a richText locale map that never set localized explicitly", () => {
+    // Text-like types localize by default in a localized collection, so the
+    // builder never materializes the flag. Reading the raw flag leaves these
+    // maps encoded and hands hooks and callers strings where Lexical objects
+    // are documented.
+    const rows = [{ body: { en: '{"root":{}}', fr: '{"root":{}}' } }];
+    decodeJsonFieldValues(rows, [{ name: "body", type: "richText" }], "all");
+    expect(rows[0].body).toEqual({ en: { root: {} }, fr: { root: {} } });
+  });
+
+  it("leaves a richText field alone when it opts out of localization", () => {
+    const rows = [{ body: { en: '{"root":{}}' } }];
+    decodeJsonFieldValues(
+      rows,
+      [{ name: "body", type: "richText", localized: false }],
+      "all"
+    );
+    expect(rows[0].body).toEqual({ en: '{"root":{}}' });
+  });
 });
