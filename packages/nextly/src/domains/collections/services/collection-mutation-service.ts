@@ -99,6 +99,7 @@ import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   buildRestorePayload,
+  type ComponentSchemas,
   type RestoreSchemaContext,
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -1479,6 +1480,59 @@ export class CollectionMutationService extends BaseService {
     );
     const status = rows[0]?._status;
     return typeof status === "string" ? status : null;
+  }
+
+  /**
+   * Overlay `patch` onto `base`, recursively merging single (non-repeatable)
+   * component objects instead of replacing them.
+   *
+   * A patch-shaped save carries only the sub-fields it changed, so replacing a
+   * component's whole object would drop sub-fields an earlier save set. Recurses
+   * according to the resolved component schemas so a component nested inside a
+   * component is merged at every depth. A dynamic zone (array), a repeatable
+   * component, and a scalar are replaced whole (patch wins).
+   */
+  private mergeSingleComponentPatches(
+    base: Record<string, unknown>,
+    patch: Record<string, unknown>,
+    fields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null
+  ): Record<string, unknown> {
+    const byName = new Map<string, FieldConfig>();
+    for (const f of fields) {
+      const name = (f as { name?: unknown }).name;
+      if (typeof name === "string") byName.set(name, f);
+    }
+    const out: Record<string, unknown> = { ...base };
+    for (const [key, patchVal] of Object.entries(patch)) {
+      const field = byName.get(key);
+      const slug =
+        field &&
+        typeof (field as { component?: unknown }).component === "string" &&
+        (field as { repeatable?: unknown }).repeatable !== true
+          ? ((field as { component?: string }).component as string)
+          : undefined;
+      const baseVal = out[key];
+      if (
+        slug !== undefined &&
+        baseVal !== null &&
+        typeof baseVal === "object" &&
+        !Array.isArray(baseVal) &&
+        patchVal !== null &&
+        typeof patchVal === "object" &&
+        !Array.isArray(patchVal)
+      ) {
+        out[key] = this.mergeSingleComponentPatches(
+          baseVal as Record<string, unknown>,
+          patchVal as Record<string, unknown>,
+          componentSchemas?.get(slug)?.fields ?? [],
+          componentSchemas
+        );
+      } else {
+        out[key] = patchVal;
+      }
+    }
+    return out;
   }
 
   /**
@@ -5032,10 +5086,18 @@ export class CollectionMutationService extends BaseService {
                 collection
               );
               finalData = { ...draftInput, ...finalData };
-              componentFieldData = {
-                ...draftParts.componentFieldData,
-                ...componentFieldData,
-              };
+              // Merge a patch-shaped single-component publish (the caller may
+              // send only the sub-fields it changed) onto the draft's component
+              // rather than replacing it, so a pending sub-field edit is promoted
+              // instead of reverting to the live value. Recurses into nested
+              // single components; a dynamic zone and a repeatable component are
+              // replaced whole.
+              componentFieldData = this.mergeSingleComponentPatches(
+                draftParts.componentFieldData,
+                componentFieldData,
+                fields as unknown as FieldConfig[],
+                splitComponentSchemas
+              );
               manyToManyData = {
                 ...draftParts.manyToManyData,
                 ...manyToManyData,
@@ -5411,43 +5473,17 @@ export class CollectionMutationService extends BaseService {
                   );
                   // A single (non-repeatable) component holds an object of
                   // sub-fields, and a patch-shaped save carries only the ones it
-                  // changed. Replacing the whole key would drop sub-field edits an
-                  // earlier draft save made, so merge this patch's component object
-                  // onto the existing draft's rather than overwriting it. A dynamic
-                  // zone (array) and a scalar are still replaced whole.
-                  const singleComponentKeys = new Set(
-                    fields
-                      .filter(
-                        f =>
-                          typeof (f as { component?: unknown }).component ===
-                            "string" &&
-                          (f as { repeatable?: unknown }).repeatable !== true
-                      )
-                      .map(f => (f as { name?: unknown }).name)
-                      .filter((n): n is string => typeof n === "string")
+                  // changed. Recursively merge this patch's component objects onto
+                  // the existing draft's (descending into nested single components)
+                  // rather than overwriting them, so disjoint sub-field edits from
+                  // separate saves coalesce at any depth. A dynamic zone, a
+                  // repeatable component, and a scalar are replaced whole.
+                  draftDocument = this.mergeSingleComponentPatches(
+                    existingSnapshot,
+                    patchFields,
+                    fields as unknown as FieldConfig[],
+                    splitComponentSchemas
                   );
-                  for (const key of Object.keys(patchFields)) {
-                    if (!singleComponentKeys.has(key)) continue;
-                    const prev = existingSnapshot[key];
-                    const next = patchFields[key];
-                    if (
-                      prev !== null &&
-                      typeof prev === "object" &&
-                      !Array.isArray(prev) &&
-                      next !== null &&
-                      typeof next === "object" &&
-                      !Array.isArray(next)
-                    ) {
-                      patchFields[key] = {
-                        ...(prev as Record<string, unknown>),
-                        ...(next as Record<string, unknown>),
-                      };
-                    }
-                  }
-                  draftDocument = {
-                    ...existingSnapshot,
-                    ...patchFields,
-                  };
                 }
                 // The response and hooks see the draft as an ordinary read, so
                 // the single-component type markers the persisted snapshot needs

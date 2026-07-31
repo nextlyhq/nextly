@@ -812,6 +812,127 @@ describe("draft/published split — promote on publish (integration)", () => {
     // ...but the field the publisher may not write keeps its live value.
     expect(live.secret).toBe("live-secret");
   });
+
+  it("recursively merges nested single-component sub-field edits across draft saves", async () => {
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "social",
+          fields: [text({ name: "twitter" }), text({ name: "facebook" })],
+        }),
+        defineFieldGroup({
+          slug: "seo",
+          fields: [
+            text({ name: "metaTitle" }),
+            fieldGroup({ name: "social", component: "social" }),
+          ],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "seo", component: "seo" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    const created = await entries.createEntry(ctx, {
+      title: "live",
+      status: "published",
+    });
+    expect(created.success).toBe(true);
+    const id = (created.data as { id: string }).id;
+
+    // Two saves each touching a DIFFERENT field of the DEEPLY NESTED component.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { social: { twitter: "draft-tw" } } }
+    );
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { social: { facebook: "draft-fb" } } }
+    );
+
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    const social = (
+      draftRead.data as {
+        seo?: { social?: { twitter?: string; facebook?: string } };
+      }
+    ).seo?.social;
+    expect(social?.twitter).toBe("draft-tw");
+    expect(social?.facebook).toBe("draft-fb");
+  });
+
+  it("merges a partial component publish patch into the promoted draft", async () => {
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "seo",
+          fields: [text({ name: "metaTitle" }), text({ name: "metaDesc" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "seo", component: "seo" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      seo: { metaTitle: "live-mt", metaDesc: "live-md" },
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A draft edit changes one sub-field of the component.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { metaTitle: "draft-mt" } }
+    );
+
+    // Publish sends a partial patch for a DIFFERENT sub-field. The pending edit
+    // and the publish patch must both reach the live row.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { status: "published", seo: { metaDesc: "pub-md" } }
+    );
+
+    const liveRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      status: "published",
+    });
+    const seo = (
+      liveRead.data as { seo?: { metaTitle?: string; metaDesc?: string } }
+    ).seo;
+    expect(seo?.metaTitle).toBe("draft-mt");
+    expect(seo?.metaDesc).toBe("pub-md");
+  });
 });
 
 // The split coalesces a working draft under one unlocalized slot and promotes it
