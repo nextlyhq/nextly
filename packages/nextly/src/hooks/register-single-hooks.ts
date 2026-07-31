@@ -54,21 +54,6 @@ const HOOK_TYPE_MAPPINGS: Record<keyof SingleHooks, HookType[]> = {
 };
 
 /**
- * `afterChange` is documented as side-effect-only for Singles (cache
- * invalidation, notifications), but it maps to the shared `afterUpdate` registry
- * type whose runner in `SingleMutationService` assigns any returned value to the
- * response after the write has committed. Wrap the handler so its return is
- * discarded, keeping the API response equal to the stored Single. `beforeChange`
- * (transforms write data) and `afterRead` (transforms the response) legitimately
- * return values, so only `afterChange` is wrapped.
- */
-function discardReturnValue(handler: HookHandler): HookHandler {
-  return async context => {
-    await handler(context);
-  };
-}
-
-/**
  * Register hooks declared on code-first Single configs with the global
  * HookRegistry, so the single read/update paths execute them. Call during app
  * initialization, mirroring {@link registerCollectionHooks}.
@@ -108,18 +93,15 @@ export function registerSingleHooks(
         continue;
       }
 
-      // Discard the return of a side-effect-only phase so a handler that returns
-      // data cannot rewrite the stored Single in the response.
-      const isSideEffectOnly = hookKey === "afterChange";
+      // `afterChange` maps to `afterUpdate`, which the registry runs as a
+      // side-effect phase: a handler's return is discarded there, so the
+      // response stays equal to the stored Single without wrapping here.
       for (const hookType of hookTypes) {
         for (const handler of handlers) {
-          const registered = isSideEffectOnly
-            ? discardReturnValue(handler as HookHandler)
-            : (handler as HookHandler);
           registry.register(
             hookType,
             singleHookNamespace(single.slug),
-            registered
+            handler as HookHandler
           );
           singleHookCount++;
         }
