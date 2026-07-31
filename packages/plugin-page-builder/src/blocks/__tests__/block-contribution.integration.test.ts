@@ -29,7 +29,7 @@ import { pageBuilder } from "../../plugin";
 let current: TestNextly | undefined;
 
 afterEach(async () => {
-  await current?.cleanup?.();
+  await current?.destroy();
   current = undefined;
   // Cleared so each test starts from an empty registry. The boot path does its
   // own reset — proven by the second-boot test below, which deliberately boots
@@ -140,7 +140,7 @@ describe("the registry survives a second boot", () => {
     current = await createTestNextly({
       plugins: [pageBuilder(), contributor()],
     });
-    await current.cleanup?.();
+    await current.destroy();
 
     current = await createTestNextly({
       plugins: [pageBuilder(), contributor()],
