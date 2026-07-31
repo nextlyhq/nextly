@@ -631,11 +631,20 @@ async function ensureLocalizedCompanionsForReload(
    * columns a reconcile would be looking for.
    */
   phase: "beforeApply" | "afterApply" = "afterApply"
-): Promise<{ preservationFailed: string[]; schemaChanged: boolean }> {
+): Promise<{
+  preservationFailed: string[];
+  restoreFailed: string[];
+  schemaChanged: boolean;
+}> {
   // Entities whose content could not be copied into their companion. The caller must not let the
   // apply run for these: the copy is the only thing standing between the apply's DROP and the
   // values it would take with it.
   const preservationFailed: string[] = [];
+  // Entities whose content could not be copied BACK onto main when localization was turned off.
+  // The caller must not publish the non-localized configuration for these: the app would read the
+  // stale main values, accept edits on them, and a later successful retry would copy the
+  // companion's older values over the top.
+  const restoreFailed: string[] = [];
   // Whether this pass altered any main table. A transition can relax a retained column, and on
   // SQLite — which cannot change nullability at all — it drops one instead. The caller cached a
   // live snapshot before this ran, and the pipeline reuses it, so an apply working from that
@@ -643,7 +652,7 @@ async function ensureLocalizedCompanionsForReload(
   let schemaChanged = false;
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
   if (process.env.NODE_ENV === "production")
-    return { preservationFailed, schemaChanged };
+    return { preservationFailed, restoreFailed, schemaChanged };
 
   const {
     ensureCompanionTable,
@@ -727,7 +736,8 @@ async function ensureLocalizedCompanionsForReload(
               store: transitionStore,
             },
             error => {
-              console.warn(
+              restoreFailed.push(entity.slug!);
+              console.error(
                 `[nextly] Could not restore "${entity.slug}" from its translations table after ` +
                   `localization was turned off. Its content is still in ` +
                   `${resolveTableName(entity)}_locales: ` +
@@ -832,7 +842,7 @@ async function ensureLocalizedCompanionsForReload(
     }
   }
 
-  return { preservationFailed, schemaChanged };
+  return { preservationFailed, restoreFailed, schemaChanged };
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -1713,11 +1723,27 @@ async function applyReload(opts?: {
     // database had no such table — non-default writes were then refused until a
     // restart. Runs after the apply because the companion carries a foreign key to
     // its main table, which a brand-new entity does not have before it.
-    await ensureLocalizedCompanionsForReload(
+    const postApply = await ensureLocalizedCompanionsForReload(
       adapter,
       newConfig,
       deferredEntities
     );
+
+    // An entity whose content could not be copied back onto main is left alone, exactly as the
+    // pre-apply pass leaves an entity whose content could not be copied INTO its companion.
+    // Publishing the non-localized configuration now would point reads at main while its values
+    // are still the pre-localization ones, let editors write on top of them, and then let a later
+    // successful retry copy the companion's older values over those edits. The registry keeps
+    // describing the entity as localized until the copy succeeds, so reads keep resolving through
+    // the companion that still holds the content.
+    if (postApply.restoreFailed.length > 0) {
+      logger.error(
+        `[nextly] Localization stays on for ${postApply.restoreFailed.join(", ")}: their content ` +
+          `could not be copied back out of the translations table. Fix the error above and save ` +
+          `again — the content is intact where it is.`
+      );
+      return;
+    }
 
     // Publish each scope's recording policy only AFTER its field-tree metadata
     // sync succeeds (see the assignment after the syncs below): the DDL applied,

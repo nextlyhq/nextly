@@ -191,22 +191,41 @@ export function buildLocalizationUpStatements(
  * handling three different ways, while a correlated UPDATE is the same statement everywhere and is
  * already the shape the restore uses. Rows the companion does not have yet are not this
  * statement's job — the guarded insert that follows adds them.
+ *
+ * `refreshStatus` carries the main row's `status` into the companion's `_status` alongside the
+ * values. Publishing state moves too while localization is off, and the companion row that
+ * survives the disable keeps whatever status it had when it was last the authority — so a page
+ * published in the meantime stays hidden from locale-aware published reads, and one unpublished in
+ * the meantime keeps being served. The guarded insert cannot correct it either, because the row it
+ * would fix already exists.
+ *
+ * One statement for every column, for the same reason the restore is one: a refresh that lands
+ * half-way leaves the companion holding a mixture with nothing recording that it did.
  */
 export function buildDefaultLocaleRefreshStatements(
   spec: CompanionCopyRef,
-  columnNames: readonly string[]
+  columnNames: readonly string[],
+  options: { refreshStatus?: boolean } = {}
 ): string[] {
   const { dialect, mainTable, companionTable, defaultLocale } = spec;
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
-  return columnNames.map(name => {
-    const col = q(name, dialect);
-    return (
-      `UPDATE ${comp} SET ${col} = ` +
-      `(SELECT ${col} FROM ${main} WHERE ${main}.${q("id", dialect)} = ${comp}.${q("_parent", dialect)}) ` +
-      `WHERE ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}`
-    );
-  });
+  const correlate = `${main}.${q("id", dialect)} = ${comp}.${q("_parent", dialect)}`;
+  const copy = (target: string, source: string) =>
+    `${target} = (SELECT ${source} FROM ${main} WHERE ${correlate})`;
+
+  const assignments = columnNames.map(name =>
+    copy(q(name, dialect), q(name, dialect))
+  );
+  if (options.refreshStatus) {
+    assignments.push(copy(q("_status", dialect), q("status", dialect)));
+  }
+  if (assignments.length === 0) return [];
+
+  return [
+    `UPDATE ${comp} SET ${assignments.join(", ")} ` +
+      `WHERE ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}`,
+  ];
 }
 
 /**

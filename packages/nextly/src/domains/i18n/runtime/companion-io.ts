@@ -603,6 +603,31 @@ export interface CompanionSeedDebt {
    * rows are stale by definition and leaving them would revert every edit made while it was off.
    */
   overwriteExisting: boolean;
+  /**
+   * Only copy when the main table still physically carries translatable columns.
+   *
+   * Set for the operator-requested repair, whose job is to move VALUES that are sitting on main
+   * into the companion. Without it, a Draft/Published entity qualifies on the strength of its
+   * readable `status` alone and the copy manufactures a default-locale row for every entry that
+   * lacks one — including entries deliberately authored in another language only, which have
+   * nothing on main to move.
+   *
+   * Note this does not identify a legacy install. Nothing does: the push leaves translatable
+   * columns on main for a from-birth entity too, so physical shape cannot tell a transition that
+   * happened before records existed from one that never happened. That is what makes the repair
+   * opt-in rather than inferred.
+   */
+  requireColumnsOnMain?: boolean;
+  /**
+   * Record the transition, called once the plan is known to describe real work and before any of
+   * it runs.
+   *
+   * Not performed while resolving the debt, because resolving cannot yet tell whether there is
+   * anything to do: a repair that turns out to be owed nothing must leave no trace. Ordering is
+   * still the module's rule — the record goes in before the statements, since MySQL commits DDL
+   * implicitly — because building the plan only reads.
+   */
+  claim?: () => Promise<void>;
 }
 
 /**
@@ -654,13 +679,12 @@ export async function resolveCompanionSeedDebt(
   // it has no `enabling` record to settle — leaving the marker untouched and the same failure
   // waiting on every retry. It is also the module's own ordering rule: the record goes in before
   // the statements, because MySQL commits DDL implicitly.
-  const claim = async (): Promise<void> => {
-    await beginI18nTransition(store, {
+  const claim = (): Promise<void> =>
+    beginI18nTransition(store, {
       kind,
       slug,
       sourceLocale: options.defaultLocale,
     });
-  };
 
   // The companion outlived a disable. Main has been authoritative ever since and carries no
   // language of its own, so enabling now declares its content to be in TODAY's default — exactly
@@ -669,15 +693,23 @@ export async function resolveCompanionSeedDebt(
   // rows with a locale that may no longer even be configured, and hide every edit made while
   // localization was off.
   if (recorded.status === "restored") {
-    await claim();
-    return { sourceLocale: options.defaultLocale, overwriteExisting: true };
+    return {
+      sourceLocale: options.defaultLocale,
+      overwriteExisting: true,
+      claim,
+    };
   }
 
   if (recorded.status === "untracked" && options.repairUntracked) {
-    await claim();
-    // Never overwriting: rows that already have a default-locale companion row are the ones a
-    // previous transition did copy, and their translations must survive the repair.
-    return { sourceLocale: options.defaultLocale, overwriteExisting: false };
+    return {
+      sourceLocale: options.defaultLocale,
+      // Never overwriting: rows that already have a default-locale companion row are the ones a
+      // previous transition did copy, and their translations must survive the repair.
+      overwriteExisting: false,
+      // The absence of a record is only evidence of a debt when main still holds the values.
+      requireColumnsOnMain: true,
+      claim,
+    };
   }
   return null;
 }
@@ -708,6 +740,8 @@ async function resumeInterruptedSeed(
     status?: boolean;
     sourceLocale?: string;
     overwriteExisting?: boolean;
+    requireColumnsOnMain?: boolean;
+    claim?: () => Promise<void>;
     settleTransition?: () => Promise<void>;
   },
   newLocalized: CompanionFieldLike[],
@@ -731,6 +765,9 @@ async function resumeInterruptedSeed(
     `AND ${companion}.${q("_locale")} = '${args.sourceLocale ?? ""}')`;
 
   try {
+    // The plan is real, so the transition is recorded — before the first statement, and only now
+    // that there is something for it to describe.
+    await args.claim?.();
     if (args.overwriteExisting) {
       const { columns } = await localizedColumnsOnBothTables(
         adapter,
@@ -738,7 +775,15 @@ async function resumeInterruptedSeed(
         companionTableName,
         newLocalized
       );
-      if (columns.length > 0) {
+      // Publishing state moves while localization is off too, and the surviving companion row
+      // keeps whatever `_status` it held when it was last the authority. Refreshed alongside the
+      // values, and only when BOTH tables physically carry the column — the entity may have gained
+      // or lost Draft/Published in the same period.
+      const refreshStatus =
+        args.status === true &&
+        (await mainTableHasColumns(adapter, args.tableName, ["status"])) &&
+        (await companionHasStatusColumn(adapter, companionTableName));
+      if (columns.length > 0 || refreshStatus) {
         const { buildDefaultLocaleRefreshStatements } = await import(
           "../migration/generate-up"
         );
@@ -749,7 +794,8 @@ async function resumeInterruptedSeed(
             companionTable: companionTableName,
             defaultLocale: args.sourceLocale ?? "",
           },
-          columns
+          columns,
+          { refreshStatus }
         );
         for (const statement of refresh) {
           await adapter.executeQuery(statement);
@@ -823,6 +869,7 @@ async function buildSeedingCreateStatements(
     dialect: SupportedDialect;
     status?: boolean;
     sourceLocale?: string;
+    requireColumnsOnMain?: boolean;
   },
   newLocalized: CompanionFieldLike[]
 ): Promise<string[] | null> {
@@ -859,6 +906,9 @@ async function buildSeedingCreateStatements(
   const statusOnMain =
     spec.status === true &&
     (await mainTableHasColumns(adapter, args.tableName, ["status"]));
+  // A repair moves values that are on main; with none to move there is nothing to repair. Status
+  // alone would otherwise qualify and manufacture a row for every entry lacking one.
+  if (args.requireColumnsOnMain && columnsOnMain.length === 0) return null;
   // No columns to copy is not the same as nothing to seed. A Draft/Published entity still needs a
   // default-locale companion row carrying the main row's status, or every published row drops out
   // of locale-aware published reads. `buildLocalizationUpStatements` handles the empty column set
@@ -968,6 +1018,8 @@ export async function ensureCompanionTable(
             ...args,
             sourceLocale: owed.sourceLocale,
             overwriteExisting: owed.overwriteExisting,
+            requireColumnsOnMain: owed.requireColumnsOnMain,
+            claim: owed.claim,
           },
           newLocalized,
           companionTableName,

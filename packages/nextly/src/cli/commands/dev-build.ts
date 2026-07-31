@@ -821,20 +821,24 @@ export async function ensureLocalizedCompanions(
   phase: "beforeApply" | "afterApply" = "afterApply",
   options: {
     /**
-     * Run even in production, and repair entities that carry no transition record.
+     * Run even in production.
      *
      * Only `nextly migrate` passes this. The production guard below exists to stop UNATTENDED
      * schema changes — a running deployment must not alter its own schema because a config file
      * changed — and `migrate` is attended by definition, which is why it is also the remedy the
      * refusal message names in production.
-     *
-     * The repair covers installs that transitioned before transitions were recorded: they have a
-     * companion, no marker, and no way to tell whether their content was ever copied across. The
-     * one fact that cannot be re-derived is the language, and running this supplies it from the
-     * configured default. The copy itself is guarded on rows that have no default-locale companion
-     * row, so an install that does not need it gets a scan and nothing else.
      */
     supervised?: boolean;
+    /**
+     * Treat an entity with NO transition record as owing a copy of its content.
+     *
+     * Separate from `supervised`, because being attended does not make the inference sound. An
+     * entity with no record is either an install that transitioned before transitions were
+     * recorded or one localized since birth, and nothing on disk tells them apart — so this is
+     * only ever set by an operator asking for it explicitly (`nextly migrate
+     * --repair-localization`), which is how the one missing fact, the language, gets supplied.
+     */
+    repairUntracked?: boolean;
   } = {}
 ): Promise<void> {
   const { logger } = context;
@@ -1000,7 +1004,7 @@ export async function ensureLocalizedCompanions(
                   defaultLocale: transitions.defaultLocale,
                   // Only under supervision. A from-birth localized entity is untracked too and
                   // owes nothing, so an unattended pass must not read absence as a debt.
-                  repairUntracked: options.supervised === true,
+                  repairUntracked: options.repairUntracked === true,
                 })
             : undefined,
           settleTransition: transitions

@@ -499,6 +499,56 @@ describe("dynamic zone whose unused field group has no companion (integration)",
   });
 });
 
+describe.each(getConfiguredTestDialects())(
+  "companion read failures on a collection read on %s (integration)",
+  dialect => {
+    it("does not put the driver's own words on the wire", async () => {
+      // The companion reads no longer swallow a failure — deciding existence by catching one is
+      // what aborted PostgreSQL transactions. Propagating is right, but it made a path that
+      // previously could not throw start throwing, and `listEntries` puts a bare Error's message
+      // into its result: the failed query, with companion table and column names in it.
+      current = await createTestNextly({
+        dialect,
+        collections: [posts(true)],
+        localization,
+      });
+      const handler =
+        current.getService<CollectionsHandler>("collectionsHandler");
+
+      // An entry, so the read actually reaches the companion: the join is skipped for an empty
+      // page, which would make this pass without exercising anything.
+      await handler.createEntry(
+        { collectionName: "i18nwin_posts", overrideAccess: true, locale: "en" },
+        { title: "Original" }
+      );
+      // A successful read first, so the companion is established as present and the failure below
+      // is a genuine read fault rather than a missing table.
+      await handler.listEntries({
+        collectionName: "i18nwin_posts",
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      // Break the companion while leaving the table in place — schema drift, from the read's
+      // point of view.
+      const quote = (id: string) =>
+        dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${quote("dc_i18nwin_posts_locales")} DROP COLUMN ${quote("title")}`
+      );
+
+      const listed = await handler.listEntries({
+        collectionName: "i18nwin_posts",
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      expect(listed.success).toBe(false);
+      expect(listed.message).not.toMatch(/title|_locales|column|relation/i);
+    });
+  }
+);
+
 /**
  * The read side, which is where this defect actually lived.
  *

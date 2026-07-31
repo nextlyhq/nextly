@@ -128,7 +128,8 @@ async function runSync(config: LoadConfigResult["config"]): Promise<void> {
  * what this file is about is the companion work it delegates.
  */
 async function runSupervisedRepair(
-  config: LoadConfigResult["config"]
+  config: LoadConfigResult["config"],
+  { repairUntracked = false }: { repairUntracked?: boolean } = {}
 ): Promise<void> {
   const logger = createLogger({ quiet: true });
   const context = { logger, options: {}, cwd: dir } as CommandContext;
@@ -137,7 +138,7 @@ async function runSupervisedRepair(
     adapter as unknown as CLIDatabaseAdapter,
     context,
     "afterApply",
-    { supervised: true }
+    { supervised: true, repairUntracked }
   );
 }
 
@@ -785,7 +786,9 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       await adapter?.executeQuery(`SELECT * FROM "dc_dbsync_legacy_locales"`)
     ).toEqual([]);
 
-    await runSupervisedRepair(localized);
+    // The operator asks for it, which is how the missing fact — that main holds content in the
+    // configured default locale — gets supplied.
+    await runSupervisedRepair(localized, { repairUntracked: true });
 
     const rows = await adapter?.executeQuery<{ title: string }>(
       `SELECT "title" FROM "dc_dbsync_legacy_locales" WHERE "_locale" = 'en'`
@@ -796,6 +799,106 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     await expect(
       readTransition("collection", "dbsync_legacy")
     ).resolves.toEqual({ status: "seeded", sourceLocale: "en" });
+  });
+
+  it("does not repair an untracked companion unless asked to", async () => {
+    // The absence of a record does not distinguish an install that transitioned before transitions
+    // were recorded from an entity localized since birth — and nothing on disk does either: the
+    // push leaves the translatable columns on main in both cases. That is the same conclusion this
+    // whole mechanism rests on, so the repair is opt-in rather than inferred.
+    //
+    // Inferring it manufactures a default-locale translation for every entry, including ones
+    // deliberately authored in another language only, and records a transition that never
+    // happened. Draft/Published is what makes it fire even with nothing to copy, because a
+    // readable `status` on main is enough to make the plan non-empty.
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_frombirth",
+          localized: true,
+          status: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    await runSync(localized);
+
+    // A legacy install: the companion predates transition records, so there is no marker — which
+    // is the only thing the repair has to go on. A modern from-birth entity is recorded when its
+    // companion is created, so this state is reached by forgetting it.
+    await forgetI18nTransition(
+      await transitionStore(),
+      "collection",
+      "dbsync_frombirth"
+    );
+
+    // An entry that exists only in Spanish, which is exactly what a spurious repair would
+    // manufacture an English row for.
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_frombirth" ("id", "slug", "status") VALUES ('row1', 'r1', 'published')`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_frombirth_locales" ("_parent", "_locale", "_status", "title") VALUES ('row1', 'es', 'published', 'Solo español')`
+    );
+
+    // An ordinary `nextly migrate` provisions companions but asks no questions about content.
+    await runSupervisedRepair(localized);
+
+    const rows = await adapter?.executeQuery<{ _locale: string }>(
+      `SELECT "_locale" FROM "dc_dbsync_frombirth_locales" ORDER BY "_locale"`
+    );
+    expect(rows).toEqual([{ _locale: "es" }]);
+    // And nothing is recorded about a transition nobody has claimed happened.
+    await expect(
+      readTransition("collection", "dbsync_frombirth")
+    ).resolves.toEqual({ status: "untracked" });
+  });
+
+  it("carries a status changed while localization was off back onto the companion", async () => {
+    // Publishing state moves while localization is off too, and the companion row that survives
+    // the disable keeps whatever `_status` it held when it was last the authority. The guarded
+    // insert cannot correct it, because the row it would fix already exists — so a page published
+    // in the meantime stays hidden from locale-aware published reads.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_restatus",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_restatus",
+          localized: true,
+          status: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_restatus" ("id", "slug", "title", "status") VALUES ('row1', 'r1', 'First', 'draft')`
+    );
+    await runSync(localized);
+    await runSync(unlocalized);
+
+    // Published while localization was off, so main is authoritative about it.
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_restatus" SET "status" = 'published' WHERE "id" = 'row1'`
+    );
+
+    await runSync(localized);
+
+    const rows = await adapter?.executeQuery<{ _status: string }>(
+      `SELECT "_status" FROM "dc_dbsync_restatus_locales" WHERE "_locale" = 'en'`
+    );
+    expect(rows).toEqual([{ _status: "published" }]);
   });
 
   it("leaves an entity that was never localized alone", async () => {

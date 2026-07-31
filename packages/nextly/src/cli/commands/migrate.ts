@@ -93,6 +93,26 @@ export interface MigrateCommandOptions {
    * @default false
    */
   forceUnlock?: boolean;
+
+  /**
+   * Copy existing content into the translation tables of localized entities that carry no record
+   * of ever having transitioned.
+   *
+   * Opt-in, and it has to be. An entity with no record is either an install that enabled
+   * localization before Nextly began recording transitions, or one that has been localized since
+   * birth and owes nothing — and nothing on disk tells the two apart. That is the same conclusion
+   * this whole mechanism rests on: which language existing values are in cannot be recovered by
+   * looking at them, which is why it is recorded rather than inferred. Guessing here would
+   * manufacture a default-locale translation for every entry, including ones deliberately authored
+   * in another language only.
+   *
+   * Running it is the operator supplying the one missing fact: that their main tables hold content
+   * in the configured default locale. Rows that already have a translation in that locale are left
+   * alone, so it is safe to repeat and cannot overwrite a real translation.
+   *
+   * @default false
+   */
+  repairLocalization?: boolean;
 }
 
 /**
@@ -322,7 +342,12 @@ export async function runMigrate(
           adapter,
           context,
           "afterApply",
-          { supervised: true }
+          {
+            supervised: true,
+            // Never by default: an entity with no transition record may be a legacy install or one
+            // localized since birth, and nothing distinguishes them. See `repairLocalization`.
+            repairUntracked: options.repairLocalization === true,
+          }
         );
       }
     } catch (err) {
@@ -903,6 +928,11 @@ export function registerMigrateCommand(program: Command): void {
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before running",
+      false
+    )
+    .option(
+      "--repair-localization",
+      "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",
       false
     )
     .action(async (cmdOptions: MigrateCommandOptions, cmd: Command) => {
