@@ -100,7 +100,14 @@ export function pluginEmptyColumnDefault(
   const contributed = pluginEmptyValue(field);
   if (contributed === undefined) return undefined;
   const storageToken = storageTypeToken(field) ?? fallbackToken;
-  return storageToken === "json"
-    ? render.json(JSON.stringify(contributed))
-    : render.literal(contributed, storageToken);
+  if (storageToken === "json") return render.json(JSON.stringify(contributed));
+
+  // A timestamp-backed type states its empty as a `Date`, but both scalar
+  // renderers only convert a timestamp when they are handed a string — an
+  // object falls through and is quoted as a human-readable date, which the
+  // integer-mode binder that reads the column cannot decode. Rendered as its
+  // ISO form so the renderer takes the branch it already has for timestamps.
+  const scalar =
+    contributed instanceof Date ? contributed.toISOString() : contributed;
+  return render.literal(scalar, storageToken);
 }

@@ -185,6 +185,36 @@ export async function runMigrateCheck(
     configResult.deferredExtends ?? []
   );
 
+  // The manifest gets the same check the code-first config got above, once its
+  // deferred extends are materialized: a Builder-owned entity can carry a
+  // plugin field too, and a plugin extending one contributes its fields here
+  // rather than in the config. Only entities a code-first entity does not
+  // shadow are checked, because a shadowed one never reaches the snapshot.
+  const surviving = <T extends { slug: string }>(
+    list: readonly T[] | undefined,
+    codeFirst: ReadonlyArray<{ slug: string }> | undefined
+  ): T[] => {
+    const shadowed = new Set((codeFirst ?? []).map(e => e.slug));
+    return (list ?? []).filter(e => !shadowed.has(e.slug));
+  };
+
+  try {
+    assertPluginFieldDeclarations({
+      collections: surviving(
+        manifest.collections,
+        configResult.config.collections
+      ),
+      singles: surviving(manifest.singles, configResult.config.singles),
+      fieldGroups: surviving(
+        manifest.components,
+        configResult.config.fieldGroups
+      ),
+    });
+  } catch (error) {
+    logger.error(describeDeclarationFailure(error));
+    process.exit(1);
+  }
+
   // Cross-file checks (slug collision, relation targets).
   const crossIssues = validateCrossFile({
     codeCollectionSlugs: configResult.config.collections.map(

@@ -93,6 +93,11 @@ function toFieldConfig(def: UserFieldDefinitionRecord): FieldConfig {
     required: def.required,
     defaultValue: def.defaultValue ?? undefined,
     admin: {
+      // Merged, not replaced. `admin` is one of the keys carried whole, so a
+      // declared `readOnly` or `hidden` lives inside it; assigning a fresh
+      // object here dropped everything the type declared and kept only the two
+      // values hoisted onto their own columns.
+      ...((def.pluginOptions?.admin ?? {}) as Record<string, unknown>),
       placeholder: def.placeholder ?? undefined,
       description: def.description ?? undefined,
     },

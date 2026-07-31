@@ -69,8 +69,20 @@ function ddlTypeForKind(
         : dialect === "mysql"
           ? "DOUBLE"
           : "REAL";
-    case "decimal":
-      return dialect === "mysql" ? "DECIMAL(10,2)" : "NUMERIC(10,2)";
+    case "decimal": {
+      // The dimensions come from the descriptor too. Stated here, a field
+      // declaring NUMERIC(18,6) got NUMERIC(10,2) when added to an existing
+      // table — rounding what it stored and refusing what it used to accept —
+      // while a fresh table and the runtime binding both honoured it.
+      const { precision, scale } = descriptor;
+      const dimensions =
+        precision !== undefined && scale !== undefined
+          ? `(${precision},${scale})`
+          : "";
+      return dialect === "mysql"
+        ? `DECIMAL${dimensions}`
+        : `NUMERIC${dimensions}`;
+    }
     case "timestamp":
       // Only SQLite routes here; it stores a timestamp as an integer.
       return dialect === "sqlite" ? "INTEGER" : undefined;
