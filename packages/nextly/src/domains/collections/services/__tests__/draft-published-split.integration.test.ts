@@ -492,6 +492,74 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(promoted.title).toBe("draft-t");
     expect(await workingDraftCount(id)).toBe(0);
   });
+
+  it("keeps the internal single-component tag out of a draft response and read but in the stored snapshot", async () => {
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({ slug: "hero", fields: [text({ name: "heading" })] }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "hero", component: "hero" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      hero: { heading: "h1" },
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A status-less edit of the single-component field.
+    const res = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { hero: { heading: "h2" } }
+    );
+    const resHero = (res.data as { hero?: Record<string, unknown> }).hero;
+    expect(resHero?.heading).toBe("h2");
+    // The mutation response omits the internal single-component marker that a
+    // dynamic zone would carry but an ordinary read of a single component does not.
+    expect(resHero && "_componentType" in resHero).toBe(false);
+
+    // The draft read overlay omits it too.
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    const readHero = (draftRead.data as { hero?: Record<string, unknown> })
+      .hero;
+    expect(readHero?.heading).toBe("h2");
+    expect(readHero && "_componentType" in readHero).toBe(false);
+
+    // The STORED snapshot retains the marker so a promote can still resolve the
+    // component's schema even if the field is later retargeted.
+    const [draftRow] = await handle.adapter.select<{
+      snapshot: { hero?: Record<string, unknown> };
+    }>("nextly_versions", {
+      where: {
+        and: [
+          { column: "entryId", op: "=", value: id },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    });
+    expect(draftRow.snapshot.hero?._componentType).toBe("hero");
+  });
 });
 
 // The split coalesces a working draft under one unlocalized slot and promotes it

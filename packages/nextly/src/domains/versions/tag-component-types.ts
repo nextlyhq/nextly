@@ -248,6 +248,143 @@ export function tagNestedComponentTypes(
 }
 
 /**
+ * Remove the single-component `_componentType` markers a snapshot carries from a
+ * document about to be served as an ordinary read — a mutation response or a
+ * hook argument assembled from a working-draft snapshot.
+ *
+ * `tagComponentTypes` stamps a single-component value with its slug so a restore
+ * can resolve the component even if the field is later retargeted, but an
+ * ordinary read of a single component omits it (the schema implies the type). A
+ * dynamic zone's row type is editor-chosen and part of read shape, so it is
+ * kept; only the components nested inside a row are cleaned. The inverse of the
+ * tag walk, sharing its field classification.
+ *
+ * Returns a new object; the tagged snapshot the input came from is untouched, so
+ * the persisted copy keeps the markers a promote needs.
+ */
+export function stripSingleComponentTags(
+  document: Record<string, unknown>,
+  fields: FieldConfig[],
+  resolve?: ComponentFieldResolver
+): Record<string, unknown> {
+  return stripFieldsIn(document, fields, resolve, new Set());
+}
+
+function stripFieldsIn(
+  source: Record<string, unknown>,
+  fields: FieldConfig[],
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...source };
+
+  for (const field of addressableFields(fields)) {
+    if (typeof field.name !== "string") continue;
+    if (!Object.prototype.hasOwnProperty.call(source, field.name)) continue;
+
+    const value = source[field.name];
+
+    const slug = singleComponentSlug(field);
+    if (slug !== undefined) {
+      out[field.name] = stripSingleValue(value, slug, resolve, seen);
+      continue;
+    }
+
+    const zone = dynamicZoneSlugs(field);
+    if (zone !== undefined) {
+      out[field.name] = stripZoneRows(value, zone, resolve, seen);
+      continue;
+    }
+
+    const children = (field as { fields?: unknown }).fields;
+    if (Array.isArray(children)) {
+      out[field.name] = stripNestedTags(
+        value,
+        children as FieldConfig[],
+        resolve,
+        seen
+      );
+    }
+  }
+
+  return out;
+}
+
+/** Strip the marker off a single-component value, descending into its own fields. */
+function stripSingleValue(
+  value: unknown,
+  slug: string,
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => stripSingleValue(item, slug, resolve, seen));
+  }
+  if (typeof value !== "object" || value === null) return value;
+
+  const source = value as Record<string, unknown>;
+  if (seen.has(source)) return source;
+
+  const ownFields = resolve?.(slug);
+  if (!ownFields) {
+    const bare = { ...source };
+    delete bare[STORAGE_FORMAT.wireTypeKey];
+    return bare;
+  }
+
+  seen.add(source);
+  const inner = stripFieldsIn(source, ownFields, resolve, seen);
+  seen.delete(source);
+
+  const out = { ...inner };
+  delete out[STORAGE_FORMAT.wireTypeKey];
+  return out;
+}
+
+/** Keep a zone row's own editor-chosen type; clean single components inside it. */
+function stripZoneRows(
+  value: unknown,
+  allowed: string[],
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map(row => stripZoneRows(row, allowed, resolve, seen));
+  }
+  if (typeof value !== "object" || value === null) return value;
+
+  const source = value as Record<string, unknown>;
+  if (seen.has(source)) return source;
+
+  const rowType = source[STORAGE_FORMAT.wireTypeKey];
+  if (typeof rowType !== "string" || !allowed.includes(rowType)) return source;
+
+  const ownFields = resolve?.(rowType);
+  if (!ownFields) return source;
+
+  seen.add(source);
+  const out = stripFieldsIn(source, ownFields, resolve, seen);
+  seen.delete(source);
+
+  return out;
+}
+
+/** Reach single components nested inside a group or repeater's stored JSON. */
+function stripNestedTags(
+  value: unknown,
+  fields: FieldConfig[],
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map(row => stripNestedTags(row, fields, resolve, seen));
+  }
+  if (typeof value !== "object" || value === null) return value;
+
+  return stripFieldsIn(value as Record<string, unknown>, fields, resolve, seen);
+}
+
+/**
  * Every component schema the fields reach, keyed by slug.
  *
  * Resolved to a fixed point so a component embedded in another component is

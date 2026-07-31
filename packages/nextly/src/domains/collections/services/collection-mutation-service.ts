@@ -103,6 +103,7 @@ import {
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
+  stripSingleComponentTags,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -1582,13 +1583,15 @@ export class CollectionMutationService extends BaseService {
     ): void => {
       if (!field.name) return;
       const value = owner[field.name];
-      const instances = Array.isArray(value)
-        ? value
-        : value != null
-          ? [value]
-          : [];
+      const isArray = Array.isArray(value);
+      const instances = isArray ? value : value != null ? [value] : [];
+      const kept: unknown[] = [];
+      let dropped = false;
       for (const inst of instances) {
-        if (!inst || typeof inst !== "object") continue;
+        if (!inst || typeof inst !== "object") {
+          kept.push(inst);
+          continue;
+        }
         const tagged = (inst as Record<string, unknown>)._componentType;
         const slug =
           typeof tagged === "string"
@@ -1597,8 +1600,22 @@ export class CollectionMutationService extends BaseService {
               ? slugs[0]
               : undefined;
         const cfields = slug ? componentFields.get(slug) : undefined;
-        if (cfields) stripInstance(inst, cfields);
+        if (cfields) {
+          stripInstance(inst, cfields);
+          kept.push(inst);
+        } else {
+          // The instance's schema cannot be resolved (a dynamic-zone row naming
+          // a component the field does not allow, or one absent from the
+          // registry), so a password nested inside it cannot be located and
+          // removed. Drop the instance rather than store an un-inspected value
+          // in plaintext, the same safe direction the restore filter takes for
+          // an unknown subtree.
+          dropped = true;
+        }
       }
+      if (!dropped) return;
+      if (isArray) owner[field.name] = kept;
+      else delete owner[field.name];
     };
     for (const field of schema) {
       const slugs = declaredSlugs(field);
@@ -5274,7 +5291,17 @@ export class CollectionMutationService extends BaseService {
                     ...patchFields,
                   };
                 }
-                workingDraftDocument = draftDocument;
+                // The response and hooks see the draft as an ordinary read, so
+                // the single-component type markers the persisted snapshot needs
+                // for promotion are stripped from that copy (a dynamic zone's own
+                // row type stays, as a read carries it). The read overlay does the
+                // same via the schema-aware prune; the persisted `draftDocument`
+                // below keeps its markers.
+                workingDraftDocument = stripSingleComponentTags(
+                  draftDocument,
+                  fields as unknown as FieldConfig[],
+                  slug => splitComponentSchemas?.get(slug)?.fields
+                );
                 await draftRepo.upsertWorkingDraft({
                   ref: draftRef,
                   // The split is non-localized only, so the working draft is one
