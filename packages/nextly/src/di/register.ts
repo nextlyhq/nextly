@@ -1182,60 +1182,82 @@ async function initializeSchemaRegistry(
     // the fresh-database case, so addressing a renamed registry by its legacy
     // name does not raise — it registers nothing, and every field-group table
     // is unaddressable until someone notices reads returning empty.
+    // Collected first, registered second. `introspectLiveSnapshot` issues
+    // separate column and index catalog queries — plus the identifier-case
+    // query on MySQL — so resolving inside the per-row callback would cost two
+    // or three metadata round trips PER field group at every boot. One pass
+    // over the rows makes it one batch for the whole set, which is what
+    // `registerComponentSchemas` already does.
+    const loadedFieldGroups: Array<{
+      tableName: string;
+      fields: FieldConfig[];
+      localized: boolean;
+    }> = [];
     await loadDynamicTables(
       adapter,
       await resolveFieldGroupRegistryName(adapter),
-      async (tableName, fields, _hasStatus, localized) => {
-        const { FieldGroupSchemaService } = await import(
-          "../services/field-groups/field-group-schema-service"
-        );
-        const compSchemaService = new FieldGroupSchemaService(dialect);
-        // Resolved per table: the storage migration renames the discriminator,
-        // and a table an author named itself keeps its own table name while its
-        // column still moves, so the two generations can be mixed across the
-        // very set being registered here.
-        const typeColumns = await resolveTypeColumns(adapter, [tableName]);
-        const runtimeTable = compSchemaService.generateRuntimeSchema(
+      (tableName, fields, _hasStatus, localized) => {
+        loadedFieldGroups.push({
           tableName,
-          fields as FieldConfig[],
-          {
-            localized,
-            typeColumn:
-              typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
-          }
-        );
-        registry.registerDynamicSchema(tableName, runtimeTable);
-        if (localized) {
-          const { ensureCompanionTable } = await import(
-            "../domains/i18n/runtime/companion-io"
-          );
-          await ensureCompanionTable(adapter, {
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            status: false,
-          });
-          const { buildCompanionRuntimeTable } = await import(
-            "../domains/i18n/runtime/companion-registration"
-          );
-          const companion = buildCompanionRuntimeTable({
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            localized: true,
-            status: false,
-          });
-          if (companion) {
-            registry.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
-            );
-          }
-        }
+          fields: fields as FieldConfig[],
+          localized,
+        });
+        return Promise.resolve();
       }
     );
+    // Resolved per table even though it is one query: the migration renames the
+    // registry last, and a table an author named itself keeps its own name
+    // while its column still moves, so the two generations can be mixed across
+    // the very set being registered here.
+    const fieldGroupTypeColumns = await resolveTypeColumns(
+      adapter,
+      loadedFieldGroups.map(entry => entry.tableName)
+    );
+    for (const { tableName, fields, localized } of loadedFieldGroups) {
+      const { FieldGroupSchemaService } = await import(
+        "../services/field-groups/field-group-schema-service"
+      );
+      const compSchemaService = new FieldGroupSchemaService(dialect);
+      const runtimeTable = compSchemaService.generateRuntimeSchema(
+        tableName,
+        fields,
+        {
+          localized,
+          typeColumn:
+            fieldGroupTypeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
+        }
+      );
+      registry.registerDynamicSchema(tableName, runtimeTable);
+      if (localized) {
+        const { ensureCompanionTable } = await import(
+          "../domains/i18n/runtime/companion-io"
+        );
+        await ensureCompanionTable(adapter, {
+          slug: tableName,
+          tableName,
+          fields: fields as { name: string; type: string }[],
+          dialect,
+          status: false,
+        });
+        const { buildCompanionRuntimeTable } = await import(
+          "../domains/i18n/runtime/companion-registration"
+        );
+        const companion = buildCompanionRuntimeTable({
+          slug: tableName,
+          tableName,
+          fields: fields as { name: string; type: string }[],
+          dialect,
+          localized: true,
+          status: false,
+        });
+        if (companion) {
+          registry.registerDynamicSchema(
+            companion.companionTableName,
+            companion.table
+          );
+        }
+      }
+    }
 
     return registry;
   } catch {
@@ -1962,15 +1984,23 @@ async function syncCodeFirstComponents(
           logger.info?.(`Created table ${tableName} for component ${slug}`);
 
           try {
+            // 🔴 Resolved, not assumed. The DDL above is
+            // `CREATE TABLE IF NOT EXISTS`, so a component whose *fields*
+            // changed reaches here with its table untouched — and this
+            // registration then overwrites the catalog-resolved one made during
+            // the boot pass. Hard-coding the creator's spelling here therefore
+            // does not describe a table this code just made; it describes a
+            // table that may have been migrated long ago.
+            const syncTypeColumns = await resolveTypeColumns(adapter, [
+              tableName,
+            ]);
             const compRuntimeTable = compSchemaService.generateRuntimeSchema(
               tableName,
               compConfig.fields,
               {
                 localized: compLocalized,
-                // This table was created by the DDL a few lines above, so it
-                // carries the spelling that generator writes. The same constant,
-                // read twice — not a guess, and not worth a catalog round trip.
-                typeColumn: STORAGE_FORMAT.columns.type,
+                typeColumn:
+                  syncTypeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
               }
             );
             const resolver = (

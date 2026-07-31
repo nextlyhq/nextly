@@ -1073,7 +1073,10 @@ export class CollectionQueryService extends BaseService {
         schema.id,
         dialect,
         componentTables,
-        await this.resolveComponentTypeColumns(componentTables.values())
+        await this.resolveComponentTypeColumns(
+          componentFilters,
+          componentTables.values()
+        )
       );
 
       // Apply component field conditions to query
@@ -1962,7 +1965,10 @@ export class CollectionQueryService extends BaseService {
           schema.id,
           dialect,
           componentTables,
-          await this.resolveComponentTypeColumns(componentTables.values())
+          await this.resolveComponentTypeColumns(
+            componentFilters,
+            componentTables.values()
+          )
         );
 
         if (componentCondition) {
@@ -3027,8 +3033,15 @@ export class CollectionQueryService extends BaseService {
    * migration has moved and the query fails instead of matching documents.
    */
   private async resolveComponentTypeColumns(
+    filters: readonly ComponentFieldFilter[],
     tableNames: Iterable<string>
   ): Promise<Map<string, string>> {
+    // Only a `_componentType` filter addresses the discriminator. Every other
+    // component filter names a user column, so introspecting here would spend
+    // per-table catalog queries — column and index reads, or a PRAGMA each on
+    // SQLite — on a value nothing goes on to read.
+    if (!filters.some(filter => filter.isComponentTypeFilter)) return new Map();
+
     const tables = [...new Set(tableNames)];
     if (tables.length === 0) return new Map();
     return resolveTypeColumns(this.adapter, tables);

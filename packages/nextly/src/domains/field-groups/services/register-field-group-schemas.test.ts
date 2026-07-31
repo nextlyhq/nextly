@@ -9,7 +9,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { MIGRATION_TARGET } from "../migration/manifest";
-import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
+import {
+  forgetFieldGroupStorageNames,
+  resolveTypeColumns,
+} from "../storage/resolve-storage-names";
 
 import { registerComponentSchemas } from "./register-field-group-schemas";
 
@@ -150,5 +153,43 @@ describe("registerComponentSchemas", () => {
 
     expect(count).toBe(0);
     expect(registry.registerDynamicSchema).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 🔴 A table this process "just created" may be years old.
+ *
+ * The code-first sync issues `CREATE TABLE IF NOT EXISTS`, so a component whose
+ * *fields* changed reaches the registration path with its table untouched. If
+ * that path hard-codes the creator's spelling it overwrites the boot pass's
+ * catalog-resolved registration and every later read addresses a column the
+ * storage migration moved. The resolver has to answer from the catalog even for
+ * a table the surrounding code believes it owns.
+ */
+describe("resolveTypeColumns — an existing table keeps its own discriminator", () => {
+  it("answers the migrated spelling for a table the DDL did not recreate", async () => {
+    const adapter = {
+      dialect: "postgresql" as const,
+      getDrizzle: <T>(): T =>
+        ({
+          execute: async () => ({
+            rows: [
+              {
+                table_name: "fg_hero",
+                column_name: MIGRATION_TARGET.columnType,
+                udt_name: "varchar",
+                is_nullable: "YES",
+                column_default: null,
+                owned_sequence_default: false,
+              },
+            ],
+          }),
+        }) as T,
+    };
+
+    const resolved = await resolveTypeColumns(adapter, ["fg_hero"]);
+
+    expect(resolved.get("fg_hero")).toBe(MIGRATION_TARGET.columnType);
+    expect(resolved.get("fg_hero")).not.toBe(STORAGE_FORMAT.columns.type);
   });
 });
