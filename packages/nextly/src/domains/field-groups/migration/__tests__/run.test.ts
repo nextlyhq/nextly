@@ -51,6 +51,22 @@ interface RunWorld {
  * It interprets statements through a real Drizzle dialect rather than matching
  * on the template object, so a statement no driver could run cannot pass here
  * either — the same bar the step and session doubles hold.
+ *
+ * 🔴 It raises bare `Error`s rather than `NextlyError`s, deliberately, and for
+ * two different reasons:
+ *
+ * - A missing relation is what a **driver** raises, and `queryStatement` passes
+ *   driver errors through untouched (`adapter-drizzle/src/adapter.ts` calls
+ *   `db.execute` and only wraps an unrecognised *result shape*). Raising a
+ *   `NextlyError` here would test the code against an error it never meets.
+ * - The unrecognised-statement branch is not a database error at all. It is this
+ *   harness saying it does not model something the code issued, and it must stay
+ *   **distinguishable from a refusal the code under test raises** — every
+ *   assertion below matches on `NextlyError.is`, so a `NextlyError` from the
+ *   double would let a broken harness satisfy a test about production
+ *   behaviour. Measured, not assumed: with `NextlyError` here, three of these
+ *   five tests still pass when the double stops modelling the registry read;
+ *   with a bare `Error`, all five fail.
  */
 function createRunWorld(world: RunWorld) {
   const trace: Trace = [];
