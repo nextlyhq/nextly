@@ -39,7 +39,10 @@ import type {
 } from "../../../services/collections/related-row-read-context";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -69,6 +72,24 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  * Maximum allowed depth to prevent performance issues.
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
+
+/**
+ * The collection a relationship field's value came from, or null when the walk
+ * cannot know.
+ *
+ * Null for a polymorphic relationship (`relationTo` is a list): the value could
+ * be a row from any of them, and applying one collection's field hooks to a row
+ * from another would transform the wrong fields. Skipping is the honest answer
+ * -- those rows keep the protections the fetch already applied, and nothing
+ * pretends they got more.
+ */
+function targetCollectionOf(field: {
+  type?: string;
+  relationTo?: unknown;
+}): string | null {
+  if (typeof field.relationTo === "string") return field.relationTo;
+  return null;
+}
 
 /**
  * The caller a related row is redacted for.
@@ -2783,6 +2804,89 @@ export class CollectionRelationshipService extends BaseService {
    * either one: it runs against the SOURCE collection's field registry, which
    * never describes a related collection's fields.
    */
+  /**
+   * Apply each nested related row's OWN collection field `afterRead` hooks,
+   * once the document is fully assembled.
+   *
+   * A field hook is the transforming half of a field's read protections -- the
+   * half that masks a value on the way out -- and its access half already runs
+   * per related row. Running the hooks there too would be wrong: related rows
+   * are fetched BEFORE the recursion that expands their own relationships, so a
+   * hook masking on `data.organization.classification` would see a raw id and
+   * return the unmasked value. A direct read of that collection expands first
+   * and runs field hooks last, and expansion may be stricter than the target's
+   * own endpoint but never looser.
+   *
+   * So this runs once, from the read path, over the finished document: every
+   * row is complete by the time its own hooks see it, at every depth, and there
+   * is one place that decides it rather than a call at each of the several
+   * points where assembly happens to end.
+   *
+   * Walks by SCHEMA rather than by marking rows during expansion: a field's
+   * `relationTo` already says which collection the value came from, so nothing
+   * has to be threaded through the fetch to be read back here.
+   */
+  async applyNestedFieldHooks(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess
+  ): Promise<void> {
+    // Only a real read applies these. A caller clearing the flag is assembling
+    // the evidence a document-dependent rule is judged on and wants the row
+    // unredacted -- the same reason the access pass is gated on it.
+    if (!access.enforceFieldAccess) return;
+    await this.walkNestedRows(entry, collectionName, access, new Set(), 0);
+  }
+
+  /**
+   * One level of {@link applyNestedFieldHooks}.
+   *
+   * `seen` breaks a reference cycle (A points at B, B points back at A) that the
+   * expansion's own depth limit would already have stopped, so this is a
+   * belt-and-braces guard rather than the primary bound. The depth cap mirrors
+   * the expansion's own maximum.
+   */
+  private async walkNestedRows(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess,
+    seen: Set<Record<string, unknown>>,
+    depth: number
+  ): Promise<void> {
+    if (depth > MAX_RELATIONSHIP_DEPTH) return;
+    if (seen.has(entry)) return;
+    seen.add(entry);
+
+    const fields = await this.getCollectionFields(collectionName);
+    for (const field of fields) {
+      const target = targetCollectionOf(field);
+      if (!target) continue;
+
+      const value = entry[field.name];
+      // An unexpanded relationship is still an id, and there is nothing to
+      // transform in a string.
+      const rows = (Array.isArray(value) ? value : [value]).filter(
+        (row): row is Record<string, unknown> =>
+          typeof row === "object" && row !== null
+      );
+      if (rows.length === 0) continue;
+
+      for (const row of rows) {
+        // Deepest first, so a hook reading into its own relations sees them
+        // already transformed rather than half-processed.
+        await this.walkNestedRows(row, target, access, seen, depth + 1);
+        await runFieldHooks({
+          kind: "collection",
+          slug: target,
+          phase: "afterRead",
+          data: row,
+          operation: "read",
+          user: access.user,
+        });
+      }
+    }
+  }
+
   private async redactRelatedRows(
     targetCollection: string,
     rows: Record<string, unknown>[],

@@ -1420,6 +1420,18 @@ export class CollectionQueryService extends BaseService {
         stripSystemOwnerField(entry);
       }
 
+      // The document is assembled now, so each nested row's own collection can
+      // transform it. Deferred to here because a related row is fetched before
+      // the recursion that expands ITS relationships: a hook run at fetch time
+      // would read those as raw ids and mask on a value that is not there yet.
+      for (const expanded of expandedEntries) {
+        await this.relationshipService.applyNestedFieldHooks(
+          expanded,
+          params.collectionName,
+          { enforceFieldAccess: true, user: params.user }
+        );
+      }
+
       // Decode before any afterRead hook runs. A hook is documented against the
       // configured value, and on SQLite these columns are strings, so decoding
       // after the hooks handed every one of them the storage encoding instead.
@@ -2582,6 +2594,13 @@ export class CollectionQueryService extends BaseService {
       }
       // Always strip the system owner column (see listEntries).
       stripSystemOwnerField(expandedEntry);
+
+      // Same post-assembly pass as the list path.
+      await this.relationshipService.applyNestedFieldHooks(
+        expandedEntry,
+        params.collectionName,
+        { enforceFieldAccess: true, user: params.user }
+      );
 
       // Decode before any afterRead hook runs, for the same reason as the list
       // path: a hook is documented against the configured value, not the
