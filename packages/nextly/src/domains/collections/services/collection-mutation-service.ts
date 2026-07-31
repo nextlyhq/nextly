@@ -5607,6 +5607,31 @@ export class CollectionMutationService extends BaseService {
                 );
               }
 
+              // A restore that lands a non-published status turns the live row
+              // into a draft, which breaks the working-draft invariant: a sidecar
+              // is pending edits OVER a published row, and once the row is a draft
+              // no status-less edit can accumulate onto it (storeAsWorkingDraft
+              // needs a published row) while editor reads still overlay the stale
+              // sidecar and a later publish would promote it over the restored
+              // content. A restore deliberately does not fold the sidecar, so drop
+              // it here. A no-op when none exists; a restore to `published` keeps
+              // the invariant and is left untouched.
+              if (
+                isRestoreWrite &&
+                splitEnabled &&
+                transitionNextStatus !== undefined &&
+                transitionNextStatus !== "published"
+              ) {
+                await new VersionsRepository(tx).deleteWorkingDraft(
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  null
+                );
+              }
+
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
               // `recorded` is false when the collection opted out of recording. A

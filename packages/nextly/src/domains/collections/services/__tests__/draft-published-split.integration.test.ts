@@ -610,6 +610,50 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(await workingDraftCount(id)).toBe(1);
   });
 
+  it("drops the working draft when a restore lands a non-published status", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      body: "b",
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A pending draft edit over the published row.
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    expect(await workingDraftCount(id)).toBe(1);
+
+    // A restore that lands a non-published status turns the live row into a draft,
+    // breaking the working-draft invariant (a sidecar is pending edits OVER a
+    // published row). The restore does not fold the sidecar, so leaving it would
+    // let editor reads overlay stale edits and a later publish promote them over
+    // the restored content. It must be dropped.
+    const restore = await entries.updateEntry(
+      { ...ctx, entryId: id, sourceVersionNo: 1 },
+      { title: "restored", body: "b", status: "draft" }
+    );
+    expect(restore.success).toBe(true);
+
+    const [live] = await handle.adapter.select<LiveRow>(TABLE);
+    expect(live.title).toBe("restored");
+    expect(await workingDraftCount(id)).toBe(0);
+  });
+
   it("expands relationships inside a draft component at depth > 0", async () => {
     handle = await createTestNextly({
       fieldGroups: [
