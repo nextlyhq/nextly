@@ -1,4 +1,4 @@
-import { pageBuilderField } from "@nextlyhq/plugin-page-builder";
+import { blocks, pageBuilderField } from "@nextlyhq/plugin-page-builder";
 import {
   defineCollection,
   text,
@@ -52,6 +52,16 @@ export const Posts = defineCollection({
     pageBuilderField("layout", {
       label: "Visual Layout",
       condition: { field: "editorMode", equals: "page-builder" },
+    }),
+    // A contributed field type declared code-first. `blocks` lives in the
+    // page-builder plugin, so this is also the harness's proof that a plugin
+    // type is authorable from a real app: the field configs are typed against
+    // a closed union, and a contributed one is admitted only through its own
+    // marked factory.
+    blocks({
+      name: "sections",
+      blocks: { allow: ["core/*"] },
+      admin: { condition: { field: "editorMode", equals: "page-builder" } },
     }),
     relationship({
       name: "categories",

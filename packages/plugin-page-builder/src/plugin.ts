@@ -2,6 +2,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
+import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
@@ -31,7 +32,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     },
     contributes: {
       collections: [pagesCollection()],
-      fieldTypes: [PAGE_BUILDER_FIELD_TYPE],
+      fieldTypes: [PAGE_BUILDER_FIELD_TYPE, BLOCKS_FIELD_TYPE],
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which
       // `update-pages` already covers, and no code path asked whether the user

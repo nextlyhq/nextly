@@ -862,54 +862,6 @@ describe("codegen import collisions", () => {
 
     expect(file.code).not.toContain("@acme/cond");
   });
-
-  it("reuses the generator's own import instead of refusing it", () => {
-    registerFieldType({
-      type: "same-binding",
-      storage: "json",
-      component: "@acme/sb/admin#Input",
-      codegen: {
-        tsImports: [{ names: ["BlockDocument"], from: "nextly" }],
-        tsType: () => "BlockDocument",
-      },
-    });
-
-    // The plugin wants exactly the binding the blocks field already imports,
-    // and cannot know whether another field caused that import to be emitted.
-    const file = new TypeGenerator().generateTypesFile([
-      collection([
-        { name: "page", type: "blocks" },
-        { name: "body", type: "same-binding" },
-      ]),
-    ]);
-
-    expect(
-      file.code.match(/import type \{ BlockDocument \} from "nextly";/g)
-    ).toHaveLength(1);
-  });
-
-  it("refuses a plugin claiming a name the generator emits itself", () => {
-    registerFieldType({
-      type: "doc-thing",
-      storage: "json",
-      component: "@acme/docs/admin#Input",
-      codegen: {
-        tsImports: [{ names: ["BlockDocument"], from: "@acme/docs" }],
-        tsType: () => "BlockDocument",
-      },
-    });
-
-    const messages = refusalMessages(() =>
-      new TypeGenerator().generateTypesFile([
-        collection([
-          { name: "page", type: "blocks" },
-          { name: "body", type: "doc-thing" },
-        ]),
-      ])
-    );
-
-    expect(messages.join(" ")).toContain("BlockDocument");
-  });
 });
 
 describe("disabled plugins", () => {

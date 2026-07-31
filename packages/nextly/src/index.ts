@@ -418,15 +418,6 @@ export {
   getFieldType as getPluginFieldType,
 } from "./domains/schema/field-types/field-type-registry";
 
-// The stored page-builder document. Re-exported so an app can name the value a
-// blocks field holds without depending on the engine package directly, and so
-// generated types resolve against the dependency it already has.
-export type {
-  BlockDocument,
-  BlockNode,
-  DocumentKind,
-} from "@nextlyhq/blocks-engine";
-
 // Block props on the field system — a block's prop declarations become
 // ordinary field configs, so block values validate through the same pass
 // entries do instead of a parallel rule set.
@@ -634,6 +625,21 @@ export {
 
 // Component field type (also exported from ./collections/fields via barrel export)
 export type { FieldGroupFieldConfig } from "./collections/fields/types/component";
+
+// Declares an entry field whose type a plugin contributed. `FieldConfig` is a
+// closed union whose arms carry each built-in type's own errors, so it cannot
+// admit a contributed type without losing them; the brand opens the authoring
+// surfaces alone. The users surface solves the same problem the same way with
+// `pluginUserField` below.
+export {
+  pluginField,
+  pluginFieldBrand,
+} from "./collections/fields/types/plugin-field";
+export type {
+  AuthorableFieldConfig,
+  PluginDataFieldConfig,
+  PluginFieldInput,
+} from "./collections/fields/types/plugin-field";
 
 // ============================================================
 // USER MANAGEMENT

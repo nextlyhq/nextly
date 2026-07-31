@@ -95,7 +95,7 @@ import type {
 import type { SingleRegistryService } from "./single-registry-service";
 import {
   assertNoPasswordDefault,
-  assertValidBlocksDefault,
+  assertValidPluginDefault,
   buildSingleErrorResult,
   collectAllMediaIds,
   deserializeJsonFields,
@@ -1146,7 +1146,9 @@ export class SingleQueryService extends BaseService {
     // first version, its localized defaults) driven by a caller about to be
     // denied. Built in memory; nothing is persisted here, and the row the read
     // goes on to create is judged again on the way out.
-    const prospective = row ? undefined : this.buildDefaultDocument(singleMeta);
+    const prospective = row
+      ? undefined
+      : await this.buildDefaultDocument(singleMeta);
     // Either way the rule is shown the document as the read would render it.
     // A draft's stored form is not that: `buildDefaultDocument` leaves group,
     // repeater and JSON defaults in their serialized form, so a rule reading
@@ -1908,7 +1910,7 @@ export class SingleQueryService extends BaseService {
    * without the publish permission) never persists a row it would then have to
    * delete — a delete that could clobber a concurrent writer's row.
    */
-  buildDefaultDocument(singleMeta: DynamicSingleRecord): {
+  async buildDefaultDocument(singleMeta: DynamicSingleRecord): Promise<{
     document: SingleDocument;
     insertValues: Record<string, unknown>;
     /**
@@ -1919,7 +1921,7 @@ export class SingleQueryService extends BaseService {
      * first written.
      */
     localizedDefaults: Record<string, unknown>;
-  } {
+  }> {
     const now = new Date();
     const id = crypto.randomUUID();
 
@@ -2017,17 +2019,15 @@ export class SingleQueryService extends BaseService {
           typeof defaultSource.defaultValue === "function"
             ? defaultSource.defaultValue(logicalDefaults)
             : defaultSource.defaultValue;
-        // A blocks default is checked here rather than only at config load,
-        // because a function default can only be resolved against real data.
-        // This row is inserted directly on first read, without going through
-        // the write path, so nothing downstream would catch a document the
-        // field's own policy rejects — and the admin control is read-only, so
-        // the stored value could not be corrected from the UI.
-        assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
         // Same direct-insert reasoning for passwords: this path never runs
         // `hashPasswordFieldValues`, so a resolved password default would persist
         // in plaintext. Refuse it (a password must be set explicitly to be hashed).
         assertNoPasswordDefault(field, singleMeta.slug);
+        // A contributed type's own rules over the resolved value. This row is
+        // inserted directly on first read, so nothing downstream would catch a
+        // value the field's own type rejects — and a contributed control may be
+        // read-only, leaving the stored value uncorrectable from the UI.
+        await assertValidPluginDefault(field, resolved, singleMeta.slug);
         // Clone before exposing: a live STATIC structured default is the object
         // stored on the config, so handing that reference to later dependent
         // defaults (which may sort/mutate it) would corrupt the config itself.
@@ -2236,7 +2236,7 @@ export class SingleQueryService extends BaseService {
       insertValues: snakeCaseDefaults,
       document,
       localizedDefaults,
-    } = options?.draft ?? this.buildDefaultDocument(singleMeta);
+    } = options?.draft ?? (await this.buildDefaultDocument(singleMeta));
     const id = snakeCaseDefaults.id as string;
     const status = (document as { status?: string }).status;
 

@@ -21,10 +21,19 @@
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
 import { validate, walkNodes } from "@nextlyhq/blocks-engine";
 
-import type { ValidationPublicData } from "../../../errors/public-data";
-import type { DocumentKind } from "../types/blocks";
+import type { DocumentKind } from "./blocks-options";
 
-type Issue = ValidationPublicData["errors"][number];
+/**
+ * The issue shape core's validation envelope carries. Declared structurally
+ * rather than imported: it is the published `{ path, code, message }` contract,
+ * and depending on core's internal error module would tie this plugin to a
+ * type it does not own.
+ */
+interface Issue {
+  path: string;
+  code: string;
+  message: string;
+}
 
 /** The field options this validator reads, in their loosest usable form. */
 export interface BlocksValidationOptions {

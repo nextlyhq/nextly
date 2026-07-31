@@ -22,9 +22,12 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
+import {
+  pluginEmptyValue,
+  storageTypeToken,
+} from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
@@ -989,11 +992,18 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * consolidation rather than with a per-column patch.
    */
   mapFieldTypeToSQL(
-    type: string,
+    declaredType: string,
     length?: number,
     options?: FieldDefinition["options"],
     validation?: FieldDefinition["validation"]
   ): string {
+    // A contributed type persists as its storage primitive, and this map has
+    // never heard of the token it is declared under. Left unresolved it falls
+    // through to `text`, so the column the DDL creates and the column the ORM
+    // binds describe different things. The same resolution `getColumnDescriptor`
+    // and the missing-column scan already make.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     if (this.dialect === "sqlite") {
       // SQLite type mapping. SQLite has dynamic typing, so types are simplified.
       const sqliteTypeMap: Record<string, string> = {
@@ -1008,7 +1018,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "text", // JSON stored as text in SQLite
         chips: "text", // Chips stored as JSON text in SQLite
-        blocks: "text", // A page document is JSON, stored as text in SQLite
         relationship: "text", // Store foreign key as text (UUID or ID)
       };
       return sqliteTypeMap[type] || "text";
@@ -1031,7 +1040,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "json", // MySQL uses 'json' type, not 'jsonb'
         chips: "json", // Chips stored as JSON array
-        blocks: "json", // A page document is one JSON value
         relationship: "varchar(36)", // Store foreign key as varchar(36) for UUIDs
       };
       return mysqlTypeMap[type] || "text";
@@ -1053,7 +1061,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       richText: "text",
       json: "jsonb",
       chips: "jsonb", // Chips stored as JSON array
-      blocks: "jsonb", // A page document is one JSON value
       relationship: "text", // Store foreign key as text (UUID or ID)
     };
     return typeMap[type] || "text";
@@ -1065,8 +1072,28 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    */
   private getDefaultValueForType(
     type: string,
-    field?: Pick<FieldDefinition, "blocks">
+    field?: Partial<FieldDefinition>
   ): string {
+    // A contributed type states its own backfill before the primitive's is
+    // derived: `{}` satisfies a json column and then fails every read that
+    // expects the structure the type actually stores. Read from the field as
+    // DECLARED — `type` here may already be the storage primitive, under which
+    // the contributed type is not registered and states nothing.
+    const contributed = pluginEmptyValue(field ?? { type });
+    if (contributed !== undefined) {
+      // The type states a value, not SQL. Which renderer applies is decided by
+      // the type's DECLARED STORAGE, never by the shape of the value it
+      // returned: a `Date` is an object too, so reading the shape would quote a
+      // timestamp-backed type's empty as JSON and write quote characters into a
+      // timestamp column. Only `json` storage is serialized; everything else is
+      // rendered as the literal its own primitive expects, which is also why
+      // `false` cannot become the truthy string `"false"` in a boolean column.
+      const storageToken = storageTypeToken(field ?? { type }) ?? type;
+      return storageToken === "json"
+        ? quoteJsonSqlDefault(JSON.stringify(contributed), this.dialect)
+        : this.formatDefaultValue(contributed, storageToken);
+    }
+
     switch (type) {
       case "text":
       case "textarea":
@@ -1088,13 +1115,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "repeater":
       case "group":
         return quoteJsonSqlDefault("{}", this.dialect);
-      case "blocks":
-        // A required blocks column needs a document, not an empty object: the
-        // generic `{}` has no formatVersion, kind, or nodes.
-        return quoteJsonSqlDefault(
-          emptyBlockDocumentJson(field?.blocks?.kinds),
-          this.dialect
-        );
       case "chips":
         return quoteJsonSqlDefault("[]", this.dialect);
       case "relationship":
@@ -1112,7 +1132,12 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
   /**
    * Format a default value for SQL (dialect-aware)
    */
-  formatDefaultValue(value: unknown, type: string): string {
+  formatDefaultValue(value: unknown, declaredType: string): string {
+    // Resolved for the same reason the type map is: a contributed token names
+    // none of the branches below, so a structured default would fall through
+    // to the string arm and be written as `[object Object]`.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     // Handle string-like types (need quotes in SQL)
     if (
       type === "text" ||
@@ -1136,7 +1161,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     }
 
     // Handle JSON (needs to be a quoted JSON string)
-    if (type === "json" || type === "blocks") {
+    if (type === "json") {
       return quoteJsonSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect

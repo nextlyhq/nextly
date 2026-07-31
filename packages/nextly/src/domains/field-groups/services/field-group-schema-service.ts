@@ -36,7 +36,6 @@ import {
   index as sqliteIndex,
 } from "drizzle-orm/sqlite-core";
 
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import {
   isTextField,
   isTextareaField,
@@ -54,7 +53,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isBlocksField,
   isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
@@ -65,6 +63,7 @@ import type {
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { pluginEmptyValue } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   DEFAULT_DECIMAL_PRECISION,
@@ -372,7 +371,11 @@ export class FieldGroupSchemaService {
       if (hasConstantDefault) {
         defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, mapped.type)}`;
       } else if ("required" in field && field.required) {
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, mapped)}`;
+        // The MAPPED type drives the switch and the ORIGINAL field carries the
+        // declared token: a contributed type states its own empty value under
+        // its own name, and `mapped` has already replaced that with the storage
+        // primitive.
+        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, field)}`;
       }
 
       statements.push(
@@ -780,7 +783,7 @@ export class FieldGroupSchemaService {
     if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
     }
-    if (isJSONField(field) || isBlocksField(field)) {
+    if (isJSONField(field)) {
       return types.json;
     }
 
@@ -826,12 +829,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return pgText(colName);
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
     }
 
@@ -883,12 +881,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return mysqlVarchar(colName, { length: 36 });
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
     }
 
@@ -935,12 +928,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return sqliteText(colName);
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
     }
 
@@ -1018,6 +1006,22 @@ export class FieldGroupSchemaService {
 
   // Used when adding NOT NULL columns to existing tables.
   private getDefaultValueForType(type: string, field?: FieldConfig): string {
+    // A contributed type states its own backfill before the primitive's is
+    // derived: `{}` satisfies a json column and then fails every read that
+    // expects the structure the type actually stores. Read from the field as
+    // DECLARED — `type` here may already be the storage primitive, under which
+    // the contributed type is not registered and states nothing.
+    const contributed = pluginEmptyValue(field ?? { type });
+    if (contributed !== undefined) {
+      // The type states a value, not SQL. A structured one is a JSON document
+      // and is quoted as such; a scalar is rendered as its own literal, since
+      // wrapping `false` as JSON text would seed a truthy string into a
+      // boolean column.
+      return typeof contributed === "object" && contributed !== null
+        ? quoteJsonSqlDefault(JSON.stringify(contributed), this.dialect)
+        : this.formatDefaultValue(contributed, type);
+    }
+
     switch (type) {
       case "text":
       case "textarea":
@@ -1028,13 +1032,6 @@ export class FieldGroupSchemaService {
       case "select":
       case "radio":
         return "''";
-      case "blocks":
-        return quoteJsonSqlDefault(
-          emptyBlockDocumentJson(
-            field && isBlocksField(field) ? field.blocks?.kinds : undefined
-          ),
-          this.dialect
-        );
       case "number":
         return "0";
       case "checkbox":

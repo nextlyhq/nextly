@@ -479,10 +479,31 @@ describe("a disabled plugin's field type", () => {
     expect(registrable.component).toBe("@acme/ratings/admin#RatingInput");
   });
 
+  it("loses its emptyValue, which runs on backfill and on single seeding", () => {
+    const seeding: PluginFieldType = {
+      ...rating,
+      emptyValue: () => {
+        throw new Error("this must never run");
+      },
+    };
+
+    const registrable = withoutDisabledBehavior(seeding, { enabled: false });
+
+    // Left registered, adding a required column or first-reading a single
+    // would call into a plugin that is off, failing a migration or a read.
+    expect(registrable.emptyValue).toBeUndefined();
+    expect(registrable.storage).toBe("number");
+  });
+
   it("is untouched while the plugin is enabled", () => {
     expect(withoutDisabledBehavior(rating, {}).validate).toBe(rating.validate);
     expect(withoutDisabledBehavior(rating, { enabled: true }).validate).toBe(
       rating.validate
+    );
+
+    const seeding: PluginFieldType = { ...rating, emptyValue: () => 0 };
+    expect(withoutDisabledBehavior(seeding, { enabled: true }).emptyValue).toBe(
+      seeding.emptyValue
     );
   });
 

@@ -38,7 +38,7 @@ import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
-import type { FieldConfig } from "../fields/types";
+import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
 // Import validation conditionally - only in server environments
 // This prevents client-side bundlers from including the validation code
@@ -1052,7 +1052,37 @@ function toTitleCase(str: string): string {
  * });
  * ```
  */
-export function defineCollection(config: CollectionConfig): CollectionConfig {
+/**
+ * A collection as an author writes it.
+ *
+ * Identical to `CollectionConfig` except for the fields array, which also
+ * admits a contributed type declared through `pluginField()`. The widening
+ * lives here rather than in `FieldConfig` because a union member carrying an
+ * index signature widens property access for every internal reader of that
+ * union.
+ */
+
+/**
+ * The authored fields as the rest of the system reads them.
+ *
+ * A contributed declaration is structurally a field — a name, a type, and the
+ * options its own type reads — and every internal consumer dispatches on
+ * `type` as a string. The authoring widening exists so a plugin type can be
+ * written down; it is dropped at this boundary, after validation, rather than
+ * carried into the union every reader shares, where an index-signature member
+ * would widen property access for all of them.
+ */
+function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
+  return fields as FieldConfig[];
+}
+
+export type CollectionConfigInput = Omit<CollectionConfig, "fields"> & {
+  fields: AuthorableFieldConfig[];
+};
+
+export function defineCollection(
+  config: CollectionConfigInput
+): CollectionConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================
@@ -1063,7 +1093,12 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
   // - Field-specific validation (select options, relationship targets, etc.)
   // - Nested field validation (array, group, blocks)
   // - Access function type validation
-  assertValidCollectionConfig(config);
+  // Validated as declared; the fields are narrowed to the shared union only
+  // after, which is what makes the narrowing safe to make at all.
+  assertValidCollectionConfig({
+    ...config,
+    fields: asDeclaredFields(config.fields),
+  });
 
   // ============================================================
   // Auto-inject system fields (title, slug)
@@ -1109,7 +1144,10 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
   }
 
   // Prepend system fields so they appear first in the form
-  const fieldsWithSystem = [...systemFields, ...config.fields];
+  const fieldsWithSystem = [
+    ...systemFields,
+    ...asDeclaredFields(config.fields),
+  ];
 
   // ============================================================
   // Apply Defaults

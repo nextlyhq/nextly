@@ -229,10 +229,9 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     expect(findColumn(table.columns, "published_at")?.type).toBe("timestamp");
   });
 
-  it("maps json/repeater/group/blocks fields to jsonb", () => {
+  it("maps json/repeater/group fields to jsonb", () => {
     const fields: MinimalField[] = [
       { name: "tags", type: "chips" },
-      { name: "blocks_field", type: "blocks" },
       { name: "meta", type: "json" },
     ];
 
@@ -243,7 +242,6 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     );
 
     expect(findColumn(table.columns, "tags")?.type).toBe("jsonb");
-    expect(findColumn(table.columns, "blocks_field")?.type).toBe("jsonb");
     expect(findColumn(table.columns, "meta")?.type).toBe("jsonb");
   });
 
@@ -332,7 +330,7 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
     expect(findColumn(table.columns, "price")?.type).toBe("double");
   });
 
-  it("maps json/blocks/group fields to json", () => {
+  it("maps json/group fields to json", () => {
     const fields: MinimalField[] = [{ name: "meta", type: "json" }];
 
     const table = buildDesiredTableFromFields(
@@ -410,7 +408,7 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
     expect(findColumn(table.columns, "ts")?.type).toBe("integer");
   });
 
-  it("maps json/blocks/group fields to lowercase 'text' (no native json)", () => {
+  it("maps json/group fields to lowercase 'text' (no native json)", () => {
     const fields: MinimalField[] = [{ name: "meta", type: "json" }];
 
     const table = buildDesiredTableFromFields(

@@ -26,8 +26,6 @@
 import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
-import type { DocumentKind } from "../../collections/fields/types/blocks";
-import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
 import type { PluginFieldType } from "../../plugins/contributions";
@@ -557,23 +555,6 @@ async function validateFieldValue(
           issues
         );
       }
-      break;
-    }
-
-    case "blocks": {
-      // The document format has one validator and it lives in the engine; this
-      // case adapts it rather than restating any of its rules.
-      const options = field as {
-        blocks?: { allow?: string[]; kinds?: DocumentKind[] };
-      };
-      issues.push(
-        ...validateBlocksValue(
-          value,
-          path,
-          label ?? "This field",
-          options.blocks ?? {}
-        )
-      );
       break;
     }
 

@@ -12,14 +12,66 @@
  * two dialects whose JSON handling differs were never exercised. It now runs
  * once per dialect the machine can reach.
  */
-import { afterEach, expect, it } from "vitest";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "@nextlyhq/plugin-sdk/testing";
+import { defineCollection, defineSingle, text } from "nextly/config";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { blocks, defineCollection, defineSingle, text } from "../../config";
-import { describeEachDialect } from "../../plugins/__tests__/helpers/dialect-matrix";
-import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
-import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
-import type { CollectionsHandler } from "../../services/collections-handler";
-import type { TestDialect } from "../../plugins/test-nextly";
+import { pageBuilder } from "../../plugin";
+import { blocks } from "../blocksHelper";
+
+/** Only what this suite calls, so it does not reach into core's private types. */
+interface CollectionsHandler {
+  createEntry(
+    ctx: Record<string, unknown>,
+    data: Record<string, unknown>
+  ): Promise<Record<string, unknown>>;
+  updateEntry(
+    ctx: Record<string, unknown>,
+    id: string,
+    data: Record<string, unknown>
+  ): Promise<Record<string, unknown>>;
+  getEntry(
+    ctx: Record<string, unknown>,
+    id: string
+  ): Promise<Record<string, unknown>>;
+}
+
+interface SingleEntryService {
+  update(
+    slug: string,
+    data: Record<string, unknown>,
+    ctx?: Record<string, unknown>
+  ): Promise<Record<string, unknown>>;
+  get(
+    slug: string,
+    ctx?: Record<string, unknown>
+  ): Promise<Record<string, unknown>>;
+}
+
+/** Every dialect the harness supports, so an unreachable one is skipped visibly. */
+const ALL_DIALECTS: readonly TestDialect[] = ["sqlite", "postgres", "mysql"];
+
+/**
+ * One describe per dialect, skipped rather than dropped when the server is not
+ * reachable: silently omitting a dialect is how this suite came to claim
+ * coverage it did not have.
+ */
+function describeEachDialect(
+  title: string,
+  body: (dialect: TestDialect) => void
+): void {
+  const available = new Set(getConfiguredTestDialects());
+  for (const dialect of ALL_DIALECTS) {
+    const name = `${title} (${dialect})`;
+    if (available.has(dialect)) describe(name, () => body(dialect));
+    else describe.skip(name, () => body(dialect));
+  }
+}
 
 let current: TestNextly | undefined;
 
@@ -71,9 +123,14 @@ function dataOf(result: unknown): Record<string, unknown> {
 async function handlerFor(dialect: TestDialect): Promise<CollectionsHandler> {
   current = await createTestNextly({
     dialect,
+    // Installed so the field type is registered before the schema is built.
+    // `defineCollection` accepts the token because it defers an unrecognised
+    // one to boot rather than refusing it, which is what makes a contributed
+    // field declarable from code at all.
+    plugins: [pageBuilder()],
     collections: [
       defineCollection({
-        slug: "pages",
+        slug: "docs",
         fields: [text({ name: "title" }), blocks({ name: "content" })],
       }),
     ],
@@ -86,12 +143,12 @@ describeEachDialect("blocks field storage", dialect => {
     const handler = await handlerFor(dialect);
 
     const created = await handler.createEntry(
-      { collectionName: "pages", userId: "u1", overrideAccess: true },
+      { collectionName: "docs", userId: "u1", overrideAccess: true },
       { title: "Home", content: DOCUMENT }
     );
 
     const read = await handler.getEntry({
-      collectionName: "pages",
+      collectionName: "docs",
       entryId: idOf(created),
       overrideAccess: true,
     });
@@ -104,13 +161,13 @@ describeEachDialect("blocks field storage", dialect => {
   it("reads the document back as an object, never a JSON string", async () => {
     const handler = await handlerFor(dialect);
     const created = await handler.createEntry(
-      { collectionName: "pages", userId: "u1", overrideAccess: true },
+      { collectionName: "docs", userId: "u1", overrideAccess: true },
       { title: "Home", content: DOCUMENT }
     );
 
     const content = dataOf(
       await handler.getEntry({
-        collectionName: "pages",
+        collectionName: "docs",
         entryId: idOf(created),
         overrideAccess: true,
       })
@@ -125,14 +182,14 @@ describeEachDialect("blocks field storage", dialect => {
   it("updates a document in place", async () => {
     const handler = await handlerFor(dialect);
     const created = await handler.createEntry(
-      { collectionName: "pages", userId: "u1", overrideAccess: true },
+      { collectionName: "docs", userId: "u1", overrideAccess: true },
       { title: "Home", content: DOCUMENT }
     );
 
     const emptied = { formatVersion: 1, kind: "page", nodes: [] };
     await handler.updateEntry(
       {
-        collectionName: "pages",
+        collectionName: "docs",
         entryId: idOf(created),
         userId: "u1",
         overrideAccess: true,
@@ -141,7 +198,7 @@ describeEachDialect("blocks field storage", dialect => {
     );
 
     const read = await handler.getEntry({
-      collectionName: "pages",
+      collectionName: "docs",
       entryId: idOf(created),
       overrideAccess: true,
     });
@@ -151,12 +208,12 @@ describeEachDialect("blocks field storage", dialect => {
   it("stores an absent document as null rather than inventing one", async () => {
     const handler = await handlerFor(dialect);
     const created = await handler.createEntry(
-      { collectionName: "pages", userId: "u1", overrideAccess: true },
+      { collectionName: "docs", userId: "u1", overrideAccess: true },
       { title: "No content" }
     );
 
     const read = await handler.getEntry({
-      collectionName: "pages",
+      collectionName: "docs",
       entryId: idOf(created),
       overrideAccess: true,
     });
@@ -168,12 +225,16 @@ describeEachDialect("blocks field storage", dialect => {
     // deserialize pair, so a collection round-trip proves nothing about them.
     current = await createTestNextly({
       dialect,
+      plugins: [pageBuilder()],
       singles: [
-        defineSingle({
+        {
           slug: "homepage",
-          fields: [text({ name: "title" }), blocks({ name: "content" })],
-        }),
-      ],
+          fields: [
+            text({ name: "title" }),
+            { name: "content", type: "blocks" },
+          ],
+        },
+      ] as never,
     });
     const singles =
       current.getService<SingleEntryService>("singleEntryService");
@@ -192,9 +253,10 @@ describeEachDialect("blocks field storage", dialect => {
   it("refuses a document the field does not accept", async () => {
     current = await createTestNextly({
       dialect,
+      plugins: [pageBuilder()],
       collections: [
         defineCollection({
-          slug: "pages",
+          slug: "docs",
           fields: [
             text({ name: "title" }),
             blocks({ name: "content", blocks: { allow: ["core/*"] } }),
@@ -206,7 +268,7 @@ describeEachDialect("blocks field storage", dialect => {
       current.getService<CollectionsHandler>("collectionsHandler");
 
     const result = (await handler.createEntry(
-      { collectionName: "pages", userId: "u1", overrideAccess: true },
+      { collectionName: "docs", userId: "u1", overrideAccess: true },
       {
         title: "Home",
         content: {

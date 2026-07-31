@@ -44,11 +44,13 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@dnd-kit/dom": "0.5.0",
     "@dnd-kit/react": "0.5.0",
+    "@nextlyhq/blocks-engine": "workspace:*",
     "css-tree": "^2.3.1",
     "isomorphic-dompurify": "^2"
   },

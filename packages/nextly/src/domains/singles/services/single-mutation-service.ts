@@ -534,7 +534,7 @@ export class SingleMutationService extends BaseService {
         this.logger.info("Preparing default Single document before update", {
           slug,
         });
-        const built = this.queryService.buildDefaultDocument(singleMeta);
+        const built = await this.queryService.buildDefaultDocument(singleMeta);
         existingDoc = built.document;
         pendingAutoCreateValues = built.insertValues;
         pendingLocalizedDefaults = built.localizedDefaults;
@@ -1378,7 +1378,12 @@ export class SingleMutationService extends BaseService {
                     componentFields.map(cf => ({
                       type: cf.type,
                       name: "name" in cf && cf.name ? cf.name : "",
-                      localized: "localized" in cf ? cf.localized : undefined,
+                      // A contributed declaration is open, so `localized` is
+                      // only usable when it really is the flag it names.
+                      localized:
+                        "localized" in cf && typeof cf.localized === "boolean"
+                          ? cf.localized
+                          : undefined,
                     })),
                     true
                   );

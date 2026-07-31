@@ -35,7 +35,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isBlocksField,
   isChipsField,
   isFieldGroupField,
   isDataField,
@@ -239,15 +238,6 @@ function uniqueSorted(values: string[]): string[] {
   return Array.from(new Set(values)).sort();
 }
 
-/** Whether a blocks field appears anywhere in a field tree, at any depth. */
-function hasBlocksField(fields: readonly unknown[]): boolean {
-  return fields.some(entry => {
-    const field = entry as { type?: unknown; fields?: unknown };
-    if (field?.type === "blocks") return true;
-    return Array.isArray(field?.fields) && hasBlocksField(field.fields);
-  });
-}
-
 export class TypeGenerator {
   private readonly includeComments: boolean;
   private readonly generateInputTypes: boolean;
@@ -335,12 +325,6 @@ export class TypeGenerator {
     // the names it actually references; they are spliced in here.
     const importSlot = lines.length;
 
-    const emitsBlockDocument = this.usesBlocksField(
-      collections,
-      singles,
-      components
-    );
-
     this.assertNoInterfaceNameCollisions(collections, singles, components);
 
     // Generate interfaces for each component (before collections/singles since they may reference components)
@@ -422,7 +406,6 @@ export class TypeGenerator {
       singles,
       components
     );
-    if (emitsBlockDocument) reserved.add("BlockDocument");
 
     // Globals the emitted code relies on resolving. An import of one shadows it
     // for the whole file — a non-generic `Partial` makes every `Partial<Post>`
@@ -438,9 +421,6 @@ export class TypeGenerator {
     // A blocks field is typed as the engine's document, imported from `nextly`
     // rather than the engine package so the generated file resolves against the
     // dependency every app already has.
-    if (emitsBlockDocument) {
-      imports.push('import type { BlockDocument } from "nextly";');
-    }
     // User fields are a flat list rather than an entity, so they are wrapped to
     // be scanned alongside the rest: a plugin type used only there still names
     // types the generated `User` interface has to import.
@@ -452,9 +432,9 @@ export class TypeGenerator {
         this.pluginExpressions,
         // What this file imports on its own behalf: a plugin naming the same
         // binding from the same module is asking for the one already there.
-        emitsBlockDocument
-          ? new Map([["BlockDocument", "nextly"]])
-          : new Map<string, string>()
+        // Empty now that no built-in brings a type of its own into the file —
+        // a contributed type declares its imports through `codegen.tsImports`.
+        new Map<string, string>()
       )
     );
     if (imports.length > 0) lines.splice(importSlot, 0, ...imports, "");
@@ -866,10 +846,6 @@ export class TypeGenerator {
     else if (isChipsField(field)) {
       tsType = "string[]";
     }
-    // Blocks fields (one page-builder document)
-    else if (isBlocksField(field)) {
-      tsType = "BlockDocument";
-    }
     // Component fields
     else if (isFieldGroupField(field)) {
       tsType = this.buildComponentType(field, allComponents);
@@ -998,21 +974,6 @@ export class TypeGenerator {
     }
 
     return `  ${field.name}${optional}: ${tsType};`;
-  }
-
-  /**
-   * Whether any entity declares a blocks field, which decides if the generated
-   * file needs the document type imported. Nested fields count: a blocks field
-   * inside a group or repeater is emitted as `BlockDocument` too, so a shallow
-   * check would leave the generated file referencing a name it never imported.
-   */
-  private usesBlocksField(
-    collections: DynamicCollectionRecord[],
-    singles: DynamicSingleRecord[],
-    components: DynamicFieldGroupRecord[]
-  ): boolean {
-    const entities = [...collections, ...singles, ...components];
-    return entities.some(entity => hasBlocksField(entity.fields ?? []));
   }
 
   /**
