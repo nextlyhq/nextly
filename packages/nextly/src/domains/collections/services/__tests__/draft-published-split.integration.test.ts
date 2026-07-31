@@ -146,6 +146,57 @@ describe("draft/published split — updateEntry (integration)", () => {
     });
     expect((publishedRead.data as { title?: string }).title).toBe("live");
   });
+
+  it("surfaces the working draft to an access-enforced authenticated editor, but not to an anonymous read", async () => {
+    // A collection whose reads are access-enforced: only an authenticated caller
+    // reads it, and everyone who reads it may also update it.
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: () => true },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const trusted = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(trusted, { title: "live", status: "published" });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+    await entries.updateEntry(
+      { ...trusted, entryId: id },
+      { title: "edited-in-draft" }
+    );
+
+    // An authenticated read with access enforced (no overrideAccess, no
+    // routeAuthorized) — the Direct API findByID shape — surfaces the editor's
+    // own pending draft, because they can update this (public) collection.
+    const editorRead = await entries.getEntry({
+      collectionName: COLLECTION,
+      entryId: id,
+      user: { id: "editor-1" },
+      overrideAccess: false,
+    });
+    expect(editorRead.success).toBe(true);
+    expect((editorRead.data as { title?: string }).title).toBe(
+      "edited-in-draft"
+    );
+
+    // An anonymous read (no user) never surfaces a draft — only the live row.
+    const anonRead = await entries.getEntry({
+      collectionName: COLLECTION,
+      entryId: id,
+      overrideAccess: false,
+    });
+    expect(anonRead.success).toBe(true);
+    expect((anonRead.data as { title?: string }).title).toBe("live");
+  });
 });
 
 // Publishing a document that has a pending working draft must apply the draft's

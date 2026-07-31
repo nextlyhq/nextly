@@ -2239,7 +2239,7 @@ export class CollectionQueryService extends BaseService {
       // a published-only or untrusted read: `statusFilter === null` excludes the
       // published default and `?status=published`, and `overrideAccess ||
       // routeAuthorized` excludes an anonymous caller passing `?status=all`.
-      const draftView =
+      const draftEligible =
         (collectionForStatus as { status?: boolean }).status === true &&
         // The working-draft split is non-localized-only (the write path stores
         // no draft for a localized collection), so skip the lookup there rather
@@ -2254,8 +2254,42 @@ export class CollectionQueryService extends BaseService {
             versions?: { drafts?: { enabled?: boolean } };
           }
         ).versions?.drafts?.enabled === true &&
-        statusFilter === null &&
-        (params.overrideAccess === true || params.routeAuthorized === true);
+        // Not an explicit published-only (or other specific-status) view. A
+        // trusted read's default resolves `statusFilter` to null; an
+        // access-enforced authenticated read defaults to a published-only
+        // filter, so the default view (no explicit `status`) is allowed too — an
+        // editor opening the document is asking to edit it, not to see the
+        // published copy. An explicit `?status=published` still suppresses the
+        // draft.
+        (statusFilter === null || params.status === undefined);
+      // A pending draft is surfaced only to a caller trusted to EDIT the
+      // document. The trusted write paths already attest that: overrideAccess, or
+      // the REST route's `routeAuthorized` update attestation. An access-enforced
+      // authenticated read (the Direct API `findByID` with a user) forwards
+      // neither flag, so an editor who can update the collection would otherwise
+      // never see their own pending draft. Probe update capability as a fallback
+      // — only here, so the common trusted paths pay no extra access check, and a
+      // public or read-only caller (no update grant) still never sees a draft.
+      let draftView = false;
+      if (draftEligible) {
+        if (params.overrideAccess === true || params.routeAuthorized === true) {
+          draftView = true;
+        } else if (params.user !== undefined) {
+          const updateDenied = await this.accessService.checkCollectionAccess(
+            params.collectionName,
+            "update",
+            params.user,
+            entryId,
+            undefined,
+            params.overrideAccess,
+            // The route attested a read, never an update, so the update grant is
+            // checked rather than assumed from `routeAuthorized`.
+            false,
+            params.authenticatedScope
+          );
+          draftView = !updateDenied;
+        }
+      }
       if (draftView) {
         const workingDraft = await new VersionsRepository(
           this.adapter
