@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, relationship, text } from "../../../config";
+import { defineCollection, group, relationship, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -68,7 +68,14 @@ async function boot(): Promise<TestNextly> {
           // relationships, so a hook needing that evidence cannot mask there.
           text({
             name: "token",
-            hooks: { afterRead: [() => "HIDDEN"] },
+            hooks: {
+              afterRead: [
+                ({ value }) =>
+                  typeof value === "string" && value.startsWith("HIDDEN")
+                    ? `${value}HIDDEN`
+                    : "HIDDEN",
+              ],
+            },
           }),
           text({
             name: "secret",
@@ -92,6 +99,12 @@ async function boot(): Promise<TestNextly> {
         fields: [
           text({ name: "title" }),
           relationship({ name: "author", relationTo: AUTHORS }),
+          // A relationship inside a container. Expansion populates it, so the
+          // walk has to descend through the container to reach it.
+          group({
+            name: "credits",
+            fields: [relationship({ name: "editor", relationTo: AUTHORS })],
+          }),
         ],
       }),
     ],
@@ -207,5 +220,62 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     const author = expanded.data!.author as Record<string, unknown>;
     expect(author.secret).toBe("VISIBLE");
+  });
+
+  it("reaches a relationship nested inside a container", async () => {
+    // The walk reads a collection's fields; a `group` has no `relationTo` of
+    // its own, so a walk that only looked at top-level relationship fields left
+    // everything inside a container unmasked.
+    const t = await boot();
+    await seed(t);
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "credited", credits: { editor: authorId } },
+    });
+
+    const listed = await handlerOf(t).listEntries({
+      collectionName: POSTS,
+      overrideAccess: true,
+      depth: 2,
+    });
+    const withCredits = listed.data!.docs.find(
+      d => (d as { title?: string }).title === "credited"
+    ) as Record<string, unknown>;
+    const credits = withCredits.credits as Record<string, unknown>;
+    const editor = credits.editor as Record<string, unknown>;
+
+    expect(editor).toBeTruthy();
+    expect(editor.token).toBe("HIDDEN");
+  });
+
+  it("transforms a row shared by several parents exactly once", async () => {
+    // Batch expansion hands the SAME object to every parent referencing it. A
+    // per-entry traversal runs its hooks once per reference, so a transform
+    // that is not idempotent compounds with the reference count and every
+    // parent sees the compounded value.
+    const t = await boot();
+    await seed(t);
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "second", author: authorId },
+    });
+
+    const listed = await handlerOf(t).listEntries({
+      collectionName: POSTS,
+      overrideAccess: true,
+      depth: 2,
+    });
+
+    expect(listed.data!.docs.length).toBeGreaterThan(1);
+    for (const doc of listed.data!.docs) {
+      const author = (doc as { author?: unknown }).author as Record<
+        string,
+        unknown
+      >;
+      // "HIDDEN", not "HIDDENHIDDEN" -- the marker of a second pass.
+      expect(author.token).toBe("HIDDEN");
+    }
   });
 });

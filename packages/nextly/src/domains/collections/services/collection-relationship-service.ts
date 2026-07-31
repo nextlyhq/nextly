@@ -6,6 +6,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
@@ -53,6 +54,7 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
+import { decodeJsonFieldValues } from "./collection-utils";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -73,21 +75,53 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
 
+/** Carried across one read's nested-hook pass. */
+interface NestedHookState {
+  /**
+   * Rows already visited. Batch expansion hands the same object to every parent
+   * that references it, so this is what keeps a transform from compounding
+   * with the reference count; it also breaks a reference cycle.
+   */
+  visited: Set<Record<string, unknown>>;
+  /** One schema read per collection per read, rather than per row per depth. */
+  fields: Map<string, FieldDefinition[]>;
+}
+
+function createNestedHookState(): NestedHookState {
+  return { visited: new Set(), fields: new Map() };
+}
+
 /**
- * The collection a relationship field's value came from, or null when the walk
- * cannot know.
+ * The collection a nested value belongs to, and the row itself.
  *
- * Null for a polymorphic relationship (`relationTo` is a list): the value could
- * be a row from any of them, and applying one collection's field hooks to a row
- * from another would transform the wrong fields. Skipping is the honest answer
- * -- those rows keep the protections the fetch already applied, and nothing
- * pretends they got more.
+ * A polymorphic relationship is expanded as `{ relationTo, value }`, so the
+ * target is knowable per VALUE even though the field declares several. The
+ * discriminator is validated against what the field declares, so a stored value
+ * naming a collection the field never pointed at cannot direct another
+ * collection's hooks at this row.
  */
-function targetCollectionOf(field: {
-  type?: string;
-  relationTo?: unknown;
-}): string | null {
-  if (typeof field.relationTo === "string") return field.relationTo;
+function resolveNestedTarget(
+  row: Record<string, unknown>,
+  field: { relationTo?: unknown }
+): { collection: string; row: Record<string, unknown> } | null {
+  const declared = field.relationTo;
+
+  const discriminator = row.relationTo;
+  if (typeof discriminator === "string") {
+    const inner = row.value;
+    if (typeof inner !== "object" || inner === null) return null;
+    const permitted = Array.isArray(declared)
+      ? declared.includes(discriminator)
+      : declared === discriminator;
+    if (!permitted) return null;
+    return {
+      collection: discriminator,
+      row: inner as Record<string, unknown>,
+    };
+  }
+
+  // A single-target relationship carries the row directly.
+  if (typeof declared === "string") return { collection: declared, row };
   return null;
 }
 
@@ -2809,81 +2843,170 @@ export class CollectionRelationshipService extends BaseService {
    * once the document is fully assembled.
    *
    * A field hook is the transforming half of a field's read protections -- the
-   * half that masks a value on the way out -- and its access half already runs
-   * per related row. Running the hooks there too would be wrong: related rows
-   * are fetched BEFORE the recursion that expands their own relationships, so a
-   * hook masking on `data.organization.classification` would see a raw id and
-   * return the unmasked value. A direct read of that collection expands first
-   * and runs field hooks last, and expansion may be stricter than the target's
-   * own endpoint but never looser.
+   * half that masks a value on the way out. Running it at fetch time would be
+   * wrong: related rows are read BEFORE the recursion that expands their own
+   * relationships, so a hook masking on `data.organization.classification`
+   * would see a raw id. A direct read expands first and runs field hooks last,
+   * and expansion may be stricter than the target's own endpoint but never
+   * looser.
    *
-   * So this runs once, from the read path, over the finished document: every
-   * row is complete by the time its own hooks see it, at every depth, and there
-   * is one place that decides it rather than a call at each of the several
-   * points where assembly happens to end.
+   * So this runs once, from the read path, over the finished document.
    *
-   * Walks by SCHEMA rather than by marking rows during expansion: a field's
-   * `relationTo` already says which collection the value came from, so nothing
-   * has to be threaded through the fetch to be read back here.
+   * `state` is shared across every entry in one read. Batch expansion hands the
+   * SAME row object to every parent that references it, so a per-entry
+   * traversal would run that row's hooks once per reference and compound any
+   * transform that is not idempotent. It also carries the schema cache: without
+   * it a hundred-row listing re-reads the same two collections' fields on every
+   * row, one metadata query at a time.
    */
+  /** A state a caller can share across every entry in one read. */
+  createNestedHookState(): NestedHookState {
+    return createNestedHookState();
+  }
+
   async applyNestedFieldHooks(
     entry: Record<string, unknown>,
     collectionName: string,
-    access: RelatedRowAccess
+    access: RelatedRowAccess,
+    state: NestedHookState = createNestedHookState()
   ): Promise<void> {
     // Only a real read applies these. A caller clearing the flag is assembling
     // the evidence a document-dependent rule is judged on and wants the row
     // unredacted -- the same reason the access pass is gated on it.
     if (!access.enforceFieldAccess) return;
-    await this.walkNestedRows(entry, collectionName, access, new Set(), 0);
+    await this.walkNestedRows(entry, collectionName, access, state, 0);
+  }
+
+  /**
+   * The collection's fields, read once per collection per read.
+   *
+   * Fails CLOSED. `getCollectionFields` returns an empty list when the metadata
+   * lookup fails, which here would mean "this row has no relationship fields"
+   * and silently skip every masking hook below it while the rows continue to
+   * the response. These are read protections, so a lookup that cannot be
+   * trusted refuses the read instead of quietly returning it untransformed.
+   */
+  private async fieldsForNestedWalk(
+    collectionName: string,
+    state: NestedHookState
+  ): Promise<FieldDefinition[]> {
+    const cached = state.fields.get(collectionName);
+    if (cached) return cached;
+
+    const fields = await this.getRedactionFields(collectionName);
+    if (fields === null) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "nested-field-hooks-schema-unavailable",
+          collection: collectionName,
+        },
+      });
+    }
+    state.fields.set(collectionName, fields);
+    return fields;
   }
 
   /**
    * One level of {@link applyNestedFieldHooks}.
    *
-   * `seen` breaks a reference cycle (A points at B, B points back at A) that the
-   * expansion's own depth limit would already have stopped, so this is a
-   * belt-and-braces guard rather than the primary bound. The depth cap mirrors
-   * the expansion's own maximum.
+   * Rows are claimed in {@link walkFieldValue} rather than here, so the claim
+   * covers running a row's hooks as well as descending into it. The depth cap
+   * mirrors the expansion's own maximum.
    */
   private async walkNestedRows(
     entry: Record<string, unknown>,
     collectionName: string,
     access: RelatedRowAccess,
-    seen: Set<Record<string, unknown>>,
+    state: NestedHookState,
     depth: number
   ): Promise<void> {
     if (depth > MAX_RELATIONSHIP_DEPTH) return;
-    if (seen.has(entry)) return;
-    seen.add(entry);
 
-    const fields = await this.getCollectionFields(collectionName);
+    const fields = await this.fieldsForNestedWalk(collectionName, state);
     for (const field of fields) {
-      const target = targetCollectionOf(field);
-      if (!target) continue;
+      await this.walkFieldValue(entry[field.name], field, access, state, depth);
+    }
+  }
 
-      const value = entry[field.name];
-      // An unexpanded relationship is still an id, and there is nothing to
-      // transform in a string.
-      const rows = (Array.isArray(value) ? value : [value]).filter(
-        (row): row is Record<string, unknown> =>
-          typeof row === "object" && row !== null
-      );
-      if (rows.length === 0) continue;
+  /**
+   * Visit one field's value, whatever shape it takes.
+   *
+   * A relationship can sit directly on the collection or inside a `group` or
+   * `repeater`, and `expandRelationships` populates it either way, so a walk
+   * that only looked at top-level `relationTo` fields left everything inside a
+   * container unmasked.
+   */
+  private async walkFieldValue(
+    value: unknown,
+    field: FieldDefinition,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (value === null || value === undefined) return;
 
+    const rows = (Array.isArray(value) ? value : [value]).filter(
+      (row): row is Record<string, unknown> =>
+        typeof row === "object" && row !== null
+    );
+    if (rows.length === 0) return;
+
+    const nested = getNestedFields(field);
+    if (nested.length > 0) {
+      // A container: its rows belong to THIS collection, so they carry no
+      // hooks of their own -- only the relationships inside them do.
       for (const row of rows) {
-        // Deepest first, so a hook reading into its own relations sees them
-        // already transformed rather than half-processed.
-        await this.walkNestedRows(row, target, access, seen, depth + 1);
-        await runFieldHooks({
-          kind: "collection",
-          slug: target,
-          phase: "afterRead",
-          data: row,
-          operation: "read",
-          user: access.user,
-        });
+        for (const inner of nested) {
+          await this.walkFieldValue(
+            row[inner.name],
+            inner,
+            access,
+            state,
+            depth
+          );
+        }
       }
+      return;
+    }
+
+    for (const row of rows) {
+      // A discriminated value names its own collection, so a polymorphic
+      // relationship is knowable per value rather than unknowable per field.
+      const resolved = resolveNestedTarget(row, field);
+      if (!resolved) continue;
+
+      // Claimed before anything runs, and the claim covers the hooks as well as
+      // the descent. Guarding only the descent still let a row shared by
+      // several parents be transformed once per parent, which compounds any
+      // transform that is not idempotent.
+      if (state.visited.has(resolved.row)) continue;
+      state.visited.add(resolved.row);
+
+      await this.walkNestedRows(
+        resolved.row,
+        resolved.collection,
+        access,
+        state,
+        depth + 1
+      );
+      // Decoded with the TARGET's schema. The read path decodes using the
+      // source collection's fields, which say nothing about a related row's
+      // own JSON columns, so on SQLite a hook inspecting one would be handed
+      // the storage string.
+      decodeJsonFieldValues(
+        [resolved.row],
+        await this.fieldsForNestedWalk(resolved.collection, state)
+      );
+      // Deepest first, so a hook reading into its own relations sees them
+      // already transformed rather than half-processed.
+      await runFieldHooks({
+        kind: "collection",
+        slug: resolved.collection,
+        phase: "afterRead",
+        data: resolved.row,
+        operation: "read",
+        user: access.user,
+      });
     }
   }
 

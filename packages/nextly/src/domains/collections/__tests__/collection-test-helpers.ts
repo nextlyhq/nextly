@@ -240,6 +240,9 @@ export function createMockRelationshipService(): MockRecord {
     // The read paths call this once the document is assembled. A double that
     // omits it certifies a path that throws for real.
     applyNestedFieldHooks: vi.fn().mockResolvedValue(undefined),
+    createNestedHookState: vi
+      .fn()
+      .mockImplementation(() => ({ visited: new Set(), fields: new Map() })),
     insertManyToManyRelations: vi.fn().mockResolvedValue(undefined),
     deleteManyToManyRelations: vi.fn().mockResolvedValue(undefined),
   };

@@ -1424,11 +1424,16 @@ export class CollectionQueryService extends BaseService {
       // transform it. Deferred to here because a related row is fetched before
       // the recursion that expands ITS relationships: a hook run at fetch time
       // would read those as raw ids and mask on a value that is not there yet.
+      // One state for the whole listing: batch expansion hands the same row
+      // object to every parent that references it, so a per-entry pass would
+      // run that row's hooks once per reference.
+      const nestedHookState = this.relationshipService.createNestedHookState();
       for (const expanded of expandedEntries) {
         await this.relationshipService.applyNestedFieldHooks(
           expanded,
           params.collectionName,
-          { enforceFieldAccess: true, user: params.user }
+          { enforceFieldAccess: true, user: params.user },
+          nestedHookState
         );
       }
 
