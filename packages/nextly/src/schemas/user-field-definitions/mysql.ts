@@ -129,6 +129,20 @@ export const userFieldDefinitionsMysql = mysqlTable(
     options: json("options").$type<{ label: string; value: string }[] | null>(),
 
     /**
+     * Options a plugin's own field type declared for this field.
+     *
+     * A contributed type states what it needs to render — a rating's scale, a
+     * picker's source — and core cannot know those keys, so they are stored
+     * whole rather than as columns. Without them the admin rebuilds the field
+     * config from this row and hands the plugin's editor a field stripped of
+     * its own declaration.
+     */
+    pluginOptions: json("plugin_options").$type<Record<
+      string,
+      unknown
+    > | null>(),
+
+    /**
      * Placeholder text shown in the input field.
      * @example 'Enter your phone number'
      */
