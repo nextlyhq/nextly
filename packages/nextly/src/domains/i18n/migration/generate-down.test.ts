@@ -43,6 +43,28 @@ describe("buildLocalizationDownSql", () => {
     );
   });
 
+  it("carries the publishing state back with the values it restores", () => {
+    // Publishing is per locale while an entity is localized, so a row published only under a
+    // non-default language holds that state on its companion row alone. This migration drops the
+    // companion immediately afterwards, so a restore that moved the content without the state it
+    // was published under would put a draft in front of the public — or take live content down —
+    // with nothing left to correct it from.
+    const withStatus = { ...spec, status: true };
+    const sql = buildLocalizationDownSql(withStatus);
+    expect(sql).toContain(
+      `"status" = (SELECT "_status" FROM "dc_pages_locales" ` +
+        `WHERE "dc_pages_locales"."_parent" = "dc_pages"."id" ` +
+        `ORDER BY ("dc_pages_locales"."_locale" = 'en') DESC, ` +
+        `"dc_pages_locales"."_locale" ASC LIMIT 1)`
+    );
+  });
+
+  it("does not touch status for an entity without Draft/Published", () => {
+    // `status` and `_status` only exist when the entity has Draft/Published. Reading either
+    // without it fails the whole migration, so the assignment is gated rather than defaulted.
+    expect(buildLocalizationDownSql(spec)).not.toContain(`"_status"`);
+  });
+
   it("archives non-default-locale translations before dropping", () => {
     const sql = buildLocalizationDownSql(spec);
     expect(sql).toContain(`INSERT INTO "nextly_i18n_archive"`);

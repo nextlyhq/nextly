@@ -72,9 +72,10 @@ export interface LocalizationDownOptions {
  */
 export function buildDefaultLocaleRestoreStatements(
   spec: CompanionCopyRef,
-  columnNames: readonly string[]
+  columnNames: readonly string[],
+  options: { restoreStatus?: boolean } = {}
 ): string[] {
-  if (columnNames.length === 0) return [];
+  if (columnNames.length === 0 && options.restoreStatus !== true) return [];
   const { dialect, mainTable, companionTable, defaultLocale } = spec;
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
@@ -84,12 +85,22 @@ export function buildDefaultLocaleRestoreStatements(
   const ordering =
     `ORDER BY (${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}) DESC, ` +
     `${comp}.${q("_locale", dialect)} ASC LIMIT 1`;
-  const assignments = columnNames
-    .map(name => {
+  const fromChosenRow = (target: string, source: string) =>
+    `${target} = (SELECT ${source} FROM ${comp} WHERE ${parent} ${ordering})`;
+  const assignments = [
+    ...columnNames.map(name => {
       const col = q(name, dialect);
-      return `${col} = (SELECT ${col} FROM ${comp} WHERE ${parent} ${ordering})`;
-    })
-    .join(", ");
+      return fromChosenRow(col, col);
+    }),
+    // The publishing state of the row the values came from, carried across with them. While an
+    // entity is localized, publishing is per locale: a publish under a non-default locale updates
+    // that companion row and deliberately leaves main alone. Restoring the content without the
+    // state it was published under makes a draft public or makes live content vanish — and on this
+    // path the companion is dropped immediately afterwards, so nothing is left to correct it from.
+    ...(options.restoreStatus === true
+      ? [fromChosenRow(q("status", dialect), q("_status", dialect))]
+      : []),
+  ].join(", ");
   return [
     `UPDATE ${main} SET ${assignments} ` +
       `WHERE EXISTS (SELECT 1 FROM ${comp} WHERE ${parent})`,
@@ -134,7 +145,10 @@ export function buildLocalizationDownStatements(
   stmts.push(
     ...buildDefaultLocaleRestoreStatements(
       spec,
-      onMain.map(c => c.name)
+      onMain.map(c => c.name),
+      // Only when the entity has Draft/Published, because that is what puts `status` on main and
+      // `_status` on the companion. Reading either without it fails the whole migration.
+      { restoreStatus: spec.status === true }
     )
   );
 
