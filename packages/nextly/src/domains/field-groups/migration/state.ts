@@ -35,11 +35,16 @@ export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
  * steps makes the recorded position address different work, and nothing in the
  * plan's own bytes reveals that. This constant is what does.
  *
- * Version 2 is this rename engine's plan format, in which a localization
+ * Version 2 was this rename engine's plan format, in which a localization
  * companion is carried on the entry for the table it belongs to rather than
  * occupying an entry, and therefore a step position, of its own.
+ *
+ * Version 3 adds the data rewrites to the executable list, ahead of the
+ * renames. The recorded entries are unchanged — those steps are derived rather
+ * than persisted — so nothing in a version 2 marker's bytes reveals that
+ * position N now addresses different work. This constant is what does.
  */
-export const MIGRATION_MARKER_VERSION = 2;
+export const MIGRATION_MARKER_VERSION = 3;
 
 /**
  * Highest step the marker will hold, one below the safe-integer ceiling.

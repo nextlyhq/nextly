@@ -1,0 +1,108 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { MetaService } from "../../../meta/services/meta-service";
+import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
+import { buildMigrationPlan } from "../plan";
+import type { ManifestEntry } from "../manifest";
+import type { MigrationSession } from "../session";
+import type { StorageObserver } from "../steps";
+
+const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
+
+/** A canonical plan: one field group with a companion, plus the registry. */
+const ENTRIES: ManifestEntry[] = [
+  {
+    kind: "table",
+    from: "comp_hero",
+    to: "fg_hero",
+    companion: { from: "comp_hero_locales", to: "fg_hero_locales" },
+  },
+  {
+    kind: "column",
+    from: "_component_type",
+    to: "_field_group_type",
+    table: "fg_hero",
+  },
+  { kind: "registry", from: "dynamic_components", to: "dynamic_field_groups" },
+];
+
+const observer: StorageObserver = {
+  tables: vi.fn(async () => []),
+  columns: vi.fn(async () => undefined),
+  pointers: vi.fn(async () => []),
+  indexNames: vi.fn(async () => undefined),
+};
+
+const meta = {} as unknown as MetaService;
+
+function plan(direction: "up" | "down"): string[] {
+  return buildMigrationPlan({
+    direction,
+    entries: ENTRIES,
+    identifierCase: PRESERVING,
+    observer,
+    meta,
+    migrationId: "run-1",
+  }).map(step => step.id);
+}
+
+describe("assembling the steps one run executes", () => {
+  // 🔴 The data steps must precede every rename going up. They reach their
+  // tables through the typed CRUD, which refuses a name the ORM does not
+  // declare, and the field-group registry is declared under its LEGACY name -
+  // so those steps are only expressible before its rename.
+  it("puts the data rewrites ahead of the renames going up", () => {
+    const ids = plan("up");
+    const lastData = ids.findLastIndex(id => id.startsWith("data:"));
+    const firstRename = ids.findIndex(id => !id.startsWith("data:"));
+    expect(lastData).toBeLessThan(firstRename);
+  });
+
+  it("runs every data step and every rename exactly once", () => {
+    const ids = plan("up");
+    expect(ids).toEqual([
+      "data:registry-definitions",
+      "data:schema-event-scope",
+      "data:nextly_versions.snapshot",
+      "data:nextly_events.payload",
+      "table:comp_hero->fg_hero",
+      "column:fg_hero._component_type->_field_group_type",
+      "registry:dynamic_components->dynamic_field_groups",
+    ]);
+  });
+
+  // 🔴 The property the whole design rests on: down is the exact reverse of up.
+  // That is what puts the data steps AFTER the renames on the way back, when
+  // the names they address have been restored.
+  it("is the exact reverse of itself going down", () => {
+    const up = plan("up");
+    const down = plan("down");
+
+    expect(down).toHaveLength(up.length);
+    // Same work, mirrored: each down id is its up counterpart with the rename
+    // reversed, so comparing the ordering of KINDS is the honest check.
+    const kind = (id: string): string => id.split(":")[0] ?? "";
+    expect(down.map(kind)).toEqual([...up.map(kind)].reverse());
+  });
+
+  it("reverses each rename rather than reissuing it", () => {
+    expect(plan("down")).toEqual([
+      "registry:dynamic_field_groups->dynamic_components",
+      "column:fg_hero._field_group_type->_component_type",
+      "table:fg_hero->comp_hero",
+      "data:nextly_events.payload",
+      "data:nextly_versions.snapshot",
+      "data:schema-event-scope",
+      "data:registry-definitions",
+    ]);
+  });
+
+  // The canonical plan is always legacy-to-migrated, whichever way the run
+  // goes. Handing this function a pre-inverted plan for a rollback would invert
+  // it twice and migrate forward while reporting a rollback.
+  it("does not mutate the entries it was given", () => {
+    const snapshot = structuredClone(ENTRIES);
+    plan("down");
+    expect(ENTRIES).toEqual(snapshot);
+  });
+});
