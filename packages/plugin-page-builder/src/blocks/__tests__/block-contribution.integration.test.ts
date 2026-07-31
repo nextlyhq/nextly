@@ -13,16 +13,17 @@
 import {
   allBlocks,
   clearBlocks,
-  defineBlock,
   getBlock,
   getBlockSource,
+  getSupport,
+  registerSupport,
 } from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createTestNextly, type TestNextly } from "nextly/testing";
 
-import { blockRegistry } from "../registration-service";
+import { blockRegistry, defineBlock } from "../index";
 import { pageBuilder } from "../../plugin";
 
 let current: TestNextly | undefined;
@@ -103,6 +104,31 @@ describe("a plugin contributes blocks through the page builder", () => {
     current = await createTestNextly({ plugins: [pageBuilder(), empty] });
 
     expect(allBlocks().some(b => b.name.startsWith("acme/"))).toBe(false);
+  });
+});
+
+describe("resetting blocks leaves the support vocabulary alone", () => {
+  it("keeps a support registered in the same init as the blocks using it", async () => {
+    // Supports are the vocabulary blocks are validated against, and a plugin
+    // may register one immediately before the blocks that use it. Clearing both
+    // together erased that support between the two calls, and the blocks were
+    // then refused as using an unknown one.
+    const withSupport = definePlugin({
+      name: "@acme/support-blocks",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      init: ctx => {
+        registerSupport({ key: "telepathy" });
+        blockRegistry(ctx).register(pricingTable, "@acme/support-blocks");
+      },
+    });
+
+    current = await createTestNextly({
+      plugins: [pageBuilder(), withSupport],
+    });
+
+    expect(getSupport("telepathy")).toBeDefined();
+    expect(getBlock("acme/pricing-table")).toBeDefined();
   });
 });
 

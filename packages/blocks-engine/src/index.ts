@@ -103,6 +103,7 @@ export {
   getSupport,
   allSupports,
   clearBlocks,
+  clearBlockDefinitions,
   MAX_BLOCK_VERSION,
   registryLookup,
   registryMigrationSource,

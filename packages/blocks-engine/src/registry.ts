@@ -313,6 +313,20 @@ export function clearBlocks(): void {
 }
 
 /**
+ * Drop every registered block, leaving supports registered.
+ *
+ * A boot rebuilds the block set, but supports are a vocabulary blocks are
+ * validated against, and a plugin may register one immediately before the
+ * blocks that use it. Clearing both together means that plugin's own support
+ * disappears between the two calls and its blocks are then refused as using an
+ * unknown support — and any support an earlier plugin registered is lost with
+ * it.
+ */
+export function clearBlockDefinitions(): void {
+  blockStore().clear();
+}
+
+/**
  * The registry as the block-type lookup validation expects, so validating a
  * document against the running app's blocks needs no adapter at the call site.
  * Reads through to the live registry, so it stays correct across a re-register.

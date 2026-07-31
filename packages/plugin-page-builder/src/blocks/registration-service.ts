@@ -18,7 +18,7 @@
  */
 
 import {
-  clearBlocks,
+  clearBlockDefinitions,
   registerBlocks,
   type AnyBlockDefinition,
 } from "@nextlyhq/blocks-engine";
@@ -75,7 +75,7 @@ export interface BlockRegistrationService {
  * process and a restart begins empty.
  */
 export function createBlockRegistrationService(): BlockRegistrationService {
-  clearBlocks();
+  clearBlockDefinitions();
   return {
     register(definitions, source) {
       const list = Array.isArray(definitions) ? definitions : [definitions];
