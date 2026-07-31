@@ -76,6 +76,9 @@ describe("populateCompanionFields (real SQLite)", () => {
         localizedFields: [{ name: "body", column: "body" }],
         rows,
         localeChain: ["en"],
+        // "ready" so the empty-rows short-circuit is what returns here, not the
+        // upstream readiness gate (which returns before the rows are inspected).
+        readiness: "ready",
       })
     ).resolves.toBeUndefined();
   });
