@@ -648,10 +648,12 @@ export function getHookRegistry(): HookRegistry {
 }
 
 /**
- * Reset the global hook registry (for testing only)
+ * Clear every hook from the global registry.
  *
- * Clears all registered hooks from the global registry.
- * Should only be used in test cleanup.
+ * Called when services shut down or are cleared, because the registry outlives
+ * the DI container: handlers are registered from config on each init, so a
+ * registry left populated would hand a second instance in the same process a
+ * duplicate of every handler plus the dead instance's own.
  *
  * @internal
  * @example

@@ -75,7 +75,7 @@ import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
-import { getHookRegistry } from "../hooks/hook-registry";
+import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
@@ -2535,6 +2535,11 @@ export async function shutdownServices(): Promise<void> {
     // process-global too, and its provider closes over this container's
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
+    // Hooks live in a process-global registry too. Registration runs from
+    // config on every init, so leaving it populated means a second instance in
+    // the same process appends a fresh copy of every handler and runs the dead
+    // instance's alongside the new one.
+    resetHookRegistry();
     globalForReg.__nextly_isRegistered = false;
   }
 }
@@ -2552,6 +2557,9 @@ export function clearServices(): void {
   // Clear the process-global recording activation for the same reason; its
   // provider closes over this container's registry.
   resetWebhookActivation();
+  // Cleared with the container for the same reason: re-initializing would
+  // otherwise register every configured hook a second time.
+  resetHookRegistry();
   globalForReg.__nextly_isRegistered = false;
 }
 
