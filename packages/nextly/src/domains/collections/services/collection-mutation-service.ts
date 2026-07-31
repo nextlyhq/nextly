@@ -4497,6 +4497,46 @@ export class CollectionMutationService extends BaseService {
           }
         : null;
 
+      // When a publish could promote a working draft, the draft's components are
+      // folded into the write INSIDE the transaction — after the preflight below.
+      // A promoted localized component whose companion exists would otherwise
+      // reach the write with no presence entry and be misfiled (default locale)
+      // or refused (non-default). Read the draft on the pooled connection here
+      // (advisory only: the authoritative fetch runs under the row lock in the
+      // transaction, and this write neither stores nor deletes it) and turn its
+      // snapshot into a restore input, so the preflight probes exactly the
+      // component types the fold will write. The caller's own components override
+      // the draft's per field, matching the in-transaction merge.
+      const promoteComponentPreview: Record<string, unknown> = {};
+      if (promotePossible && promoteRestoreCtx) {
+        const advisoryDraft = await new VersionsRepository(
+          this.adapter
+        ).findWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          },
+          null
+        );
+        if (advisoryDraft) {
+          const { payload: advisoryInput } = buildRestorePayload(
+            advisoryDraft.snapshot,
+            fields as unknown as FieldConfig[],
+            promoteRestoreCtx
+          );
+          for (const field of fields) {
+            if (
+              isFieldGroupField(field) &&
+              field.name &&
+              advisoryInput[field.name] !== undefined
+            ) {
+              promoteComponentPreview[field.name] = advisoryInput[field.name];
+            }
+          }
+        }
+      }
+
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
       // The content UPDATE is a deterministic SET, so re-applying it is safe.
@@ -4512,6 +4552,13 @@ export class CollectionMutationService extends BaseService {
       // resolves, so a rolled-back attempt (a version conflict) or a commit
       // failure never flags a durable event that isn't there.
       let recorded = false;
+      // Set when this update was stored as a working draft (see the split below).
+      // The live row is left untouched, so the row re-fetched after the
+      // transaction is the OLD published content; the response, afterUpdate/
+      // afterChange hooks, and the reaction event must use this pending document
+      // instead, and the public revalidation and reaction event are skipped
+      // because the live document a visitor sees did not change.
+      let workingDraftDocument: Record<string, unknown> | undefined;
       // Verify every localized field group in this payload can actually be written
       // BEFORE the transaction opens. Inside it the probes would borrow a second
       // connection and deadlock a single-connection pool, and a NextlyError raised in
@@ -4520,7 +4567,9 @@ export class CollectionMutationService extends BaseService {
       const fieldGroupPresence =
         (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
           fields: fields as unknown as FieldConfig[],
-          data: componentFieldData,
+          // The draft's component types are included so a promote that folds them
+          // in has their companion presence resolved here, off the transaction.
+          data: { ...promoteComponentPreview, ...componentFieldData },
           locale: params.locale,
         })) ?? new Map<string, boolean>();
       await withVersionConflictRetry(() =>
@@ -5207,6 +5256,11 @@ export class CollectionMutationService extends BaseService {
                   fields,
                   tx
                 );
+                // Reused after the transaction as the response/hook document,
+                // since the live row the re-fetch returns is the unchanged
+                // published content.
+                const draftDocument = assembleDocument(draftParts);
+                workingDraftDocument = draftDocument;
                 await new VersionsRepository(tx).upsertWorkingDraft({
                   ref: {
                     scopeKind: "collection",
@@ -5220,7 +5274,7 @@ export class CollectionMutationService extends BaseService {
                   // arrives under a different locale in a localization-configured
                   // app. The read overlay and promote use the same null key.
                   locale: null,
-                  snapshot: assembleDocument(draftParts),
+                  snapshot: draftDocument,
                   createdBy: params.user?.id ?? null,
                 });
               }
@@ -5422,29 +5476,41 @@ export class CollectionMutationService extends BaseService {
       // recording/revalidation opt-outs below.
       committedWrite = true;
 
+      // A pure draft edit leaves the live row untouched, so the re-fetched
+      // `updated` is the OLD published content. Everything that reports what this
+      // update produced — the response, the afterUpdate/afterChange hooks — uses
+      // the pending draft document instead.
+      const responseSource = (workingDraftDocument ?? updated) as Record<
+        string,
+        unknown
+      >;
+
       // The tags this update invalidates: the id and current-slug tags, plus the
       // previous-slug tag when the slug changed (captured in the transaction), so
       // a read cached under the old URL clears. Built on the committed write, NOT
       // the outbox-event flag: reaching here past the 404 guard means the row was
       // written, so an opted-out (`webhooks: false`) update — which records no
-      // event — must still bust its tags, exactly as create and delete do.
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: params.entryId,
-          slug: readStringField(updated as Record<string, unknown>, "slug"),
-          previousSlug,
-          locale: localizedUpdate?.writeLocale,
-        }
-      );
+      // event — must still bust its tags, exactly as create and delete do. A
+      // draft edit changes nothing a visitor sees, so it busts no public tags.
+      if (!workingDraftDocument) {
+        revalidationIntent = buildEntryRevalidationIntent(
+          params.collectionName,
+          readRevalidateConfig(collection),
+          {
+            id: params.entryId,
+            slug: readStringField(updated as Record<string, unknown>, "slug"),
+            previousSlug,
+            locale: localizedUpdate?.writeLocale,
+          }
+        );
+      }
 
       // Execute afterUpdate hooks (code-registered)
       // Hooks run after database update completes (for side effects)
       const afterContext = this.hookService.buildHookContext({
         collection: params.collectionName,
         operation: "update" as const,
-        data: updated,
+        data: responseSource,
         originalData: existingEntry,
         user: params.user,
         context: sharedContext, // Pass shared context from beforeUpdate
@@ -5459,20 +5525,24 @@ export class CollectionMutationService extends BaseService {
         this.hookService.buildPrebuiltHookContext(
           params.collectionName,
           "update",
-          updated,
+          responseSource,
           this.queryDatabaseFn,
           params.user,
           sharedContext
         )
       );
 
-      // Post-commit reaction event (D8/D51).
-      emitCollectionEvent(
-        "updated",
-        params.collectionName,
-        updated,
-        params.user
-      );
+      // Post-commit reaction event (D8/D51). Skipped for a pure draft edit: the
+      // live document did not change, so no cache reaction is owed — mirroring
+      // the outbox `entry.updated` event, which is already suppressed above.
+      if (!workingDraftDocument) {
+        emitCollectionEvent(
+          "updated",
+          params.collectionName,
+          updated,
+          params.user
+        );
+      }
 
       // D69 document-level status events. Status is a user-defined field;
       // emit only when a `status` field value actually changed on update.
@@ -5526,15 +5596,19 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      // Deserialize JSON fields (richtext, blocks, array, group, json) for response
+      // Deserialize JSON fields (richtext, blocks, array, group, json) for
+      // response. A no-op on the draft document, whose JSON fields are already
+      // parsed by the snapshot builder.
       fields.forEach(field => {
         if (
           isJsonFieldType(field.type, field) &&
-          updated[field.name] &&
-          typeof updated[field.name] === "string"
+          responseSource[field.name] &&
+          typeof responseSource[field.name] === "string"
         ) {
           try {
-            updated[field.name] = JSON.parse(updated[field.name] as string);
+            responseSource[field.name] = JSON.parse(
+              responseSource[field.name] as string
+            );
           } catch {
             // If parsing fails, keep as string
           }
@@ -5548,17 +5622,19 @@ export class CollectionMutationService extends BaseService {
         kind: "collection",
         slug: params.collectionName,
         phase: "afterChange",
-        data: updated as Record<string, unknown>,
+        data: responseSource,
         operation: "update",
         user: params.user,
       });
 
-      // Expand relationships in response if depth is specified
-      let responseEntry = updated;
+      // Expand relationships in response if depth is specified. Runs on the
+      // draft document too for a draft edit, so a trusted editor's save response
+      // populates top-level relations at the requested depth just like a read.
+      let responseEntry = responseSource;
       if (depth !== undefined && depth > 0) {
         try {
           responseEntry = await this.relationshipService.expandRelationships(
-            updated,
+            responseSource,
             params.collectionName,
             fields,
             {
@@ -5597,7 +5673,7 @@ export class CollectionMutationService extends BaseService {
       // Redact the response: drop write-only password hashes and any field
       // the caller may write but not read (parity with the query path).
       await this.redactResponseFields(
-        responseEntry as Record<string, unknown>,
+        responseEntry,
         fields,
         {
           user: params.user,

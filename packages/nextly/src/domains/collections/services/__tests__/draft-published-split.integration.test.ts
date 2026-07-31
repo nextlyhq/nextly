@@ -89,6 +89,9 @@ describe("draft/published split — updateEntry (integration)", () => {
       { title: "edited-in-draft" }
     );
     expect(res.success).toBe(true);
+    // The response reflects the pending draft the caller just saved, not the
+    // unchanged live row the transaction re-fetches.
+    expect((res.data as { title?: string }).title).toBe("edited-in-draft");
 
     // The live row is unchanged: title AND status.
     const [liveAfter] = await handle!.adapter.select<LiveRow>(TABLE);

@@ -2271,7 +2271,34 @@ export class CollectionQueryService extends BaseService {
           null
         );
         if (workingDraft) {
-          expandedEntry = workingDraft.snapshot as Record<string, unknown>;
+          let draftEntry = workingDraft.snapshot as Record<string, unknown>;
+          // The snapshot stores top-level relations as ids (captured at depth 0),
+          // so expand them at the requested depth to match a live read. Only
+          // relationship expansion runs here, never component population: the
+          // snapshot already carries the draft's own component values, and
+          // re-reading components from their tables would replace the pending
+          // edits with live content — the reason the overlay sits after the live
+          // assembly at all.
+          if (params.depth !== undefined && params.depth > 0) {
+            draftEntry = await this.relationshipService.expandRelationships(
+              draftEntry,
+              params.collectionName,
+              fields,
+              {
+                depth: params.depth,
+                enforceFieldAccess: true,
+                user: params.user,
+                overrideAccess: params.overrideAccess,
+                authenticatedScope: params.authenticatedScope,
+                locale: localeChain?.[0],
+                status:
+                  params.status === "all" || params.overrideAccess === true
+                    ? "all"
+                    : undefined,
+              }
+            );
+          }
+          expandedEntry = draftEntry;
         }
       }
 
