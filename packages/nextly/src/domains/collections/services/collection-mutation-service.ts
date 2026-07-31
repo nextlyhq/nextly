@@ -5256,17 +5256,47 @@ export class CollectionMutationService extends BaseService {
                   fields,
                   tx
                 );
+                // This document is built from the live parent + relations with
+                // only the CURRENT patch overlaid. Accumulate it onto an existing
+                // working draft rather than the live row: a second status-less
+                // save of different fields would otherwise re-derive from live and
+                // revert the first pending edit. Read the draft under the row lock
+                // (already held above) and, when one exists, overlay only the
+                // fields this patch touched onto it, at the assembled read shape.
                 // Reused after the transaction as the response/hook document,
                 // since the live row the re-fetch returns is the unchanged
                 // published content.
-                const draftDocument = assembleDocument(draftParts);
+                const draftRepo = new VersionsRepository(tx);
+                const patchedDocument = assembleDocument(draftParts);
+                const draftRef = {
+                  scopeKind: "collection" as const,
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                };
+                const existingDraft = await draftRepo.findWorkingDraft(
+                  draftRef,
+                  null
+                );
+                let draftDocument = patchedDocument;
+                if (existingDraft) {
+                  const touched = new Set<string>([
+                    ...Object.keys(updatePayload),
+                    ...Object.keys(componentFieldData),
+                    ...Object.keys(manyToManyData),
+                  ]);
+                  const patchFields = Object.fromEntries(
+                    Object.entries(patchedDocument).filter(([key]) =>
+                      touched.has(key)
+                    )
+                  );
+                  draftDocument = {
+                    ...(existingDraft.snapshot as Record<string, unknown>),
+                    ...patchFields,
+                  };
+                }
                 workingDraftDocument = draftDocument;
-                await new VersionsRepository(tx).upsertWorkingDraft({
-                  ref: {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
-                  },
+                await draftRepo.upsertWorkingDraft({
+                  ref: draftRef,
                   // The split is non-localized only, so the working draft is one
                   // logical document with no per-locale variant: key it under the
                   // unlocalized `locale IS NULL` slot. Keying it by the resolved

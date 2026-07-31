@@ -117,6 +117,37 @@ describe("draft/published split — updateEntry (integration)", () => {
     expect(await durableCount()).toBe(durableBefore);
   });
 
+  it("accumulates disjoint status-less edits onto the working draft instead of overwriting them", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live-t",
+      body: "live-b",
+      status: "published",
+    });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Two SEPARATE status-less saves touching different fields. The second must
+    // build on the pending draft, not re-derive from the live row (which would
+    // revert the first edit).
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft-t" });
+    await entries.updateEntry({ ...ctx, entryId: id }, { body: "draft-b" });
+
+    // One coalesced draft holding BOTH edits.
+    expect(await workingDraftCount(id)).toBe(1);
+    const draftRead = await entries.getEntry({ ...ctx, entryId: id });
+    const data = draftRead.data as { title?: string; body?: string };
+    expect(data.title).toBe("draft-t");
+    expect(data.body).toBe("draft-b");
+
+    // The live row is still fully untouched.
+    const [live] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(live.title).toBe("live-t");
+    expect(live.body).toBe("live-b");
+  });
+
   it("surfaces the working draft on a trusted draft-view read, but the live row on a published-view read", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
