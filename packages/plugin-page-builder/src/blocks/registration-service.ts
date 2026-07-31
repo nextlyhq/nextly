@@ -44,13 +44,14 @@ export interface BlockRegistrationService {
   /**
    * Add block definitions to the page builder.
    *
-   * `source` is recorded against each block so a name collision between two
-   * plugins names both culprits instead of failing anonymously.
+   * The contributing plugin is recorded against each block, so a name collision
+   * between two plugins names both culprits instead of failing anonymously. It
+   * is taken from the caller's own identity rather than passed in: a plugin that
+   * renamed itself, or copied a neighbour's call, would otherwise file its
+   * blocks under a plugin that did not register them and send whoever hits the
+   * collision to the wrong package.
    */
-  register(
-    definitions: AnyBlockDefinition | AnyBlockDefinition[],
-    source: string
-  ): void;
+  register(definitions: AnyBlockDefinition | AnyBlockDefinition[]): void;
 
   /**
    * Add a custom support — a capability key blocks may declare.
@@ -65,15 +66,33 @@ export interface BlockRegistrationService {
 }
 
 /**
+ * The single service instance the page builder contributes, shared by every
+ * contributor.
+ *
+ * It takes the contributing plugin's name explicitly because one instance
+ * serves them all; `blockRegistry` below is what binds each caller's own
+ * identity, so the name can never be supplied by hand at a call site.
+ */
+interface BlockRegistrationBackend {
+  register(
+    definitions: AnyBlockDefinition | AnyBlockDefinition[],
+    source: string
+  ): void;
+  registerSupport(support: SupportDefinition): void;
+}
+
+/**
  * Build the service the page builder contributes.
  *
  * The registry is emptied here, at the moment the first contribution of a boot
  * is about to be made, rather than earlier. That placement is load-bearing in
  * both directions:
  *
- * - Not in the page builder's `init`, because init order is not fixed: a
- *   contributor whose init ran first would have its blocks wiped by a later
- *   clear.
+ * - Not directly in the page builder's `init`, because init order is not fixed:
+ *   a contributor whose init ran first would have its blocks wiped by a later
+ *   clear. The page builder does resolve this service from `init`, but that
+ *   only triggers the reset on a boot where nothing else has already, since
+ *   resolution is memoized.
  * - Not in `setup`, which is the one hook a config reload DOES re-run. A reload
  *   never goes back through `registerServices`, so no `init` runs afterwards to
  *   repopulate — clearing there empties the registry for the rest of the
@@ -88,12 +107,19 @@ export interface BlockRegistrationService {
  * refused as using an unknown one. Both are contributed through this service,
  * so both are registered after the reset and neither can be caught by it.
  *
- * The cost is that a contributor removed mid-process leaves its blocks behind:
- * with nothing resolving this service, nothing clears them. That is the smaller
- * problem — the registry lives on `globalThis`, so it does not outlive the
- * process and a restart begins empty.
+ * A boot on which no plugin contributes still resets, because the page builder
+ * resolves this service from its own `init`. Left to contributors alone, a boot
+ * whose last contributing plugin had been removed would resolve nothing, and
+ * that plugin's blocks would stay registered for the life of the process.
+ *
+ * The case that remains is a config reload, which re-runs neither
+ * `registerServices` nor any `init`: contributions are not re-registered there
+ * either, so the registry keeps exactly the blocks the running process
+ * registered, and a plugin removed by that reload is visible until a restart.
+ * Closing it needs core to re-run `init` on reload, and clearing without that
+ * would empty the registry with nothing left to repopulate it.
  */
-export function createBlockRegistrationService(): BlockRegistrationService {
+export function createBlockRegistrationService(): BlockRegistrationBackend {
   clearBlocks();
   return {
     registerSupport,
@@ -108,15 +134,20 @@ export function createBlockRegistrationService(): BlockRegistrationService {
 }
 
 /**
- * Typed handle to the page builder's block registry.
+ * Typed handle to the page builder's block registry, bound to the calling
+ * plugin.
  *
  * The cross-plugin namespace is typed `Record<string, Record<string, unknown>>`,
  * so reaching it directly costs a cast at every call site and gives block
  * authors no argument checking. This resolves it once and states what came back.
+ *
+ * Resolving is also what triggers the per-boot reset, so the page builder calls
+ * this on itself during `init` to guarantee the reset happens on every boot
+ * rather than only on boots where something contributes.
  */
 export function blockRegistry(ctx: PluginContext): BlockRegistrationService {
   const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
-  if (!isBlockRegistrationService(service)) {
+  if (!isBlockRegistrationBackend(service)) {
     // Named rather than a generic missing-service message: the overwhelmingly
     // likely cause is that the page builder is not installed, and a plugin
     // author reading this should not have to infer that.
@@ -126,13 +157,20 @@ export function blockRegistry(ctx: PluginContext): BlockRegistrationService {
         `defineConfig({ plugins: [...] }) before any plugin that contributes blocks.`
     );
   }
-  return service;
+  // Provenance comes from the plugin's own resolved identity, so it names the
+  // plugin that actually registered rather than whatever string reached the
+  // call site.
+  const source = ctx.self.name;
+  return {
+    register: definitions => service.register(definitions, source),
+    registerSupport: support => service.registerSupport(support),
+  };
 }
 
 /** Whether a resolved service is the block registry rather than something else. */
-function isBlockRegistrationService(
+function isBlockRegistrationBackend(
   value: unknown
-): value is BlockRegistrationService {
+): value is BlockRegistrationBackend {
   return (
     typeof value === "object" &&
     value !== null &&

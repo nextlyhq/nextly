@@ -10,6 +10,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   BLOCK_SERVICE,
+  blockRegistry,
   createBlockRegistrationService,
 } from "./blocks/registration-service";
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
@@ -46,6 +47,16 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     admin: {
       description:
         "Build pages visually from blocks with drag-and-drop editing",
+    },
+    // Resolving the block registry is what empties it for the boot, and the
+    // service is lazy: on a boot where nothing contributes, no contributor
+    // resolves it and the previous boot's blocks would survive. Resolving it
+    // here makes the reset unconditional. The handle is deliberately unused —
+    // the page builder registers no blocks of its own — and resolving from
+    // `init` cannot wipe a contributor that ran first, because the factory is
+    // memoized for the boot and clears only on its first resolution.
+    init: ctx => {
+      blockRegistry(ctx);
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no

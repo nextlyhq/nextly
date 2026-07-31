@@ -49,6 +49,15 @@ const pricingTable = defineBlock({
   render: () => null,
 });
 
+const heroBanner = defineBlock({
+  name: "acme/hero-banner",
+  version: 1,
+  description: "A hero banner.",
+  example: { props: {} },
+  props: {},
+  render: () => null,
+});
+
 /** A plugin that contributes one block through the page builder's registry. */
 function contributor(name = "@acme/pricing-blocks") {
   return definePlugin({
@@ -56,7 +65,7 @@ function contributor(name = "@acme/pricing-blocks") {
     version: "1.0.0",
     nextly: ">=0.0.0",
     init: ctx => {
-      blockRegistry(ctx).register(pricingTable, name);
+      blockRegistry(ctx).register(pricingTable);
     },
   });
 }
@@ -82,6 +91,29 @@ describe("a plugin contributes blocks through the page builder", () => {
     expect(getBlockSource("acme/pricing-table")).toBe("@acme/pricing-blocks");
   });
 
+  it("attributes each block to the plugin that registered it", async () => {
+    // One service instance serves every contributor, so attribution has to be
+    // bound per caller rather than held on the instance. Two plugins
+    // registering in the same boot is what tells the two apart: a source held
+    // on the shared instance, or taken from an argument, would file both blocks
+    // under whichever plugin ran last.
+    const marketing = definePlugin({
+      name: "@acme/marketing-blocks",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      init: ctx => {
+        blockRegistry(ctx).register(heroBanner);
+      },
+    });
+
+    current = await createTestNextly({
+      plugins: [pageBuilder(), contributor(), marketing],
+    });
+
+    expect(getBlockSource("acme/pricing-table")).toBe("@acme/pricing-blocks");
+    expect(getBlockSource("acme/hero-banner")).toBe("@acme/marketing-blocks");
+  });
+
   it("refuses to contribute when the page builder is absent", async () => {
     // The failure this design exists to prevent: registering into a registry
     // nothing drains, and finding out only when a page renders empty.
@@ -98,7 +130,7 @@ describe("a plugin contributes blocks through the page builder", () => {
       version: "1.0.0",
       nextly: ">=0.0.0",
       init: ctx => {
-        blockRegistry(ctx).register([], "@acme/empty-blocks");
+        blockRegistry(ctx).register([]);
       },
     });
 
@@ -121,7 +153,7 @@ describe("resetting blocks leaves the support vocabulary alone", () => {
       init: ctx => {
         const registry = blockRegistry(ctx);
         registry.registerSupport({ key: "telepathy" });
-        registry.register(pricingTable, "@acme/support-blocks");
+        registry.register(pricingTable);
       },
     });
 
@@ -146,7 +178,7 @@ describe("resetting blocks leaves the support vocabulary alone", () => {
         init: ctx => {
           const registry = blockRegistry(ctx);
           registry.registerSupport({ key: "telepathy" });
-          registry.register(pricingTable, "@acme/support-blocks");
+          registry.register(pricingTable);
         },
       });
 
@@ -165,6 +197,23 @@ describe("resetting blocks leaves the support vocabulary alone", () => {
 });
 
 describe("the registry survives a second boot", () => {
+  it("drops a removed contributor's blocks on the next boot", async () => {
+    // The reset runs when the registry service is first resolved, and the
+    // service is lazy — so on a boot where nothing contributes, nothing would
+    // resolve it and the departed plugin's blocks would still be offered.
+    // Both boots run inside one test because the suite's `afterEach` clears the
+    // registry, which would hide exactly the leak being asserted.
+    current = await createTestNextly({
+      plugins: [pageBuilder(), contributor()],
+    });
+    expect(getBlock("acme/pricing-table")).toBeDefined();
+    await current.destroy();
+
+    current = await createTestNextly({ plugins: [pageBuilder()] });
+
+    expect(getBlock("acme/pricing-table")).toBeUndefined();
+  });
+
   it("re-registers the same block without a collision", async () => {
     // The registry is pinned to globalThis and outlives a config reload, while
     // every plugin's init runs again — so a boot that did not reset it would
