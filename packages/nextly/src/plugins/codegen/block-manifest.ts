@@ -276,7 +276,14 @@ export function assertManifestPathIsFree(typesOutputPath: string): void {
   // manifest is written and then overwritten by the types; with none, the
   // cleanup deletes the types output the user asked for. Both are silent, and
   // one destroys work, so the collision is refused before either happens.
-  if (basename(typesOutputPath) === BLOCK_MANIFEST_FILENAME) {
+  //
+  // Compared without regard to case, because on macOS and Windows the default
+  // filesystem is case-insensitive: `BLOCKS.MANIFEST.JSON` is the same file
+  // there, and a case-sensitive comparison would protect Linux alone while the
+  // delete still landed everywhere else. On a case-sensitive filesystem this
+  // refuses a name that would in fact have been distinct, which costs a user
+  // nothing beyond picking a less confusing one.
+  if (basename(typesOutputPath).toLowerCase() === BLOCK_MANIFEST_FILENAME) {
     throw NextlyError.validation({
       errors: [
         {
@@ -418,6 +425,12 @@ function declaredBlocks(value: unknown, source: string): DeclaredBlock[] {
         `Block "${definition.name}" from "${source}" has no numeric version.`
       );
     }
+    const gaps = missingMigrationSteps(definition.version, definition.migrate);
+    if (gaps.length > 0) {
+      throw invalidDeclaration(
+        `Block "${definition.name}" from "${source}" is at version ${definition.version} but has no migration from version${gaps.length > 1 ? "s" : ""} ${gaps.join(", ")}. Add the missing step(s) so stored blocks can be upgraded.`
+      );
+    }
     if (
       typeof definition.description !== "string" ||
       definition.description.length === 0
@@ -470,6 +483,34 @@ function toEntry(block: DeclaredBlock, source: string): BlockManifestDraft {
   if (isRecord(block.supports)) entry.supports = block.supports;
   if (isRecord(block.slots)) entry.slots = block.slots;
   return entry;
+}
+
+/**
+ * The versions between 1 and this block's own that no migration step covers.
+ *
+ * A version above 1 says stored nodes exist at older versions, so every step
+ * between has to be there or those nodes could never be upgraded. Registration
+ * refuses a declaration with a gap, and the map is functions — which never
+ * reach the manifest — so this is judged from the declaration or not at all.
+ *
+ * Only for a version already in range. An out-of-range one is refused by the
+ * schema a moment later, and walking up to it first would mean counting to
+ * whatever number was declared.
+ */
+function missingMigrationSteps(version: number, map: unknown): number[] {
+  if (
+    !Number.isInteger(version) ||
+    version <= 1 ||
+    version > MAX_DECLARED_BLOCK_VERSION
+  ) {
+    return [];
+  }
+  const steps = isRecord(map) ? map : undefined;
+  const gaps: number[] = [];
+  for (let step = 1; step < version; step++) {
+    if (typeof steps?.[String(step)] !== "function") gaps.push(step);
+  }
+  return gaps;
 }
 
 /** A short, safe description of a bad value, for an error a human reads. */
