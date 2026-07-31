@@ -690,6 +690,63 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(live.title).toBe("edited");
     expect(await workingDraftCount(id)).toBe(0);
   });
+
+  it("accumulates disjoint sub-field edits of a single component across draft saves", async () => {
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "seo",
+          fields: [text({ name: "metaTitle" }), text({ name: "metaDesc" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "seo", component: "seo" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      seo: { metaTitle: "live-title", metaDesc: "live-desc" },
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Two draft saves each touching a DIFFERENT sub-field of the same component.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { metaTitle: "draft-title" } }
+    );
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { metaDesc: "draft-desc" } }
+    );
+    expect(await workingDraftCount(id)).toBe(1);
+
+    // Both pending sub-field edits survive on the coalesced draft.
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    const seo = (
+      draftRead.data as { seo?: { metaTitle?: string; metaDesc?: string } }
+    ).seo;
+    expect(seo?.metaTitle).toBe("draft-title");
+    expect(seo?.metaDesc).toBe("draft-desc");
+  });
 });
 
 // The split coalesces a working draft under one unlocalized slot and promotes it

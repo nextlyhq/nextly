@@ -5349,6 +5349,10 @@ export class CollectionMutationService extends BaseService {
                 );
                 let draftDocument = patchedDocument;
                 if (existingDraft) {
+                  const existingSnapshot = existingDraft.snapshot as Record<
+                    string,
+                    unknown
+                  >;
                   const touched = new Set<string>([
                     ...Object.keys(updatePayload),
                     ...Object.keys(componentFieldData),
@@ -5359,8 +5363,43 @@ export class CollectionMutationService extends BaseService {
                       touched.has(key)
                     )
                   );
+                  // A single (non-repeatable) component holds an object of
+                  // sub-fields, and a patch-shaped save carries only the ones it
+                  // changed. Replacing the whole key would drop sub-field edits an
+                  // earlier draft save made, so merge this patch's component object
+                  // onto the existing draft's rather than overwriting it. A dynamic
+                  // zone (array) and a scalar are still replaced whole.
+                  const singleComponentKeys = new Set(
+                    fields
+                      .filter(
+                        f =>
+                          typeof (f as { component?: unknown }).component ===
+                            "string" &&
+                          (f as { repeatable?: unknown }).repeatable !== true
+                      )
+                      .map(f => (f as { name?: unknown }).name)
+                      .filter((n): n is string => typeof n === "string")
+                  );
+                  for (const key of Object.keys(patchFields)) {
+                    if (!singleComponentKeys.has(key)) continue;
+                    const prev = existingSnapshot[key];
+                    const next = patchFields[key];
+                    if (
+                      prev !== null &&
+                      typeof prev === "object" &&
+                      !Array.isArray(prev) &&
+                      next !== null &&
+                      typeof next === "object" &&
+                      !Array.isArray(next)
+                    ) {
+                      patchFields[key] = {
+                        ...(prev as Record<string, unknown>),
+                        ...(next as Record<string, unknown>),
+                      };
+                    }
+                  }
                   draftDocument = {
-                    ...(existingDraft.snapshot as Record<string, unknown>),
+                    ...existingSnapshot,
                     ...patchFields,
                   };
                 }
