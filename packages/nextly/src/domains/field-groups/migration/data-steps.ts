@@ -115,6 +115,9 @@ const DEFINITION_TABLES = [
   STORAGE_FORMAT.registryTable,
 ] as const;
 
+/** The columns one registry row needs written back. */
+type Patch = Record<string, unknown>;
+
 /** Property holding a registry row's stored field definitions. */
 const FIELDS_PROPERTY = "fields";
 
@@ -184,6 +187,14 @@ function registryDefinitionsStep(
     id: "data:registry-definitions",
     async run(session) {
       const outcome = await session.inTransaction(async ctx => {
+        // Every patch is computed before any of them is issued. A refusal has
+        // to leave the transaction as a value rather than as an exception —
+        // the adapter reclassifies anything thrown out of a callback and
+        // discards the context naming what could not be read — and a value
+        // returned from the callback COMMITS. Staging first is what keeps that
+        // from committing the rows already rewritten and leaving exactly the
+        // mixed-vocabulary registry set this step exists to prevent.
+        const staged: { table: string; id: string; patch: Patch }[] = [];
         for (const table of DEFINITION_TABLES) {
           for (const row of await readRegistryRows(ctx, table)) {
             const patch = registryPatch(row, table, from, to);
@@ -191,14 +202,14 @@ function registryDefinitionsStep(
             if (patch.value === null) continue;
             const id = readRowId(row, table);
             if (!id.ok) return id;
-            await ctx.update(table, patch.value, whereRowId(id.value));
+            staged.push({ table, id: id.value, patch: patch.value });
           }
+        }
+        for (const write of staged) {
+          await ctx.update(write.table, write.patch, whereRowId(write.id));
         }
         return { ok: true as const };
       });
-      // Raised outside the transaction, because an error escaping a callback is
-      // reclassified by the adapter into an unknown database error and loses the
-      // context naming what could not be read.
       if (!outcome.ok) throw outcome.refusal;
     },
     async verify(session) {
@@ -225,6 +236,11 @@ function registryDefinitionsStep(
  * one names the field-group directory. All three declare the column, and asking
  * for it uniformly is what lets `registryPatch` decide by table rather than by
  * which columns happen to have arrived.
+ *
+ * Locked, for the same reason the ledger walk locks: a plain `SELECT` takes no
+ * lock on Postgres or MySQL, and the update writes the whole `fields` document
+ * back, so a schema save committing in between would be overwritten rather than
+ * merged — a silently lost schema change.
  */
 async function readRegistryRows(
   ctx: TransactionContext,
@@ -232,6 +248,7 @@ async function readRegistryRows(
 ): Promise<Record<string, unknown>[]> {
   return ctx.select<Record<string, unknown>>(table, {
     columns: ["id", FIELDS_PROPERTY, CONFIG_PATH_PROPERTY],
+    forUpdate: true,
   });
 }
 
@@ -248,8 +265,8 @@ function registryPatch(
   table: string,
   from: FieldGroupStorageVocabulary,
   to: FieldGroupStorageVocabulary
-): Narrowed<Record<string, unknown> | null> {
-  const patch: Record<string, unknown> = {};
+): Narrowed<Patch | null> {
+  const patch: Patch = {};
 
   const fields = readProperty(row, { table, property: FIELDS_PROPERTY });
   if (!fields.ok) return fields;

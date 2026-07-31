@@ -179,6 +179,54 @@ describe("rewriting the vocabulary stored in registry rows", () => {
     await expect(step.verify(target.session)).resolves.toBe(true);
   });
 
+  // 🔴 A refusal has to leave the transaction as a value, because an exception
+  // is reclassified at the boundary and loses its context - but a value RETURNED
+  // from the callback commits. So every patch is staged before any is issued:
+  // otherwise a bad row late in the set would commit the rows rewritten before
+  // it, leaving exactly the mixed-vocabulary registries this step prevents.
+  it("writes nothing at all when a later row cannot be read", async () => {
+    const target = world({
+      // Read third, and missing `fields` - so the first two registries have
+      // already produced patches by the time this one refuses.
+      [STORAGE_FORMAT.registryTable]: {
+        columns: ["id", "configPath"],
+        rows: [{ id: "f1", configPath: "components/hero.ts" }],
+      },
+    });
+
+    await expect(
+      stepNamed(target, "data:registry-definitions").run(target.session)
+    ).rejects.toMatchObject({
+      logContext: {
+        reason: "row rewrite target names a property the table does not have",
+      },
+    });
+
+    // The registries read before the refusal are untouched.
+    expect(target.rows("dynamic_collections")[0]?.fields).toEqual(
+      storedFields()
+    );
+    expect(target.rows("dynamic_singles")[0]?.fields).toEqual(storedFields());
+    expect(target.counts.updates).toBe(0);
+  });
+
+  // Same hazard as the ledger walk: a plain SELECT takes no lock, and the update
+  // writes the whole `fields` document back, so a schema save committing in
+  // between would be overwritten rather than merged.
+  it("locks the registry rows it is about to rewrite", async () => {
+    const target = world();
+    await stepNamed(target, "data:registry-definitions").run(target.session);
+    const registryReads = target.reads.filter(read =>
+      [
+        "dynamic_collections",
+        "dynamic_singles",
+        STORAGE_FORMAT.registryTable,
+      ].includes(read.table)
+    );
+    expect(registryReads).not.toHaveLength(0);
+    expect(registryReads.every(read => read.forUpdate)).toBe(true);
+  });
+
   // 🔴 The ordering invariant, expressed as behaviour. These steps run before
   // any rename, so the registry is addressed under the name the ORM declares.
   // A world holding only the migrated name is the state they must NOT work in,

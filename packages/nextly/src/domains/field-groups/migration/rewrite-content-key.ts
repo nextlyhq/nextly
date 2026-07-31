@@ -26,9 +26,7 @@
  * the walk by the entry's field definitions would skip exactly the rows a
  * complete rename most needs to reach, for the reason above, while reporting
  * success — a silent partial rename is a worse failure than a rare collision
- * that is visible in the data. The trade is recorded in
- * `tasks/011-B1-4-DESIGN.md` §0.1, and it rests on there being no production
- * data yet.
+ * that is visible in the data.
  *
  * @module domains/field-groups/migration/rewrite-content-key
  */

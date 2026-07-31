@@ -93,12 +93,22 @@ function rewriteField(
       setOwnProperty(rewritten, key, to.fieldType);
       continue;
     }
+    // A node already carrying the target key keeps what is there, rather than
+    // having it overwritten by the value moving off the source key — or
+    // overwriting it, depending on which came first in the stored JSON. Nothing
+    // writes both today; deciding it here is what stops the surviving reference
+    // depending on key order, and it is the same rule the content rewriter
+    // applies to its own collision.
     if (isFieldGroup && key === from.refKeys.single) {
-      setOwnProperty(rewritten, to.refKeys.single, value);
+      if (!keptUnderTarget(field, key, to.refKeys.single)) {
+        setOwnProperty(rewritten, to.refKeys.single, value);
+      }
       continue;
     }
     if (isFieldGroup && key === from.refKeys.many) {
-      setOwnProperty(rewritten, to.refKeys.many, value);
+      if (!keptUnderTarget(field, key, to.refKeys.many)) {
+        setOwnProperty(rewritten, to.refKeys.many, value);
+      }
       continue;
     }
     if (
@@ -122,6 +132,20 @@ function rewriteField(
   }
 
   return rewritten;
+}
+
+/**
+ * Whether the target key is already present and holds the value that survives.
+ *
+ * Only a *different* key can collide: rewriting a key onto itself is not a
+ * collision, and treating it as one would drop the value entirely.
+ */
+function keptUnderTarget(
+  field: Record<string, unknown>,
+  sourceKey: string,
+  targetKey: string
+): boolean {
+  return targetKey !== sourceKey && targetKey in field;
 }
 
 function isContainer(type: unknown): boolean {

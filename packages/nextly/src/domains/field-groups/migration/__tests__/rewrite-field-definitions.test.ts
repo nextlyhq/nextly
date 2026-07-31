@@ -199,3 +199,53 @@ describe("rebuilding a definition without letting a key decide how", () => {
     expect(Object.getPrototypeOf(field)).toBe(Object.prototype);
   });
 });
+
+describe("deciding a reference-key collision rather than letting key order", () => {
+  // A node carrying both the source key and a property already named the target
+  // one: without a rule, whichever came later in the stored JSON wins and the
+  // other reference is dropped silently. Both orders are asserted, because a
+  // single-order test passes whether or not the rule exists.
+  it.each([
+    [
+      "source key first",
+      '[{"type":"component","component":"a","fieldGroup":"b"}]',
+    ],
+    [
+      "target key first",
+      '[{"type":"component","fieldGroup":"b","component":"a"}]',
+    ],
+  ])("keeps the value already under the target key (%s)", (_label, stored) => {
+    const rewritten = up(JSON.parse(stored)) as Record<string, unknown>[];
+    expect(rewritten[0]).toEqual({ type: "fieldGroup", fieldGroup: "b" });
+  });
+
+  it.each([
+    [
+      "source key first",
+      '[{"type":"component","components":["a"],"fieldGroups":["b"]}]',
+    ],
+    [
+      "target key first",
+      '[{"type":"component","fieldGroups":["b"],"components":["a"]}]',
+    ],
+  ])("does the same for the dynamic-zone list (%s)", (_label, stored) => {
+    const rewritten = up(JSON.parse(stored)) as Record<string, unknown>[];
+    expect(rewritten[0]).toEqual({ type: "fieldGroup", fieldGroups: ["b"] });
+  });
+
+  // Rewriting a key onto itself is not a collision. Treating it as one would
+  // drop the value entirely, which is why the guard compares the keys first.
+  it("does not drop a reference when the vocabulary does not rename the key", () => {
+    const same: FieldGroupVocabulary = {
+      fieldType: "component",
+      refKeys: { single: "component", many: "components" },
+    };
+    expect(
+      rewriteFieldDefinitions(
+        [{ type: "component", component: "hero" }],
+        same,
+        same
+      )
+    ).toEqual([{ type: "component", component: "hero" }]);
+  });
+});

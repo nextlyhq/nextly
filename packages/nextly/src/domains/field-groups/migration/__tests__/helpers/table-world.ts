@@ -12,6 +12,13 @@
  * safety argument is that a cursor is written only after its batch committed,
  * and a double that kept a failed batch's writes could not tell the two apart.
  *
+ * The errors it raises are the ones production raises, which is why they are not
+ * `NextlyError`s despite the repository rule: an unresolvable table comes out of
+ * the adapter as a `DatabaseError` (`adapter.ts` `select`), and an unresolvable
+ * column comes out of the where builder as a bare `Error` (`drizzle-where.ts`
+ * `buildCondition`). Raising a different error type here would test refusal
+ * handling against errors the code will never actually meet.
+ *
  * And it reclassifies whatever escapes a transaction callback, exactly as every
  * real adapter does: `classifyError` short-circuits only on an existing
  * `DatabaseError`, so a `NextlyError` thrown inside a transaction reaches the
@@ -77,17 +84,21 @@ export function createTableWorld(
   function tableOf(name: string): TableFixture {
     const fixture = tables.get(name);
     if (fixture === undefined) {
-      // Mirrors the adapter, which refuses a name the schema registry does not
-      // declare rather than falling back to something that might work.
-      throw new Error(`Table "${name}" not found in schema registry.`);
+      // The adapter refuses a name the schema registry does not declare, and
+      // does it as a DatabaseError -- so this raises the same type, which the
+      // transaction boundary then passes through rather than reclassifying.
+      throw createDatabaseError({
+        kind: "query",
+        message: `Table "${name}" not found in schema registry.`,
+      });
     }
     return fixture;
   }
 
   function requireColumn(fixture: TableFixture, column: string): void {
     if (fixture.columns.includes(column)) return;
-    // The where builder throws on an unresolvable column. A double that ignored
-    // one would silently widen every filter it was given.
+    // A bare Error, because that is what the where builder raises. A double that
+    // ignored the column would silently widen every filter it was given.
     throw new Error(`Column "${column}" not found in table.`);
   }
 
