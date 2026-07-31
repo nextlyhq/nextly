@@ -19,6 +19,24 @@ import type {
 } from "./types";
 
 /**
+ * The phases whose handlers exist for their effects, not to reshape data.
+ *
+ * These run after the write has already committed, so there is nothing left for
+ * a return value to change. Honouring one would mean a second handler is shown
+ * whatever the first happened to return instead of the row that was persisted,
+ * and returning the result of a side-effect call -- a logger, a fetch, a cache
+ * write -- is an easy accident to make.
+ *
+ * `afterRead` is deliberately absent: it reshapes the response by design, and
+ * the read paths consume what it returns.
+ */
+const SIDE_EFFECT_HOOK_TYPES: ReadonlySet<HookType> = new Set([
+  "afterCreate",
+  "afterUpdate",
+  "afterDelete",
+]);
+
+/**
  * Global hook registry singleton
  *
  * Manages registration and execution of database lifecycle hooks.
@@ -221,7 +239,9 @@ export class HookRegistry {
    *
    * **Data Flow:**
    * - For `before*` hooks: Each hook can modify data, which is passed to the next hook
-   * - For `after*` hooks: Return values are ignored (used for side effects)
+   * - For the after-write hooks in {@link SIDE_EFFECT_HOOK_TYPES}: return values
+   *   are ignored, so every handler and the caller see the persisted row
+   * - For `afterRead`: the return reshapes the response and is passed on
    *
    * **Error Handling:**
    * - If any hook throws an error, execution stops immediately
@@ -274,6 +294,11 @@ export class HookRegistry {
 
     let data = context.data;
 
+    // A side-effect phase runs after the write has committed, so a return value
+    // has nothing left to change: the row stays the persisted one for every
+    // later handler and for the caller.
+    const isSideEffectPhase = SIDE_EFFECT_HOOK_TYPES.has(hookType);
+
     // Execute hooks in series (FIFO order)
     for (const handler of allHandlers) {
       try {
@@ -284,7 +309,7 @@ export class HookRegistry {
         // If hook returns undefined, keep current data unchanged
         // This allows before* hooks to intentionally set null values
         // while after* hooks can skip returning (undefined) for side effects
-        if (result !== undefined) {
+        if (!isSideEffectPhase && result !== undefined) {
           data = result;
         }
       } catch (error: unknown) {
