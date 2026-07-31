@@ -961,6 +961,9 @@ importers:
       '@nextlyhq/adapter-sqlite':
         specifier: workspace:*
         version: link:../adapter-sqlite
+      '@nextlyhq/blocks-engine':
+        specifier: workspace:*
+        version: link:../blocks-engine
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config

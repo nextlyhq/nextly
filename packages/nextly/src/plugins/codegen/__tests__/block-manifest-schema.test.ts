@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { definePlugin, type PluginDefinition } from "../../plugin-context";
 import {
   BLOCK_MANIFEST_VERSION,
+  MAX_DECLARED_BLOCK_VERSION,
   blockManifestJsonSchema,
   blockManifestSchema,
   buildBlockManifest,
@@ -123,6 +124,14 @@ describe("the manifest schema", () => {
       "a block with no example, which the emitter can never produce",
       { name: "n", version: 1, description: "d", example: undefined },
     ],
+    [
+      "a version above what migration can chain back from",
+      {
+        name: "n",
+        version: MAX_DECLARED_BLOCK_VERSION + 1,
+        description: "d",
+      },
+    ],
   ])("refuses %s", (_label, partial) => {
     const result = blockManifestSchema.safeParse({
       manifestVersion: BLOCK_MANIFEST_VERSION,
@@ -178,6 +187,7 @@ describe("the emitter's obligation to the schema", () => {
     ["a fraction", 1.5],
     ["zero", 0],
     ["a negative", -1],
+    ["one past the engine's bound", MAX_DECLARED_BLOCK_VERSION + 1],
   ])(
     "refuses a version of %s, which the per-declaration check reads as a number",
     (_label, version) => {
@@ -371,7 +381,7 @@ describe("the published JSON Schema", () => {
                 },
                 "version": {
                   "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991,
+                  "maximum": 1001,
                   "type": "integer",
                 },
               },

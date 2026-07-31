@@ -46,6 +46,21 @@ export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
 export const BLOCK_MANIFEST_VERSION = 1;
 
 /**
+ * The highest version a declared block may carry.
+ *
+ * The same bound the block engine enforces at registration, restated rather
+ * than imported: reading it from `@nextlyhq/blocks-engine` would make every
+ * app that installs core carry the block engine so that code generation can
+ * read one integer, and it points the dependency the wrong way — the plugin
+ * layer builds on core, not the reverse.
+ *
+ * Restating a value is only safe if it cannot quietly diverge, so a test holds
+ * this equal to the engine's own constant. The engine is a development
+ * dependency here for that test alone; nothing imports it at runtime.
+ */
+export const MAX_DECLARED_BLOCK_VERSION = 1001;
+
+/**
  * One block, as the manifest states it.
  *
  * Strict, and not optionally so: the JSON Schema derived from this object
@@ -77,13 +92,15 @@ export const blockManifestEntrySchema = z
     /**
      * The block's own schema version, stamped onto every node of its type.
      *
-     * A whole number from 1: the engine counts migration steps between
-     * versions, so a fraction has no step to chain and a value below 1 has
-     * nothing to migrate from. `.int()` also excludes `NaN` and `Infinity`,
-     * which `typeof` reads as numbers and `JSON.stringify` writes as `null` —
-     * a manifest that parses as JSON and is wrong.
+     * A whole number from 1 to {@link MAX_DECLARED_BLOCK_VERSION}: the engine
+     * counts migration steps between versions, so a fraction has no step to
+     * chain, a value below 1 has nothing to migrate from, and one above the
+     * bound could never chain back to its oldest stored nodes. `.int()` also
+     * excludes `NaN` and `Infinity`, which `typeof` reads as numbers and
+     * `JSON.stringify` writes as `null` — a manifest that parses as JSON and
+     * is wrong.
      */
-    version: z.number().int().positive(),
+    version: z.number().int().positive().max(MAX_DECLARED_BLOCK_VERSION),
     /**
      * Required to be non-blank rather than merely non-empty: the engine trims
      * before checking, and a description of spaces renders as an empty palette
