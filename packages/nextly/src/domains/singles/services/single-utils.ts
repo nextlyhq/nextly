@@ -38,8 +38,14 @@ import type { SingleDocument, SingleResult } from "../types";
  *
  * The Lexical editor crashes with `{}` or `""` — it requires a root node
  * with at least one paragraph child.
+ *
+ * The document itself, not its serialization: everything a default feeds
+ * passes through the JSON-column encoder, which is where a value bound for a
+ * JSON column is turned into text. Handing that encoder an already-encoded
+ * string is what makes a stored string ambiguous — it cannot tell an encoded
+ * document from a logical string that happens to parse.
  */
-export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
+export const EMPTY_LEXICAL_DOCUMENT: Record<string, unknown> = {
   root: {
     type: "root",
     format: "",
@@ -58,7 +64,7 @@ export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
     ],
     direction: null,
   },
-});
+};
 
 /**
  * Check if a field should be treated as a JSON field.
@@ -213,19 +219,19 @@ export function getDefaultValue(field: FieldConfig): unknown {
 
   // A contributed type states what it holds when empty, the same declaration
   // the DDL backfill reads, so a structured type is seeded with its own shape
-  // rather than the primitive's `{}`. Serialized only where the column stores
-  // JSON as text — a boolean-backed type's `false` must reach the driver as a
-  // boolean, not as the truthy string "false".
+  // rather than the primitive's `{}`.
   const contributed = pluginEmptyValue(field);
   if (contributed !== undefined) {
-    return shouldTreatAsJson(field) ? JSON.stringify(contributed) : contributed;
+    // Returned as the type stated it, whatever the column holds. Serializing
+    // here as well as at the encoder would encode a JSON-backed value twice.
+    return contributed;
   }
 
   if (shouldTreatAsJson(field)) {
     if (field.type === "repeater" || ("hasMany" in field && field.hasMany)) {
-      return "[]";
+      return [];
     }
-    return "{}";
+    return {};
   }
 
   // Seeded by what the column holds, as the JSON predicate above already is: a
@@ -247,7 +253,7 @@ export function getDefaultValue(field: FieldConfig): unknown {
       return false;
 
     case "json":
-      return "{}";
+      return {};
     case "repeater":
       return "[]";
     case "chips":
