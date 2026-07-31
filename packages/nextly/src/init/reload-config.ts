@@ -1493,32 +1493,34 @@ async function applyReload(opts?: {
   // not surface as a schema diff — so run the idempotent metadata sync before
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
-  // Also provision on the no-DDL path. A missing `_locales` table produces no schema
-  // diff — companion tables are excluded from it — so `hasChanges` stays false and the
-  // reload would return before ever reaching the call after the apply, which is exactly
-  // the missing-companion state this repairs. Idempotent, so running it here and after
-  // a successful apply costs one existence probe per localized entity.
-  const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
-    adapter,
-    newConfig,
-    deferredEntities
-  );
-
-  // The same gate the post-apply path applies. Disabling localization on an entity whose main
-  // columns were retained produces no schema diff at all, so a failed restore would otherwise
-  // reach `syncCodeFirstMetadataOnly` below and publish the non-localized metadata anyway —
-  // pointing reads at main while its values are still the pre-localization ones.
-  if (noDdlProvisioning.restoreFailed.length > 0) {
-    logger?.error(
-      `[nextly] Localization stays on for ${noDdlProvisioning.restoreFailed.join(", ")}: their ` +
-        `content could not be copied back out of the translations table. Fix the error above and ` +
-        `save again — the content is intact where it is.`
-    );
-    abandonReload();
-    return;
-  }
-
   if (!hasChanges) {
+    // Provisioning for the path where nothing is applied. It has to be INSIDE this branch: a
+    // disable that needs DDL to put the main columns back reaches here before the apply has added
+    // them, so a restore run now would find nothing to copy, copy nothing, and still record the
+    // transition as finished — after which the post-apply pass skips it and the recreated columns
+    // stay empty while the content sits in a companion nothing reads.
+    //
+    // A missing `_locales` table produces no schema diff either, because companion tables are
+    // excluded from it, so `hasChanges` stays false and this is the only pass that repairs it.
+    const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
+      adapter,
+      newConfig,
+      deferredEntities
+    );
+
+    // The same gate the post-apply path applies. A failed restore would otherwise reach
+    // `syncCodeFirstMetadataOnly` below and publish the non-localized metadata anyway — pointing
+    // reads at main while its values are still the pre-localization ones.
+    if (noDdlProvisioning.restoreFailed.length > 0) {
+      logger?.error(
+        `[nextly] Localization stays on for ${noDdlProvisioning.restoreFailed.join(", ")}: their ` +
+          `content could not be copied back out of the translations table. Fix the error above ` +
+          `and save again — the content is intact where it is.`
+      );
+      abandonReload();
+      return;
+    }
+
     // Only sync when the schema is genuinely in step (every entity had a zero-op
     // diff). If a real schema change was deferred (unsafe/needs review) or a diff
     // threw, syncing would persist `fields` that disagree with the physical

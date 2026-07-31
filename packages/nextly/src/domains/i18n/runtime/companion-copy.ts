@@ -157,28 +157,51 @@ interface UpdatableDb {
  */
 export async function copyDefaultLocaleOntoMain(
   adapter: CompanionIntrospectAdapter,
-  args: CopyArgs
+  args: CopyArgs & { fallbackLocale?: string }
 ): Promise<void> {
   const shape = await resolveCopyShape(args);
   if (!shape) return;
 
-  const matches = and(
-    eq(shape.companion._parent as never, shape.main.id as never),
-    eq(shape.companion._locale as never, args.locale)
-  );
+  // Each parent is restored from `locale` when it has a row there and from `fallbackLocale`
+  // otherwise. One entity-wide choice is not enough: the configured default can move while an
+  // entity is localized, leaving some parents authored under the new code and others only under
+  // the one the transition recorded. Choosing per entity restores whichever group matches and
+  // leaves the rest holding pre-localization values — while the record marks the transition
+  // terminally finished, so nothing retries.
+  const locales =
+    args.fallbackLocale && args.fallbackLocale !== args.locale
+      ? [args.locale, args.fallbackLocale]
+      : [args.locale];
+  const rowFor = (locale: string) =>
+    and(
+      eq(shape.companion._parent as never, shape.main.id as never),
+      eq(shape.companion._locale as never, locale)
+    );
   const values: Record<string, unknown> = {};
   for (const pair of shape.pairs) {
-    values[pair.field] =
-      sql`(select ${shape.companion[pair.column]} from ${shape.companionTable} where ${matches})`;
+    values[pair.field] = locales
+      .map(
+        locale =>
+          sql`(select ${shape.companion[pair.column]} from ${shape.companionTable} where ${rowFor(locale)})`
+      )
+      .reduce((first, next) => sql`coalesce(${first}, ${next})`);
   }
+
+  // Guarded on ANY of them existing: a parent with a row in neither locale — an entry authored in
+  // some third language only — would otherwise be assigned SQL NULL, blanking the main column
+  // instead of leaving it alone.
+  const anyRow = locales
+    .map(
+      locale =>
+        sql`exists (select 1 from ${shape.companionTable} where ${rowFor(locale)})`
+    )
+    .reduce((first, next) => sql`${first} or ${next}`);
 
   await adapter
     .getDrizzle<UpdatableDb>()
     .update(shape.mainTable)
     .set(values)
-    .where(
-      sql`exists (select 1 from ${shape.companionTable} where ${matches})`
-    );
+    .where(anyRow);
 }
 
 /**

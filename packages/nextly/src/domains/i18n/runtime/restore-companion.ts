@@ -148,6 +148,12 @@ export async function restoreDisabledCompanion(
         fields: restorableFields(args.fields),
         dialect: args.dialect,
         locale: restoreLocale,
+        // The other candidate, so a parent without a row in the chosen locale still comes back
+        // from the one it does have rather than keeping a pre-localization value.
+        fallbackLocale:
+          restoreLocale === recorded.sourceLocale
+            ? args.defaultLocale
+            : recorded.sourceLocale,
         columns: present,
       });
     }

@@ -1026,6 +1026,69 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(main).toEqual([{ title: "Widget", sku: "NEW-SKU" }]);
   });
 
+  it("restores each entry from whichever locale it actually has", async () => {
+    // The default can move while an entity is localized, so a corpus ends up mixed: some entries
+    // authored under the new code, some only under the one the transition recorded. One
+    // entity-wide choice restores whichever group matches and leaves the rest holding
+    // pre-localization values — while the record marks the transition terminally finished.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_mixedloc",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_mixedloc" ("id", "slug", "title") VALUES ('old', 'o', 'Stale old'), ('new', 'n', 'Stale new')`
+    );
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "de" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_mixedloc",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    // One entry translated under the recorded locale only, the other under the new default.
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_mixedloc_locales" SET "title" = 'Nur Deutsch' WHERE "_parent" = 'old'`
+    );
+    await adapter?.executeQuery(
+      `DELETE FROM "dc_dbsync_mixedloc_locales" WHERE "_parent" = 'new'`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_mixedloc_locales" ("_parent", "_locale", "title") VALUES ('new', 'en', 'English only')`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_mixedloc",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ id: string; title: string }>(
+      `SELECT "id", "title" FROM "dc_dbsync_mixedloc" ORDER BY "id"`
+    );
+    expect(main).toEqual([
+      { id: "new", title: "English only" },
+      { id: "old", title: "Nur Deutsch" },
+    ]);
+  });
+
   it("leaves an entity that was never localized alone", async () => {
     // The restore is gated on the durable record, not on physical shape, so a collection that
     // never had a companion is not probed for one and nothing is written on its behalf.
