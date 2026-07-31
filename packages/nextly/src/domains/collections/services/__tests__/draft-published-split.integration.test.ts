@@ -29,7 +29,7 @@ async function boot(): Promise<CollectionEntryService> {
         slug: COLLECTION,
         status: true,
         versions: { drafts: true },
-        fields: [text({ name: "title" })],
+        fields: [text({ name: "title" }), text({ name: "body" })],
       }),
     ],
   });
@@ -38,12 +38,27 @@ async function boot(): Promise<CollectionEntryService> {
     .getEntryService() as CollectionEntryService;
 }
 
-type LiveRow = { id: string; title: string; status: string };
+type LiveRow = { id: string; title: string; body: string; status: string };
 type VersionRow = {
-  snapshot: { title?: string };
+  snapshot: { title?: string; body?: string };
   status: string;
   versionNo: number | null;
 };
+
+async function workingDraftCount(id: string): Promise<number> {
+  return (
+    await handle!.adapter.select<VersionRow>("nextly_versions", {
+      where: {
+        and: [
+          { column: "entryId", op: "=", value: id },
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    })
+  ).length;
+}
 
 describe("draft/published split — updateEntry (integration)", () => {
   it("stores a status-less edit of a published doc as a working draft, leaving the live row untouched", async () => {
@@ -127,5 +142,133 @@ describe("draft/published split — updateEntry (integration)", () => {
       status: "published",
     });
     expect((publishedRead.data as { title?: string }).title).toBe("live");
+  });
+});
+
+// Publishing a document that has a pending working draft must apply the draft's
+// whole content to the live row, not just the fields the publish call carried —
+// the admin Publish button sends only the fields dirtied this session, so a
+// status-only publish still has to bring the accumulated edits live. Unpublish
+// is the same fold with a draft target status.
+describe("draft/published split — promote on publish (integration)", () => {
+  it("promotes the whole working draft to the live row when the publish omits its fields", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live-t",
+      body: "live-b",
+      status: "published",
+    });
+    const [before] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = before.id;
+
+    // A status-less edit stores the pending title AND body as one working draft.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-t", body: "draft-b" }
+    );
+    expect(await workingDraftCount(id)).toBe(1);
+    const [mid] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(mid.title).toBe("live-t");
+    expect(mid.body).toBe("live-b");
+
+    // Publish carrying ONLY the status (the admin Publish button on an unedited
+    // pending draft) must promote the draft's title and body to the live row.
+    const res = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { status: "published" }
+    );
+    expect(res.success).toBe(true);
+
+    const [after] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(after.title).toBe("draft-t");
+    expect(after.body).toBe("draft-b");
+    expect(after.status).toBe("published");
+    // The sidecar draft is consumed in the same transaction.
+    expect(await workingDraftCount(id)).toBe(0);
+  });
+
+  it("overlays the publish payload on the draft, with the caller winning per field", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live-t",
+      body: "live-b",
+      status: "published",
+    });
+    const [before] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = before.id;
+
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-t", body: "draft-b" }
+    );
+
+    // Publish re-titles in the same call: the payload's title wins, the draft
+    // supplies the body the payload did not carry.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "final-t", status: "published" }
+    );
+
+    const [after] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(after.title).toBe("final-t");
+    expect(after.body).toBe("draft-b");
+    expect(after.status).toBe("published");
+    expect(await workingDraftCount(id)).toBe(0);
+  });
+
+  it("folds the draft into the live row as a draft on unpublish, clearing the sidecar", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live-t",
+      body: "live-b",
+      status: "published",
+    });
+    const [before] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = before.id;
+
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft-t" });
+
+    // Unpublish names status:draft, so the accumulated draft content lands on
+    // the live row and the row itself is retracted to draft.
+    await entries.updateEntry({ ...ctx, entryId: id }, { status: "draft" });
+
+    const [after] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(after.title).toBe("draft-t");
+    expect(after.body).toBe("live-b");
+    expect(after.status).toBe("draft");
+    expect(await workingDraftCount(id)).toBe(0);
+  });
+
+  it("publishes normally when no working draft exists", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live-t",
+      body: "live-b",
+      status: "draft",
+    });
+    const [before] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = before.id;
+
+    // First publish of a never-drafted document: no sidecar to fold, the
+    // payload is written as-is.
+    const res = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "pub-t", status: "published" }
+    );
+    expect(res.success).toBe(true);
+
+    const [after] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(after.title).toBe("pub-t");
+    expect(after.body).toBe("live-b");
+    expect(after.status).toBe("published");
+    expect(await workingDraftCount(id)).toBe(0);
   });
 });

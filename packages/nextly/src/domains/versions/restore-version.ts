@@ -122,7 +122,7 @@ async function describeEntity(
  * it — the safe direction, since resubmitting a subtree it cannot inspect could
  * overwrite a nested credential.
  */
-async function resolveComponentSchemas(
+export async function resolveComponentSchemas(
   fields: FieldConfig[]
 ): Promise<ComponentSchemas> {
   const slugs = new Set<string>();

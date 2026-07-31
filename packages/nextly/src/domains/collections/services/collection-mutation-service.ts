@@ -97,6 +97,11 @@ import {
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  buildRestorePayload,
+  type RestoreSchemaContext,
+} from "../../versions/restore-snapshot";
+import { resolveComponentSchemas } from "../../versions/restore-version";
+import {
   resolveComponentFieldMap,
   tagComponentTypes,
   tagNestedComponentTypes,
@@ -1128,6 +1133,164 @@ export class CollectionMutationService extends BaseService {
       localizedFieldValues,
       hasStatus: companion.hasStatus,
     };
+  }
+
+  /**
+   * Turn post-hook update input into the column/relation shapes the write path
+   * persists, mutating `data` in place into the main-row payload and returning
+   * the pieces that live outside it. Relationships and uploads are reduced to
+   * ids; component and many-to-many fields are pulled out of `data` (they store
+   * in their own tables); JSON, date, slug, and upload columns are serialized.
+   *
+   * Pure and free of database access, so it runs the same off-transaction for a
+   * normal write and inside the transaction when a publish promotes an
+   * accumulated working draft — the draft's stored snapshot is shaped through
+   * this exact path so promoted content reaches the row identically to a direct
+   * write. `manyToManyFields` is passed in rather than recomputed because the
+   * caller reuses the same list for the junction rewrite later in the write.
+   */
+  private shapeWriteParts(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[],
+    manyToManyFields: FieldDefinition[],
+    collection: unknown
+  ): {
+    manyToManyData: Record<string, string[]>;
+    componentFieldData: Record<string, unknown>;
+  } {
+    // Normalize relationship field values (extract IDs from objects with display properties)
+    // This must happen before many-to-many extraction and JSON serialization
+    // Walks containers too: a reference left populated inside a group or
+    // repeater is serialized to JSON as the row and never read back as a
+    // reference.
+    normalizeRelationshipFields(data, fields as unknown as FieldConfig[]);
+
+    // Normalize upload field values (extract IDs from populated media objects)
+    normalizeUploadFields(data, fields);
+
+    const manyToManyData: Record<string, string[]> = {};
+
+    // Extract many-to-many data from data (after hooks)
+    manyToManyFields.forEach(field => {
+      if (data[field.name] !== undefined) {
+        manyToManyData[field.name] = Array.isArray(data[field.name])
+          ? (data[field.name] as string[])
+          : data[field.name] === null
+            ? []
+            : [data[field.name] as string];
+        delete data[field.name]; // Remove from main update
+      }
+    });
+
+    // Extract component field data (stored in separate comp_{slug} tables)
+    // Component fields should not be stored in the collection table
+    const componentFieldData: Record<string, unknown> = {};
+    fields.forEach(field => {
+      if (isFieldGroupField(field) && data[field.name] !== undefined) {
+        componentFieldData[field.name] = data[field.name];
+        delete data[field.name]; // Remove from main update
+      }
+    });
+
+    // Normalize relationship data inside repeater/group fields before serialization.
+    // The admin panel may send full relationship objects ({id, title, slug, ...})
+    // inside repeater rows — strip these down to just IDs to prevent bloated JSON.
+    fields.forEach(field => {
+      if (
+        (field.type === "repeater" || field.type === "group") &&
+        data[field.name] != null &&
+        typeof data[field.name] === "object"
+      ) {
+        const nestedFields = field.fields || [];
+        if (
+          nestedFields.some(
+            f =>
+              isRelationshipField(f.type) ||
+              f.type === "repeater" ||
+              f.type === "group"
+          )
+        ) {
+          if (field.type === "repeater" && Array.isArray(data[field.name])) {
+            data[field.name] = (data[field.name] as unknown[]).map(
+              (row: unknown) =>
+                row && typeof row === "object" && !Array.isArray(row)
+                  ? normalizeNestedRelationships(
+                      row as Record<string, unknown>,
+                      nestedFields
+                    )
+                  : row
+            );
+          } else if (
+            field.type === "group" &&
+            !Array.isArray(data[field.name])
+          ) {
+            data[field.name] = normalizeNestedRelationships(
+              data[field.name] as Record<string, unknown>,
+              nestedFields
+            );
+          }
+        }
+      }
+    });
+
+    // Serialize JSON fields (richtext, blocks, array, group, json)
+    fields.forEach(field => {
+      if (isJsonFieldType(field.type, field) && data[field.name] != null) {
+        data[field.name] = toJsonColumnValue(data[field.name]);
+      }
+    });
+
+    this.serializeHasManyRelationships(data, fields);
+
+    // Convert date-field strings into `Date` objects so Drizzle can bind
+    // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+    // failure mode this guards against.
+    coerceDateFieldsToDate(data, fields);
+
+    // Sanitize slug if provided in update
+    // - Dynamic collections (UI-created) always have a slug column
+    // - Plugin collections (isPlugin: true) only have slug if explicitly defined
+    const isPluginCollection =
+      (
+        (collection as Record<string, unknown>).admin as
+          | Record<string, unknown>
+          | undefined
+      )?.isPlugin === true;
+    const hasSlugField = fields.some(f => f.name === "slug");
+    const shouldHandleSlug = isPluginCollection ? hasSlugField : true;
+
+    if (shouldHandleSlug && data.slug !== undefined) {
+      if (typeof data.slug === "string" && data.slug.trim()) {
+        data.slug = generateSlug(data.slug);
+      } else {
+        // If slug is empty/null, remove it from update to keep existing value
+        delete data.slug;
+      }
+    }
+
+    // Final safety pass: ensure upload field values are IDs, not populated objects.
+    fields.forEach(field => {
+      if (field.type === "upload" && data[field.name] != null) {
+        const val = data[field.name];
+        if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+          data[field.name] =
+            "id" in val &&
+            typeof (val as Record<string, unknown>).id === "string"
+              ? (val as Record<string, unknown>).id
+              : null;
+        } else if (Array.isArray(val)) {
+          data[field.name] = val.map((item: unknown) =>
+            typeof item === "string"
+              ? item
+              : typeof item === "object" && item !== null && "id" in item
+                ? (item as Record<string, unknown>).id
+                : item
+          );
+        }
+      }
+    });
+
+    return { manyToManyData, componentFieldData };
   }
 
   /**
@@ -3931,8 +4094,10 @@ export class CollectionMutationService extends BaseService {
             sharedContext
           )
         );
-      const finalData = (storedBeforeResult.data ??
-        dataAfterCodeHooks) as Record<string, unknown>;
+      let finalData = (storedBeforeResult.data ?? dataAfterCodeHooks) as Record<
+        string,
+        unknown
+      >;
 
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
@@ -4011,156 +4176,28 @@ export class CollectionMutationService extends BaseService {
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
 
-      // Normalize relationship field values (extract IDs from objects with display properties)
-      // This must happen before many-to-many extraction and JSON serialization
-      // Walks containers too: a reference left populated inside a group or
-      // repeater is serialized to JSON as the row and never read back as a
-      // reference.
-      normalizeRelationshipFields(
-        finalData,
-        fields as unknown as FieldConfig[]
-      );
-
-      // Normalize upload field values (extract IDs from populated media objects)
-      normalizeUploadFields(finalData, fields);
-
-      // Separate regular fields from many-to-many relations
+      // Many-to-many field defs drive both the extraction inside shapeWriteParts
+      // and the junction rewrite later in this transaction, so they are resolved
+      // once here and reused rather than recomputed.
       const manyToManyFields = fields.filter(
         f =>
           f.type === "relationship" &&
-          // Only UI-built manyToMany routes through a junction table.
-          // Code-first `hasMany: true` is stored as a JSON array on the
-          // parent column (see field-column-descriptor.ts kind="json")
-          // and is serialized later in the same finalData pass.
+          // Only UI-built manyToMany routes through a junction table. Code-first
+          // `hasMany: true` is stored as a JSON array on the parent column and is
+          // serialized in the same shaping pass.
           f.options?.relationType === "manyToMany"
       );
-      const manyToManyData: Record<string, string[]> = {};
 
-      // Extract many-to-many data from finalData (after hooks)
-      manyToManyFields.forEach(field => {
-        if (finalData[field.name] !== undefined) {
-          manyToManyData[field.name] = Array.isArray(finalData[field.name])
-            ? (finalData[field.name] as string[])
-            : finalData[field.name] === null
-              ? []
-              : [finalData[field.name] as string];
-          delete finalData[field.name]; // Remove from main update
-        }
-      });
-
-      // Extract component field data (stored in separate comp_{slug} tables)
-      // Component fields should not be stored in the collection table
-      const componentFieldData: Record<string, unknown> = {};
-      fields.forEach(field => {
-        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
-          componentFieldData[field.name] = finalData[field.name];
-          delete finalData[field.name]; // Remove from main update
-        }
-      });
-
-      // Normalize relationship data inside repeater/group fields before serialization.
-      // The admin panel may send full relationship objects ({id, title, slug, ...})
-      // inside repeater rows — strip these down to just IDs to prevent bloated JSON.
-      fields.forEach(field => {
-        if (
-          (field.type === "repeater" || field.type === "group") &&
-          finalData[field.name] != null &&
-          typeof finalData[field.name] === "object"
-        ) {
-          const nestedFields = field.fields || [];
-          if (
-            nestedFields.some(
-              f =>
-                isRelationshipField(f.type) ||
-                f.type === "repeater" ||
-                f.type === "group"
-            )
-          ) {
-            if (
-              field.type === "repeater" &&
-              Array.isArray(finalData[field.name])
-            ) {
-              finalData[field.name] = (finalData[field.name] as unknown[]).map(
-                (row: unknown) =>
-                  row && typeof row === "object" && !Array.isArray(row)
-                    ? normalizeNestedRelationships(
-                        row as Record<string, unknown>,
-                        nestedFields
-                      )
-                    : row
-              );
-            } else if (
-              field.type === "group" &&
-              !Array.isArray(finalData[field.name])
-            ) {
-              finalData[field.name] = normalizeNestedRelationships(
-                finalData[field.name] as Record<string, unknown>,
-                nestedFields
-              );
-            }
-          }
-        }
-      });
-
-      // Serialize JSON fields (richtext, blocks, array, group, json)
-      fields.forEach(field => {
-        if (
-          isJsonFieldType(field.type, field) &&
-          finalData[field.name] != null
-        ) {
-          finalData[field.name] = toJsonColumnValue(finalData[field.name]);
-        }
-      });
-
-      this.serializeHasManyRelationships(finalData, fields);
-
-      // Convert date-field strings into `Date` objects so Drizzle can bind
-      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
-      // failure mode this guards against.
-      coerceDateFieldsToDate(finalData, fields);
-
-      // Sanitize slug if provided in update
-      // - Dynamic collections (UI-created) always have a slug column
-      // - Plugin collections (isPlugin: true) only have slug if explicitly defined
-      const isPluginCollection =
-        (
-          (collection as Record<string, unknown>).admin as
-            | Record<string, unknown>
-            | undefined
-        )?.isPlugin === true;
-      const hasSlugField = fields.some(f => f.name === "slug");
-      const shouldHandleSlug = isPluginCollection ? hasSlugField : true;
-
-      if (shouldHandleSlug && finalData.slug !== undefined) {
-        if (typeof finalData.slug === "string" && finalData.slug.trim()) {
-          finalData.slug = generateSlug(finalData.slug);
-        } else {
-          // If slug is empty/null, remove it from update to keep existing value
-          delete finalData.slug;
-        }
-      }
-
-      // Final safety pass: ensure upload field values are IDs, not populated objects.
-      fields.forEach(field => {
-        if (field.type === "upload" && finalData[field.name] != null) {
-          const val = finalData[field.name];
-          if (typeof val === "object" && val !== null && !Array.isArray(val)) {
-            finalData[field.name] =
-              "id" in val &&
-              typeof (val as Record<string, unknown>).id === "string"
-                ? (val as Record<string, unknown>).id
-                : null;
-          } else if (Array.isArray(val)) {
-            finalData[field.name] = val.map((item: unknown) =>
-              typeof item === "string"
-                ? item
-                : typeof item === "object" && item !== null && "id" in item
-                  ? (item as Record<string, unknown>).id
-                  : item
-            );
-          }
-        }
-      });
+      // Shape the post-hook input into the row payload (mutating finalData) plus
+      // the component and many-to-many pieces that persist outside the main row.
+      // `let` because a publish that promotes an accumulated working draft
+      // rebinds these to the merged draft+payload shape below.
+      let { manyToManyData, componentFieldData } = this.shapeWriteParts(
+        finalData,
+        fields,
+        manyToManyFields,
+        collection
+      );
 
       // Update main entry
       // Use Date object (not .toISOString() string) because Drizzle's timestamp()
@@ -4318,10 +4355,19 @@ export class CollectionMutationService extends BaseService {
 
       // Stage B draft/published split: an update to a PUBLISHED document that
       // names no status is non-destructive on a split-enabled collection — it is
-      // stored as the working draft, leaving the live row untouched. Requires the
-      // draft/publish lifecycle (`status`) and drafts-enabled versioning.
+      // stored as the working draft, leaving the live row untouched, and a
+      // publish later promotes that draft to the live row. Requires the
+      // draft/publish lifecycle (`status`) and drafts-enabled versioning, and is
+      // scoped to non-localized collections: a localized document keeps
+      // draft/published state per locale, so coalescing per-locale drafts and
+      // aligning the working-draft locale key with the read overlay needs its own
+      // design and is handled separately.
+      const documentLocalized =
+        (collection as { localized?: boolean }).localized === true;
       const splitEnabled =
-        collectionHasStatus && versionsConfig?.drafts?.enabled === true;
+        collectionHasStatus &&
+        versionsConfig?.drafts?.enabled === true &&
+        !documentLocalized;
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).
@@ -4335,6 +4381,39 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         fields
       );
+
+      // Stage B promote-on-publish: a publish or unpublish on a split collection
+      // must apply the whole accumulated working draft to the live row, not only
+      // the dirty fields the caller sent (the admin Publish sends just the fields
+      // touched this session). The component schemas the draft snapshot is
+      // filtered against are read from the registry here, off the transaction —
+      // the same pooled-connection reason as `webhookFields` — and the restore
+      // context records which system columns the live row actually has. Both are
+      // unused unless a draft is found under the row lock below. `promotePossible`
+      // is the publish/unpublish counterpart of the status-less draft edit: the
+      // two are disjoint on `namesNoStatus`.
+      const promotePossible = splitEnabled && !namesNoStatus;
+      const isPluginForRestore =
+        (
+          (collection as Record<string, unknown>).admin as
+            | Record<string, unknown>
+            | undefined
+        )?.isPlugin === true;
+      const promoteRestoreCtx: RestoreSchemaContext | null = promotePossible
+        ? {
+            hasStatus: collectionHasStatus,
+            hasSlug: !isPluginForRestore || fields.some(f => f.name === "slug"),
+            hasTitle:
+              !isPluginForRestore || fields.some(f => f.name === "title"),
+            componentSchemas: await resolveComponentSchemas(
+              fields as unknown as FieldConfig[]
+            ),
+            // The split is non-localized-only, so the document holds no per-locale
+            // values and the snapshot's locale is the resolved request locale.
+            documentLocalized: false,
+            localeUnknown: false,
+          }
+        : null;
 
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
@@ -4365,7 +4444,9 @@ export class CollectionMutationService extends BaseService {
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;
-          const updatePayload = {
+          // `let` because promote-on-publish rebinds it from the merged
+          // draft+payload after the working draft is folded in below.
+          let updatePayload = {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
           };
@@ -4624,6 +4705,66 @@ export class CollectionMutationService extends BaseService {
                   throw new StatusTransitionDeniedError();
                 }
               }
+            }
+          }
+
+          // Stage B promote-on-publish: with the row lock held and the publish
+          // authorized above, fold any accumulated working draft into this write
+          // so the live row receives the draft's whole content with the caller's
+          // fields overlaid. The admin Publish sends only the fields dirtied this
+          // session, so without this a publish drops edits made in earlier ones.
+          // Fetched here, under the lock, so a concurrent draft edit is
+          // serialized: it either lands before this read (and is promoted) or
+          // after this transaction commits (against the now-published row). The
+          // draft is deleted in the same transaction below, so promote is atomic:
+          // any failure rolls back the live write and leaves the draft intact.
+          let promotedDraft = false;
+          if (promotePossible && promoteRestoreCtx) {
+            const workingDraft = await new VersionsRepository(
+              tx
+            ).findWorkingDraft(
+              {
+                scopeKind: "collection",
+                scopeSlug: params.collectionName,
+                entryId: params.entryId,
+              },
+              this.componentSnapshotLocale(params.locale)
+            );
+            if (workingDraft) {
+              // The snapshot is stored read-shaped, so buildRestorePayload turns
+              // it into a safe update input (immutable ids stripped, removed
+              // columns and password fields dropped, component subtrees whose
+              // schema no longer resolves reported rather than written blind).
+              // Shaping that input through the SAME pure pass the caller's input
+              // took yields matching column and relation parts, so merging the
+              // caller over the draft (caller wins per key, including the
+              // published/draft `status`) and rebinding makes the writes below
+              // persist the promoted content with no separate code path.
+              const { payload: draftInput } = buildRestorePayload(
+                workingDraft.snapshot,
+                fields as unknown as FieldConfig[],
+                promoteRestoreCtx
+              );
+              const draftParts = this.shapeWriteParts(
+                draftInput,
+                fields,
+                manyToManyFields,
+                collection
+              );
+              finalData = { ...draftInput, ...finalData };
+              componentFieldData = {
+                ...draftParts.componentFieldData,
+                ...componentFieldData,
+              };
+              manyToManyData = {
+                ...draftParts.manyToManyData,
+                ...manyToManyData,
+              };
+              updatePayload = {
+                ...stripImmutableSystemFields(finalData),
+                updatedAt: updatePayload.updatedAt,
+              };
+              promotedDraft = true;
             }
           }
 
@@ -4957,13 +5098,33 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  locale: capturedLocaleState
-                    ? (localizedUpdate?.writeLocale ??
-                      this.componentSnapshotLocale(params.locale))
-                    : null,
+                  // The resolved request locale (null when localization is off),
+                  // which is exactly what the read overlay looks the draft up
+                  // under (`localeChain[0] ?? null`) and what a later publish uses
+                  // to promote it — so store, overlay, and promote never drift.
+                  // The split is non-localized-only, so this captures the single
+                  // per-locale component snapshot for one logical document.
+                  locale: this.componentSnapshotLocale(params.locale),
                   snapshot: assembleDocument(draftParts),
                   createdBy: params.user?.id ?? null,
                 });
+              }
+
+              // Stage B promote-on-publish: the accumulated draft has been folded
+              // into the live write above, so drop the sidecar in the SAME
+              // transaction — its content is now the live row, and a surviving
+              // draft would shadow the freshly published document on the next
+              // trusted read. Uses the locale key the fetch used, so it removes
+              // exactly the row that was promoted.
+              if (promotedDraft) {
+                await new VersionsRepository(tx).deleteWorkingDraft(
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  this.componentSnapshotLocale(params.locale)
+                );
               }
 
               // Append the outbox event in the same transaction, so it commits

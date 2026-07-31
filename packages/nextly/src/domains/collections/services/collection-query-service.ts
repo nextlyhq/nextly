@@ -2241,6 +2241,10 @@ export class CollectionQueryService extends BaseService {
       // routeAuthorized` excludes an anonymous caller passing `?status=all`.
       const draftView =
         (collectionForStatus as { status?: boolean }).status === true &&
+        // The working-draft split is non-localized-only (the write path stores
+        // no draft for a localized collection), so skip the lookup there rather
+        // than issue a read that can only miss.
+        (collectionForStatus as { localized?: boolean }).localized !== true &&
         statusFilter === null &&
         (params.overrideAccess === true || params.routeAuthorized === true);
       if (draftView) {
