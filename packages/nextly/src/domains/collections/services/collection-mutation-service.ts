@@ -4666,9 +4666,25 @@ export class CollectionMutationService extends BaseService {
           data: componentFieldData,
           locale: params.locale,
         })) ?? new Map<string, boolean>();
+      // `withVersionConflictRetry` re-runs the closure on a version_no conflict,
+      // and the promote fold inside it rebinds these payloads (and sets the
+      // pending-draft document). Capture the caller's own shaped input so each
+      // attempt starts from it rather than from a prior attempt's merged draft.
+      const baseFinalData = { ...finalData };
+      const baseManyToManyData = { ...manyToManyData };
+      const baseComponentFieldData = { ...componentFieldData };
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;
+          // Reset the payloads the promote fold rebinds, so a retried attempt
+          // re-decides the split from the caller's input; and clear the pending
+          // draft document, so a stale one from a promoted attempt cannot suppress
+          // the outbox/reaction events or the revalidation intent of a committed
+          // live write on the retry.
+          finalData = { ...baseFinalData };
+          manyToManyData = { ...baseManyToManyData };
+          componentFieldData = { ...baseComponentFieldData };
+          workingDraftDocument = undefined;
           // `let` because promote-on-publish rebinds it from the merged
           // draft+payload after the working draft is folded in below.
           let updatePayload = {
