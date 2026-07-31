@@ -1180,6 +1180,11 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         status,
+        // `?draft=true` overlays the pending working draft in place of the live
+        // row (draft/published split), matching Payload's read-side `draft`
+        // parameter. The service gates it on an update-capability probe, so a
+        // read-only caller passing it still receives the published row.
+        includeWorkingDraft: isTruthyParam(p.draft),
         // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,

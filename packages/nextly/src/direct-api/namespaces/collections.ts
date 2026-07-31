@@ -121,6 +121,9 @@ export async function findByID<TSlug extends CollectionSlug>(
       richTextFormat: config.richTextFormat,
       overrideAccess: config.overrideAccess,
       user: config.user,
+      // Overlay the pending working draft when the caller opts in; the service
+      // still gates it on an update-capability probe.
+      includeWorkingDraft: args.draft,
       // i18n M4: forward the content locale + fallback so localized fields resolve.
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,

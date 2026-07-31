@@ -24,8 +24,8 @@
  * ```
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve, dirname } from "node:path";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { resolve, dirname, join } from "node:path";
 
 import type { Command } from "commander";
 
@@ -41,6 +41,11 @@ import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
+import {
+  assertManifestPathIsFree,
+  BLOCK_MANIFEST_FILENAME,
+  buildBlockManifestArtifact,
+} from "../../plugins/codegen/block-manifest";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 // The option names the field identity would overwrite, refused here because a
@@ -100,6 +105,8 @@ interface ResolvedGenerateTypesOptions extends GenerateTypesCommandOptions {
 interface GenerationResult {
   /** Path to generated TypeScript types file */
   typesFile?: string;
+  /** Path to the generated block manifest, when plugins declare blocks. */
+  blockManifestFile?: string;
   /** Path to the generated admin component import map, when plugins contribute admin UI (D60) */
   componentImportMapFile?: string;
   /** Number of collection interfaces generated */
@@ -174,6 +181,41 @@ export async function runGenerateTypes(
   // User fields alone are enough to generate for: the `User` interface carries
   // them, and stopping here would leave an app with no output, or a stale file
   // from a previous run.
+  // Settled BEFORE the empty-schema return below, which exits without running
+  // anything after it. An app whose only schema came from a page-builder plugin
+  // reaches zero on every count the moment that plugin is removed, and that is
+  // exactly when its manifest most needs deleting. The path is recorded and
+  // reported on the result further down, where that object exists.
+  const manifestCwd = options.cwd ?? process.cwd();
+  const manifestOutputPath =
+    options.output ?? configResult.config.typescript.outputFile;
+  // Checked before either branch: the cleanup path deletes by name, so a
+  // collision here would remove the types output rather than a stale manifest.
+  assertManifestPathIsFree(manifestOutputPath);
+  const blockManifest = buildBlockManifestArtifact(
+    configResult.config.plugins ?? [],
+    manifestOutputPath
+  );
+  let writtenManifestPath: string | undefined;
+  if (blockManifest) {
+    writtenManifestPath = resolve(manifestCwd, blockManifest.path);
+    await ensureDir(dirname(writtenManifestPath));
+    await writeFile(writtenManifestPath, blockManifest.code, "utf-8");
+    logger.debug(`Written block manifest to: ${writtenManifestPath}`);
+  } else {
+    // No manifest for this config, expressed by removing any previous one.
+    // Writing nothing would leave the last run's file on disk still
+    // advertising blocks the app no longer has -- worse than never having
+    // generated it, because it reads as current.
+    await rm(
+      resolve(
+        manifestCwd,
+        join(dirname(manifestOutputPath), BLOCK_MANIFEST_FILENAME)
+      ),
+      { force: true }
+    );
+  }
+
   if (
     collectionCount === 0 &&
     singleCount === 0 &&
@@ -193,6 +235,9 @@ export async function runGenerateTypes(
 
   try {
     const result = await generateTypes(configResult, options, context);
+    // Reported here because the manifest is settled earlier, before the
+    // empty-schema return, while this object is built by the call above.
+    result.blockManifestFile = writtenManifestPath;
 
     // Step 3: Display results
     displayResults(result, options, context);
