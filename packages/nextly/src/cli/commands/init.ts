@@ -346,9 +346,12 @@ export async function initializeNextly(): Promise<void> {
   }
 
   try {
-    // Collection hooks are registered by Nextly's own boot, so there is
-    // nothing to register here. Doing it again would append the same
-    // handlers a second time and run every hook twice.
+    // Boot Nextly, which is what registers the config's collection hooks.
+    // Doing that here as well would append the same handlers a second time
+    // and run every hook twice, so this defers to the one boot rather than
+    // repeating it -- and calling it is what makes those hooks exist, so
+    // this cannot simply do nothing.
+    await getNextlyInstance();
 
     initialized = true;
     console.log("[Nextly] Initialized successfully");
