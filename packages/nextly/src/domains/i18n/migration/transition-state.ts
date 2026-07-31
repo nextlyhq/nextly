@@ -369,25 +369,32 @@ export async function settleI18nTransition(
     });
   }
 
-  const marker: StoredMarker = {
-    version: I18N_TRANSITION_MARKER_VERSION,
-    status: "seeded",
-    sourceLocale: current.sourceLocale,
-  };
-  // Conditional on the state this settlement actually describes. Opposite transitions can
-  // interleave: while a re-enable is copying, a disable can restore the content and write
-  // `restored`, and an unconditional write here would bury that under `seeded` — after which the
-  // next enable trusts the companion and skips the refresh, reverting every edit made on main
-  // while localization was off. Losing means the entity moved on and this settlement no longer
-  // describes it, which is not an error: whatever moved it owns the state now.
+  // Only ever from `enabling`, and only via a conditional write.
+  //
+  // A settlement describes a copy that ran under a claim, so `enabling` is the only state it can
+  // truthfully follow. Reading the state here and settling from whatever it happens to be would
+  // let an intervening disable be buried: it restores the content to main and records `restored`
+  // while the copy is still finishing, and a `restored -> seeded` move would then tell the next
+  // enable that the companion is authoritative — reverting every edit made on main while
+  // localization was off.
+  //
+  // Anything else means the entity moved on under someone else's claim, which is not an error and
+  // not this caller's to correct. The conditional write covers the same race happening between
+  // this read and the write.
+  if (current.status !== "enabling") return;
+
   await store.compareAndSet(
     key,
     {
       version: I18N_TRANSITION_MARKER_VERSION,
-      status: current.status,
+      status: "enabling",
       sourceLocale: current.sourceLocale,
     } satisfies StoredMarker,
-    marker
+    {
+      version: I18N_TRANSITION_MARKER_VERSION,
+      status: "seeded",
+      sourceLocale: current.sourceLocale,
+    } satisfies StoredMarker
   );
 }
 
@@ -413,6 +420,18 @@ export async function recordI18nRestore(
     kind: I18nTransitionKind;
     slug: string;
     sourceLocale: string;
+    /**
+     * The state observed BEFORE the copy this call completes.
+     *
+     * Passed in rather than re-read, because a re-read happens after the copy and would let this
+     * write succeed from a state some other transition established in the meantime. A re-enable
+     * that claimed `enabling` while the restore was copying owns the entity now, and overwriting
+     * its claim would leave its copy with nothing to settle.
+     */
+    expect?: {
+      status: "enabling" | "seeded" | "restored";
+      sourceLocale: string;
+    };
   }
 ): Promise<void> {
   requireIdentifier(args.sourceLocale, "sourceLocale");
@@ -432,15 +451,19 @@ export async function recordI18nRestore(
     status: "restored",
     sourceLocale: args.sourceLocale,
   };
-  // Conditional for the same reason settling is: a re-enable running concurrently may have claimed
-  // this entity, and overwriting its `enabling` record would leave that copy with nothing to
-  // settle. Losing means the entity moved on under someone else's claim.
+  // Conditional against the state the copy was based on, not the one visible now: re-reading here
+  // would accept whatever another transition established while the copy ran. Losing means the
+  // entity moved on under someone else's claim, which is not an error.
+  const expected = args.expect ?? {
+    status: current.status,
+    sourceLocale: current.sourceLocale,
+  };
   await store.compareAndSet(
     key,
     {
       version: I18N_TRANSITION_MARKER_VERSION,
-      status: current.status,
-      sourceLocale: current.sourceLocale,
+      status: expected.status,
+      sourceLocale: expected.sourceLocale,
     } satisfies StoredMarker,
     marker
   );

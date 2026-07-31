@@ -165,6 +165,12 @@ export async function restoreDisabledCompanion(
       kind: args.kind,
       slug: args.slug,
       sourceLocale: restoreLocale,
+      // The state read before the copy, so a re-enable that claimed this entity while it ran keeps
+      // its claim rather than having it overwritten by a completion it never saw.
+      expect: {
+        status: recorded.status,
+        sourceLocale: recorded.sourceLocale,
+      },
     });
     return present.length > 0;
   } catch (error) {
