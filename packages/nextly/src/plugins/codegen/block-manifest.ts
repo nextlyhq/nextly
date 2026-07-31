@@ -19,7 +19,7 @@
  * @module plugins/codegen/block-manifest
  */
 
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 
 import { NextlyError } from "../../errors";
 import { collectDeclarations } from "../declarations";
@@ -86,9 +86,20 @@ export function buildBlockManifest(
   if (!isConsumerActive(plugins, PAGE_BUILDER_PLUGIN)) {
     return { manifestVersion: BLOCK_MANIFEST_VERSION, blocks };
   }
+  // Where each name came from, so a collision names both plugins rather than
+  // just the one that lost.
+  const declaredBy = new Map<string, string>();
   for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
     for (const block of declaredBlocks(declaration.value, declaration.source)) {
-      blocks.push(toEntry(block, declaration.source));
+      const entry = toEntry(block, declaration.source);
+      const firstSource = declaredBy.get(entry.name);
+      if (firstSource !== undefined) {
+        throw invalidDeclaration(
+          `Block "${entry.name}" is declared by both "${firstSource}" and "${declaration.source}". Block names are global, so one of them has to change.`
+        );
+      }
+      declaredBy.set(entry.name, declaration.source);
+      blocks.push(entry);
     }
   }
   blocks.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -106,6 +117,25 @@ export function buildBlockManifest(
  * any previous file: writing nothing would leave the last run's manifest on
  * disk advertising blocks the app no longer has.
  */
+export function assertManifestPathIsFree(typesOutputPath: string): void {
+  // The manifest sits beside the generated types, so a types file named
+  // `blocks.manifest.json` resolves to the same path. With blocks declared the
+  // manifest is written and then overwritten by the types; with none, the
+  // cleanup deletes the types output the user asked for. Both are silent, and
+  // one destroys work, so the collision is refused before either happens.
+  if (basename(typesOutputPath) === BLOCK_MANIFEST_FILENAME) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "typescript.outputFile",
+          code: "OUTPUT_PATH_COLLISION",
+          message: `The generated types output cannot be named "${BLOCK_MANIFEST_FILENAME}": the block manifest is written to that name in the same directory, and one would overwrite or delete the other.`,
+        },
+      ],
+    });
+  }
+}
+
 export function buildBlockManifestArtifact(
   plugins: readonly PluginDefinition[],
   typesOutputPath: string
@@ -118,6 +148,26 @@ export function buildBlockManifestArtifact(
     // does not show a no-newline marker in every diff.
     code: `${JSON.stringify(manifest, null, 2)}\n`,
   };
+}
+
+/**
+ * A generation-time refusal, addressed at the declaration that caused it.
+ *
+ * Generation must not be more permissive than boot. Anything the page builder
+ * would reject when it registers has to fail here too, or `generate:types`
+ * reports success -- and may delete the previous manifest -- for a
+ * configuration that cannot start.
+ */
+function invalidDeclaration(message: string): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: `contributes.declarations.${PAGE_BUILDER_PLUGIN}.blocks`,
+        code: "INVALID_BLOCK_DECLARATION",
+        message,
+      },
+    ],
+  });
 }
 
 /** Whether the plugin these declarations are addressed to will actually run. */
@@ -151,20 +201,40 @@ function declaredBlocks(
   const blocks = (value as { blocks?: unknown }).blocks;
   if (blocks === undefined) return [];
   if (!Array.isArray(blocks)) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: `contributes.declarations.${PAGE_BUILDER_PLUGIN}.blocks`,
-          code: "INVALID_BLOCK_DECLARATION",
-          message: `Plugin "${source}" declared blocks for the page builder as ${typeof blocks}; it must be an array of block definitions.`,
-        },
-      ],
-    });
+    throw invalidDeclaration(
+      `Plugin "${source}" declared blocks for the page builder as ${typeof blocks}; it must be an array of block definitions.`
+    );
   }
-  return blocks.filter(
-    (block): block is Record<string, unknown> =>
-      typeof block === "object" && block !== null && !Array.isArray(block)
-  );
+  return blocks.map((block, index) => {
+    // Filtering a bad element would drop a block the author meant to ship and
+    // leave the manifest quietly short; the engine rejects the same element at
+    // registration, so it fails here instead.
+    if (typeof block !== "object" || block === null || Array.isArray(block)) {
+      throw invalidDeclaration(
+        `Plugin "${source}" declared a block at index ${index} that is ${describeKind(block)}; each entry must be a block definition.`
+      );
+    }
+    const definition = block as Record<string, unknown>;
+    if (typeof definition.name !== "string" || definition.name.length === 0) {
+      throw invalidDeclaration(
+        `Plugin "${source}" declared a block at index ${index} with no name.`
+      );
+    }
+    if (typeof definition.version !== "number") {
+      throw invalidDeclaration(
+        `Block "${definition.name}" from "${source}" has no numeric version.`
+      );
+    }
+    if (
+      typeof definition.description !== "string" ||
+      definition.description.length === 0
+    ) {
+      throw invalidDeclaration(
+        `Block "${definition.name}" from "${source}" has no description. Every block needs one, for the palette, the docs and the manifest.`
+      );
+    }
+    return definition;
+  });
 }
 
 /**
@@ -191,6 +261,12 @@ function toEntry(
   if (isRecord(block.supports)) entry.supports = block.supports;
   if (isRecord(block.slots)) entry.slots = block.slots;
   return entry;
+}
+
+/** A short, safe description of a bad value, for an error a human reads. */
+function describeKind(value: unknown): string {
+  if (value === null) return "null";
+  return Array.isArray(value) ? "an array" : `a ${typeof value}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

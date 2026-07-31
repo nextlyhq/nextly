@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertManifestPathIsFree,
   BLOCK_MANIFEST_FILENAME,
   buildBlockManifest,
   buildBlockManifestArtifact,
@@ -162,6 +163,86 @@ describe("buildBlockManifest", () => {
       thrown as { publicData?: { errors?: { message: string }[] } }
     )?.publicData?.errors;
     expect(issues?.[0]?.message, String(thrown)).toContain("@acme/bad");
+  });
+});
+
+describe("buildBlockManifest rejects what boot would reject", () => {
+  /** The message of the first issue on a thrown validation error. */
+  function issueOf(run: () => unknown): string {
+    try {
+      run();
+    } catch (error) {
+      const issues = (
+        error as { publicData?: { errors?: { message: string }[] } }
+      )?.publicData?.errors;
+      return issues?.[0]?.message ?? String(error);
+    }
+    return "";
+  }
+
+  it("refuses a non-object entry inside a valid array", () => {
+    // Filtering it would drop a block the author meant to ship and leave the
+    // manifest quietly short, while the engine rejects the same element at
+    // registration.
+    const message = issueOf(() =>
+      buildBlockManifest([consumer(), declaring("@acme/a", ["not-a-block"])])
+    );
+
+    expect(message).toContain("@acme/a");
+    expect(message).toContain("index 0");
+  });
+
+  it("refuses a block with no name", () => {
+    const message = issueOf(() =>
+      buildBlockManifest([consumer(), declaring("@acme/a", [{ version: 1 }])])
+    );
+
+    expect(message).toContain("no name");
+  });
+
+  it("refuses a block with no description", () => {
+    // Required by the block API and by the manifest's own contract: it is what
+    // the palette, the docs and an agent read.
+    const message = issueOf(() =>
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/a", [{ name: "acme/x", version: 1 }]),
+      ])
+    );
+
+    expect(message).toContain("no description");
+  });
+
+  it("refuses the same block name from two plugins, naming both", () => {
+    // The engine throws NEXTLY_BLOCK_COLLISION for the second registration, so
+    // emitting both would hand tooling an ambiguous manifest for a config that
+    // cannot boot.
+    const message = issueOf(() =>
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/a", [block("acme/dup")]),
+        declaring("@acme/b", [block("acme/dup")]),
+      ])
+    );
+
+    expect(message).toContain("@acme/a");
+    expect(message).toContain("@acme/b");
+  });
+});
+
+describe("assertManifestPathIsFree", () => {
+  it("refuses a types output named like the manifest", () => {
+    // Same directory, same filename: with blocks the types overwrite the
+    // manifest, and with none the cleanup deletes the types output.
+    expect(() =>
+      assertManifestPathIsFree(`/app/src/${BLOCK_MANIFEST_FILENAME}`)
+    ).toThrow();
+  });
+
+  it("accepts an ordinary types output", () => {
+    expect(() =>
+      assertManifestPathIsFree("/app/src/nextly-types.ts")
+    ).not.toThrow();
   });
 });
 

@@ -42,6 +42,7 @@ import { describeError } from "../../errors/index";
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import {
+  assertManifestPathIsFree,
   BLOCK_MANIFEST_FILENAME,
   buildBlockManifestArtifact,
 } from "../../plugins/codegen/block-manifest";
@@ -188,6 +189,9 @@ export async function runGenerateTypes(
   const manifestCwd = options.cwd ?? process.cwd();
   const manifestOutputPath =
     options.output ?? configResult.config.typescript.outputFile;
+  // Checked before either branch: the cleanup path deletes by name, so a
+  // collision here would remove the types output rather than a stale manifest.
+  assertManifestPathIsFree(manifestOutputPath);
   const blockManifest = buildBlockManifestArtifact(
     configResult.config.plugins ?? [],
     manifestOutputPath
