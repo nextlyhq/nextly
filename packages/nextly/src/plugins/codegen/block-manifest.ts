@@ -233,6 +233,19 @@ function declaredBlocks(
         `Block "${definition.name}" from "${source}" has no description. Every block needs one, for the palette, the docs and the manifest.`
       );
     }
+    // A worked instance is what makes a block usable by something that has
+    // never seen it: a preview renders it, and a generator few-shots from it.
+    // The block API requires one, so a declaration without it describes a block
+    // that could not have been built with `defineBlock`.
+    if (
+      typeof definition.example !== "object" ||
+      definition.example === null ||
+      Array.isArray(definition.example)
+    ) {
+      throw invalidDeclaration(
+        `Block "${definition.name}" from "${source}" has no example. Every block needs a worked instance, for previews and for generating content.`
+      );
+    }
     return definition;
   });
 }
