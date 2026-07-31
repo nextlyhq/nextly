@@ -21,6 +21,8 @@
 
 import { join, dirname, basename } from "node:path";
 
+import { z } from "zod";
+
 import { NextlyError } from "../../errors";
 import { collectDeclarations } from "../declarations";
 import type { PluginDefinition } from "../plugin-context";
@@ -43,28 +45,69 @@ export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
  */
 export const BLOCK_MANIFEST_VERSION = 1;
 
-/** One block, as the manifest states it. */
-export interface BlockManifestEntry {
-  name: string;
-  /** The block's own schema version, stamped onto every node of its type. */
-  version: number;
-  description: string;
-  /** The plugin that declared it, so a reader knows what to install. */
-  source: string;
-  /** A worked instance, for previews and few-shot prompting. */
-  example?: unknown;
-  /** Prop schemas keyed by prop name. */
-  props?: Record<string, unknown>;
-  /** Style capabilities the block opts into. */
-  supports?: Record<string, unknown>;
-  /** Named child regions, for container blocks. */
-  slots?: Record<string, unknown>;
-}
+/**
+ * One block, as the manifest states it.
+ *
+ * Strict, and not optionally so: the JSON Schema derived from this object
+ * carries `additionalProperties: false` whether or not `.strict()` is written
+ * here. Without it the two sides disagree — an unknown key would be quietly
+ * dropped by the emitter's own check and REJECTED by the schema handed to
+ * outside readers, so a manifest Nextly wrote would fail the contract Nextly
+ * published for it. Strict makes both refuse, which is also what makes a key
+ * added to the emitter and not to the schema a decision someone made rather
+ * than a diff nobody noticed.
+ *
+ * `props`, `supports` and `slots` stay open, because their contents belong to
+ * the block rather than to the manifest: core has no vocabulary for them and
+ * would only be guessing at what a plugin may put there.
+ */
+export const blockManifestEntrySchema = z
+  .object({
+    name: z.string().min(1),
+    /** The block's own schema version, stamped onto every node of its type. */
+    version: z.number(),
+    description: z.string().min(1),
+    /** The plugin that declared it, so a reader knows what to install. */
+    source: z.string().min(1),
+    /** A worked instance, for previews and few-shot prompting. */
+    example: z.unknown().optional(),
+    /** Prop schemas keyed by prop name. */
+    props: z.record(z.string(), z.unknown()).optional(),
+    /** Style capabilities the block opts into. */
+    supports: z.record(z.string(), z.unknown()).optional(),
+    /** Named child regions, for container blocks. */
+    slots: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
 
 /** The emitted document. */
-export interface BlockManifest {
-  manifestVersion: number;
-  blocks: BlockManifestEntry[];
+export const blockManifestSchema = z
+  .object({
+    manifestVersion: z.number().int().positive(),
+    blocks: z.array(blockManifestEntrySchema),
+  })
+  .strict();
+
+/**
+ * The types are DERIVED from the schema rather than declared beside it, so the
+ * shape a TypeScript consumer sees and the shape a JSON consumer validates
+ * against cannot describe different files.
+ */
+export type BlockManifestEntry = z.infer<typeof blockManifestEntrySchema>;
+export type BlockManifest = z.infer<typeof blockManifestSchema>;
+
+/**
+ * The manifest's contract in a form that needs neither zod nor this package.
+ *
+ * A manifest is read by things that never import Nextly — an editor build, a
+ * docs page, an agent handed the file on its own — and until now they had only
+ * a TypeScript interface, which a JSON consumer cannot check anything against.
+ *
+ * Derived from the schema above, so publishing it cannot drift from what the
+ * emitter actually writes.
+ */
+export function blockManifestJsonSchema(): Record<string, unknown> {
+  return z.toJSONSchema(blockManifestSchema);
 }
 
 /**
@@ -103,7 +146,39 @@ export function buildBlockManifest(
     }
   }
   blocks.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  return { manifestVersion: BLOCK_MANIFEST_VERSION, blocks };
+  return assertMatchesSchema({
+    manifestVersion: BLOCK_MANIFEST_VERSION,
+    blocks,
+  });
+}
+
+/**
+ * Hold the assembled document to the contract the manifest publishes.
+ *
+ * The per-block checks above read a DECLARATION, addressing whoever wrote it.
+ * This reads the DOCUMENT, and its audience is whoever changed the emitter: it
+ * is what stops a manifest being written that the schema shipped alongside it
+ * would reject, which is the one failure a reader has no way to recover from.
+ *
+ * Refusing rather than warning, for the reason the whole module refuses: this
+ * runs on a path that DELETES the previous manifest when it finds no blocks, so
+ * an emitter defect must stop generation rather than be written over the last
+ * good file.
+ */
+function assertMatchesSchema(manifest: unknown): BlockManifest {
+  const parsed = blockManifestSchema.safeParse(manifest);
+  if (parsed.success) return parsed.data;
+  const [issue] = parsed.error.issues;
+  const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `${BLOCK_MANIFEST_FILENAME}.${at}`,
+        code: "MANIFEST_SCHEMA_MISMATCH",
+        message: `The block manifest does not satisfy the schema published for it: ${issue.message}`,
+      },
+    ],
+  });
 }
 
 /**

@@ -68,6 +68,20 @@ export interface SaveComponentDataParams {
    * (shared fields still go to the main comp_ row). Threaded from the parent entity's write.
    */
   locale?: string;
+
+  /**
+   * The parent write's request context, forwarded to the field validators that run on each
+   * component instance. Carries `user` when the write is authenticated.
+   *
+   * A component instance is validated by its own pass, in its own service, against its own
+   * field set — the parent entry's validation never reaches inside it. Without this the
+   * instance pass runs with an empty context, so a field rule that reads `req.user` cannot
+   * tell an authenticated write from an anonymous one and accepts both.
+   *
+   * The whole record rather than a bare `user`: it is what the validator receives, so
+   * anything else the parent write puts on its request travels with it.
+   */
+  req?: Record<string, unknown>;
 }
 
 /**
@@ -322,7 +336,7 @@ export class FieldGroupMutationService extends BaseService {
    * Save component data for all component fields of a parent entry.
    */
   async saveComponentData(params: SaveComponentDataParams): Promise<void> {
-    const { parentId, parentTable, fields, data, locale } = params;
+    const { parentId, parentTable, fields, data, locale, req } = params;
 
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
@@ -351,6 +365,7 @@ export class FieldGroupMutationService extends BaseService {
           field,
           data: fieldData,
           locale,
+          req,
         });
       } else if (field.component) {
         if (field.repeatable) {
@@ -361,6 +376,7 @@ export class FieldGroupMutationService extends BaseService {
             componentSlug: field.component,
             data: fieldData,
             locale,
+            req,
           });
         } else {
           await this.saveSingleComponent({
@@ -370,6 +386,7 @@ export class FieldGroupMutationService extends BaseService {
             componentSlug: field.component,
             data: fieldData as ComponentInstanceData,
             locale,
+            req,
           });
         }
       }
@@ -484,7 +501,7 @@ export class FieldGroupMutationService extends BaseService {
     tx: TransactionContext,
     params: SaveComponentDataParams
   ): Promise<void> {
-    const { parentId, parentTable, fields, data, locale } = params;
+    const { parentId, parentTable, fields, data, locale, req } = params;
 
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
@@ -513,6 +530,7 @@ export class FieldGroupMutationService extends BaseService {
           field,
           data: fieldData,
           locale,
+          req,
         });
       } else if (field.component) {
         if (field.repeatable) {
@@ -523,6 +541,7 @@ export class FieldGroupMutationService extends BaseService {
             componentSlug: field.component,
             data: fieldData,
             locale,
+            req,
           });
         } else {
           await this.saveSingleComponentInTx(tx, {
@@ -532,6 +551,7 @@ export class FieldGroupMutationService extends BaseService {
             componentSlug: field.component,
             data: fieldData as ComponentInstanceData,
             locale,
+            req,
           });
         }
       }
@@ -582,9 +602,17 @@ export class FieldGroupMutationService extends BaseService {
     componentSlug: string;
     data: ComponentInstanceData;
     locale?: string;
+    req?: Record<string, unknown>;
   }): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      componentSlug,
+      data,
+      locale,
+      req,
+    } = params;
 
     try {
       const componentMeta =
@@ -605,7 +633,8 @@ export class FieldGroupMutationService extends BaseService {
       await this.prepareInstanceForWrite(
         data,
         componentFields,
-        existing.length > 0 ? "update" : "create"
+        existing.length > 0 ? "update" : "create",
+        req
       );
 
       // i18n: split translatable values out of the main comp_ write — they live on the
@@ -684,10 +713,18 @@ export class FieldGroupMutationService extends BaseService {
       componentSlug: string;
       data: ComponentInstanceData;
       locale?: string;
+      req?: Record<string, unknown>;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      componentSlug,
+      data,
+      locale,
+      req,
+    } = params;
 
     try {
       const componentMeta =
@@ -709,7 +746,8 @@ export class FieldGroupMutationService extends BaseService {
       await this.prepareInstanceForWrite(
         data,
         componentFields,
-        existing.length > 0 ? "update" : "create"
+        existing.length > 0 ? "update" : "create",
+        req
       );
 
       // i18n: split translatable values out of the main comp_ write (companion-owned).
@@ -775,9 +813,17 @@ export class FieldGroupMutationService extends BaseService {
     componentSlug: string;
     data: unknown;
     locale?: string;
+    req?: Record<string, unknown>;
   }): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      componentSlug,
+      data,
+      locale,
+      req,
+    } = params;
 
     if (!Array.isArray(data)) {
       this.logger.warn("Repeatable component data is not an array", {
@@ -818,7 +864,8 @@ export class FieldGroupMutationService extends BaseService {
         await this.prepareInstanceForWrite(
           instance,
           componentFields,
-          instanceId && existingMap.has(instanceId) ? "update" : "create"
+          instanceId && existingMap.has(instanceId) ? "update" : "create",
+          req
         );
 
         if (instanceId && existingMap.has(instanceId)) {
@@ -890,10 +937,18 @@ export class FieldGroupMutationService extends BaseService {
       componentSlug: string;
       data: unknown;
       locale?: string;
+      req?: Record<string, unknown>;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, componentSlug, data, locale } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      componentSlug,
+      data,
+      locale,
+      req,
+    } = params;
 
     if (!Array.isArray(data)) {
       this.logger.warn("Repeatable component data is not an array", {
@@ -937,7 +992,8 @@ export class FieldGroupMutationService extends BaseService {
         await this.prepareInstanceForWrite(
           instance,
           componentFields,
-          instanceId && existingMap.has(instanceId) ? "update" : "create"
+          instanceId && existingMap.has(instanceId) ? "update" : "create",
+          req
         );
 
         if (instanceId && existingMap.has(instanceId)) {
@@ -1010,8 +1066,10 @@ export class FieldGroupMutationService extends BaseService {
     field: FieldGroupFieldConfig;
     data: unknown;
     locale?: string;
+    req?: Record<string, unknown>;
   }): Promise<void> {
-    const { parentId, parentTable, fieldName, field, data, locale } = params;
+    const { parentId, parentTable, fieldName, field, data, locale, req } =
+      params;
     const allowedSlugs = field.components ?? [];
 
     // Shared with the pre-transaction check, so the two cannot disagree about which
@@ -1105,7 +1163,8 @@ export class FieldGroupMutationService extends BaseService {
         await this.prepareInstanceForWrite(
           instance,
           componentFields,
-          instanceId && globalExistingMap.has(instanceId) ? "update" : "create"
+          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
+          req
         );
 
         if (instanceId && globalExistingMap.has(instanceId)) {
@@ -1182,9 +1241,11 @@ export class FieldGroupMutationService extends BaseService {
       field: FieldGroupFieldConfig;
       data: unknown;
       locale?: string;
+      req?: Record<string, unknown>;
     }
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, field, data, locale } = params;
+    const { parentId, parentTable, fieldName, field, data, locale, req } =
+      params;
     const allowedSlugs = field.components ?? [];
 
     // Shared with the pre-transaction check, so the two cannot disagree about which
@@ -1264,7 +1325,8 @@ export class FieldGroupMutationService extends BaseService {
         await this.prepareInstanceForWrite(
           instance,
           componentFields,
-          instanceId && globalExistingMap.has(instanceId) ? "update" : "create"
+          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
+          req
         );
 
         if (instanceId && globalExistingMap.has(instanceId)) {
@@ -1487,11 +1549,18 @@ export class FieldGroupMutationService extends BaseService {
    * matching the parent entry pipeline. `mode` is "update" for an instance
    * that already exists (so a write-only password left empty keeps the stored
    * hash) and "create" for a new one.
+   *
+   * `req` is the parent write's request context. It reaches the field
+   * validators unchanged, so a rule on a component field sees the same `user`
+   * a rule on a top-level field would. Defaults to an empty record: a caller
+   * with no request (an internal write, a seed) supplies no context, which is
+   * what an unauthenticated write looks like anyway.
    */
   private async prepareInstanceForWrite(
     instance: ComponentInstanceData,
     componentFields: FieldConfig[],
-    mode: "create" | "update"
+    mode: "create" | "update",
+    req: Record<string, unknown> = {}
   ): Promise<void> {
     // A component instance must be a plain object. A primitive (e.g. a bare
     // string sent for a non-repeatable component field) would make the field
@@ -1517,7 +1586,10 @@ export class FieldGroupMutationService extends BaseService {
     // reference left populated here is stored there as a snapshot of the row.
     normalizeRelationshipFields(instance, componentFields);
 
-    const issues = await validateEntryData(instance, componentFields, { mode });
+    const issues = await validateEntryData(instance, componentFields, {
+      mode,
+      req,
+    });
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });
     }

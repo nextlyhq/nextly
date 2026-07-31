@@ -17,6 +17,7 @@ import { registerAddCommand } from "./commands/add";
 import { registerBuildCommand } from "./commands/build";
 // What: import the renamed one-shot sync command.
 import { registerDbSyncCommand } from "./commands/db-sync";
+import { registerGenerateManifestCommand } from "./commands/generate-manifest";
 import { registerGenerateTypesCommand } from "./commands/generate-types";
 import { registerI18nRestoreCommand } from "./commands/i18n-restore";
 import { registerInitCommand } from "./commands/init";
@@ -140,6 +141,7 @@ export function createProgram(): Command {
 ${pc.bold("Examples:")}
   ${pc.gray("$")} next dev                      ${pc.gray("# Start the dev server (Nextly boots in-process)")}
   ${pc.gray("$")} nextly generate:types         ${pc.gray("# Generate TypeScript types")}
+  ${pc.gray("$")} nextly generate:manifest --check ${pc.gray("# Fail if the committed block manifest is stale")}
   ${pc.gray("$")} nextly migrate                ${pc.gray("# Run pending migrations")}
   ${pc.gray("$")} nextly migrate:status         ${pc.gray("# Show migration status")}
 
@@ -204,6 +206,9 @@ function registerCommands(program: Command): void {
   // Type generation commands
   registerGenerateTypesCommand(program);
   registerGenerateSchemaCommand(program);
+  // The manifest is also written by generate:types; this stands alone so CI can
+  // check it is current without paying for type and Zod generation.
+  registerGenerateManifestCommand(program);
 
   // Migration commands. F11 was forward-only; SP-2 adds single-step rollback.
   registerMigrateCommand(program); // Imported from ./commands/migrate.js
