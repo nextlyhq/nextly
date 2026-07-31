@@ -6239,6 +6239,16 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
+      // Signal that this save stored a pending working draft rather than writing
+      // the live row (draft/published split): the caller edited a published,
+      // drafts-enabled document without naming a status. The response reflects the
+      // draft, but its `status` stays the live parent's value, so an editor UI
+      // needs an explicit flag to show an "unpublished changes" state. Mirrors the
+      // read overlay's `_isWorkingDraft`.
+      if (workingDraftDocument) {
+        responseEntry._isWorkingDraft = true;
+      }
+
       return {
         success: true,
         statusCode: 200,
