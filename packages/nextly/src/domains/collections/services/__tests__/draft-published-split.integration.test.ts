@@ -1095,6 +1095,49 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(promo?.label).toBe("live");
   });
 
+  it("edits a localized collection live without a working draft", async () => {
+    // A localized document is ineligible for the split (a disqualifier known
+    // without the registry), so a status-less edit writes the live row directly
+    // and stores no working draft even when the schema references a component.
+    handle = await createTestNextly({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      fieldGroups: [
+        defineFieldGroup({ slug: "promo", fields: [text({ name: "label" })] }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          localized: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "promo", component: "promo" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    const res = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited" }
+    );
+    expect(res.success).toBe(true);
+    expect(await workingDraftCount(id)).toBe(0);
+    // A localized collection keeps its text per locale, so read the live value
+    // back through getEntry rather than the main row.
+    const read = await entries.getEntry({ ...ctx, entryId: id, locale: "en" });
+    expect((read.data as { title?: string }).title).toBe("edited");
+  });
+
   it("deletes the working-draft sidecar when the entry is deleted", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };

@@ -4590,10 +4590,16 @@ export class CollectionMutationService extends BaseService {
         (collection as { localized?: boolean }).localized === true;
       // The component schemas reachable from this collection, resolved once off
       // the transaction (registry reads on the pooled connection, the same reason
-      // as `webhookFields` below) and reused by the promote path. Only resolved
-      // when the split could otherwise apply.
+      // as `webhookFields` below) and reused by the promote path. Skipped when a
+      // disqualifier already known without the registry rules the split out: a
+      // localized document or a top-level password field. Component resolution can
+      // fail on a transient registry error, so an ordinary live write on such a
+      // collection must not acquire that dependency for a split it can never take.
       const splitComponentSchemas =
-        collectionHasStatus && versionsConfig?.drafts?.enabled === true
+        collectionHasStatus &&
+        versionsConfig?.drafts?.enabled === true &&
+        !documentLocalized &&
+        !hasPasswordField(fields)
           ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
           : null;
       // A localized component stores its values per locale, but a working draft
