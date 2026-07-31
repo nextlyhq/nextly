@@ -166,10 +166,24 @@ export type {
 /**
  * Hook types.
  * @public `HookContext` — exercised by `plugin-form-builder`'s collection hook.
- * @experimental `HookType`, `HookHandler` — the `ctx.hooks` plugin-registration
- *   path is not yet exercised by a first-party plugin.
+ * @experimental `HookType`, `HookContextPhase`, `HookHandler` — the `ctx.hooks`
+ *   plugin-registration path is not yet exercised by a first-party plugin.
+ *
+ * `HookContextPhase` is what `ctx.hooks.on`/`off` accept: every phase except
+ * `beforeOperation`, whose handler takes the operation's args instead. The
+ * `BeforeOperation*` types below are what `ctx.hooks.onBeforeOperation`/
+ * `offBeforeOperation` accept, and are exported so a plugin can type a handler
+ * it holds in a variable in order to unregister the same function later.
  */
-export type { HookType, HookHandler, HookContext } from "nextly";
+export type {
+  BeforeOperationArgs,
+  BeforeOperationContext,
+  BeforeOperationHandler,
+  HookContext,
+  HookContextPhase,
+  HookHandler,
+  HookType,
+} from "nextly";
 
 /**
  * Event bus (D8/D51) — `ctx.events` surface + types.

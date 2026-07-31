@@ -66,6 +66,16 @@ export type HookType =
   | "afterRead";
 
 /**
+ * The phases whose handlers take a {@link HookContext}, which is every phase
+ * except `beforeOperation`.
+ *
+ * `beforeOperation` handlers take a {@link BeforeOperationContext} instead and
+ * reshape the operation's `args` rather than its `data`. Naming the rest as a
+ * type keeps the two signatures from being registered through one another.
+ */
+export type HookContextPhase = Exclude<HookType, "beforeOperation">;
+
+/**
  * Context object passed to hook handlers containing operation metadata.
  *
  * The context provides all information needed for hooks to make decisions:
@@ -399,15 +409,15 @@ export interface BeforeOperationArgs<T = any> {
  *
  * @example
  * ```typescript
- * import { registerHook } from 'nextly';
+ * import { registerBeforeOperationHook } from 'nextly';
  *
  * // Global logging for all operations
- * registerHook('beforeOperation', '*', async (context) => {
+ * registerBeforeOperationHook('*', async (context) => {
  *   console.log(`[${context.operation}] ${context.collection}`, context.args);
  * });
  *
  * // Modify operation arguments
- * registerHook('beforeOperation', 'posts', async (context) => {
+ * registerBeforeOperationHook('posts', async (context) => {
  *   if (context.operation === 'create' && context.args.data) {
  *     return {
  *       ...context.args,
