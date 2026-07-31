@@ -26,6 +26,12 @@ import { normalizeIdentifier } from "../../singles/services/resolve-single-table
 /**
  * The names storage moves to.
  *
+ * Every entry is the counterpart of a `STORAGE_FORMAT` value, and the two files
+ * are read together: `STORAGE_FORMAT` is what a database says today, this is
+ * what it says afterwards. Keeping the pairs in one place is what lets a plan
+ * and the rewrite that applies it be checked against each other rather than
+ * matched by eye.
+ *
  * `dynamic_field_groups` is parallel to `dynamic_collections` and
  * `dynamic_singles`. `fg_` is deliberately shorter than the prefix it replaces,
  * so no name that fits an identifier limit today can overflow one by migrating.
@@ -34,6 +40,38 @@ export const MIGRATION_TARGET = {
   registryTable: "dynamic_field_groups",
   tablePrefix: "fg_",
   columnType: "_field_group_type",
+
+  /** Directory segment a registry row's `config_path` records. */
+  configPathDir: "field-groups",
+
+  /** Discriminator a stored field definition's `type` carries. */
+  fieldType: "fieldGroup",
+
+  /**
+   * The key a dynamic-zone instance announces its type under once it is JSON.
+   *
+   * Read by user application code out of a dynamic zone, so this is a public
+   * contract and not only an on-disk one. It pairs with `columnType`: the same
+   * value, spelled for the database and spelled for the wire.
+   */
+  wireTypeKey: "_fieldGroupType",
+
+  /**
+   * Property names a stored field definition uses to reference a field group.
+   *
+   * There is no counterpart to `STORAGE_FORMAT.refKeys.legacy`, deliberately.
+   * That spelling is read-only compatibility — nothing writes it — so renaming
+   * it would mint a fresh obsolete key that nothing writes either. Rows
+   * carrying it are normalised onto `single` instead, which retires the concept
+   * rather than translating it.
+   */
+  refKeys: {
+    single: "fieldGroup",
+    many: "fieldGroups",
+  },
+
+  /** Scope kind a schema event carries when it concerns a field group. */
+  schemaEventScope: "fieldGroup",
 } as const;
 
 /** A registry row, as far as the migration is concerned. */
