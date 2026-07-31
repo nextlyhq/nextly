@@ -130,13 +130,38 @@ describe("buildBlockManifest", () => {
     expect(manifest.blocks).toEqual([]);
   });
 
-  it("ignores a declaration whose blocks are not an array", () => {
+  it("ignores a declaration carrying no blocks key", () => {
+    // Another version of the page builder may read keys this one does not, so
+    // an unread declaration is not a defect.
     const manifest = buildBlockManifest([
       consumer(),
-      declaring("@acme/bad", undefined as unknown as unknown[]),
+      declaring("@acme/other", undefined as unknown as unknown[]),
     ]);
 
     expect(manifest.blocks).toEqual([]);
+  });
+
+  it("refuses a blocks value that is present but not an array", () => {
+    // The runtime refuses the same input, so reading it as "no blocks" here
+    // would emit -- or delete -- a manifest describing a config that cannot
+    // boot, and the first sign of trouble would be a failing start.
+    let thrown: unknown;
+    try {
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/bad", { nope: true } as unknown as unknown[]),
+      ]);
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Asserted on the structured issue rather than the message: the public
+    // message is deliberately generic, and the plugin to go and fix is named
+    // in the issue.
+    const issues = (
+      thrown as { publicData?: { errors?: { message: string }[] } }
+    )?.publicData?.errors;
+    expect(issues?.[0]?.message, String(thrown)).toContain("@acme/bad");
   });
 });
 

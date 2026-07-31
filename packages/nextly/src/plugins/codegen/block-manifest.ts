@@ -21,6 +21,7 @@
 
 import { join, dirname } from "node:path";
 
+import { NextlyError } from "../../errors";
 import { collectDeclarations } from "../declarations";
 import type { PluginDefinition } from "../plugin-context";
 
@@ -86,7 +87,7 @@ export function buildBlockManifest(
     return { manifestVersion: BLOCK_MANIFEST_VERSION, blocks };
   }
   for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
-    for (const block of declaredBlocks(declaration.value)) {
+    for (const block of declaredBlocks(declaration.value, declaration.source)) {
       blocks.push(toEntry(block, declaration.source));
     }
   }
@@ -128,13 +129,38 @@ function isConsumerActive(
   return found !== undefined && found.enabled !== false;
 }
 
-/** The block list inside one declaration, or none when it holds no usable one. */
-function declaredBlocks(value: unknown): Record<string, unknown>[] {
+/**
+ * The block list inside one declaration.
+ *
+ * A `blocks` value that is present but not an array is refused rather than read
+ * as empty. The runtime refuses it too, so treating it as "no blocks" here
+ * would emit — or delete — a manifest describing a configuration that cannot
+ * boot, and the first sign of trouble would be a failing start rather than a
+ * failing generate.
+ *
+ * A declaration carrying no `blocks` key at all is not an error: another
+ * version of the page builder may read keys this one does not.
+ */
+function declaredBlocks(
+  value: unknown,
+  source: string
+): Record<string, unknown>[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return [];
   }
   const blocks = (value as { blocks?: unknown }).blocks;
-  if (!Array.isArray(blocks)) return [];
+  if (blocks === undefined) return [];
+  if (!Array.isArray(blocks)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `contributes.declarations.${PAGE_BUILDER_PLUGIN}.blocks`,
+          code: "INVALID_BLOCK_DECLARATION",
+          message: `Plugin "${source}" declared blocks for the page builder as ${typeof blocks}; it must be an array of block definitions.`,
+        },
+      ],
+    });
+  }
   return blocks.filter(
     (block): block is Record<string, unknown> =>
       typeof block === "object" && block !== null && !Array.isArray(block)
