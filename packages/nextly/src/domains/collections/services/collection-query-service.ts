@@ -2352,13 +2352,26 @@ export class CollectionQueryService extends BaseService {
           // same schema-aware prune the promote path applies is reused, then the
           // identity and timestamp columns it holds back (a restore must not
           // resubmit them, a read carries them) are copied back from the snapshot.
+          // Which system columns the row actually has, mirroring the promote and
+          // restore paths: a plugin collection gets no synthesized slug/title, so
+          // telling the prune those columns exist would keep an obsolete snapshot
+          // key the current schema no longer declares. `status` is present because
+          // the draft eligibility above required it.
+          const declaredFields = fields as FieldConfig[];
+          const isPluginCollection =
+            (collection as { admin?: { isPlugin?: boolean } }).admin
+              ?.isPlugin === true;
           const { payload: shapedDraft } = buildRestorePayload(
             rawSnapshot,
-            fields as FieldConfig[],
+            declaredFields,
             {
               hasStatus: true,
-              hasSlug: true,
-              hasTitle: true,
+              hasSlug:
+                !isPluginCollection ||
+                declaredFields.some(f => f.name === "slug"),
+              hasTitle:
+                !isPluginCollection ||
+                declaredFields.some(f => f.name === "title"),
               componentSchemas: draftComponentSchemas ?? undefined,
               documentLocalized: false,
               localeUnknown: false,
