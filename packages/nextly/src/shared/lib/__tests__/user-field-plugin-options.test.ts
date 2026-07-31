@@ -63,6 +63,55 @@ describe("carriedUserFieldOptions", () => {
     }
   });
 
+  it("accepts one object referenced twice without a cycle", () => {
+    // Two properties pointing at the same object is not a cycle: JSON encodes
+    // it at both locations. Treating every visited object as cyclic refused a
+    // declaration that persists perfectly well.
+    const shared = { scale: 5 };
+
+    expect(
+      carriedUserFieldOptions(
+        field({
+          name: "score",
+          type: "rating",
+          // Nested under ONE option, because each top-level option is walked
+          // with its own path — two sibling options referencing the same object
+          // never share the state this guards.
+          pluginOptions: { scales: { left: shared, right: shared } },
+        })
+      )
+    ).toMatchObject({ scales: { left: { scale: 5 }, right: { scale: 5 } } });
+  });
+
+  it("accepts the same object twice inside an array", () => {
+    const shared = { a: 1 };
+
+    expect(() =>
+      carriedUserFieldOptions(
+        field({
+          name: "score",
+          type: "rating",
+          pluginOptions: { list: [shared, shared] },
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses a sparse array, whose holes become null", () => {
+    // `Array.prototype.every` skips holes, so these passed while JSON turned
+    // each hole into `null` — the component then receives different data.
+    const withHole = [1, undefined, 3];
+    delete withHole[1];
+
+    for (const list of [new Array(2), withHole]) {
+      expect(() =>
+        carriedUserFieldOptions(
+          field({ name: "score", type: "rating", pluginOptions: { list } })
+        )
+      ).toThrow();
+    }
+  });
+
   it("refuses an option that cannot be serialized at all", () => {
     // These throw during serialization, which would take the whole code-field
     // sync down rather than failing this one declaration.
