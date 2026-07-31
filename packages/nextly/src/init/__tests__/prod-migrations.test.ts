@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NextlyError } from "../../errors/nextly-error";
-import { FIELD_GROUP_MIGRATION_PHASE } from "../../domains/field-groups/migration/run";
 import { runProdMigrationsIfEnabled } from "../prod-migrations";
 
 const ORIG = process.env.NODE_ENV;
@@ -87,57 +85,5 @@ describe("runProdMigrationsIfEnabled", () => {
       runProdMigrationsIfEnabled(a as never)
     ).resolves.toBeUndefined();
     expect(a.logger.error).toHaveBeenCalled();
-  });
-
-  // A failed FILE migration is survivable: each applies in its own transaction,
-  // so the database is at a clean boundary and the app can serve while an
-  // operator looks.
-  it("continues booting when a file migration fails", async () => {
-    const a = args({
-      migrateCore: vi.fn(async () => {
-        throw new Error("file apply failed");
-      }),
-    });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
-    expect(a.logger.error).toHaveBeenCalled();
-  });
-
-  // 🔴 A failed STORAGE migration is not survivable. MySQL commits DDL as it is
-  // issued and the ledger rewrites commit per batch, so a failure can leave
-  // tables half-renamed. Serving against that is worse than not booting: the
-  // read path treats a missing data table as EMPTY CONTENT rather than an
-  // error, so it would surface as silently absent content, not a stopped deploy.
-  it("refuses to boot when the storage migration fails", async () => {
-    const a = args({
-      migrateCore: vi.fn(async () => {
-        throw NextlyError.serviceUnavailable({
-          logMessage: "storage half-renamed",
-          logContext: { phase: FIELD_GROUP_MIGRATION_PHASE, reason: "x" },
-        });
-      }),
-    });
-    // Asserted on logContext, not on the message: NextlyError's public message
-    // is deliberately generic and carries none of the detail.
-    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
-      logContext: { phase: FIELD_GROUP_MIGRATION_PHASE },
-    });
-  });
-
-  // Matched on the stamped phase, not on message text, so a reworded message
-  // cannot quietly turn a fatal failure back into a tolerated one.
-  it("does not treat an unrelated NextlyError as a storage failure", async () => {
-    const a = args({
-      migrateCore: vi.fn(async () => {
-        throw NextlyError.serviceUnavailable({
-          logMessage: "something else",
-          logContext: { reason: "unrelated" },
-        });
-      }),
-    });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
   });
 });

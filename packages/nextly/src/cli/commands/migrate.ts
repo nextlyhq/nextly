@@ -36,7 +36,6 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { runFieldGroupMigration } from "../../domains/field-groups/migration/run";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
@@ -58,7 +57,6 @@ import {
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
-import type { Logger } from "../../shared/types";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -318,15 +316,11 @@ export interface MigrateCoreDeps {
   reconcileCoreFn?: typeof reconcileCore;
   runFileMigrationsFn?: typeof runFileMigrations;
   withLock?: typeof withMigrateLock;
-  /** Seam for the storage-format phase, so tests can run the others alone. */
-  migrateFieldGroupStorageFn?: typeof runFieldGroupMigration;
 }
 
 export interface MigrateCoreResult {
   applied: number;
   coreChanged: boolean;
-  /** Whether the field-group storage format was migrated by this run. */
-  storageMigrated: boolean;
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
@@ -345,11 +339,8 @@ export async function migrateCore(
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
   const lock = deps.withLock ?? withMigrateLock;
-  const migrateStorage =
-    deps.migrateFieldGroupStorageFn ?? runFieldGroupMigration;
   let applied = 0;
   let coreChanged = false;
-  let storageMigrated = false;
 
   await lock(
     deps.db,
@@ -377,39 +368,6 @@ export async function migrateCore(
         step: deps.step,
         logger: deps.logger,
       });
-
-      // Last, and after the user's files rather than before them. A migration
-      // file is authored against the naming generation current when it was
-      // created, and `migrate:create` still generates field-group table names
-      // through `resolveComponentTableName` — so every file that exists at
-      // upgrade time names the pre-migration tables. Renaming first would make
-      // `ALTER TABLE comp_hero ...` fail on SQL that was valid when committed.
-      // Files written after this phase address the new names, and by then
-      // storage has already moved.
-      //
-      // Still after the core reconcile, because the marker lives in
-      // `nextly_meta` and the lock table has to exist before anything can
-      // contend for it.
-      //
-      // The field-group lock is taken inside this one. Everything else that
-      // takes it (db:sync, the HMR reload) takes it alone, so this is the only
-      // nesting and there is no reverse ordering to deadlock against.
-      deps.logger.info("Phase 3: migrating field group storage format...");
-      // The CLI logger carries cosmetic helpers this does not need, so only the
-      // four levels are forwarded. `info` goes to debug: the phase announces
-      // itself above, and a run with nothing to do should not add noise.
-      const storageLogger: Logger = {
-        debug: (message: string) => deps.logger.debug(message),
-        info: (message: string) => deps.logger.debug(message),
-        warn: (message: string) => deps.logger.warn(message),
-        error: (message: string) => deps.logger.error(message),
-      };
-      const storage = await migrateStorage({
-        adapter: deps.adapter as unknown as DrizzleAdapter,
-        logger: storageLogger,
-        direction: "up",
-      });
-      storageMigrated = storage.ran;
     },
     {
       mode: deps.lockMode ?? "fail-fast",
@@ -422,7 +380,7 @@ export async function migrateCore(
     }
   );
 
-  return { applied, coreChanged, storageMigrated };
+  return { applied, coreChanged };
 }
 
 /**

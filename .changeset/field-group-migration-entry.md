@@ -22,8 +22,6 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-`nextly migrate` now migrates field group storage to its new format. The rename Nextly has been preparing across several releases becomes real here: tables, columns, and the vocabulary stored inside registry rows, version snapshots and event payloads all move to the field group spelling.
+Groundwork for the field group storage migration. The engine can now plan a complete run in either direction, resume one that was interrupted, and refuse changes to a field group while a run is in flight - editing one mid-run would leave a database indistinguishable from the migration's own work, which no later check could untangle.
 
-It runs as a phase between the core schema reconcile and your own migration files, so a committed migration that names a field group table is applied after those names have moved rather than before. A database already migrated is left alone, so this is safe to run on every deploy rather than something to run once and remember.
-
-The run records what it is about to do before it starts, verifies the result against the database rather than trusting that its steps ran, and only then marks itself finished, so an interrupted upgrade resumes instead of guessing. While it is in flight, changes to field groups are refused: editing one mid-run would leave a database indistinguishable from the migration's own work, which no later check could untangle.
+Nothing runs it yet. No command invokes the migration and no database is changed by installing this; the entry point ships separately, once the engine is covered end to end against real PostgreSQL, MySQL and SQLite servers.
