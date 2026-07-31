@@ -24,8 +24,8 @@
  * ```
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve, dirname } from "node:path";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { resolve, dirname, join } from "node:path";
 
 import type { Command } from "commander";
 
@@ -41,7 +41,10 @@ import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
-import { buildBlockManifestArtifact } from "../../plugins/codegen/block-manifest";
+import {
+  BLOCK_MANIFEST_FILENAME,
+  buildBlockManifestArtifact,
+} from "../../plugins/codegen/block-manifest";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 // The option names the field identity would overwrite, refused here because a
@@ -317,6 +320,16 @@ async function generateTypes(
     await writeFile(manifestPath, blockManifest.code, "utf-8");
     result.blockManifestFile = manifestPath;
     logger.debug(`Written block manifest to: ${manifestPath}`);
+  } else {
+    // No manifest for this config, which has to be expressed by removing any
+    // previous one. Writing nothing would leave the last run's file on disk
+    // still advertising blocks the app no longer has -- worse than never
+    // having generated it, because it reads as current.
+    const stalePath = resolve(
+      cwd,
+      join(dirname(typesOutputPath), BLOCK_MANIFEST_FILENAME)
+    );
+    await rm(stalePath, { force: true });
   }
 
   // Generate Zod schemas if enabled

@@ -20,6 +20,16 @@ function block(name: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+/** The page builder itself, which must be present for anything to register. */
+function consumer(enabled?: boolean): PluginDefinition {
+  return definePlugin({
+    name: PAGE_BUILDER_PLUGIN,
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    enabled,
+  });
+}
+
 /** A plugin declaring blocks for the page builder. */
 function declaring(name: string, blocks: unknown[]): PluginDefinition {
   return definePlugin({
@@ -33,6 +43,7 @@ function declaring(name: string, blocks: unknown[]): PluginDefinition {
 describe("buildBlockManifest", () => {
   it("states each declared block and who declared it", () => {
     const manifest = buildBlockManifest([
+      consumer(),
       declaring("@acme/pricing", [block("acme/pricing-table")]),
     ]);
 
@@ -51,6 +62,7 @@ describe("buildBlockManifest", () => {
     // A function cannot be serialized, and the manifest describes what a block
     // accepts rather than how it draws.
     const manifest = buildBlockManifest([
+      consumer(),
       declaring("@acme/a", [block("acme/one")]),
     ]);
 
@@ -60,6 +72,7 @@ describe("buildBlockManifest", () => {
 
   it("carries props, supports and slots when the block declares them", () => {
     const manifest = buildBlockManifest([
+      consumer(),
       declaring("@acme/a", [
         block("acme/section", {
           props: { width: { type: "text" } },
@@ -80,10 +93,12 @@ describe("buildBlockManifest", () => {
     // Reordering plugins must not rewrite the file, or every unrelated config
     // edit shows a diff and a drift test cannot tell a change from a shuffle.
     const forward = buildBlockManifest([
+      consumer(),
       declaring("@acme/a", [block("acme/zebra")]),
       declaring("@acme/b", [block("acme/alpha")]),
     ]);
     const reversed = buildBlockManifest([
+      consumer(),
       declaring("@acme/b", [block("acme/alpha")]),
       declaring("@acme/a", [block("acme/zebra")]),
     ]);
@@ -95,8 +110,29 @@ describe("buildBlockManifest", () => {
     expect(reversed).toEqual(forward);
   });
 
+  it("lists nothing when the page builder is disabled", () => {
+    // A disabled plugin runs no init and contributes no services, so the
+    // registry these declarations would fill never exists. Listing them would
+    // tell tooling the app has blocks it cannot render.
+    const manifest = buildBlockManifest([
+      consumer(false),
+      declaring("@acme/a", [block("acme/one")]),
+    ]);
+
+    expect(manifest.blocks).toEqual([]);
+  });
+
+  it("lists nothing when the page builder is not installed", () => {
+    const manifest = buildBlockManifest([
+      declaring("@acme/a", [block("acme/one")]),
+    ]);
+
+    expect(manifest.blocks).toEqual([]);
+  });
+
   it("ignores a declaration whose blocks are not an array", () => {
     const manifest = buildBlockManifest([
+      consumer(),
       declaring("@acme/bad", undefined as unknown as unknown[]),
     ]);
 
@@ -115,7 +151,7 @@ describe("buildBlockManifestArtifact", () => {
 
   it("writes beside the generated types, as parseable JSON", () => {
     const artifact = buildBlockManifestArtifact(
-      [declaring("@acme/a", [block("acme/one")])],
+      [consumer(), declaring("@acme/a", [block("acme/one")])],
       "/app/src/nextly-types.ts"
     );
 

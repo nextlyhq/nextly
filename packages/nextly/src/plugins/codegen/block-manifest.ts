@@ -78,6 +78,13 @@ export function buildBlockManifest(
   plugins: readonly PluginDefinition[]
 ): BlockManifest {
   const blocks: BlockManifestEntry[] = [];
+  // Nothing can register when the consumer is absent or disabled: a disabled
+  // plugin runs no `init` and contributes no services, so the registry these
+  // declarations would fill never exists. Listing them anyway would tell
+  // tooling the app has blocks it cannot render.
+  if (!isConsumerActive(plugins, PAGE_BUILDER_PLUGIN)) {
+    return { manifestVersion: BLOCK_MANIFEST_VERSION, blocks };
+  }
   for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
     for (const block of declaredBlocks(declaration.value)) {
       blocks.push(toEntry(block, declaration.source));
@@ -93,7 +100,10 @@ export function buildBlockManifest(
  * empty manifest and an absent one mean the same thing, and only one of them
  * leaves a stale artifact behind when the last block plugin is removed.
  *
- * Placed beside the generated types so it ships with the app.
+ * Placed beside the generated types so it ships with the app. Returning `null`
+ * means "this app has no manifest", which the caller must express by REMOVING
+ * any previous file: writing nothing would leave the last run's manifest on
+ * disk advertising blocks the app no longer has.
  */
 export function buildBlockManifestArtifact(
   plugins: readonly PluginDefinition[],
@@ -107,6 +117,15 @@ export function buildBlockManifestArtifact(
     // does not show a no-newline marker in every diff.
     code: `${JSON.stringify(manifest, null, 2)}\n`,
   };
+}
+
+/** Whether the plugin these declarations are addressed to will actually run. */
+function isConsumerActive(
+  plugins: readonly PluginDefinition[],
+  consumer: string
+): boolean {
+  const found = plugins.find(plugin => plugin.name === consumer);
+  return found !== undefined && found.enabled !== false;
 }
 
 /** The block list inside one declaration, or none when it holds no usable one. */
