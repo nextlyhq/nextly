@@ -95,6 +95,8 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { buildRestorePayload } from "../../versions/restore-snapshot";
+import { resolveComponentSchemas } from "../../versions/restore-version";
 import { VersionsRepository } from "../../versions/versions-repository";
 
 import type { CollectionAccessService } from "./collection-access-service";
@@ -2316,8 +2318,54 @@ export class CollectionQueryService extends BaseService {
           // found regardless of the request locale.
           null
         );
-        if (workingDraft) {
-          let draftEntry = workingDraft.snapshot as Record<string, unknown>;
+        // Mirror the write gate's reachable-component check before overlaying:
+        // a component that turned localized, or that can no longer be resolved,
+        // after this draft was written cannot have its sidecar promoted or
+        // deleted by any write, so the live row must not be shadowed by a draft
+        // nothing can complete. Resolved only once a draft actually exists, to
+        // keep the registry reads off the common read path; the schemas double
+        // as the prune filter below.
+        const draftComponentSchemas = workingDraft
+          ? await resolveComponentSchemas(fields as FieldConfig[])
+          : null;
+        const draftComponentIneligible = draftComponentSchemas
+          ? [...draftComponentSchemas.values()].some(
+              schema => schema.localized || !schema.resolved
+            )
+          : false;
+        if (workingDraft && !draftComponentIneligible) {
+          const rawSnapshot = workingDraft.snapshot as Record<string, unknown>;
+          // Shape the snapshot to the current schema before exposing it. A field
+          // removed or renamed while the draft was pending leaves a key the
+          // snapshot still carries; the password strip and field read-access
+          // below inspect only currently declared fields, so an obsolete value
+          // would otherwise reach the afterRead hooks and the response even
+          // though a live read of the same document no longer returns it. The
+          // same schema-aware prune the promote path applies is reused, then the
+          // identity and timestamp columns it holds back (a restore must not
+          // resubmit them, a read carries them) are copied back from the snapshot.
+          const { payload: shapedDraft } = buildRestorePayload(
+            rawSnapshot,
+            fields as FieldConfig[],
+            {
+              hasStatus: true,
+              hasSlug: true,
+              hasTitle: true,
+              componentSchemas: draftComponentSchemas ?? undefined,
+              documentLocalized: false,
+              localeUnknown: false,
+            }
+          );
+          for (const key of [
+            "id",
+            "createdAt",
+            "created_at",
+            "updatedAt",
+            "updated_at",
+          ]) {
+            if (key in rawSnapshot) shapedDraft[key] = rawSnapshot[key];
+          }
+          let draftEntry = shapedDraft;
           // The snapshot stores top-level relations as ids (captured at depth 0),
           // so expand them at the requested depth to match a live read. The live
           // assembly forwards `params.depth` unconditionally and

@@ -1,6 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { defineCollection, text } from "../../../../config";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../../config";
+import { createAdapter } from "../../../../database/factory";
 import {
   createTestNextly,
   type TestNextly,
@@ -481,5 +491,179 @@ describe("draft/published split — promote on publish (integration)", () => {
     const [promoted] = await handle.adapter.select<LiveRow>(TABLE);
     expect(promoted.title).toBe("draft-t");
     expect(await workingDraftCount(id)).toBe(0);
+  });
+});
+
+// The split coalesces a working draft under one unlocalized slot and promotes it
+// as plain columns, so it is only safe on a collection whose reachable component
+// schemas are all resolvable and non-localized. These cases cover the schema
+// changing AFTER a draft was written (a field dropped, a component turning
+// localized), which the write gate and the read overlay must both react to.
+describe("draft/published split — schema and component eligibility (integration)", () => {
+  let dir: string;
+  let dbPath: string;
+  // createTestNextly snapshots DB_DIALECT when it builds an adapter; these tests
+  // build their own adapter first, so the prior value is restored to keep the
+  // single-fork run from resolving later files' schema behaviour as SQLite.
+  let previousDialect: string | undefined;
+
+  beforeEach(() => {
+    previousDialect = process.env.DB_DIALECT;
+    dir = mkdtempSync(join(tmpdir(), "nextly-draft-split-"));
+    dbPath = join(dir, "test.db");
+  });
+
+  afterEach(() => {
+    if (previousDialect === undefined) delete process.env.DB_DIALECT;
+    else process.env.DB_DIALECT = previousDialect;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // A file-backed SQLite boot so a second boot on the same path sees the rows
+  // (and the working draft) the first boot wrote, with a changed schema.
+  async function bootFile(
+    opts: Parameters<typeof createTestNextly>[0]
+  ): Promise<CollectionEntryService> {
+    process.env.DB_DIALECT = "sqlite";
+    const adapter = await createAdapter({
+      type: "sqlite",
+      url: `file:${dbPath}`,
+    } as Parameters<typeof createAdapter>[0]);
+    handle = await createTestNextly({ ...opts, adapter });
+    return handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+  }
+
+  const localization = { locales: ["en", "es"], defaultLocale: "en" };
+
+  const withHero = (
+    heroLocalized: boolean
+  ): Parameters<typeof createTestNextly>[0] => ({
+    localization,
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "hero",
+        localized: heroLocalized,
+        fields: [text({ name: "heading" })],
+      }),
+    ],
+    collections: [
+      defineCollection({
+        slug: COLLECTION,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "hero", component: "hero" }),
+        ],
+      }),
+    ],
+  });
+
+  it("keeps a status-less edit live (no draft) when the collection embeds a localized component", async () => {
+    const entries = await bootFile(withHero(true));
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A localized component makes the collection ineligible for the split, so a
+    // status-less edit writes the live row directly rather than storing a draft.
+    const res = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited" }
+    );
+    expect(res.success).toBe(true);
+
+    const [live] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(live.title).toBe("edited");
+    expect(await workingDraftCount(id)).toBe(0);
+  });
+
+  it("prunes fields the current schema no longer declares from a draft read", async () => {
+    const entries = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "body" }),
+            text({ name: "subtitle" }),
+          ],
+        }),
+      ],
+    });
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Store a draft that carries `subtitle`, then drop `subtitle` from the schema.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-title", subtitle: "pending" }
+    );
+    await handle!.destroy();
+    handle = undefined;
+
+    const reopened = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+
+    const draftRead = await reopened.getEntry({
+      collectionName: COLLECTION,
+      entryId: id,
+      overrideAccess: true,
+      includeWorkingDraft: true,
+    });
+    const data = draftRead.data as Record<string, unknown>;
+    // The draft is still surfaced...
+    expect(data.title).toBe("draft-title");
+    // ...but the field the schema no longer declares does not leak through.
+    expect("subtitle" in data).toBe(false);
+  });
+
+  it("stops overlaying the draft when an embedded component becomes localized after the draft was written", async () => {
+    const entries = await bootFile(withHero(false));
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Non-localized component: the split is on, so a status-less edit stores a draft.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-title" }
+    );
+    expect(await workingDraftCount(id)).toBe(1);
+
+    await handle!.destroy();
+    handle = undefined;
+
+    // Re-open with the component now localized: no write can consume the sidecar
+    // (the mutation path stopped promoting and deleting it), so the read overlay
+    // must fall back to the live row rather than shadow it with a stale draft.
+    const reopened = await bootFile(withHero(true));
+
+    const draftRead = await reopened.getEntry({
+      collectionName: COLLECTION,
+      entryId: id,
+      overrideAccess: true,
+      includeWorkingDraft: true,
+    });
+    expect((draftRead.data as { title?: string }).title).toBe("live");
   });
 });

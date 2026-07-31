@@ -4457,17 +4457,23 @@ export class CollectionMutationService extends BaseService {
       // A localized component stores its values per locale, but a working draft
       // is keyed under one unlocalized slot, so a draft saved under one locale
       // would be promoted under another and misfile the translation into the
-      // wrong companion. Until per-locale drafts exist, a collection that embeds
-      // a localized component is excluded from the split, alongside a localized
-      // document.
-      const hasLocalizedComponent = splitComponentSchemas
-        ? [...splitComponentSchemas.values()].some(schema => schema.localized)
+      // wrong companion. A component whose schema cannot be resolved is treated
+      // the same way: it could itself be localized, and promoting a draft while
+      // it stays unresolvable drops the component subtree (the restore filter
+      // cannot see inside a schema it cannot load) before the sidecar is deleted,
+      // silently losing the pending edit. Until per-locale drafts exist, either
+      // kind of component makes the collection ineligible for the split,
+      // alongside a localized document.
+      const hasIneligibleComponent = splitComponentSchemas
+        ? [...splitComponentSchemas.values()].some(
+            schema => schema.localized || !schema.resolved
+          )
         : false;
       const splitEnabled =
         collectionHasStatus &&
         versionsConfig?.drafts?.enabled === true &&
         !documentLocalized &&
-        !hasLocalizedComponent;
+        !hasIneligibleComponent;
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).
