@@ -692,9 +692,14 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       });
     }
 
+    // Resolved once and reused by the failure log below: a message naming a
+    // table this code did not read sends an operator to the wrong place, and
+    // the two names differ on exactly the databases where a failure is hardest
+    // to diagnose.
+    const registryTable = await this.resolveRegistryTableName();
     try {
       const components = await this.adapter.select<Record<string, unknown>>(
-        await this.resolveRegistryTableName(),
+        registryTable,
         { columns: ["slug", "fields"] }
       );
 
@@ -715,12 +720,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         }
       }
     } catch (error) {
-      this.logger.debug(
-        `Could not scan ${STORAGE_FORMAT.registryTable} for references`,
-        {
-          error: error instanceof Error ? error.message : String(error),
-        }
-      );
+      this.logger.debug(`Could not scan ${registryTable} for references`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     if (references.length > 0) {
