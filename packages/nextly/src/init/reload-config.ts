@@ -23,7 +23,9 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { sql, type SQL } from "drizzle-orm";
 
+import { MIGRATION_TARGET } from "../domains/field-groups/migration/manifest";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import {
   chooseTypeColumns,
@@ -1002,6 +1004,63 @@ async function runReload(opts?: {
   }
 }
 
+/**
+ * Read `slug` and `table_name` from the field-group registry.
+ *
+ * A Drizzle statement rather than the query builder: the builder resolves a
+ * table through the schema registry, and the name to address here is the one
+ * the catalog reports. Same reason the migration's own registry read is written
+ * this way.
+ */
+async function runRegistrySelect(
+  db: unknown,
+  registryTable: string
+): Promise<Array<{ slug?: unknown; table_name?: unknown }>> {
+  const executor = db as {
+    execute?: (query: SQL) => Promise<unknown>;
+    all?: (query: SQL) => Promise<unknown>;
+  };
+  const statement = sql`SELECT ${sql.identifier("slug")}, ${sql.identifier(
+    "table_name"
+  )} FROM ${sql.identifier(registryTable)}`;
+  // SQLite's driver exposes `all`; Postgres and MySQL expose `execute` and wrap
+  // rows in a driver-specific envelope.
+  const result = await (executor.all
+    ? executor.all(statement)
+    : executor.execute?.(statement));
+  if (Array.isArray(result)) {
+    return result as Array<{ slug?: unknown; table_name?: unknown }>;
+  }
+  const rows = (result as { rows?: unknown })?.rows;
+  return Array.isArray(rows)
+    ? (rows as Array<{ slug?: unknown; table_name?: unknown }>)
+    : [];
+}
+
+/**
+ * Whether the database genuinely has no field-group registry.
+ *
+ * The distinction that matters after a failed read: absent means a fresh
+ * database, where deriving names is correct; present-but-unreadable means the
+ * names are unknown, and deriving them would address storage that is not there.
+ * Answered `undefined` when even this cannot be established, which is treated
+ * as unreadable.
+ */
+async function registryIsAbsent(
+  adapter: AdapterLike
+): Promise<boolean | undefined> {
+  try {
+    const tables = await adapter.listTables();
+    return !tables.some(
+      table =>
+        table === STORAGE_FORMAT.registryTable ||
+        table === MIGRATION_TARGET.registryTable
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 async function applyReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
@@ -1256,23 +1315,50 @@ async function applyReload(opts?: {
   // derived, which is exactly the behaviour of a database that has no registry
   // yet.
   const storedComponentTables = new Map<string, string>();
+  /** Field groups left out of this reload because their storage is unknown. */
+  const skippedComponentSlugs = new Set<string>();
+  // 🔴 A failed probe is NOT evidence of a fresh database.
+  //
+  // Deriving `comp_*` names because the lookup threw is only sound when the
+  // registry is genuinely absent. If it exists and the read merely failed —
+  // a transient error, a denied catalog query — the derived names address
+  // tables that are not there, and the reload goes on to create empty ones
+  // beside the populated tables it meant to edit. So the two cases are
+  // separated: absent means derive, unreadable means skip the component apply
+  // and let the next reload retry.
+  let storedNamesUsable = true;
   try {
     const registryTable = await resolveFieldGroupRegistryName(adapter);
-    const rows = await adapter.executeQuery<{
-      slug: string;
-      table_name: string;
-    }>(`SELECT slug, table_name FROM ${registryTable}`);
+    // Drizzle statement rather than an interpolated string: database access in
+    // product code goes through Drizzle, and the query builder is not usable
+    // here because it resolves a table through the schema registry, which knows
+    // this table under whichever name it was registered with.
+    const db = adapter.getDrizzle<{ execute?: unknown }>();
+    const rows = await runRegistrySelect(db, registryTable);
     for (const row of rows) {
       if (typeof row.slug === "string" && typeof row.table_name === "string") {
         storedComponentTables.set(row.slug, row.table_name);
       }
     }
   } catch {
-    // No registry yet, or a transient catalog failure. Derived names below.
+    storedNamesUsable = (await registryIsAbsent(adapter)) === true;
+    if (!storedNamesUsable) {
+      logger?.warn(
+        "[Nextly HMR] Could not read stored field-group table names; " +
+          "deferring the field-group apply to the next reload."
+      );
+    }
   }
 
   for (const c of newConfig.fieldGroups ?? []) {
     if (!c.slug) continue;
+    // Skipped entirely when the stored names could not be established: a
+    // derived name is a guess about physical storage, and guessing here is what
+    // creates the empty table.
+    if (!storedNamesUsable) {
+      skippedComponentSlugs.add(c.slug);
+      continue;
+    }
     componentTargets.push({
       slug: c.slug,
       tableName:
@@ -1365,11 +1451,13 @@ async function applyReload(opts?: {
   // registry's `fields` would disagree with the physical table, so the no-DDL
   // metadata-only sync below must be skipped rather than persist unmigrated
   // schema metadata; it retries on the next clean reload or restart.
-  let deferredSchemaChange = false;
+  let deferredSchemaChange = skippedComponentSlugs.size > 0;
   // Which entities were deferred, as `<kind>:<slug>`. The flag above answers "may the
   // metadata-only sync run at all"; this answers "may THIS entity be provisioned", which is a
   // per-entity question — see `ensureLocalizedCompanionsForReload`.
-  const deferredEntities = new Set<string>();
+  const deferredEntities = new Set<string>(
+    [...skippedComponentSlugs].map(slug => `component:${slug}`)
+  );
 
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {

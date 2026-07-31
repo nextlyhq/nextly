@@ -90,6 +90,8 @@ describe("reloadNextlyConfig", () => {
   // Build a service resolver fake. Returns the service or undefined per
   // service name. Tests pass this into reloadNextlyConfig via opts.resolver.
   function buildResolver(opts?: {
+    /** Catalog listing the reload probes to tell absent from unreadable. */
+    catalogTables?: string[];
     withAdapter?: boolean;
     allCollections?: Array<{
       slug: string;
@@ -141,6 +143,12 @@ describe("reloadNextlyConfig", () => {
             dialect: "sqlite" as const,
             getCapabilities: () => ({ dialect: "sqlite" }),
             getDrizzle: lockDouble.adapter.getDrizzle.bind(lockDouble.adapter),
+            // The reload resolves each field group's PHYSICAL table name from
+            // the registry, and distinguishes "no registry" from "registry
+            // unreadable" by listing the catalog. A double that cannot answer
+            // that is indistinguishable from a database whose registry read
+            // failed, which is the state the reload now refuses to guess past.
+            listTables: vi.fn().mockResolvedValue(opts?.catalogTables ?? []),
           })
         : undefined,
       collectionRegistryService: {

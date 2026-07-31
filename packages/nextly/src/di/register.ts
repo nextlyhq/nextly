@@ -1193,9 +1193,18 @@ async function initializeSchemaRegistry(
       fields: FieldConfig[];
       localized: boolean;
     }> = [];
+    // Resolved inside the same best-effort boundary as the load it feeds. An
+    // `await` in the argument position rejects BEFORE `loadDynamicTables`
+    // enters its own `try`, so a transient catalog failure would escape to
+    // `initializeSchemaRegistry`'s outer catch — which returns `undefined` and
+    // skips config-table registration entirely, discarding a registry that was
+    // otherwise fine.
+    const fieldGroupRegistry = await resolveFieldGroupRegistryName(
+      adapter
+    ).catch(() => undefined);
     await loadDynamicTables(
       adapter,
-      await resolveFieldGroupRegistryName(adapter),
+      fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
       (tableName, fields, _hasStatus, localized) => {
         loadedFieldGroups.push({
           tableName,
