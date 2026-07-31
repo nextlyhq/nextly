@@ -141,6 +141,21 @@ describe("hook error propagation", () => {
     expect((error as { cause?: unknown }).cause).toBe(original);
   });
 
+  it("survives a thrown value that cannot be stringified", async () => {
+    // A null-prototype object has no `toString`, so recording it would throw
+    // inside the handler meant to describe the original failure -- replacing
+    // the error the caller needs with one about logging it.
+    const registry = new HookRegistry();
+    registry.register("beforeCreate", "docs", () => {
+      throw Object.create(null) as never;
+    });
+
+    const error = await registry
+      .execute("beforeCreate", contextFor("docs"))
+      .catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+  });
+
   it("still runs later hooks when no one throws", async () => {
     // The mirror: error handling must not change the ordinary path.
     const registry = new HookRegistry();

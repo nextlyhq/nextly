@@ -69,6 +69,14 @@ export type { FieldConfig } from "nextly";
  *   are its only caller — so it has not met the graduation bar in
  *   STABILITY.md. It graduates once the page builder owns block props.
  */
+export { validateFieldValues } from "nextly";
+export type {
+  ValidateFieldValuesOptions,
+  FieldValueDeclaration,
+  FieldValueDeclarationInput,
+  ValidationIssue,
+} from "nextly";
+
 /**
  * The canonical error type, so a hook or route a plugin contributes can reject
  * input the way core does.
@@ -81,14 +89,6 @@ export type { FieldConfig } from "nextly";
  * @public
  */
 export { NextlyError } from "nextly";
-
-export { validateFieldValues } from "nextly";
-export type {
-  ValidateFieldValuesOptions,
-  FieldValueDeclaration,
-  FieldValueDeclarationInput,
-  ValidationIssue,
-} from "nextly";
 
 /**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich

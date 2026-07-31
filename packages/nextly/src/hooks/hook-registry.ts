@@ -69,6 +69,22 @@ import type {
  * collection travel in log context where they are useful without being
  * disclosed to the caller.
  */
+/**
+ * A short description of a value a hook threw that was not an Error.
+ *
+ * `String()` is not total: a null-prototype object has no `toString`, and a
+ * symbol throws on implicit conversion. Either would turn recording a
+ * diagnostic into a second failure that replaces the first, so the conversion
+ * is attempted and its own failure falls back to the type name.
+ */
+function describeThrown(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return `<unstringifiable ${typeof value}>`;
+  }
+}
+
 function normalizeHookError(
   error: unknown,
   hookType: string,
@@ -83,7 +99,7 @@ function normalizeHookError(
       reason: "hook-execution-failed",
       hookType,
       collection,
-      ...(error instanceof Error ? {} : { thrown: String(error) }),
+      ...(error instanceof Error ? {} : { thrown: describeThrown(error) }),
     },
   });
 }
