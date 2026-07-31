@@ -517,7 +517,7 @@ export async function recordI18nRestore(
       owner?: string;
     };
   }
-): Promise<void> {
+): Promise<boolean> {
   requireIdentifier(args.sourceLocale, "sourceLocale");
   const key = markerKey(args.kind, args.slug);
   const current = await readI18nTransitionState(store, args.kind, args.slug);
@@ -534,7 +534,11 @@ export async function recordI18nRestore(
   // would accept whatever another transition established while the copy ran. Losing means the
   // entity moved on under someone else's claim, which is not an error.
   const expected = args.expect ?? current;
-  await store.compareAndSet(
+  // Reported, not discarded. Losing means another transition established something while the copy
+  // ran, and the copy has ALREADY written main — so a caller that treated this as done would
+  // publish a non-localized configuration over a record that says otherwise, and the next enable
+  // would trust a companion that no longer describes the main table.
+  return store.compareAndSet(
     key,
     storedMarker(expected),
     // The restore ends the transition rather than continuing it, so the completed claim's token
@@ -542,6 +546,38 @@ export async function recordI18nRestore(
     // something of their own and claims it then.
     storedMarker({ status: "restored", sourceLocale: args.sourceLocale })
   );
+}
+
+/**
+ * The `nextly_meta` row a claim holds, as a condition a statement can carry.
+ *
+ * For the one statement whose damage cannot be undone by losing a race afterwards: the refresh a
+ * re-enable runs over a companion that outlived a disable overwrites its default-locale rows from
+ * main. Checking ownership in JavaScript first leaves a window — the check passes, the claim moves,
+ * the statement runs — and no amount of narrowing closes it, because the two are separate round
+ * trips.
+ *
+ * Handing the caller the key and the exact serialised value lets the database evaluate both in one
+ * statement, so a claim that has moved on makes the update match nothing. Serialised here rather
+ * than at the call site because the byte-for-byte form is this module's own, and a guard built from
+ * a near-miss would silently never match.
+ */
+export function claimGuardCondition(args: {
+  kind: I18nTransitionKind;
+  slug: string;
+  sourceLocale: string;
+  token: string | undefined;
+}): { key: string; value: string } {
+  return {
+    key: markerKey(args.kind, args.slug),
+    value: JSON.stringify(
+      storedMarker({
+        status: "enabling",
+        sourceLocale: args.sourceLocale,
+        owner: args.token,
+      })
+    ),
+  };
 }
 
 // Mirrors the non-empty check the read applies, so the two cannot drift into a

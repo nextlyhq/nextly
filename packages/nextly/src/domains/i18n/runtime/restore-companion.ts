@@ -184,7 +184,7 @@ export async function restoreDisabledCompanion(
     // Recorded even when no column needed copying. The transition is over either way, and leaving
     // the record saying the companion is authoritative would make every later pass re-examine an
     // entity that has nothing left to do.
-    await recordI18nRestore(args.store, {
+    const recorded_ = await recordI18nRestore(args.store, {
       kind: args.kind,
       slug: args.slug,
       sourceLocale: restoreLocale,
@@ -194,6 +194,20 @@ export async function restoreDisabledCompanion(
       // comparison that omitted the one observed here would match no row at all.
       expect: based,
     });
+    if (!recorded_) {
+      // The copy landed but the record did not: another transition claimed this entity while it
+      // ran. Main now holds the companion's values while the marker describes something else, and
+      // continuing would publish a non-localized configuration over that disagreement. Reported so
+      // the pass fails and an operator sees it, rather than reporting a restore that is only half
+      // true.
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          `Localization for "${args.slug}" changed while its content was being restored, ` +
+          `so the restore could not be recorded. Re-run once nothing else is changing it.`,
+        logContext: { slug: args.slug, kind: args.kind },
+      });
+    }
     return present.length > 0 || statusOnBoth;
   } catch (error) {
     // Reported rather than thrown, for the same reason the create path reports: provisioning must

@@ -517,6 +517,46 @@ describe("settleI18nTransition", () => {
   });
 });
 
+describe("recordI18nRestore", () => {
+  it("reports a settlement that lost, rather than swallowing it", async () => {
+    // The copy has ALREADY written main by the time this runs. If another transition established
+    // something while it ran, the conditional write matches nothing — and a caller told nothing
+    // would go on to publish a non-localized configuration over a record that disagrees, leaving
+    // the next enable to trust a companion that no longer describes the main table.
+    const store = fakeStore();
+    const token = await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token,
+    });
+
+    // Based on what the copy saw before it ran, which is no longer what the row holds.
+    await expect(
+      recordI18nRestore(store, {
+        kind: "collection",
+        slug: "posts",
+        sourceLocale: "en",
+        expect: { status: "enabling", sourceLocale: "en", owner: token },
+      })
+    ).resolves.toBe(false);
+
+    // And reports success when it does win.
+    await expect(
+      recordI18nRestore(store, {
+        kind: "collection",
+        slug: "posts",
+        sourceLocale: "en",
+        expect: { status: "seeded", sourceLocale: "en", owner: token },
+      })
+    ).resolves.toBe(true);
+  });
+});
+
 describe("forgetI18nTransition", () => {
   it("lets a recreated slug record its own source locale", async () => {
     // The key is kind plus slug, which a later entity can reuse. Without forgetting, a new entity

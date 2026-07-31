@@ -5522,7 +5522,12 @@ export class CollectionMutationService extends BaseService {
       // against a missing relation aborts the whole transaction on PostgreSQL. On a worker whose
       // first act is a delete nothing has resolved this entity yet, and an unresolved verdict reads
       // as unusable, so every localized field would be silently missing from that event.
-      await this.warmCompanionReadiness(params.collectionName);
+      //
+      // Every field-group type the collection can hold, not just the collection's own companion:
+      // the deleted-document snapshot reads each embedded component through the transaction, where
+      // it can only consult what is already resolved. A delete is the one write with no second
+      // chance — the event it records is the last description of the row there will ever be.
+      await this.warmLocalizedReadiness(params.collectionName);
       const deletedLocalizedSlugsForRevalidation =
         await this.readCompanionSlugsAllLocales(
           this.db,

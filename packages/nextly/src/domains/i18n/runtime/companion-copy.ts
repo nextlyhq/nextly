@@ -15,8 +15,11 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
+import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
+import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
+import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
 
 import type { CompanionIntrospectAdapter } from "./companion-io";
@@ -224,6 +227,14 @@ export async function copyDefaultLocaleOntoMain(
  * authoritative ever since. Rows the companion does not have yet are not this statement's job — the
  * guarded insert that follows adds them.
  *
+ * `guard` is the claim this refresh runs under, carried INTO the statement rather than checked
+ * before it. This is the one copy here whose damage outlives losing a race: it overwrites the
+ * companion's default-locale rows from main, so a run that was displaced mid-flight would destroy
+ * translations the run that displaced it has already seeded and published. Checking ownership
+ * first cannot close that — the check and the statement are separate round trips — but a `WHERE`
+ * the database evaluates alongside the update can, because a claim that has moved on makes it
+ * match no rows.
+ *
  * `refreshStatus` carries the main row's `status` across too. Publishing state moves while
  * localization is off, and the surviving companion row keeps whatever status it held when it was
  * last the authority. Defaulted, because the companion's `_status` is NOT NULL while main's
@@ -231,7 +242,10 @@ export async function copyDefaultLocaleOntoMain(
  */
 export async function refreshDefaultLocaleFromMain(
   adapter: CompanionIntrospectAdapter,
-  args: CopyArgs & { refreshStatus?: boolean }
+  args: CopyArgs & {
+    refreshStatus?: boolean;
+    guard?: { key: string; value: string };
+  }
 ): Promise<void> {
   const resolved = await resolveCopyShape(args);
   if (!resolved) return;
@@ -251,9 +265,23 @@ export async function refreshDefaultLocaleFromMain(
   }
   if (Object.keys(values).length === 0) return;
 
+  const meta =
+    adapter.dialect === "postgresql"
+      ? nextlyMetaPg
+      : adapter.dialect === "mysql"
+        ? nextlyMetaMysql
+        : nextlyMetaSqlite;
+  const thisLocale = eq(resolved.companion._locale as never, args.locale);
   await adapter
     .getDrizzle<UpdatableDb>()
     .update(resolved.companionTable)
     .set(values)
-    .where(eq(resolved.companion._locale as never, args.locale));
+    .where(
+      args.guard
+        ? and(
+            thisLocale,
+            sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${eq(meta.value as never, args.guard.value as never)})`
+          )
+        : thisLocale
+    );
 }

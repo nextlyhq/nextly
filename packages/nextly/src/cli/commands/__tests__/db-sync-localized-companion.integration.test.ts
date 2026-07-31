@@ -1425,6 +1425,91 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(main).toEqual([{ title: "English title", summary: null }]);
   });
 
+  it("does not let a displaced claim run the destructive refresh", async () => {
+    // Re-enabling localization on a companion that outlived a disable overwrites its
+    // default-locale rows from main, because main was authoritative the whole time localization
+    // was off. That is correct exactly while the claim is held. A run displaced between claiming
+    // and reaching the statement would destroy translations the run that displaced it has already
+    // seeded and published.
+    //
+    // Checking ownership beforehand cannot prevent that — the check and the update are separate
+    // round trips — so the claim travels INTO the statement. A guard naming a claim the row no
+    // longer holds matches nothing.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_guard",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_guard",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    // Localize, then disable, which restores `title` onto main and leaves the companion standing —
+    // the exact state the destructive refresh exists for.
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_guard" ("id", "slug", "title") VALUES ('row1', 'r1', 'Before')`
+    );
+    await runSync(localized);
+    await runSync(unlocalized);
+
+    // A translation written since, and a main value that differs from it.
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_guard_locales" SET "title" = 'Seeded by the holder' WHERE "_locale" = 'en'`
+    );
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_guard" SET "title" = 'Stale main value' WHERE "id" = 'row1'`
+    );
+
+    const { refreshDefaultLocaleFromMain } = await import(
+      "../../../domains/i18n/runtime/companion-copy"
+    );
+    const { claimGuardCondition } = await import(
+      "../../../domains/i18n/migration/transition-state"
+    );
+    const shape = {
+      tableName: "dc_dbsync_guard",
+      companionTableName: "dc_dbsync_guard_locales",
+      fields: [{ name: "title", type: "text", localized: true }],
+      dialect: "sqlite" as const,
+      locale: "en",
+      columns: ["title"],
+    };
+
+    await refreshDefaultLocaleFromMain(adapter as never, {
+      ...shape,
+      guard: claimGuardCondition({
+        kind: "collection",
+        slug: "dbsync_guard",
+        sourceLocale: "en",
+        token: "a-token-the-row-does-not-name",
+      }),
+    });
+
+    const guarded = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_guard_locales" WHERE "_locale" = 'en'`
+    );
+    expect(guarded).toEqual([{ title: "Seeded by the holder" }]);
+
+    // The same call without a guard IS the overwrite, which is what makes the assertion above
+    // about the guard rather than about an inert statement.
+    await refreshDefaultLocaleFromMain(adapter as never, shape);
+    const unguarded = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_guard_locales" WHERE "_locale" = 'en'`
+    );
+    expect(unguarded).toEqual([{ title: "Stale main value" }]);
+  });
+
   it("leaves an entity that was never localized alone", async () => {
     // The restore is gated on the durable record, not on physical shape, so a collection that
     // never had a companion is not probed for one and nothing is written on its behalf.

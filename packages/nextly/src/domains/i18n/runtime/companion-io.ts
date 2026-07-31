@@ -16,12 +16,25 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { LocalizedFieldRef } from "../companion-join";
+import { claimGuardCondition } from "../migration/transition-state";
 import type {
   I18nTransitionKind,
   TransitionStateStore,
 } from "../migration/transition-state";
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
+
+/**
+ * A held transition, plus the condition a statement can carry to prove it is still held.
+ *
+ * The two travel together because they are only correct together: the token settles the claim
+ * afterwards, and the guard is what keeps the one destructive statement from running for a claim
+ * that has since moved on.
+ */
+interface CompanionClaim {
+  token: string;
+  guard: { key: string; value: string };
+}
 
 /** Minimal field shape the companion I/O needs. */
 interface CompanionFieldLike {
@@ -641,7 +654,7 @@ export interface CompanionSeedDebt {
    * still the module's rule — the record goes in before the statements, since MySQL commits DDL
    * implicitly — because building the plan only reads.
    */
-  claim?: () => Promise<string>;
+  claim?: () => Promise<CompanionClaim>;
 }
 
 /**
@@ -682,9 +695,20 @@ export async function resolveCompanionSeedDebt(
   );
   const recorded = await readI18nTransitionState(store, kind, slug);
 
-  const claimIn = (sourceLocale: string): Promise<string> =>
-    beginI18nTransition(store, { kind, slug, sourceLocale });
-  const claim = (): Promise<string> => claimIn(options.defaultLocale);
+  const claimIn = async (sourceLocale: string): Promise<CompanionClaim> => {
+    const token = await beginI18nTransition(store, {
+      kind,
+      slug,
+      sourceLocale,
+    });
+    // Built here because this is where the kind, the slug and the locale are all in hand, and the
+    // statement that needs it is several calls down.
+    return {
+      token,
+      guard: claimGuardCondition({ kind, slug, sourceLocale, token }),
+    };
+  };
+  const claim = (): Promise<CompanionClaim> => claimIn(options.defaultLocale);
 
   // A copy already recorded and unfinished. Continue it in the language it recorded — a default
   // locale that changed since must not relabel values written under the old one.
@@ -763,7 +787,7 @@ async function resumeInterruptedSeed(
     sourceLocale?: string;
     overwriteExisting?: boolean;
     requireColumnsOnMain?: boolean;
-    claim?: () => Promise<string>;
+    claim?: () => Promise<CompanionClaim>;
     settleTransition?: (token: string | undefined) => Promise<void>;
   },
   newLocalized: CompanionFieldLike[],
@@ -789,7 +813,7 @@ async function resumeInterruptedSeed(
   try {
     // The plan is real, so the transition is recorded — before the first statement, and only now
     // that there is something for it to describe.
-    const claimToken = await args.claim?.();
+    const claimed = await args.claim?.();
     if (args.overwriteExisting) {
       const { columns, statusOnBoth } = await localizedColumnsOnBothTables(
         adapter,
@@ -819,6 +843,11 @@ async function resumeInterruptedSeed(
           columns,
           status: refreshStatus,
           refreshStatus,
+          // The claim, carried into the statement. This copy overwrites the companion's
+          // default-locale rows, so a run displaced between claiming and reaching here would
+          // destroy translations the run that displaced it has already seeded. Checking ownership
+          // beforehand cannot prevent that; a condition the database evaluates with the update can.
+          guard: claimed?.guard,
         });
       }
     }
@@ -830,7 +859,7 @@ async function resumeInterruptedSeed(
       );
     }
     // The interrupted run's debt is discharged, so the record stops describing one.
-    await args.settleTransition?.(claimToken);
+    await args.settleTransition?.(claimed?.token);
     return true;
   } catch (error) {
     onError?.(error);

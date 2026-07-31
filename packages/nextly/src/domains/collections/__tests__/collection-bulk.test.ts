@@ -216,6 +216,28 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       );
     });
 
+    it("resolves component readiness before a single delete opens its transaction", async () => {
+      // A delete used to warm only the collection's own companion. The snapshot that becomes the
+      // durable delete event reads every embedded component too, through the transaction, where a
+      // verdict can only be consulted — so on a fresh worker the component overlays were skipped
+      // and the last description of the row there will ever be went out without its translations.
+      // A row to delete. Without one the delete answers 404 before it reaches anything localized,
+      // which would let this pass while proving nothing.
+      selectData.rows = [createSampleEntry()];
+      const order = await warmsBeforeItsTransaction(() =>
+        service.deleteEntry({ collectionName: "posts", entryId: "entry-1" })
+      );
+
+      expect(order.indexOf("resolve")).toBeGreaterThanOrEqual(0);
+      // A delete may not reach a transaction at all in this double; what matters is that the
+      // resolution happens, and before any transaction it does open.
+      if (order.includes("transaction")) {
+        expect(order.indexOf("resolve")).toBeLessThan(
+          order.indexOf("transaction")
+        );
+      }
+    });
+
     it("resolves readiness before a batch create opens its transaction", async () => {
       const order = await warmsBeforeItsTransaction(() =>
         service.createEntries({ collectionName: "posts" }, [
