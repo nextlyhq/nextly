@@ -93,6 +93,26 @@ export interface MigrateCommandOptions {
    * @default false
    */
   forceUnlock?: boolean;
+
+  /**
+   * Copy existing content into the translation tables of localized entities that carry no record
+   * of ever having transitioned.
+   *
+   * Opt-in, and it has to be. An entity with no record is either an install that enabled
+   * localization before Nextly began recording transitions, or one that has been localized since
+   * birth and owes nothing — and nothing on disk tells the two apart. That is the same conclusion
+   * this whole mechanism rests on: which language existing values are in cannot be recovered by
+   * looking at them, which is why it is recorded rather than inferred. Guessing here would
+   * manufacture a default-locale translation for every entry, including ones deliberately authored
+   * in another language only.
+   *
+   * Running it is the operator supplying the one missing fact: that their main tables hold content
+   * in the configured default locale. Rows that already have a translation in that locale are left
+   * alone, so it is safe to repeat and cannot overwrite a real translation.
+   *
+   * @default false
+   */
+  repairLocalization?: boolean;
 }
 
 /**
@@ -280,6 +300,56 @@ export async function runMigrate(
           ? "Nothing to migrate. Database is up to date."
           : `${formatCount(applied, "migration")} applied.`
       );
+    } catch (err) {
+      logger.error(describeError(err));
+      process.exit(1);
+    }
+
+    // Localization companions, once the schema is in step.
+    //
+    // The push pipeline does not manage companion tables, so a localized entity can be fully
+    // migrated and still have nowhere to store translations — and in production nothing else may
+    // create one, because boot deliberately refuses to run DDL there. This is the supervised path
+    // the refusal message names, and the only one an install that transitioned before transitions
+    // were recorded can be repaired from.
+    //
+    // After the migrations, not before: a companion carries a foreign key to its main table, and
+    // the columns it seeds from are whatever the migrations have just left in place.
+    //
+    // Skipped entirely while any migration is still pending, which `--step` is precisely for. The
+    // config describes the FINAL schema, so provisioning against it now would create a companion
+    // that a later pending migration is going to create for itself — and that migration's
+    // unconditional `CREATE TABLE` then fails on a table that already exists. Deriving the work
+    // from the applied subset instead is not worth it: the operator stepping through migrations
+    // will reach the end, and the run that gets there does the provisioning.
+    try {
+      const stillPending = await findPendingFiles(
+        adapter,
+        db,
+        dialect,
+        appMigrationsDir,
+        logger
+      );
+      if (stillPending.length > 0) {
+        logger.info(
+          `Skipping translation-table provisioning: ${formatCount(stillPending.length, "migration")} still pending. ` +
+            `Run \`nextly migrate\` without --step to finish.`
+        );
+      } else {
+        const { ensureLocalizedCompanions } = await import("./dev-build");
+        await ensureLocalizedCompanions(
+          configResult.config,
+          adapter,
+          context,
+          "afterApply",
+          {
+            supervised: true,
+            // Never by default: an entity with no transition record may be a legacy install or one
+            // localized since birth, and nothing distinguishes them. See `repairLocalization`.
+            repairUntracked: options.repairLocalization === true,
+          }
+        );
+      }
     } catch (err) {
       logger.error(describeError(err));
       process.exit(1);
@@ -858,6 +928,11 @@ export function registerMigrateCommand(program: Command): void {
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before running",
+      false
+    )
+    .option(
+      "--repair-localization",
+      "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",
       false
     )
     .action(async (cmdOptions: MigrateCommandOptions, cmd: Command) => {

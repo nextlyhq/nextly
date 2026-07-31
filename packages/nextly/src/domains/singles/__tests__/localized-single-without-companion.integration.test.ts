@@ -163,5 +163,36 @@ describe.each(getConfiguredTestDialects())(
       expect(result.statusCode).toBe(409);
       expect(result.message).toMatch(/Translations are not ready/);
     });
+
+    it("does not put the driver's own words on the wire when a companion read fails", async () => {
+      // The companion reads no longer swallow a failure — deciding existence by catching one is
+      // what aborted PostgreSQL transactions. Propagating is right, but it made a path that
+      // previously could not throw start throwing, and the result builder puts a bare Error's
+      // message straight onto the response: companion table and column names with it.
+      current = await createTestNextly({
+        dialect,
+        singles: [settings(true)],
+        localization,
+      });
+      const service =
+        current.getService<SingleEntryService>("singleEntryService");
+
+      // A successful read first, so the companion is established as present and the failure below
+      // is a genuine read fault rather than a missing table.
+      await service.get("swin_settings", { locale: "en" });
+
+      // Break the companion while leaving the table in place, which is what a schema drift or a
+      // permission fault looks like from the read's point of view.
+      const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${q("single_swin_settings_locales")} DROP COLUMN ${q("headline")}`
+      );
+
+      const result = await service.get("swin_settings", { locale: "en" });
+
+      expect(result.success).toBe(false);
+      // The canonical envelope, not the driver's text.
+      expect(result.message).not.toMatch(/headline|_locales|column|relation/i);
+    });
   }
 );

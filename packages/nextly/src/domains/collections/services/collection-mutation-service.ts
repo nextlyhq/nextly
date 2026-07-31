@@ -92,9 +92,11 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
-  companionTableExists as sharedCompanionTableExists,
-  mainTableHasColumns,
-} from "../../i18n/runtime/companion-io";
+  cachedCompanionReadiness,
+  companionNotReadyMessage,
+  isCompanionReady,
+  resolveCompanionReadiness,
+} from "../../i18n/runtime/companion-readiness";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
@@ -956,23 +958,6 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Whether the companion `_locales` table physically exists (migration has run).
-   *
-   * Delegates to the shared probe, which returns false only for a dialect-verified
-   * missing-table error and rethrows anything else. Catching every exception here
-   * turned a connection timeout or a permission error into "the table is absent",
-   * which the callers below read as a schema state: one refuses the write with a
-   * 409 telling the operator to re-run sync, the other decides the collection has
-   * no publish lifecycle. Both are the wrong answer to "the database is
-   * unreachable", and both hide a failure the caller would otherwise retry.
-   */
-  private async companionTableExists(
-    companionTableName: string
-  ): Promise<boolean> {
-    return sharedCompanionTableExists(this.adapter, companionTableName);
-  }
-
-  /**
    * Split `entryData` (snake_case keys) into main-table data and companion data for a localized
    * collection: localized columns move to `companionData` and are removed from `mainData` (the
    * migrated main table no longer has them). Returns `null` when the collection isn't localized
@@ -1022,7 +1007,16 @@ export class CollectionMutationService extends BaseService {
     // Route to the companion ONLY when it physically exists (the migration has run). Before
     // `migrate`, the dev auto-sync leaves localized columns on the MAIN table (Option B), so
     // writes must go there — return null and let the localized values flow to main as today.
-    if (!(await this.companionTableExists(companion.companionTableName))) {
+    //
+    // Resolved here, before the transaction opens. Everything downstream — including the read-back
+    // that runs inside it — reads the answer rather than asking again.
+    const mainTableName = companion.companionTableName.replace(/_locales$/, "");
+    const readiness = await resolveCompanionReadiness(this.adapter, {
+      companionTableName: companion.companionTableName,
+      mainTableName,
+      localizedColumns: companion.localizedFields.map(f => f.column),
+    });
+    if (readiness !== "ready") {
       // The main table carries no language of its own, so anything written there
       // while the companion is missing is later read as the DEFAULT language —
       // that is the assumption the companion seed makes when it copies those
@@ -1045,8 +1039,7 @@ export class CollectionMutationService extends BaseService {
       if (requested !== this.localization.defaultLocale) {
         throw NextlyError.conflict({
           reason: "state",
-          message:
-            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          message: companionNotReadyMessage("collection"),
           logContext: {
             cause: "localized-write-without-companion",
             collection: collectionName,
@@ -1063,17 +1056,10 @@ export class CollectionMutationService extends BaseService {
       // that has no columns for them. That write cannot land: it reaches the driver
       // and fails as a 500. Refusing here says the same thing in terms the caller can
       // act on, and says it before anything is attempted.
-      const fallbackPossible = await mainTableHasColumns(
-        this.adapter,
-        // The companion is always `<main>_locales`, so the main table is its stem.
-        companion.companionTableName.replace(/_locales$/, ""),
-        companion.localizedFields.map(f => f.column)
-      );
-      if (!fallbackPossible) {
+      if (readiness === "broken") {
         throw NextlyError.conflict({
           reason: "state",
-          message:
-            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          message: companionNotReadyMessage("collection"),
           logContext: {
             cause: "localized-write-without-companion",
             collection: collectionName,
@@ -1352,13 +1338,7 @@ export class CollectionMutationService extends BaseService {
     tx: { getDrizzle<T = unknown>(): T },
     collectionName: string,
     entryId: string,
-    locale: string,
-    // When set, only a missing companion table is tolerated; any other read
-    // failure propagates. Callers whose result feeds a DURABLE record (the
-    // outbox `previous` payload, a "Before restore" version snapshot) pass this
-    // so a real companion failure aborts the write rather than persisting a
-    // preimage that silently drops a translation.
-    strict = false
+    locale: string
   ): Promise<Record<string, unknown>> {
     // Bound to the transaction connection so the companion metadata read does not
     // re-enter the pool from inside the caller's transaction.
@@ -1375,7 +1355,13 @@ export class CollectionMutationService extends BaseService {
       localizedFields: companion.localizedFields,
       rows: [row],
       localeChain: [locale],
-      strict,
+      // Inside the caller's transaction, so the remembered verdict is read and never resolved:
+      // resolving would query, and a query against a missing relation aborts the whole
+      // transaction on PostgreSQL. The write path resolves before opening one.
+      readiness: cachedCompanionReadiness(
+        this.adapter,
+        companion.companionTableName
+      ),
     });
 
     const values: Record<string, unknown> = {};
@@ -1401,6 +1387,64 @@ export class CollectionMutationService extends BaseService {
    * id-tagged, every locale's page — still bust) and is logged rather than
    * silently dropped.
    */
+  /**
+   * Resolve a collection's companion readiness on the pooled connection.
+   *
+   * Warming only — it judges nothing. Its value is the verdict it leaves behind for the
+   * in-transaction reads that follow, which cannot resolve one themselves.
+   */
+  private async warmCompanionReadiness(collectionName: string): Promise<void> {
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return;
+    await resolveCompanionReadiness(this.adapter, {
+      companionTableName: companion.companionTableName,
+      mainTableName: companion.companionTableName.replace(/_locales$/, ""),
+      localizedColumns: companion.localizedFields.map(f => f.column),
+    });
+  }
+
+  /**
+   * Resolve, on the pooled connection, every companion verdict a write for this collection needs:
+   * the collection's own, and one for each field-group type its schema can hold.
+   *
+   * Public because the only place this can run is somewhere the caller controls. A method that
+   * receives a transaction cannot do it for itself: resolving issues a query, a query against a
+   * missing relation aborts the whole transaction on PostgreSQL, and a pooled probe taken while a
+   * transaction is open waits for a connection that transaction will not release until it ends.
+   * So it has to happen before the transaction opens.
+   *
+   * Skipping it is exactly what makes it worth calling. Nothing throws — an unresolved verdict
+   * reads as unusable, so the write commits normally while its durable version snapshot and its
+   * outbound event quietly omit every localized component value. That omission surfaces from a
+   * consumer of the event, long after the snapshot has become the historical record and stopped
+   * being reconstructable.
+   *
+   * Read-only and idempotent: safe to call more than once, and for a collection that is not
+   * localized at all.
+   */
+  async warmLocalizedReadiness(collectionName: string): Promise<void> {
+    await this.warmCompanionReadiness(collectionName);
+    if (!this.fieldGroupDataService) return;
+    const collection =
+      await this.collectionService.getCollection(collectionName);
+    const fields =
+      ((
+        (collection as Record<string, unknown>).schemaDefinition as
+          | Record<string, unknown>
+          | undefined
+      )?.fields as FieldDefinition[]) ||
+      ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
+      [];
+    await this.fieldGroupDataService.assertLocalizedFieldGroupsWritable({
+      fields: fields as unknown as FieldConfig[],
+      // Nothing is being written, so nothing is judged: this call is here purely for the verdicts
+      // it leaves behind.
+      data: {},
+      locale: undefined,
+    });
+  }
+
   private async readCompanionSlugsAllLocales(
     db: CompanionReadDb,
     collectionName: string,
@@ -1431,6 +1475,10 @@ export class CollectionMutationService extends BaseService {
         localizedFields: slugField,
         rows: [row],
         locales,
+        readiness: cachedCompanionReadiness(
+          this.adapter,
+          companion.companionTableName
+        ),
       });
 
       // row.slug is a `{ [locale]: slug | null }` map; collect the distinct
@@ -2748,12 +2796,11 @@ export class CollectionMutationService extends BaseService {
       // connection and deadlock a single-connection pool, and a NextlyError raised in
       // the callback is reclassified by the adapter into an opaque database error —
       // so the actionable 409 would never reach the caller.
-      const fieldGroupPresence =
-        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-          fields: fields as unknown as FieldConfig[],
-          data: componentFieldData,
-          locale: params.locale,
-        })) ?? new Map<string, boolean>();
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: fields as unknown as FieldConfig[],
+        data: componentFieldData,
+        locale: params.locale,
+      });
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -2796,19 +2843,15 @@ export class CollectionMutationService extends BaseService {
           this.fieldGroupDataService &&
           Object.keys(componentFieldData).length > 0
         ) {
-          await this.fieldGroupDataService.saveComponentDataInTransaction(
-            tx,
-            {
-              parentId: entry.id as string,
-              parentTable: tableName,
-              fields: fields as unknown as FieldConfig[],
-              data: componentFieldData,
-              // i18n: thread the write locale so an embedded localized component writes
-              // translatable fields to its companion within the same transaction.
-              locale: params.locale,
-            },
-            fieldGroupPresence
-          );
+          await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+            parentId: entry.id as string,
+            parentTable: tableName,
+            fields: fields as unknown as FieldConfig[],
+            data: componentFieldData,
+            // i18n: thread the write locale so an embedded localized component writes
+            // translatable fields to its companion within the same transaction.
+            locale: params.locale,
+          });
         }
 
         // Write many-to-many junction rows inside the transaction so a junction
@@ -3259,7 +3302,9 @@ export class CollectionMutationService extends BaseService {
       const companionPublishable =
         !!companion &&
         companion.hasStatus &&
-        (await this.companionTableExists(companion.companionTableName));
+        // Only `ready` matters: a companion that is not there has no per-locale publish
+        // lifecycle, and why it is not there changes nothing about that.
+        (await isCompanionReady(this.adapter, companion.companionTableName));
 
       if (!hasMainStatus && !companionPublishable) {
         // Nothing to publish — the collection has no status concept. Returned
@@ -3281,6 +3326,21 @@ export class CollectionMutationService extends BaseService {
       // Defer a document-dependent (owner-only/custom) publish rule to the
       // under-lock re-check so it is judged against the row-locked document, not
       // the stale pre-transaction `existingEntry` — a custom rule keyed on a
+      // Readiness for this collection AND for every field-group type it can hold, resolved on the
+      // pool before the transaction opens. The snapshot built inside it reads all of them, and
+      // there it can only READ a verdict — resolving issues a query, and a query against a missing
+      // relation aborts the whole transaction on PostgreSQL. A publish is a plausible first act on
+      // a fresh worker, and an unresolved verdict reads as unusable, so every translated value
+      // would be missing from the durable event.
+      await this.warmCompanionReadiness(params.collectionName);
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: (publishCollection as { fields?: FieldConfig[] }).fields ?? [],
+        // Nothing is being written, so nothing is judged: this call is here purely for the
+        // verdicts it leaves behind.
+        data: {},
+        locale: undefined,
+      });
+
       // mutable field (e.g. an approval flag a concurrent writer clears) must
       // decide on the committed value this publish will overwrite.
       const publishStoredRules = this.accessService.getAccessRules(
@@ -3460,7 +3520,11 @@ export class CollectionMutationService extends BaseService {
                       Parameters<typeof readCompanionLocaleStatusAll>[0]
                     >(),
                     companion.table,
-                    params.entryId
+                    params.entryId,
+                    cachedCompanionReadiness(
+                      this.adapter,
+                      companion.companionTableName
+                    )
                   )
                 : new Map<string, string | null>();
           } catch (err) {
@@ -3679,8 +3743,7 @@ export class CollectionMutationService extends BaseService {
                 tx,
                 params.collectionName,
                 params.entryId,
-                locale,
-                true
+                locale
               );
             } catch (err) {
               // Normalize the raw driver error the same way the status scan
@@ -4840,12 +4903,11 @@ export class CollectionMutationService extends BaseService {
       // connection and deadlock a single-connection pool, and a NextlyError raised in
       // the callback is reclassified by the adapter into an opaque database error —
       // so the actionable 409 would never reach the caller.
-      const fieldGroupPresence =
-        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-          fields: fields as unknown as FieldConfig[],
-          data: componentFieldData,
-          locale: params.locale,
-        })) ?? new Map<string, boolean>();
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: fields as unknown as FieldConfig[],
+        data: componentFieldData,
+        locale: params.locale,
+      });
       // `withVersionConflictRetry` re-runs the closure on a version_no conflict,
       // and the promote fold inside it rebinds these payloads (and sets the
       // pending-draft document). Capture the caller's own shaped input so each
@@ -4932,12 +4994,7 @@ export class CollectionMutationService extends BaseService {
                   tx,
                   params.collectionName,
                   params.entryId,
-                  localizedUpdate.writeLocale,
-                  // This preimage feeds the durable `previous` event and, on a
-                  // restore, the "Before restore" snapshot, so a real companion
-                  // read failure must abort rather than silently drop a
-                  // translation from a record the user cannot tell is incomplete.
-                  true
+                  localizedUpdate.writeLocale
                 )
               : {};
             // The locale's committed status, read before the write. Gated on
@@ -5334,8 +5391,7 @@ export class CollectionMutationService extends BaseService {
                 // i18n: thread the write locale so an embedded localized component writes
                 // translatable fields to its companion within the same transaction.
                 locale: params.locale,
-              },
-              fieldGroupPresence
+              }
             );
           }
 
@@ -6347,6 +6403,18 @@ export class CollectionMutationService extends BaseService {
       // pool. The companion rows are still committed here; if a slug shifts
       // between this read and the delete, the always-busted id tag still covers
       // every locale's page.
+      // Resolved here, on the pool, for the same reason the slugs are read here. Everything the
+      // transaction below does with the companion — including the snapshot that builds the durable
+      // delete event — can only READ the verdict, because resolving issues a query and a query
+      // against a missing relation aborts the whole transaction on PostgreSQL. On a worker whose
+      // first act is a delete nothing has resolved this entity yet, and an unresolved verdict reads
+      // as unusable, so every localized field would be silently missing from that event.
+      //
+      // Every field-group type the collection can hold, not just the collection's own companion:
+      // the deleted-document snapshot reads each embedded component through the transaction, where
+      // it can only consult what is already resolved. A delete is the one write with no second
+      // chance — the event it records is the last description of the row there will ever be.
+      await this.warmLocalizedReadiness(params.collectionName);
       const deletedLocalizedSlugsForRevalidation =
         await this.readCompanionSlugsAllLocales(
           this.db,

@@ -213,8 +213,14 @@ export class CollectionService extends BaseService {
    * Unlike the base helper, this yields the adapter's `TransactionContext` (the
    * handle the *InTransaction wrappers expect), not a raw driver transaction.
    *
+   * Warm each collection's localized readiness before opening the transaction — see
+   * {@link warmLocalizedReadiness}. It cannot be done from inside one, and without it the writes
+   * commit with their version snapshots and outbound events missing every localized component
+   * value.
+   *
    * @example
    * ```typescript
+   * await service.warmLocalizedReadiness('posts');
    * await service.withTransaction(async (tx) => {
    *   const entry = await service.createEntryInTransaction(tx, 'posts', data, context);
    *   await service.updateEntryInTransaction(tx, 'posts', entry.id, moreData, context);
@@ -848,6 +854,25 @@ export class CollectionService extends BaseService {
   }
 
   /**
+   * Resolve this collection's localized companion verdicts on the pooled connection.
+   *
+   * Run it BEFORE opening a transaction that uses the `*InTransaction` methods below. They cannot
+   * do it for themselves: resolving a verdict issues a query, a query against a missing relation
+   * aborts the whole transaction on PostgreSQL, and a pooled probe taken while a transaction is
+   * open waits for a connection that transaction will not release until it ends.
+   *
+   * Nothing throws when it is skipped, which is the reason it is worth calling. An unresolved
+   * verdict reads as unusable, so the writes commit normally while their durable version snapshots
+   * and outbound events quietly omit every localized component value — an omission that surfaces
+   * from a consumer of the event, by which point the snapshot is the historical record.
+   *
+   * Read-only and idempotent. Safe for a collection that is not localized.
+   */
+  async warmLocalizedReadiness(collectionName: string): Promise<void> {
+    await this.entryService.warmLocalizedReadiness(collectionName);
+  }
+
+  /**
    * Create an entry within an existing transaction
    *
    * Use this when you need to coordinate multiple operations atomically.
@@ -859,8 +884,11 @@ export class CollectionService extends BaseService {
    * @returns Created entry
    * @throws Error if underlying service doesn't support transaction context
    *
+   * Preceded by {@link warmLocalizedReadiness} for this collection, as in the example.
+   *
    * @example
    * ```typescript
+   * await service.warmLocalizedReadiness('posts');
    * await service.withTransaction(async (tx) => {
    *   const entry = await service.createEntryInTransaction(tx, 'posts', data, context);
    *   await service.updateEntryInTransaction(tx, 'posts', entry.id, moreData, context);
@@ -916,11 +944,15 @@ export class CollectionService extends BaseService {
   /**
    * Update an entry within an existing transaction
    *
+   * Preceded by {@link warmLocalizedReadiness} for this collection. This method runs entirely on
+   * the caller's transaction, where a companion verdict can only be read and never resolved, and
+   * an unresolved one reads as unusable — so without the warm-up the update commits while its
+   * previous/post version snapshots and its outbound event omit every localized component value.
+   *
    * @param tx - Transaction context from adapter
    * @param collectionName - Name of the collection
    * @param entryId - ID of the entry to update
    * @param data - Update data
-   * @param context - Request context
    * @returns Updated entry
    * @throws Error if underlying service doesn't support transaction context
    */

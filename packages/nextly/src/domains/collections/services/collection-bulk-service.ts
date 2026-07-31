@@ -1060,6 +1060,13 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // Every companion verdict the batch needs, resolved here for the same reason the
+    // authorization above is. Inside the transaction they can only be READ: resolving issues a
+    // query, and a query against a missing relation aborts the whole transaction on PostgreSQL.
+    // An unresolved verdict reads as unusable, so each row's durable version snapshot and its
+    // outbound event would silently omit every localized component value.
+    await this.mutationService.warmLocalizedReadiness(params.collectionName);
+
     // The revalidation intents of every committed create, applied to the result
     // only after the shared transaction commits — a rollback undoes every insert.
     const collectedIntents: RevalidationIntent[] = [];
@@ -1223,6 +1230,10 @@ export class CollectionBulkService extends BaseService {
    *
    * @example
    * ```typescript
+   * // Resolve companion readiness before opening the transaction — inside one it can only be
+   * // read, and an unresolved verdict silently strips localized component values from every
+   * // version snapshot and outbound event this batch produces.
+   * await entryService.warmLocalizedReadiness('children');
    * await adapter.transaction(async (tx) => {
    *   // Create parent entry
    *   const parent = await entryService.createEntryInTransaction(tx, parentParams, parentData);
@@ -1496,6 +1507,13 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // Every companion verdict the batch needs, resolved here for the same reason the
+    // authorization above is. Inside the transaction they can only be READ: resolving issues a
+    // query, and a query against a missing relation aborts the whole transaction on PostgreSQL.
+    // An unresolved verdict reads as unusable, so each row's previous/post version snapshots and
+    // its outbound event would silently omit every localized component value.
+    await this.mutationService.warmLocalizedReadiness(params.collectionName);
+
     // The revalidation intents of every committed update, applied only after the
     // shared transaction commits — a rollback undoes every update.
     const collectedIntents: RevalidationIntent[] = [];
@@ -1657,6 +1675,10 @@ export class CollectionBulkService extends BaseService {
    *
    * @example
    * ```typescript
+   * // Resolve companion readiness before opening the transaction — inside one it can only be
+   * // read, and an unresolved verdict silently strips localized component values from every
+   * // version snapshot and outbound event this batch produces.
+   * await entryService.warmLocalizedReadiness('children');
    * await adapter.transaction(async (tx) => {
    *   // Update parent entry
    *   await entryService.updateEntryInTransaction(tx, parentParams, parentData);
@@ -1903,6 +1925,13 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
+    // Every companion verdict the batch needs, resolved on the pool before the shared
+    // transaction opens. Inside it they can only be READ: resolving issues a query, and a query
+    // against a missing relation aborts the whole transaction on PostgreSQL. An unresolved verdict
+    // reads as unusable, so the snapshot describing each deleted row — the last record of it
+    // there will ever be — would silently omit every localized component value.
+    await this.mutationService.warmLocalizedReadiness(params.collectionName);
+
     // Whether any item appended an outbox event in the shared transaction. Read
     // back onto the result only after the transaction commits (below), so a
     // rollback — which undoes every delete and its event — never reports a
@@ -2051,6 +2080,10 @@ export class CollectionBulkService extends BaseService {
    *
    * @example
    * ```typescript
+   * // Resolve companion readiness before opening the transaction — inside one it can only be
+   * // read, and an unresolved verdict silently strips localized component values from the
+   * // snapshot describing each deleted row, which is the last record of it there will ever be.
+   * await entryService.warmLocalizedReadiness('children');
    * await adapter.transaction(async (tx) => {
    *   // Delete parent entry
    *   await entryService.deleteEntryInTransaction(tx, parentParams);

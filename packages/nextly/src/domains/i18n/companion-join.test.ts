@@ -62,7 +62,7 @@ describe("resolveLocalizedValue (fallback chain, blank = untranslated)", () => {
   });
 });
 
-describe("populateTranslationStatus (failed overview reads)", () => {
+describe("populateTranslationStatus (read failures)", () => {
   /** A db whose query rejects the way a permission or schema fault would. */
   function failingDb(message: string) {
     const rejection = () => {
@@ -73,7 +73,10 @@ describe("populateTranslationStatus (failed overview reads)", () => {
     } as never;
   }
 
-  const args = (strict: boolean, message: string) => ({
+  const args = (
+    readiness: "ready" | "pre-migration" | undefined,
+    message: string
+  ) => ({
     db: failingDb(message),
     companionTable: { _parent: "p", _locale: "l" },
     localizedFields: [],
@@ -81,35 +84,31 @@ describe("populateTranslationStatus (failed overview reads)", () => {
     locales: ["en", "de"],
     defaultLocale: "en",
     hasStatus: true,
-    strict,
+    readiness,
   });
 
-  it("leaves the rows untouched when a caller is not judging on them", () => {
-    // The default stays forgiving: an ordinary read is still served when the
-    // overview cannot be loaded.
-    const rows = [{ id: "doc1" } as Record<string, unknown>];
-    return expect(
-      populateTranslationStatus({
-        ...args(false, "permission denied for relation"),
-        rows,
-      })
+  it("surfaces every failure once the companion is ready", async () => {
+    // A rule reading `_translations` cannot tell an untranslated Single from one whose overview
+    // simply failed to load, so the failure has to reach it. There is no tolerated class left:
+    // the missing-table case is decided before the query rather than caught after it.
+    for (const message of [
+      "permission denied for relation",
+      "no such table: single_branding_locales",
+    ]) {
+      await expect(
+        populateTranslationStatus(args("ready", message))
+      ).rejects.toThrow(message);
+    }
+  });
+
+  it("issues no query at all before the companion migration has run", async () => {
+    // A Single before its migration is not a fault, and it is also not something to find out by
+    // failing: on PostgreSQL a failed statement aborts the caller's whole transaction.
+    await expect(
+      populateTranslationStatus(args("pre-migration", "must not be issued"))
     ).resolves.toBeUndefined();
-  });
-
-  it("surfaces the failure to a caller that will judge on the overview", async () => {
-    // A rule reading `_translations` cannot tell an untranslated Single from
-    // one whose overview simply failed to load, so the failure has to reach it.
     await expect(
-      populateTranslationStatus(args(true, "permission denied for relation"))
-    ).rejects.toThrow("permission denied");
-  });
-
-  it("still tolerates a companion table that does not exist yet", async () => {
-    // A Single before its migration runs is not a fault.
-    await expect(
-      populateTranslationStatus(
-        args(true, "no such table: single_branding_locales")
-      )
+      populateTranslationStatus(args(undefined, "must not be issued"))
     ).resolves.toBeUndefined();
   });
 });

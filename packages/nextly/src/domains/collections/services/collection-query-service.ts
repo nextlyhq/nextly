@@ -95,6 +95,7 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   buildRestorePayload,
@@ -179,6 +180,35 @@ export class CollectionQueryService extends BaseService {
    * covering every configured locale. No-op when localization is off, the request isn't
    * `locale=all`, or the collection isn't localized.
    */
+  /**
+   * Run a companion overlay, turning a driver failure into the canonical envelope.
+   *
+   * The companion reads used to swallow a failure — deciding existence by catching one is what
+   * aborted PostgreSQL transactions — so these overlays could not throw and nothing here needed to
+   * shape their errors. Now every failure propagates, and the result builders below put a bare
+   * `Error`'s own message into the response: the failed query, with companion table and column
+   * names in it.
+   *
+   * Only non-`NextlyError` failures are wrapped. One that is already typed carries a deliberate
+   * status — a refused access constraint is a 403 — and flattening it would report an
+   * authorization decision as a server fault.
+   */
+  private async overlayLocalized(
+    collectionName: string,
+    reason: string,
+    run: () => Promise<void>
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { collection: collectionName, reason },
+      });
+    }
+  }
+
   private async populateLocalizedAll(
     collectionName: string,
     rows: Record<string, unknown>[],
@@ -193,6 +223,8 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,
+      // Outside any transaction, so this may resolve rather than only read what is remembered.
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
@@ -224,6 +256,7 @@ export class CollectionQueryService extends BaseService {
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
@@ -324,6 +357,7 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       localeChain,
@@ -1195,28 +1229,43 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
-      await this.populateLocalized(
+      await this.overlayLocalized(
         params.collectionName,
-        entries,
-        localeChain,
-        companion,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-load-failed",
+        () =>
+          this.populateLocalized(
+            params.collectionName,
+            entries,
+            localeChain,
+            companion,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
-      await this.populateLocalizedAll(
+      await this.overlayLocalized(
         params.collectionName,
-        entries,
-        params.locale,
-        companion,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-projection-failed",
+        () =>
+          this.populateLocalizedAll(
+            params.collectionName,
+            entries,
+            params.locale,
+            companion,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // i18n M7: per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
-        await this.populateTranslationMeta(
+        await this.overlayLocalized(
           params.collectionName,
-          entries,
-          companion,
-          statusFilter?.value ?? null // i18n M6: per-locale published filter
+          "translation-overview-failed",
+          () =>
+            this.populateTranslationMeta(
+              params.collectionName,
+              entries,
+              companion,
+              statusFilter?.value ?? null // i18n M6: per-locale published filter
+            )
         );
       }
 
@@ -2162,28 +2211,43 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
-      await this.populateLocalized(
+      await this.overlayLocalized(
         params.collectionName,
-        [entry as Record<string, unknown>],
-        localeChain,
-        undefined,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-load-failed",
+        () =>
+          this.populateLocalized(
+            params.collectionName,
+            [entry as Record<string, unknown>],
+            localeChain,
+            undefined,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
-      await this.populateLocalizedAll(
+      await this.overlayLocalized(
         params.collectionName,
-        [entry as Record<string, unknown>],
-        params.locale,
-        undefined,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-projection-failed",
+        () =>
+          this.populateLocalizedAll(
+            params.collectionName,
+            [entry as Record<string, unknown>],
+            params.locale,
+            undefined,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
-        await this.populateTranslationMeta(
+        await this.overlayLocalized(
           params.collectionName,
-          [entry as Record<string, unknown>],
-          undefined,
-          statusFilter?.value ?? null // i18n M6: per-locale published filter
+          "translation-overview-failed",
+          () =>
+            this.populateTranslationMeta(
+              params.collectionName,
+              [entry as Record<string, unknown>],
+              undefined,
+              statusFilter?.value ?? null // i18n M6: per-locale published filter
+            )
         );
       }
 

@@ -21,7 +21,19 @@ export interface LockingAdapterOptions {
   heldBy?: string | null;
   /** Whether the lock table exists. */
   lockTableExists?: boolean;
+  /**
+   * Companion `_locales` tables that physically exist.
+   *
+   * The runtime decides a companion is there by probing it and treating a missing-table error as
+   * the answer, so a double that resolves every statement reports a companion for every entity —
+   * and certifies restore and seeding paths that would never run against a database without one.
+   * Empty by default, which is what a fixture that never created a companion actually has.
+   */
+  companionTables?: readonly string[];
 }
+
+/** The probe {@link createLockingAdapter} has to answer honestly. */
+const COMPANION_PROBE = /^SELECT 1 FROM ["`](\w+_locales)["`] LIMIT 0$/;
 
 export function createLockingAdapter(options: LockingAdapterOptions = {}) {
   const lock: { seeded: boolean; owner: string | null } = {
@@ -79,6 +91,11 @@ export function createLockingAdapter(options: LockingAdapterOptions = {}) {
       }),
     }),
     executeQuery: (sql: string) => {
+      const probed = COMPANION_PROBE.exec(sql.replace(/\s+/g, " ").trim());
+      if (probed && !(options.companionTables ?? []).includes(probed[1])) {
+        // The shape the runtime's missing-table matcher looks for, in this double's own dialect.
+        return Promise.reject(new Error(`no such table: ${probed[1]}`));
+      }
       ddl.push(sql);
       return Promise.resolve([]);
     },

@@ -322,6 +322,11 @@ async function reconcileSingleCompanion(args: {
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale
   // — the check that protects a live transition would block a legitimate one instead.
   if (plan.companionDropped) {
+    // The other half of "this companion is gone": readiness remembers only that one exists.
+    const { forgetCompanionReadiness } = await import(
+      "../../domains/i18n/runtime/companion-readiness"
+    );
+    forgetCompanionReadiness(adapter, `${tableName}_locales`);
     const { resolveTransitionStore } = await import(
       "../../domains/i18n/migration/transition-recorder"
     );
