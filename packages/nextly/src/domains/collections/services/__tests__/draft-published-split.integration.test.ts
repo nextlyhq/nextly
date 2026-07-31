@@ -560,6 +560,38 @@ describe("draft/published split — promote on publish (integration)", () => {
     });
     expect(draftRow.snapshot.hero?._componentType).toBe("hero");
   });
+
+  it("does not fold or delete a working draft when restoring a version", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      body: "b",
+      status: "published",
+    });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A pending draft edit.
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    expect(await workingDraftCount(id)).toBe(1);
+
+    // A restore write names a status and carries sourceVersionNo. It must apply
+    // the restore payload directly, not fold the unrelated pending draft into
+    // the live row, and must leave the draft in place rather than deleting it.
+    const restore = await entries.updateEntry(
+      { ...ctx, entryId: id, sourceVersionNo: 1 },
+      { title: "restored", body: "b", status: "published" }
+    );
+    expect(restore.success).toBe(true);
+
+    // The live row is the restored payload, not the draft's "drafted" title.
+    const [live] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(live.title).toBe("restored");
+    // The pending draft survived the restore.
+    expect(await workingDraftCount(id)).toBe(1);
+  });
 });
 
 // The split coalesces a working draft under one unlocalized slot and promotes it

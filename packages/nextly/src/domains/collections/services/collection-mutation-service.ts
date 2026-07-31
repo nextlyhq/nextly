@@ -4515,7 +4515,14 @@ export class CollectionMutationService extends BaseService {
       // unused unless a draft is found under the row lock below. `promotePossible`
       // is the publish/unpublish counterpart of the status-less draft edit: the
       // two are disjoint on `namesNoStatus`.
-      const promotePossible = splitEnabled && !namesNoStatus;
+      // A restore write (a `sourceVersionNo` is set) names the restored version's
+      // status and so is not status-less, but it is not a publish of the pending
+      // draft either: folding the draft would fill fields the historical snapshot
+      // omits with unrelated pending edits and then delete the draft. Apply the
+      // restore payload directly and leave any working draft in place.
+      const isRestoreWrite =
+        params.sourceVersionNo !== undefined && params.sourceVersionNo !== null;
+      const promotePossible = splitEnabled && !namesNoStatus && !isRestoreWrite;
       const isPluginForRestore =
         (
           (collection as Record<string, unknown>).admin as
