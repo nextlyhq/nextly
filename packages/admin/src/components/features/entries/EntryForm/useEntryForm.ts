@@ -92,6 +92,14 @@ export interface EntryFormCollection {
    * Backed by the `dynamic_collections.localized` boolean column.
    */
   localized?: boolean;
+  /**
+   * Whether the draft/published working-draft split is enabled (drafts on a
+   * versioned collection). When `true` on a `status` collection, saving an
+   * already-published entry stores a pending working draft instead of writing
+   * the live row; a separate Publish promotes it. Read-only, derived
+   * server-side — only code-first collections enable it.
+   */
+  draftsEnabled?: boolean;
 }
 
 /**
@@ -149,6 +157,7 @@ export interface UseEntryFormOptions {
 export type EntryFormIntent =
   | "save-draft"
   | "publish"
+  | "save-working-draft"
   | "save-changes"
   | "unpublish";
 
@@ -228,6 +237,12 @@ export function mapIntentToPayload(
       return { ...data, status: "draft" };
     case "publish":
       return { ...data, status: "published" };
+    case "save-working-draft":
+      // A status-less save on a drafts-enabled, already-published entry: the
+      // server stores the pending edit as a working draft and leaves the live
+      // row untouched (draft/published split). Omitting `status` is exactly
+      // what triggers that; a later Publish promotes the draft to live.
+      return data;
     case "save-changes":
       return { ...data, status: "published" };
     case "unpublish":

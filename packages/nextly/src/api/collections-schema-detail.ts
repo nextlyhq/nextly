@@ -117,9 +117,20 @@ export const GET = withErrorHandler(
       config?.plugins ?? []
     );
 
+    // Derived flag: whether the draft/published working-draft split is enabled
+    // (drafts on a versioned collection). The full versions config is passed
+    // through above, but the admin editor reads this simple boolean to decide
+    // whether a "Save" stores a working draft instead of writing the live row.
+    // Builder collections always resolve drafts off; only code-first ones enable
+    // it, so this is derived from the resolved config rather than assumed.
+    const draftsEnabled =
+      (collection.versions as { drafts?: { enabled?: boolean } } | null)?.drafts
+        ?.enabled === true;
+
     return respondDoc({
       ...(collectionWithViews as unknown as typeof collection),
       fields: enrichedFields,
+      draftsEnabled,
     } as unknown as typeof collection);
   }
 );
