@@ -38,6 +38,7 @@ import {
   type RegistryRow,
 } from "./manifest";
 import { createStorageObserver } from "./observer";
+import { assertNoStaleParentPointers } from "./parent-pointers";
 import {
   buildMigrationPlan,
   dataStepCount,
@@ -246,6 +247,13 @@ export async function runFieldGroupMigration(
         dialect,
         rows: await readRegistryRows(adapter),
         identifierCase,
+        // Every name this run renamed away. A row still addressing one of them
+        // is content the read path would return nothing for, and it is asked
+        // about here rather than per step because the failure worth catching is
+        // a data table no step ever observed.
+        renamedAway: directed
+          .filter(entry => entry.kind === "table")
+          .map(entry => entry.from),
         generation,
       });
 
@@ -265,21 +273,31 @@ export async function runFieldGroupMigration(
 }
 
 /**
- * Structural verification, run before the marker is allowed to settle.
+ * Verification, run before the marker is allowed to settle.
  *
- * Reuses the read-path's own verdict rather than asking a second, similar
- * question: whatever would refuse to *serve* this storage must also refuse to
- * declare the migration finished, or the two would disagree and the marker
- * would be the more trusted of the pair.
+ * Two questions, because storage can be structurally complete and still unable
+ * to serve what it holds. The first reuses the read-path's own verdict rather
+ * than asking a second, similar question: whatever would refuse to *serve* this
+ * storage must also refuse to declare the migration finished, or the two would
+ * disagree and the marker would be the more trusted of the pair. The second asks
+ * the rows, because the verdict is a judgement about tables and columns and says
+ * nothing about what the rows inside them address.
  */
 async function assertStorageComplete(args: {
   adapter: DrizzleAdapter;
   dialect: MigrationDialect;
   rows: readonly RegistryRow[];
   identifierCase: IdentifierCaseRules;
+  renamedAway: readonly string[];
   generation: "legacy" | "field-groups-v2";
 }): Promise<void> {
   const { tables, columns } = await readCatalog(args.adapter, args.dialect);
+  await assertNoStaleParentPointers({
+    query: statement => args.adapter.queryStatement(statement),
+    columns,
+    identifierCase: args.identifierCase,
+    staleNames: args.renamedAway,
+  });
   const probe = probeStorage({
     rows: args.rows,
     tables,

@@ -25,6 +25,7 @@ import {
 
 import { tableRenamesOf, type ManifestEntry } from "./manifest";
 import { findLostIndexes, refuseLostIndexes } from "./observer";
+import { PARENT_TABLE_COLUMN } from "./parent-pointers";
 import type { MigrationStep } from "./runner";
 import type { MigrationSession } from "./session";
 
@@ -66,6 +67,17 @@ export interface StorageObserver {
   ): Promise<ObservedColumn[] | undefined>;
   /** Every `table_name` the registry currently points at. */
   pointers(session: MigrationSession, registryTable: string): Promise<string[]>;
+  /**
+   * Every table storing embedded field-group instances, under its current name.
+   *
+   * Separate from `tables` because the question is not "what exists" but "what
+   * holds a parent pointer", and the answer is a property of a table's columns
+   * rather than of its name: a field group whose table was named through
+   * `dbName` carries no recognisable prefix, and a table orphaned by a deleted
+   * registry row appears in no plan, yet a stale pointer in either is content
+   * that stops resolving.
+   */
+  dataTables(session: MigrationSession): Promise<string[]>;
   /**
    * A table's index names, or `undefined` when they were not tracked.
    *
@@ -152,7 +164,19 @@ interface StepContext {
 }
 
 /**
- * Rename a table and its companion, and move the registry pointer with them.
+ * Rename a table and its companion, and move every pointer at it with them.
+ *
+ * Two kinds of row address a field-group table by its physical name, and both
+ * move here rather than in a step of their own:
+ *
+ * - the **registry**'s `table_name`, which is how everything finds the table;
+ * - **`_parent_table`** on every embedded instance nested inside this field
+ *   group, which is how a child row says which parent it hangs off.
+ *
+ * Separating either from the rename opens a window in which a row addresses a
+ * table that is not there, and the read path turns that into empty content
+ * rather than an error — so a rename that lost its pointers looks like a
+ * successful migration and reads like deleted data.
  *
  * How atomic that is depends on the dialect, and the difference is not one this
  * module can paper over:
@@ -169,8 +193,15 @@ interface StepContext {
  *
  * So on MySQL this is sequenced with repair rather than atomic, and every half
  * is idempotent to make that repair possible: the renames check the catalog
- * first, and the pointer update is a no-op once no row still points at the old
+ * first, and the pointer updates are no-ops once no row still points at the old
  * name.
+ *
+ * The two pointer updates sit on opposite sides of the renames on purpose. The
+ * parent pointers go **first**, so that MySQL's implicit commit carries them
+ * with the rename and a table that moved always has its children's pointers
+ * moved too. The registry pointer stays **after**, where its own idempotence and
+ * `verify`'s pointer check already cover the gap, and where it addresses the
+ * registry under the name `registryNameAt` derives.
  */
 function renameStep(
   entry: ManifestEntry,
@@ -211,8 +242,36 @@ function renameStep(
           source === undefined ? undefined : await observer.indexNames(source)
         );
       }
+      // Observed outside the transaction for the same reason the catalog is,
+      // and observed fresh per step rather than once per run: earlier steps have
+      // already renamed some of these tables, and the names this step must
+      // address are the ones they carry now.
+      const dataTables = movesPointer ? await observer.dataTables(session) : [];
 
       await session.inTransaction(async ctx => {
+        // Issued BEFORE the renames below, so that on MySQL the implicit commit
+        // a `RENAME TABLE` performs carries these updates with it: a table that
+        // moved then always has the pointers at it moved too. Postgres and
+        // SQLite commit the whole step atomically, where the order is immaterial.
+        //
+        // Every field-group data table is rewritten, not only the one being
+        // renamed. A child of `comp_outer` stores its pointer in the *child's*
+        // table, so the stale string lives somewhere other than the table this
+        // step moves — including in tables this plan renames nothing of, and in
+        // the moved table itself where a field group nests inside itself.
+        //
+        // Deliberately not skipped for a satisfied entry, exactly as the
+        // registry update below is not: a resume reached here because something
+        // did not land, and an update that is already correct costs a scan.
+        if (movesPointer) {
+          for (const table of dataTables) {
+            await ctx.runStatement(
+              sql`UPDATE ${sql.identifier(table)}
+                  SET ${sql.identifier(PARENT_TABLE_COLUMN)} = ${entry.to}
+                  WHERE ${sql.identifier(PARENT_TABLE_COLUMN)} = ${entry.from}`
+            );
+          }
+        }
         // Re-runnable, and decided per table rather than per entry: on a resume
         // a rename may already have committed, and issuing it again would fail
         // on a source that is no longer there. The catalog answers that for each

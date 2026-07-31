@@ -22,6 +22,6 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Groundwork for the field group storage migration. The engine can now plan a complete run in either direction, resume one that was interrupted, and refuse changes to a field group while a run is in flight - editing one mid-run would leave a database indistinguishable from the migration's own work, which no later check could untangle.
+Groundwork for the field group storage migration. The engine can now plan a complete run in either direction and resume one that was interrupted. A rename also carries the pointers that address the table it moves: a field group nested inside another records its parent by physical table name, so renaming the parent without rewriting those records would leave the nested content in place but unreachable, and reads would return nothing rather than fail.
 
 Nothing runs it yet. No command invokes the migration and no database is changed by installing this; the entry point ships separately, once the engine is covered end to end against real PostgreSQL, MySQL and SQLite servers.

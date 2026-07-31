@@ -35,6 +35,7 @@ const observer: StorageObserver = {
   tables: vi.fn(async () => []),
   columns: vi.fn(async () => undefined),
   pointers: vi.fn(async () => []),
+  dataTables: vi.fn(async () => []),
   indexNames: vi.fn(async () => undefined),
 };
 

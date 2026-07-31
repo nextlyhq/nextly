@@ -22,6 +22,7 @@ import {
   type IdentifierCaseRules,
 } from "../../schema/utils/resolve-catalog-name";
 
+import { parentPointerTables } from "./parent-pointers";
 import type { ObservedColumn, StorageObserver } from "./steps";
 
 /** The registry column holding a row's physical table name. */
@@ -78,6 +79,27 @@ export function createStorageObserver(
       return rows
         .map(row => row[REGISTRY_TABLE_NAME_COLUMN])
         .filter((value): value is string => typeof value === "string");
+    },
+
+    dataTables: async (): Promise<string[]> => {
+      const names = await adapter.listTables();
+      if (names.length === 0) return [];
+      // Read through the same introspection every other observation uses, and
+      // decided on the parent-pointer column rather than on a name: which
+      // tables hold instances is a property of their shape, and the one
+      // recognisable by name is exactly the set this migration is renaming.
+      const snapshot = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect,
+        names
+      );
+      return parentPointerTables({
+        columns: snapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        identifierCase,
+      });
     },
 
     indexNames: async (table): Promise<string[] | undefined> => {

@@ -34,6 +34,8 @@ function createWorld(initial: {
   columns?: Record<string, ObservedColumn[]>;
   pointers?: Record<string, string[]>;
   indexes?: Record<string, string[]>;
+  /** `_parent_table` values held by each field-group data table's rows. */
+  parents?: Record<string, string[]>;
 }) {
   const tables = new Set(initial.tables);
   const columns = new Map<string, ObservedColumn[]>(
@@ -44,6 +46,9 @@ function createWorld(initial: {
   );
   const indexes = new Map<string, string[]>(
     Object.entries(initial.indexes ?? {})
+  );
+  const parents = new Map<string, string[]>(
+    Object.entries(initial.parents ?? {})
   );
   const statements: string[] = [];
   let transactions = 0;
@@ -72,6 +77,14 @@ function createWorld(initial: {
         indexes.delete(rename[1]);
         indexes.set(rename[2], idx);
       }
+      // A table's rows travel with it. Keeping them keyed by the old name would
+      // make every pointer update after a rename look like it found no rows,
+      // which is the failure these tests exist to detect.
+      const rows = parents.get(rename[1]);
+      if (rows !== undefined) {
+        parents.delete(rename[1]);
+        parents.set(rename[2], rows);
+      }
       return;
     }
     const renameColumn =
@@ -87,6 +100,25 @@ function createWorld(initial: {
         throw new Error(`column "${renameColumn[2]}" does not exist`);
       }
       target.name = renameColumn[3];
+      return;
+    }
+    // Bound the same way, and matched as strictly: an embedded instance names
+    // its parent by physical table name, so this update is what keeps nested
+    // content reachable across a rename.
+    const reparent =
+      /^UPDATE "(.+?)" SET "_parent_table" = \$1 WHERE "_parent_table" = \$2$/.exec(
+        sql
+      );
+    if (reparent?.[1] !== undefined) {
+      if (!tables.has(reparent[1])) {
+        throw new Error(`relation "${reparent[1]}" does not exist`);
+      }
+      const [to, from] = params as [string, string];
+      const current = parents.get(reparent[1]) ?? [];
+      parents.set(
+        reparent[1],
+        current.map(value => (value === from ? to : value))
+      );
       return;
     }
     // `$1`/`$2`, because this world stands in for node-postgres and that is what
@@ -140,6 +172,12 @@ function createWorld(initial: {
     pointers: async (_s, registryTable) => [
       ...(pointers.get(registryTable) ?? []),
     ],
+    // Only tables this world was given rows for, and only while they exist:
+    // production decides the same set from the presence of the parent-pointer
+    // column, and a double that answered with a dropped table would certify an
+    // update the server rejects.
+    dataTables: async () =>
+      [...parents.keys()].filter(name => tables.has(name)),
     indexNames: async table => indexes.get(table),
   };
 
@@ -150,6 +188,7 @@ function createWorld(initial: {
     transactionCount: () => transactions,
     tableNames: () => [...tables],
     pointersOf: (registry: string) => [...(pointers.get(registry) ?? [])],
+    parentsOf: (table: string) => [...(parents.get(table) ?? [])],
     columnsOf: (table: string) => (columns.get(table) ?? []).map(c => c.name),
     dropIndexes: (table: string) => indexes.set(table, []),
   };
@@ -299,6 +338,203 @@ describe("rename steps", () => {
     expect(w.statements.filter(s => s.includes("RENAME TO"))).toHaveLength(0);
     expect(w.statements.filter(s => s.startsWith("UPDATE"))).toHaveLength(1);
     await expect(tableStep?.verify(w.session)).resolves.toBe(true);
+  });
+});
+
+// `_parent_table` stores a PHYSICAL table name, so a field group nested inside
+// another addresses its parent by the very name a rename changes. Left behind,
+// the rows survive and stop resolving: the read path matches on this column and
+// reports a parent it cannot match as no rows rather than as an error, so the
+// content is gone without anything failing.
+describe("parent pointers across a rename", () => {
+  const nested = buildMigrationManifest([
+    row({ slug: "inner", tableName: "comp_inner" }),
+    row({ slug: "outer", tableName: "comp_outer" }),
+  ]).entries;
+
+  // Sorted by stored table name, so `comp_inner` is planned first.
+  const OUTER_STEP = nested.findIndex(
+    entry => entry.kind === "table" && entry.from === "comp_outer"
+  );
+
+  function nestedWorld(over: Partial<Parameters<typeof createWorld>[0]> = {}) {
+    return createWorld({
+      tables: [LEGACY_REGISTRY, "comp_inner", "comp_outer"],
+      columns: {
+        comp_inner: [...TYPE_COLUMN],
+        comp_outer: [...TYPE_COLUMN],
+      },
+      pointers: { [LEGACY_REGISTRY]: ["comp_inner", "comp_outer"] },
+      // The inner group is embedded in the outer one, which is embedded in a
+      // collection. Only the first of those addresses a name this plan moves.
+      parents: { comp_inner: ["comp_outer"], comp_outer: ["dc_pages"] },
+      ...over,
+    });
+  }
+
+  function stepsFor(w: ReturnType<typeof createWorld>) {
+    return buildMigrationSteps({
+      entries: nested,
+      identifierCase: PRESERVING,
+      observer: w.observer,
+    });
+  }
+
+  // The scope trap: the stale string lives in the CHILD's table, not in the one
+  // being renamed. A rewrite scoped to the renamed table finds nothing to do.
+  it("rewrites the pointer stored in another table", async () => {
+    const w = nestedWorld();
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    expect(w.parentsOf("comp_inner")).toEqual(["fg_outer"]);
+    expect(w.tableNames()).toContain("fg_outer");
+  });
+
+  // Pairing is the point: apart, there is a window in which every child row
+  // addresses a table that is not there.
+  it("rewrites the pointer in the same transaction as the rename", async () => {
+    const w = nestedWorld();
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    // Both halves, and one transaction: a rewrite issued in a transaction of
+    // its own would count two, and no rewrite at all would count one just the
+    // same. Neither assertion means much without the other.
+    //
+    // One rewrite per field-group data table, because the stale string can be
+    // in any of them and nothing but a scan can say which.
+    expect(
+      w.statements.filter(s => s.includes('"_parent_table"'))
+    ).toHaveLength(2);
+    expect(w.statements.filter(s => s.includes("RENAME TO"))).toHaveLength(1);
+    expect(w.transactionCount()).toBe(1);
+  });
+
+  // 🔴 Ordering, not decoration. MySQL commits DDL implicitly, so the `RENAME
+  // TABLE` commits whatever preceded it in the transaction: issuing the pointer
+  // rewrite first is what guarantees a table that moved has its children's
+  // pointers moved too. After the rename they would be a separate commit.
+  it("issues the pointer rewrite before the rename", async () => {
+    const w = nestedWorld();
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    const rewrite = w.statements.findIndex(s => s.includes('"_parent_table"'));
+    const rename = w.statements.findIndex(s => s.includes("RENAME TO"));
+    expect(rewrite).toBeGreaterThanOrEqual(0);
+    expect(rename).toBeGreaterThanOrEqual(0);
+    expect(rewrite).toBeLessThan(rename);
+  });
+
+  // A name a rename does not touch is left exactly as it was. Rewriting on
+  // anything looser than an equality against the renamed name would corrupt the
+  // pointers of every top-level instance.
+  it("leaves a pointer at an untouched table alone", async () => {
+    const w = nestedWorld();
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    expect(w.parentsOf("fg_outer")).toEqual(["dc_pages"]);
+  });
+
+  // A field group whose table was named through `dbName` is left unrenamed and
+  // so appears in no rename entry -- but it still holds instances, and those
+  // instances can be nested inside a group that IS renamed. Deriving the tables
+  // to rewrite from the plan rather than from the storage would miss it.
+  it("rewrites a pointer held by a table the plan leaves alone", async () => {
+    const w = nestedWorld({
+      tables: [LEGACY_REGISTRY, "comp_inner", "comp_outer", "handwritten"],
+      parents: {
+        comp_inner: ["comp_outer"],
+        comp_outer: ["dc_pages"],
+        handwritten: ["comp_outer"],
+      },
+    });
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    expect(w.parentsOf("handwritten")).toEqual(["fg_outer"]);
+  });
+
+  // A group nested inside itself keeps its pointer in the table being renamed.
+  // Rewriting before the rename is what lets that row be addressed at all.
+  it("rewrites a pointer held by the renamed table itself", async () => {
+    const w = nestedWorld({
+      tables: [LEGACY_REGISTRY, "comp_inner", "comp_outer"],
+      parents: { comp_inner: ["comp_outer"], comp_outer: ["comp_outer"] },
+    });
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    expect(w.parentsOf("fg_outer")).toEqual(["fg_outer"]);
+  });
+
+  // MySQL can leave a step torn with the rename committed and nothing else. The
+  // resume has to finish the pointers without re-issuing DDL that would now fail.
+  it("finishes the pointers when the rename already committed", async () => {
+    const w = nestedWorld({
+      tables: [LEGACY_REGISTRY, "comp_inner", "fg_outer"],
+      columns: { comp_inner: [...TYPE_COLUMN], fg_outer: [...TYPE_COLUMN] },
+      parents: { comp_inner: ["comp_outer"], fg_outer: ["dc_pages"] },
+    });
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    expect(w.parentsOf("comp_inner")).toEqual(["fg_outer"]);
+    expect(w.statements.filter(s => s.includes("RENAME TO"))).toHaveLength(0);
+  });
+
+  // Re-running a completed step must not undo it, which an equality against the
+  // renamed-away name gives for free.
+  it("is a no-op once every pointer has moved", async () => {
+    const w = nestedWorld({
+      tables: [LEGACY_REGISTRY, "comp_inner", "fg_outer"],
+      columns: { comp_inner: [...TYPE_COLUMN], fg_outer: [...TYPE_COLUMN] },
+      parents: { comp_inner: ["fg_outer"], fg_outer: ["dc_pages"] },
+    });
+    await stepsFor(w)[OUTER_STEP]?.run(w.session);
+
+    expect(w.parentsOf("comp_inner")).toEqual(["fg_outer"]);
+  });
+
+  // A rollback has to restore the pointers as well as the names, or it produces
+  // legacy storage that reads as empty.
+  it("restores the legacy pointer going down", async () => {
+    const down = invertManifest(nested).entries;
+    const w = createWorld({
+      tables: [LEGACY_REGISTRY, "fg_inner", "fg_outer"],
+      columns: { fg_inner: [...TYPE_COLUMN], fg_outer: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["fg_inner", "fg_outer"] },
+      parents: { fg_inner: ["fg_outer"], fg_outer: ["dc_pages"] },
+    });
+    const steps = buildMigrationSteps({
+      entries: down,
+      identifierCase: PRESERVING,
+      observer: w.observer,
+    });
+    const index = down.findIndex(
+      entry => entry.kind === "table" && entry.from === "fg_outer"
+    );
+    await steps[index]?.run(w.session);
+
+    expect(w.parentsOf("fg_inner")).toEqual(["comp_outer"]);
+  });
+
+  // The registry is not addressed by any instance, and the discriminator rename
+  // moves no table. Issuing a rewrite for either would scan every table for a
+  // name no row can hold.
+  it("rewrites nothing for the registry or a column entry", async () => {
+    const w = nestedWorld();
+    const registryIndex = nested.findIndex(e => e.kind === "registry");
+    await stepsFor(w)[registryIndex]?.run(w.session);
+    expect(w.statements.filter(s => s.includes('"_parent_table"'))).toEqual([]);
+
+    // A column entry names its table by the post-rename name, so it is only
+    // runnable once that rename has landed.
+    const renamed = nestedWorld({
+      tables: [LEGACY_REGISTRY, "fg_inner", "comp_outer"],
+      columns: { fg_inner: [...TYPE_COLUMN], comp_outer: [...TYPE_COLUMN] },
+      parents: { fg_inner: ["comp_outer"], comp_outer: ["dc_pages"] },
+    });
+    const columnIndex = nested.findIndex(e => e.kind === "column");
+    await stepsFor(renamed)[columnIndex]?.run(renamed.session);
+    expect(
+      renamed.statements.filter(s => s.includes('"_parent_table"'))
+    ).toEqual([]);
   });
 });
 
