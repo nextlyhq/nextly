@@ -375,6 +375,11 @@ export function getMinSearchLength(
  * access, the caller -- is documented against the configured value, so the
  * decode belongs before the first of them.
  *
+ * The `locale=all` shape is a language-keyed map, but only a LOCALIZED field
+ * is ever read that way. A shared JSON field is a plain object on a driver that
+ * parses JSON, so treating every object as a locale map would parse its own
+ * string properties and hand back values the row never held.
+ *
  * Runs exactly once per read. A second pass cannot tell an already-decoded
  * string from storage encoding, so a field holding the string `"123"` would
  * decode to the number `123` on the second visit; `"true"` and `"null"` fail
@@ -387,6 +392,7 @@ export function decodeJsonFieldValues(
     type: string;
     hasMany?: boolean;
     relationTo?: unknown;
+    localized?: boolean;
   }[],
   locale?: string
 ): void {
@@ -402,6 +408,7 @@ export function decodeJsonFieldValues(
         }
       } else if (
         locale === "all" &&
+        field.localized === true &&
         value !== null &&
         typeof value === "object"
       ) {

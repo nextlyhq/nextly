@@ -39,10 +39,7 @@ import type {
 } from "../../../services/collections/related-row-read-context";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import {
-  applyFieldReadAccess,
-  runFieldHooks,
-} from "../../../shared/lib/field-level-registry";
+import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -53,7 +50,6 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
-import { decodeJsonFieldValues, isJsonFieldType } from "./collection-utils";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -2840,90 +2836,7 @@ export class CollectionRelationshipService extends BaseService {
         stripPasswordFieldValues(row, targetFields);
       }
     }
-    // Related rows come straight from the table, so on SQLite their JSON
-    // columns are still strings. A field hook is documented against the
-    // configured value, so the decode is scoped to the hook pass: a related row
-    // keeps its stored encoding on the way out, and the access pass below reads
-    // inside that encoding.
-    await this.withDecodedJsonFields(rows, targetFields, () =>
-      this.runRelatedRowFieldHooks(targetCollection, rows, access)
-    );
     await this.applyRelatedRowReadAccess(targetCollection, rows, access);
-  }
-
-  /**
-   * Decode the JSON-encoded fields of `rows`, run `work`, then put the encoding
-   * back.
-   *
-   * A related row carries its stored shape all the way out -- redaction reads
-   * and rewrites inside the encoded string, and callers receive the column as
-   * it is stored. Field hooks are the exception: they are declared against the
-   * configured value, so they see it decoded and whatever they leave behind is
-   * re-encoded before anything downstream looks at it.
-   *
-   * Only fields that arrived encoded are restored, so a value that was never a
-   * string is left as it is, as is one whose text was not JSON after all.
-   */
-  private async withDecodedJsonFields<T>(
-    rows: Record<string, unknown>[],
-    fields: FieldDefinition[],
-    work: () => Promise<T>
-  ): Promise<T> {
-    const encoded: Array<[Record<string, unknown>, string]> = [];
-    for (const row of rows) {
-      for (const field of fields) {
-        if (!isJsonFieldType(field.type, field)) continue;
-        if (typeof row[field.name] === "string")
-          encoded.push([row, field.name]);
-      }
-    }
-    decodeJsonFieldValues(rows, fields);
-    try {
-      return await work();
-    } finally {
-      for (const [row, name] of encoded) {
-        if (typeof row[name] !== "string")
-          row[name] = JSON.stringify(row[name]);
-      }
-    }
-  }
-
-  /**
-   * Run the TARGET collection's field-level `afterRead` hooks over related rows.
-   *
-   * These hooks are how a field masks or rewrites itself on the way out -- the
-   * transforming half of the same pair whose access half is
-   * `applyRelatedRowReadAccess`. A direct read of the target runs both, so
-   * skipping them here hands a caller through a relationship the value the
-   * target's own endpoint would never return.
-   *
-   * Ordered before the access pass, exactly as a direct read orders them, so a
-   * field the rules deny is dropped after its hook has run rather than being
-   * transformed once it is already gone.
-   *
-   * Gated on the same flag as that access pass, because a caller clearing it is
-   * not asking for a lighter read: it is assembling the evidence a
-   * document-dependent rule is judged on, and wants the row unredacted. Running
-   * these hooks there would let a masking hook rewrite the evidence before the
-   * rule sees it, and would fire their side effects for a request that has not
-   * been authorized yet.
-   */
-  private async runRelatedRowFieldHooks(
-    targetCollection: string,
-    rows: Record<string, unknown>[],
-    access: RelatedRowAccess
-  ): Promise<void> {
-    if (!access.enforceFieldAccess) return;
-    for (const row of rows) {
-      await runFieldHooks({
-        kind: "collection",
-        slug: targetCollection,
-        phase: "afterRead",
-        data: row,
-        operation: "read",
-        user: access.user,
-      });
-    }
   }
 
   /**

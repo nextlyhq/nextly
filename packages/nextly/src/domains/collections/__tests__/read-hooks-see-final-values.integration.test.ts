@@ -1,12 +1,12 @@
-// What a read hook is handed, and where a target's own hooks reach.
+// What a read hook is handed.
 //
-// Two halves of one promise: a hook is documented against the value the field
-// was configured with, and a related row is documented as getting the target
-// collection's own treatment. Both were true only for a direct read.
+// A hook is documented against the value the field was configured with, but
+// `afterRead` ran before JSON columns were decoded, so on SQLite every handler
+// received the storage encoding instead.
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, json, relationship, text } from "../../../config";
+import { defineCollection, json, text } from "../../../config";
 import { registerHook, unregisterHook } from "../../../hooks";
 import type { HookHandler } from "../../../hooks/types";
 import {
@@ -17,12 +17,6 @@ import {
 // Integration files share fixed system-table names, so this suite keeps its own
 // slugs to avoid colliding with a concurrently-running file.
 const DOCS = "finalval_docs";
-const AUTHORS = "finalval_authors";
-const POSTS = "finalval_posts";
-
-// What the related-row field hook was handed. The hook is declared inside the
-// fixture, so the assertion reads it from here.
-const profileHookSaw: unknown[] = [];
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -61,46 +55,6 @@ async function boot(): Promise<TestNextly> {
       defineCollection({
         slug: DOCS,
         fields: [text({ name: "title" }), json({ name: "config" })],
-      }),
-      defineCollection({
-        slug: AUTHORS,
-        fields: [
-          text({ name: "name" }),
-          // The transforming half of a field's read protections: the value the
-          // target's own endpoint returns is the masked one.
-          text({
-            name: "secret",
-            hooks: { afterRead: [() => "REDACTED"] },
-          }),
-          // A hook doing ordinary object work. Handed the storage encoding it
-          // throws, and the relationship fetch reads the failure as an absent
-          // row.
-          json({
-            name: "profile",
-            hooks: {
-              afterRead: [
-                ({ value }) => {
-                  // A row that has no profile at all is not what this is
-                  // about, so it passes through.
-                  if (value === null || value === undefined) return value;
-                  // Ordinary object work. Handed the storage encoding, `tags`
-                  // is undefined and this throws -- and the relationship fetch
-                  // reads that failure as an absent row.
-                  const v = value as { tags: string[] };
-                  profileHookSaw.push(v.tags.length);
-                  return value;
-                },
-              ],
-            },
-          }),
-        ],
-      }),
-      defineCollection({
-        slug: POSTS,
-        fields: [
-          text({ name: "title" }),
-          relationship({ name: "author", relationTo: AUTHORS }),
-        ],
       }),
     ],
   });
@@ -168,119 +122,6 @@ describe("read hooks see the values a caller sees", () => {
     } finally {
       unregisterHook("afterRead", DOCS, record);
     }
-  });
-
-  it("a target's field afterRead applies to a row reached through a relationship", async () => {
-    // The control below shows the target masks the field on its own endpoint.
-    // Reaching the same row through a relationship must not be the way around
-    // that: expansion may be stricter than the target's endpoint, never looser.
-    const t = await boot();
-    await t.nextly.create({
-      collection: AUTHORS,
-      data: { name: "a", secret: "TOP_SECRET" },
-    });
-    const authorId = await onlyId(t, AUTHORS);
-    await t.nextly.create({
-      collection: POSTS,
-      data: { title: "p", author: authorId },
-    });
-    const postId = await onlyId(t, POSTS);
-
-    // Control: the target's own endpoint masks it.
-    const direct = await handlerOf(t).getEntry({
-      collectionName: AUTHORS,
-      entryId: authorId,
-      overrideAccess: true,
-    });
-    expect(direct.data!.secret).toBe("REDACTED");
-
-    const expanded = await handlerOf(t).getEntry({
-      collectionName: POSTS,
-      entryId: postId,
-      overrideAccess: true,
-      depth: 1,
-    });
-
-    const related = expanded.data!.author as Record<string, unknown>;
-    expect(related).toBeTruthy();
-    expect(related.secret).toBe("REDACTED");
-  });
-  it("a target's field hook is handed decoded values through a relationship", async () => {
-    // Related rows are read straight from the table, so on SQLite their JSON
-    // columns are strings. A hook doing object work throws on one, and the
-    // relationship fetch reports that failure as an absent row -- the relation
-    // disappears rather than erroring.
-    profileHookSaw.length = 0;
-    const t = await boot();
-    await t.nextly.create({
-      collection: AUTHORS,
-      data: { name: "a", secret: "s", profile: { tags: ["x", "y"] } },
-    });
-    const authorId = await onlyId(t, AUTHORS);
-    await t.nextly.create({
-      collection: POSTS,
-      data: { title: "p", author: authorId },
-    });
-    const postId = await onlyId(t, POSTS);
-
-    // The reads above went through the DIRECT path, which decodes and runs the
-    // same hook. Cleared here so what follows can only have come from the
-    // expansion.
-    profileHookSaw.length = 0;
-
-    const expanded = await handlerOf(t).getEntry({
-      collectionName: POSTS,
-      entryId: postId,
-      overrideAccess: true,
-      depth: 1,
-    });
-
-    // The relation survived, and the hook read the tags rather than choking on
-    // a string. The row itself keeps its stored encoding on the way out, which
-    // is why this asserts what the hook was handed.
-    expect(expanded.data!.author).toBeTruthy();
-    expect(profileHookSaw).toContain(2);
-  });
-
-  it("related field hooks stay out of an evidence-gathering read", async () => {
-    // A caller clearing `enforceFieldAccess` is assembling the row a
-    // document-dependent access rule is judged on, and wants it unredacted. A
-    // masking hook running there would rewrite the evidence before the rule
-    // sees it, and would fire its side effects for a request not yet allowed.
-    const t = await boot();
-    await t.nextly.create({
-      collection: AUTHORS,
-      data: { name: "a", secret: "TOP_SECRET", profile: { tags: [] } },
-    });
-    const authorId = await onlyId(t, AUTHORS);
-
-    const service = t.getService("relationshipService") as unknown as {
-      batchFetchRelatedEntries: (
-        target: string,
-        ids: string[],
-        field: Record<string, unknown>,
-        access: Record<string, unknown>
-      ) => Promise<Map<string, Record<string, unknown>>>;
-    };
-    const field = { name: "author", type: "relationship", relationTo: AUTHORS };
-
-    const evidence = await service.batchFetchRelatedEntries(
-      AUTHORS,
-      [authorId],
-      field,
-      { enforceFieldAccess: false, overrideAccess: true }
-    );
-    expect(evidence.get(authorId)!.secret).toBe("TOP_SECRET");
-
-    // The control: the same fetch for a real read does mask it, so the
-    // difference is the flag and not a hook that never ran.
-    const served = await service.batchFetchRelatedEntries(
-      AUTHORS,
-      [authorId],
-      field,
-      { enforceFieldAccess: true, overrideAccess: true }
-    );
-    expect(served.get(authorId)!.secret).toBe("REDACTED");
   });
 
   it("a value a hook returns is not decoded a second time", async () => {
