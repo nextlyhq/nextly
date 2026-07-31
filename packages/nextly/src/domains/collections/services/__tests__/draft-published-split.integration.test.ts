@@ -1017,6 +1017,84 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(live.secret).not.toBe("draft-secret");
   });
 
+  it("does not promote a caller's component value a field-access rule denies", async () => {
+    // The scalar case above is caught by the merged access pass, but a component
+    // (and m2m) value is EXTRACTED out of the caller payload before promotion, so
+    // it must be folded back into the access-checked document or the caller's copy
+    // is persisted after the pass denies the draft's copy.
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({ slug: "promo", fields: [text({ name: "label" })] }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+          },
+          fields: [
+            text({ name: "approved" }),
+            fieldGroup({
+              name: "promo",
+              component: "promo",
+              // Denied only when its sibling `approved` is explicitly "no", so a
+              // publish that omits `approved` passes the caller-payload gate while
+              // the pending draft's `approved: "no"` must still deny it.
+              access: {
+                update: (args: { data?: { approved?: unknown } }) =>
+                  args.data?.approved !== "no",
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      { approved: "yes", promo: { label: "live" }, status: "published" }
+    );
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // A trusted draft sets approved="no" (which denies promo) and stages a promo.
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { approved: "no", promo: { label: "draft" } }
+    );
+
+    // A non-override editor publishes, carrying a new promo but NOT `approved`: the
+    // caller-payload gate allows promo (approved absent), but the merged document
+    // carries the draft's `approved: "no"`, so the extracted component must be
+    // re-denied against that final value and NOT promoted.
+    const res = await entries.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        user: { id: "editor" },
+        overrideAccess: false,
+      },
+      { status: "published", promo: { label: "caller" } }
+    );
+    expect(res.success).toBe(true);
+
+    const readBack = await entries.getEntry({
+      collectionName: COLLECTION,
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect((readBack.data as { approved?: string }).approved).toBe("no");
+    const promo = (readBack.data as { promo?: { label?: string } }).promo;
+    expect(promo?.label).toBe("live");
+  });
+
   it("deletes the working-draft sidecar when the entry is deleted", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };

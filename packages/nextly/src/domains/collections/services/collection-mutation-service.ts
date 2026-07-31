@@ -1484,6 +1484,71 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Assemble the document a draft promotion actually persists: the draft with the
+   * caller's scalars overlaid, the caller's single-component patches merged onto
+   * the draft's components (a patch wins per sub-field, recursing into nested
+   * single components; a dynamic zone, a repeatable component, and a many-to-many
+   * set are replaced whole). `shapeWriteParts` extracts component and m2m fields
+   * out of the caller payload before promotion, so field-level write access and
+   * validation would otherwise judge the draft's OLD copy of those fields while
+   * the caller's copy is folded back in and persisted. Building the full document
+   * here lets the access and validation passes see the real final values, at every
+   * depth, for column, component, and many-to-many fields alike.
+   */
+  private assemblePromotedDocument(
+    draftInput: Record<string, unknown>,
+    callerScalars: Record<string, unknown>,
+    callerComponentData: Record<string, unknown>,
+    callerManyToManyData: Record<string, string[]>,
+    fields: FieldDefinition[],
+    manyToManyFields: FieldDefinition[],
+    componentSchemas: ComponentSchemas | null
+  ): Record<string, unknown> {
+    // Read the draft's own component and m2m values straight off the draft
+    // document, NOT through `shapeWriteParts` — that serializes groups/json to
+    // strings and would hide a nested field from the access and validation passes
+    // that run on the returned document. These only seed the merges below; the
+    // merged values overwrite the same keys in the returned document.
+    const draftComponents: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (!isFieldGroupField(field)) continue;
+      const name = (field as { name?: unknown }).name;
+      if (typeof name === "string" && name in draftInput) {
+        draftComponents[name] = draftInput[name];
+      }
+    }
+    const draftManyToMany: Record<string, string[]> = {};
+    for (const field of manyToManyFields) {
+      if (!(field.name in draftInput)) continue;
+      const value = draftInput[field.name];
+      draftManyToMany[field.name] = Array.isArray(value)
+        ? (value as string[])
+        : value == null
+          ? []
+          : [value as string];
+    }
+    // Caller scalars win over the draft; the caller's single-component patches
+    // merge onto the draft's components (a patch wins per sub-field); the caller's
+    // m2m replaces the draft's.
+    const mergedComponents = this.mergeSingleComponentPatches(
+      draftComponents,
+      callerComponentData,
+      fields as unknown as FieldConfig[],
+      componentSchemas
+    );
+    const mergedManyToMany = {
+      ...draftManyToMany,
+      ...callerManyToManyData,
+    };
+    return {
+      ...draftInput,
+      ...callerScalars,
+      ...mergedComponents,
+      ...mergedManyToMany,
+    };
+  }
+
+  /**
    * Overlay `patch` onto `base`, recursively merging single (non-repeatable)
    * component objects instead of replacing them.
    *
@@ -4648,15 +4713,24 @@ export class CollectionMutationService extends BaseService {
             fields as unknown as FieldConfig[],
             promoteRestoreCtx
           );
-          const merged = { ...draftInput, ...finalData };
-          // Field-level write access on the MERGED promoted payload, so the
-          // validation below gates only the values the publisher may write: the
-          // caller gate above ran on the caller's payload only (a publish sends
-          // just the status), but promote folds the whole draft in. The
-          // authoritative filtering runs again on the locked draft inside the
-          // transaction (see the promote block), so a denied value nested in a
-          // group or repeater is dropped too, not only a fully denied top-level
-          // container.
+          // Assemble the full document the promotion will persist so both the
+          // access filter and the validation below judge the real final values.
+          // The caller gate above ran on the caller's payload only (a publish
+          // sends just the status), and `shapeWriteParts` has already pulled the
+          // caller's component and m2m fields out of `finalData`; folding them back
+          // in gates a denied value at every depth (top-level, or nested in a
+          // group/repeater/component) and covers component and m2m fields, not only
+          // columns. The authoritative pass runs again on the locked draft in the
+          // transaction (see the promote block).
+          const merged = this.assemblePromotedDocument(
+            draftInput,
+            finalData,
+            componentFieldData,
+            manyToManyData,
+            fields,
+            manyToManyFields,
+            splitComponentSchemas
+          );
           await applyFieldWriteAccess({
             kind: "collection",
             slug: params.collectionName,
@@ -5071,16 +5145,26 @@ export class CollectionMutationService extends BaseService {
                 fields as unknown as FieldConfig[],
                 promoteRestoreCtx
               );
-              // Merge the locked draft with the caller's payload (caller wins)
-              // BEFORE filtering, then re-apply the current field-level write
-              // access to that authoritative merged document. A rule that depends
-              // on a sibling the publish patch supplies (e.g. a field writable
-              // only when `approved` is true, where the publish sets it false) is
-              // then judged on the real final values, and a denied value is
-              // dropped at any depth (top-level or nested in a group/repeater/
-              // component). `applyFieldWriteAccess` is already used inside the
-              // caller-owned transaction paths, so running it here is consistent.
-              const mergedPromoteData = { ...draftInput, ...finalData };
+              // Assemble the full document the promotion persists (the locked
+              // draft, the caller's scalars overlaid, the caller's single-component
+              // patches merged onto the draft's components, and the caller's m2m),
+              // then filter it through the current field-level write access. A rule
+              // that depends on a sibling the publish patch supplies (e.g. a field
+              // writable only when `approved` is true, where the publish sets it
+              // false) is judged on the real final values, and a denied value is
+              // dropped at any depth for column, component, and m2m fields alike.
+              // Re-extracting the write parts from the FILTERED document keeps a
+              // denied component/m2m value out of the persisted parts, which the
+              // earlier after-access merge would have restored.
+              const mergedPromoteData = this.assemblePromotedDocument(
+                draftInput,
+                finalData,
+                componentFieldData,
+                manyToManyData,
+                fields,
+                manyToManyFields,
+                splitComponentSchemas
+              );
               await applyFieldWriteAccess({
                 kind: "collection",
                 slug: params.collectionName,
@@ -5097,22 +5181,8 @@ export class CollectionMutationService extends BaseService {
                 collection
               );
               finalData = mergedPromoteData;
-              // Merge a patch-shaped single-component publish (the caller may
-              // send only the sub-fields it changed) onto the draft's component
-              // rather than replacing it, so a pending sub-field edit is promoted
-              // instead of reverting to the live value. Recurses into nested
-              // single components; a dynamic zone and a repeatable component are
-              // replaced whole.
-              componentFieldData = this.mergeSingleComponentPatches(
-                draftParts.componentFieldData,
-                componentFieldData,
-                fields as unknown as FieldConfig[],
-                splitComponentSchemas
-              );
-              manyToManyData = {
-                ...draftParts.manyToManyData,
-                ...manyToManyData,
-              };
+              componentFieldData = draftParts.componentFieldData;
+              manyToManyData = draftParts.manyToManyData;
               updatePayload = {
                 ...stripImmutableSystemFields(finalData),
                 updatedAt: updatePayload.updatedAt,
