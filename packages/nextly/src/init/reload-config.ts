@@ -631,13 +631,19 @@ async function ensureLocalizedCompanionsForReload(
    * columns a reconcile would be looking for.
    */
   phase: "beforeApply" | "afterApply" = "afterApply"
-): Promise<{ preservationFailed: string[] }> {
+): Promise<{ preservationFailed: string[]; schemaChanged: boolean }> {
   // Entities whose content could not be copied into their companion. The caller must not let the
   // apply run for these: the copy is the only thing standing between the apply's DROP and the
   // values it would take with it.
   const preservationFailed: string[] = [];
+  // Whether this pass altered any main table. A transition can relax a retained column, and on
+  // SQLite — which cannot change nullability at all — it drops one instead. The caller cached a
+  // live snapshot before this ran, and the pipeline reuses it, so an apply working from that
+  // snapshot would re-emit a DROP for a column that is already gone.
+  let schemaChanged = false;
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
-  if (process.env.NODE_ENV === "production") return { preservationFailed };
+  if (process.env.NODE_ENV === "production")
+    return { preservationFailed, schemaChanged };
 
   const {
     ensureCompanionTable,
@@ -741,7 +747,7 @@ async function ensureLocalizedCompanionsForReload(
         // creates this entity's companion once the apply has produced its main table.
         continue;
       }
-      await ensureCompanionTable(
+      const provisioned = await ensureCompanionTable(
         adapter,
         {
           slug: entity.slug,
@@ -795,6 +801,10 @@ async function ensureLocalizedCompanionsForReload(
       // function has already returned: this runs only under `next dev`. The reconcile is
       // additive, so it never removes a column even when a field stops being localized.
       //
+      // A transition ran, so the main table may no longer look the way the caller's cached
+      // snapshot says. Only tracked before the apply — afterwards there is no apply left to
+      // mislead.
+      if (provisioned && phase === "beforeApply") schemaChanged = true;
       // Skipped before the apply, which is what creates the columns a reconcile would be looking
       // for. Running it early would compare the companion against a main table the apply has not
       // finished shaping.
@@ -819,7 +829,7 @@ async function ensureLocalizedCompanionsForReload(
     }
   }
 
-  return { preservationFailed };
+  return { preservationFailed, schemaChanged };
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -1680,6 +1690,13 @@ async function applyReload(opts?: {
     );
     return;
   }
+
+  // The snapshot registered above was taken before the pass ran, and the pipeline reuses it rather
+  // than introspecting again. A transition can relax a retained column — and on SQLite, which
+  // cannot change nullability, it drops one — so an apply working from that snapshot re-emits a
+  // DROP for a column that is already gone and fails. Dropping the cache costs one introspection,
+  // and only in the cycle where a transition actually happened.
+  if (preservation.schemaChanged) clearLiveSnapshots();
 
   const applyResult = await apply(desired, "code", {
     promptChannel: "terminal",

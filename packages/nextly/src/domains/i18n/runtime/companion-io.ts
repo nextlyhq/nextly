@@ -937,8 +937,9 @@ export async function ensureCompanionTable(
     // companion over that content. Reads resolve through the companion once it exists, so an empty
     // one hides everything already written — and because creation is a race, the first caller to
     // win decides. Boot-time provisioning has no locale to offer, so it defers here and leaves the
-    // entity to the path that does; #382's write guard keeps a non-default write from doing damage
-    // in the meantime.
+    // entity to the path that does. Nothing is at risk in the meantime: a write in a language
+    // other than the default is refused while the companion is absent, so the main table's values
+    // cannot be overwritten by one.
     // What makes creating here unsafe is CONTENT, not shape. An entity with no rows has nothing to
     // hide, so a locale-less caller may create its companion freely — which is the ordinary case
     // for a new entity, and refusing it would leave every such entity without a companion and its

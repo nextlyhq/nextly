@@ -716,7 +716,13 @@ export class CollectionMetadataService extends BaseService {
 
         if (this.isDevelopment()) {
           try {
-            await this.fileManager.runMigration(updateArtifacts.migrationSQL);
+            // The file is what a fresh database will replay; this is what THIS one needs. They
+            // differ only where unattended provisioning left the local schema in a shape no
+            // migration history produces, and running the file here would then fail on a column
+            // that is already present.
+            await this.fileManager.runMigration(
+              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
+            );
             // Get collection to access table name for verification
             const existingCollection =
               await this.collectionService.getCollection(params.collectionName);
