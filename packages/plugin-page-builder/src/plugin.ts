@@ -10,8 +10,8 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   BLOCK_SERVICE,
-  blockRegistry,
   createBlockRegistrationService,
+  registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
@@ -48,15 +48,15 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       description:
         "Build pages visually from blocks with drag-and-drop editing",
     },
-    // Resolving the block registry is what empties it for the boot, and the
-    // service is lazy: on a boot where nothing contributes, no contributor
-    // resolves it and the previous boot's blocks would survive. Resolving it
-    // here makes the reset unconditional. The handle is deliberately unused —
-    // the page builder registers no blocks of its own — and resolving from
-    // `init` cannot wipe a contributor that ran first, because the factory is
-    // memoized for the boot and clears only on its first resolution.
+    // Registers what other plugins DECLARED, and resolves the registry service
+    // on the way, which is what empties it for the boot. The service is lazy:
+    // on a boot where nothing contributes, nobody else resolves it and the
+    // previous boot's blocks would survive. Doing it here makes the reset
+    // unconditional, and cannot wipe a contributor whose `init` ran first,
+    // because the factory is memoized for the boot and clears only on its
+    // first resolution.
     init: ctx => {
-      blockRegistry(ctx);
+      registerDeclaredBlocks(ctx);
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no

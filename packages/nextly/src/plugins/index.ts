@@ -9,6 +9,8 @@
  */
 
 export { AdminPlacement } from "./admin-placement";
+export { collectDeclarations } from "./declarations";
+export type { PluginDeclaration } from "./declarations";
 export type { AdminPlacement as AdminPlacementType } from "./admin-placement";
 
 export {
