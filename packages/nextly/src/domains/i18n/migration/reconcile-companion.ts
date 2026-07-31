@@ -204,8 +204,13 @@ export interface CompanionTransitionArgs {
    * `_status` before this save. Deriving it from the DESIRED status instead would emit a copy from
    * a `_status` the old companion never had, into a `status` main has not been given yet, because a
    * disable deliberately runs the companion transition before the shared ALTER that adds it.
+   *
+   * REQUIRED rather than optional, and that is the point. An optional history signal is one a
+   * caller can omit without noticing, and the copy it gates then silently stops happening for that
+   * caller alone — which is exactly how this went wrong once already. `undefined` is not a
+   * shorthand for "no status"; a caller that genuinely has none says `false`.
    */
-  wasStatus?: boolean;
+  wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
 }

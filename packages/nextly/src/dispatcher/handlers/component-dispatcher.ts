@@ -240,6 +240,8 @@ async function reconcileComponentCompanion(args: {
     defaultLocale,
     // Components are never Draft/Published — companion has no `_status`.
     status: false,
+    // And never had one, so the disable restore has no status to carry back.
+    wasStatus: false,
     wasLocalized,
     isLocalized: localized,
     oldFields,

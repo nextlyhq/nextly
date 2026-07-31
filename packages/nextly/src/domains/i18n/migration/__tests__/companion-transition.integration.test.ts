@@ -307,9 +307,9 @@ describe("buildCompanionTransitionStatements — disable", () => {
  * published under cannot be corrected afterwards: a draft becomes publicly visible, or live content
  * disappears.
  *
- * Driven against a real database rather than asserted on SQL text, because the defect this replaces
- * was a condition that could never be true — a text assertion would have kept passing while the
- * copy never ran.
+ * Driven against a real database rather than asserted on statement text: the point is that the
+ * generated statements EXECUTE and leave main holding the restored row's status. A text assertion
+ * can only say the statement was emitted, which is true of a copy that never runs.
  */
 describe("buildCompanionTransitionStatements — disable with Draft/Published", () => {
   const withStatus = (over: Record<string, unknown>) => ({
@@ -339,8 +339,8 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
       })
     );
     run(enable.statements);
-    // Published under a language that is not the default, which is where main is deliberately left
-    // alone while the entity is localized.
+    // The row is published in `en`, the default locale — the row a disable restores onto main —
+    // while main itself sits at `draft`, which is what makes the two distinguishable afterwards.
     sqlite
       .prepare(
         `UPDATE "single_hero_locales" SET "_status" = 'published' WHERE "_locale" = 'en'`
@@ -368,9 +368,9 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
   });
 
   it("leaves status alone when the entity did not have it before this save", () => {
-    // Turning Draft/Published ON in the same save that disables localization. The old companion has
-    // no `_status` and main has not been given `status` yet — a disable runs the companion
-    // transition before the shared ALTER — so a copy here would fail the whole migration.
+    // Turning Draft/Published ON in the same save that disables localization. The old companion
+    // has no `_status` and main has not been given `status` yet, because a disable runs the
+    // companion transition before the shared ALTER, so a copy here would fail the migration.
     const enable = buildCompanionTransitionStatements(
       withStatus({
         status: false,
