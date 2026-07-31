@@ -335,10 +335,19 @@ export function buildCompanionTransitionStatements(
         // would have this restore read a `_status` the old companion never had — and main receive
         // it before the shared ALTER that adds `status`, because a disable deliberately runs the
         // companion transition first. Both columns have to be there already.
-        // Whether both sides HAD the column before this save. `existingMainColumns` cannot answer
-        // it: it is built from localized user fields, so it never contains `status`, and it is
-        // cleared for the artefact so a migration file cannot depend on local introspection.
-        restoreStatus: args.wasStatus === true,
+        // The column has to be there BEFORE this save and still be there after.
+        //
+        // Before, because the copy reads the companion's `_status` and writes main's `status`, and
+        // neither exists for an entity that did not have Draft/Published. `existingMainColumns`
+        // cannot answer that: it is built from localized user fields, so it never contains
+        // `status`, and it is cleared for the artefact so a migration file cannot depend on local
+        // introspection.
+        //
+        // After, because turning Draft/Published off in the same save drops main's `status`, and
+        // whether that ALTER lands before or after this plan differs by flow — the single schema
+        // path runs it first, the collection path runs it second. Restoring into a column that is
+        // being removed is pointless in both, and fatal in the one that removes it first.
+        restoreStatus: args.wasStatus === true && status === true,
       }),
       needsArchive: true,
       companionDropped: true,

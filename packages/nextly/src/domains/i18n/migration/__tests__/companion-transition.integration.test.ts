@@ -367,6 +367,38 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
     expect(row.status).toBe("published");
   });
 
+  it("leaves status alone when Draft/Published is turned off in the same save", () => {
+    // Main's `status` column is being dropped by the shared ALTER, and whether that runs before or
+    // after this plan differs by flow: the single schema path applies it first, the collection path
+    // second. Copying into a column that is going away is pointless in both and fails outright in
+    // the one that removes it first, leaving the schema half-applied.
+    const enable = buildCompanionTransitionStatements(
+      withStatus({
+        status: true,
+        wasLocalized: false,
+        isLocalized: true,
+        companionExists: false,
+      })
+    );
+    sqlite.prepare(`ALTER TABLE "single_hero" ADD COLUMN "status" text`).run();
+    sqlite.prepare(`UPDATE "single_hero" SET "status" = 'draft'`).run();
+    run(enable.statements);
+
+    const plan = buildCompanionTransitionStatements(
+      withStatus({
+        // Localization AND Draft/Published both going off.
+        status: false,
+        wasStatus: true,
+        wasLocalized: true,
+        isLocalized: false,
+        companionExists: true,
+        companionHasStatus: true,
+      })
+    );
+
+    expect(plan.statements.join("\n")).not.toContain(`"_status"`);
+  });
+
   it("leaves status alone when the entity did not have it before this save", () => {
     // Turning Draft/Published ON in the same save that disables localization. The old companion
     // has no `_status` and main has not been given `status` yet, because a disable runs the
