@@ -328,6 +328,59 @@ export class CollectionQueryService extends BaseService {
    * Build the localized-query context for the search/where builders, or `null` when the
    * collection isn't localized. Uses the requested locale (chain head) for EXISTS filtering.
    */
+  /**
+   * Run the hooks that precede a where-filtered read and return the filter they
+   * settled on.
+   *
+   * The chain is the caller's own filter, then `beforeOperation`'s `args.where`,
+   * then `beforeRead`'s return, and each stage is shown the previous stage's
+   * result. Stating it in one place matters twice over: a hook cannot narrow a
+   * filter it was never shown, and a list and its count have to narrow
+   * identically or the total describes rows the list correctly withheld.
+   *
+   * The `CollectionsListQuery` filter seam runs after this, on what this
+   * returns.
+   *
+   * With no hooks registered both calls hand back what they were given, so the
+   * caller's filter reaches the query untouched.
+   */
+  private async resolveReadWhere(params: {
+    collectionName: string;
+    where: WhereFilter | undefined;
+    user?: UserContext;
+    sharedContext: Record<string, unknown>;
+  }): Promise<WhereFilter | undefined> {
+    const beforeOpArgs =
+      await this.hookService.hookRegistry.executeBeforeOperation({
+        collection: params.collectionName,
+        operation: "read",
+        args: { where: params.where },
+        user: params.user
+          ? { id: params.user.id, email: params.user.email }
+          : undefined,
+        context: params.sharedContext,
+      });
+
+    const afterBeforeOperation = (beforeOpArgs?.where ?? params.where) as
+      | WhereFilter
+      | undefined;
+
+    const beforeReadResult = await this.hookService.hookRegistry.execute(
+      "beforeRead",
+      this.hookService.buildHookContext({
+        collection: params.collectionName,
+        operation: "read" as const,
+        data: afterBeforeOperation,
+        user: params.user,
+        context: params.sharedContext,
+      })
+    );
+
+    // `execute` returns the data it was given when nothing is registered, so a
+    // read with no hooks is unchanged rather than emptied.
+    return beforeReadResult ?? afterBeforeOperation;
+  }
+
   private buildLocalizedQueryContext(
     companion: CompanionSchema | null,
     localeChain: string[] | null,
@@ -573,44 +626,27 @@ export class CollectionQueryService extends BaseService {
       // Seed with caller's context if provided (e.g., from Direct API)
       const sharedContext: Record<string, unknown> = { ...params.context };
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "read",
-          args: { where: {} }, // List operations can have where clause modified
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-        });
-
-      // Extract modified where clause if returned (for future query filtering)
-      const whereFromHook = beforeOpArgs?.where;
-
-      // Execute beforeRead hooks
-      // Hooks can be used to modify query parameters or add filters
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "read" as const,
-        data: whereFromHook ?? {}, // Pass where clause as data for beforeRead
+      // The read hooks settle the filter before any seam or constraint touches
+      // it, so `beforeOperation` and `beforeRead` both narrow the rows actually
+      // returned rather than being computed and dropped.
+      const hookedWhere = await this.resolveReadWhere({
+        collectionName: params.collectionName,
+        where: params.where,
         user: params.user,
-        context: sharedContext,
+        sharedContext,
       });
 
-      await this.hookService.hookRegistry.execute("beforeRead", beforeContext);
-
       // D63 seam: let plugins transform the structured list-query `where`.
-      // Guarded by hasFilters so default behavior (no plugins) is unchanged —
-      // we do NOT activate the dormant beforeOperation `whereFromHook` path here.
+      // Guarded by hasFilters so default behavior (no plugins) is unchanged. It
+      // runs last, on what the hooks settled, because it is the only one of the
+      // three that was already live.
       const filterRegistry = getFilterRegistry();
       const listQueryWhere = filterRegistry.hasFilters(
         FilterSeams.CollectionsListQuery
       )
         ? await filterRegistry.applyFilters(
             FilterSeams.CollectionsListQuery,
-            params.where ?? {},
+            hookedWhere ?? {},
             {
               collection: params.collectionName,
               userId: params.user?.id,
@@ -618,7 +654,7 @@ export class CollectionQueryService extends BaseService {
               limit: params.limit,
             }
           )
-        : params.where;
+        : hookedWhere;
 
       // Build base query using Drizzle (via BaseService db compatibility layer)
       let query = this.db.select().from(schema);
@@ -966,6 +1002,11 @@ export class CollectionQueryService extends BaseService {
             user: params.user,
             search: params.search,
             where: cleanedWhere, // Use cleaned where (without geo operators)
+            // The read hooks already ran for this request and `cleanedWhere`
+            // is what they settled on. Running them again here would fire every
+            // side effect twice -- an audit entry, a rate-limit tick -- for one
+            // list call.
+            readHooksAlreadyRan: true,
             // The `_translated` language filter was stripped from `cleanedWhere` for
             // the list query; pass it explicitly so the count applies the same filter.
             // Without it the count ignores the filter and over-counts
@@ -1428,6 +1469,12 @@ export class CollectionQueryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     /**
+     * Set by `listEntries`, which has already run the read hooks for this
+     * request and forwards the filter they settled on. A standalone count runs
+     * them itself, so the total answers the same question as a list would.
+     */
+    readHooksAlreadyRan?: boolean;
+    /**
      * Language filter, already extracted by the caller (listEntries). When present it is
      * applied directly instead of re-extracting `_translated` from `where` — listEntries strips
      * `_translated` from the where it forwards, so re-extraction would find nothing and the count
@@ -1462,6 +1509,19 @@ export class CollectionQueryService extends BaseService {
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
+
+      // A standalone count runs the read hooks for the same reason it mirrors
+      // every other listEntries filter: the total has to describe the rows a
+      // list would return. Skipped when listEntries already ran them and
+      // forwarded what they settled on.
+      const countWhere = params.readHooksAlreadyRan
+        ? params.where
+        : await this.resolveReadWhere({
+            collectionName: params.collectionName,
+            where: params.where,
+            user: params.user,
+            sharedContext: { ...params.context },
+          });
 
       // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
       // counts the SAME rows the page returns (count==list parity).
@@ -1557,13 +1617,13 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
-      // apply the `_translated` language filter regardless of `params.where` — when it
+      // apply the `_translated` language filter regardless of `countWhere` — when it
       // is the ONLY filter, listEntries forwards `where: undefined` (the key having been stripped)
       // and passes the filter via `translationFilter`. Applying it here (not inside the
-      // `if (params.where)` block below) keeps count == list so pagination totals stay correct.
+      // `if (countWhere)` block below) keeps count == list so pagination totals stay correct.
       const countTranslationFilter =
         params.translationFilter ??
-        this.extractTranslationStatusFilter(params.where).filter;
+        this.extractTranslationStatusFilter(countWhere).filter;
       if (countTranslationFilter) {
         const translationCondition =
           await this.buildTranslationStatusFilterCondition(
@@ -1575,7 +1635,7 @@ export class CollectionQueryService extends BaseService {
       }
 
       // Apply where clause if provided
-      if (params.where) {
+      if (countWhere) {
         // Determine database dialect for ILIKE vs LIKE
         const dialect = this.adapter?.dialect || "postgresql";
 
@@ -1599,7 +1659,7 @@ export class CollectionQueryService extends BaseService {
         // Strip the `_translated` key before the component extractor (which drops unrecognized
         // object keys). The filter itself was already applied above.
         const { cleanedWhere: whereWithoutTranslation } =
-          this.extractTranslationStatusFilter(params.where);
+          this.extractTranslationStatusFilter(countWhere);
 
         // Extract component field conditions (e.g., 'seo.metaTitle')
         const { componentFilters, cleanedWhere } =
