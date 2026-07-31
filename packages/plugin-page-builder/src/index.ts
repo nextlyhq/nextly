@@ -54,3 +54,27 @@ export type {
   PageBuilderAdminConfig,
   EditorMode,
 } from "./collections/pageBuilderEntry";
+
+/**
+ * Contributing blocks: the registry a plugin hands its blocks to.
+ *
+ * Only the registration side is here, because that is what belongs to this
+ * plugin. The contracts for authoring a block come from
+ * `@nextlyhq/plugin-sdk/blocks`, the stable surface a plugin author is offered.
+ */
+export {
+  blockRegistry,
+  BLOCK_SERVICE,
+  PAGE_BUILDER_PLUGIN,
+} from "./blocks/registration-service";
+export type { BlockRegistrationService } from "./blocks/registration-service";
+// `defineBlock` and `BlockDefinition` are NOT re-exported here. The package
+// root already exports both from `./core`, where `defineBlock` registers into
+// `defaultBlockRegistry` and `BlockDefinition` is the PoC's own shape. An
+// explicit re-export would shadow the star export, so a consumer importing
+// `defineBlock` from the root would silently get the engine's helper — which
+// only returns its argument — and stop registering its blocks.
+//
+// Block authors take both from `@nextlyhq/plugin-sdk/blocks`, where the name
+// is unclaimed and the export is covered by the SDK's stability ledger.
+export type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";

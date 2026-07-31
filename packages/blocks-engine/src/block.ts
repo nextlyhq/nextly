@@ -17,6 +17,9 @@ import type { MigrationMap } from "./migration";
  * prop's declared `type` (for the generated manifest and for deriving editor
  * controls); the full field-configuration vocabulary lives in the field system
  * that produces these objects.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export interface PropSchema {
   type: string;
@@ -47,6 +50,9 @@ export interface SlotSpec {
  * Style capabilities a block opts into. Each key must be a registered support
  * (built-in or added via `registerSupport`); `true` enables the whole group and
  * an object enables individual sub-flags.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export type BlockSupports = Record<string, boolean | Record<string, unknown>>;
 
@@ -78,7 +84,12 @@ export interface BlockVariation<P extends object = Record<string, unknown>> {
   props?: Partial<P>;
 }
 
-/** What a block's `render` receives. */
+/**
+ * What a block's `render` receives.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
 export interface BlockRenderArgs<P> {
   props: P;
   node: BlockNode;
@@ -94,6 +105,9 @@ export interface BlockRenderArgs<P> {
 /**
  * A block's rendered output. Opaque here: the engine stores and passes it
  * through without inspecting it, so this package needs no UI dependency.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export type BlockRenderResult = unknown;
 
@@ -109,6 +123,9 @@ export interface BlockExample<P> {
  * `P` is constrained to `object` rather than a string-index record so ordinary
  * named interfaces (which carry no implicit index signature) can describe a
  * block's props without being rewritten.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export interface BlockDefinition<P extends object = Record<string, unknown>> {
   /** Namespaced, immutable identity, e.g. "core/heading". */
@@ -161,6 +178,13 @@ export interface BlockDefinition<P extends object = Record<string, unknown>> {
  * checked against each other at author time. Shape rules that need runtime
  * data (name format, version/migration coverage, support keys) are enforced
  * when the block is registered.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   The definition shape settles at the end of the engine phase, so a
+ *   contributed block may need changes until then. The tag lives here because
+ *   this declaration is what an author's editor resolves to; the SDK's own
+ *   re-export is collapsed to one line by its declaration bundler, which drops
+ *   the comments attached to it.
  */
 export function defineBlock<P extends object>(
   definition: BlockDefinition<P>
@@ -168,7 +192,12 @@ export function defineBlock<P extends object>(
   return definition;
 }
 
-/** The prop type of a block definition. */
+/**
+ * The prop type of a block definition.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
 export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
 
 /**
@@ -187,6 +216,9 @@ export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
  * (bivariant parameter checking), and a consumer holding a stored node can
  * still call `render`/`resolve` with that node's runtime props. Narrowing them
  * to `never` would make the collection accept definitions it could never use.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export interface AnyBlockDefinition
   extends Omit<

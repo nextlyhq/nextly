@@ -22,6 +22,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./blocks": {
+      "types": "./dist/blocks.d.ts",
+      "import": "./dist/blocks.mjs",
+      "default": "./dist/blocks.mjs"
+    },
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.mjs",
@@ -51,6 +56,9 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@nextlyhq/blocks-engine": "workspace:*"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
