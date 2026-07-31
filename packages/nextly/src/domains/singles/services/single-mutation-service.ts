@@ -680,6 +680,28 @@ export class SingleMutationService extends BaseService {
         }
       }
 
+      // 6.25. Single-level beforeChange hooks, on data the validation gate has
+      // just passed. The declaration used to register onto `beforeUpdate`,
+      // which runs above at step 5 -- before validation -- so the hook that
+      // documents itself as the last chance to shape a stored value saw data
+      // the rules had not been applied to yet.
+      if (this.hookRegistry.hasHooks("beforeChange", hookCollection)) {
+        const beforeChangeResult = await this.hookRegistry.execute(
+          "beforeChange",
+          buildSingleHookContext({
+            collection: hookCollection,
+            operation: "update",
+            data: currentData,
+            originalData: existingDeserialized,
+            user: options.user ?? undefined,
+            context: sharedContext,
+          })
+        );
+        if (beforeChangeResult !== undefined) {
+          currentData = beforeChangeResult;
+        }
+      }
+
       // 6.3. Field-level beforeChange hooks (after validation, before
       // hashing/serialization).
       await runFieldHooks({
