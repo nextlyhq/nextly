@@ -620,7 +620,21 @@ export interface CompanionSeedDebt {
 export async function resolveCompanionSeedDebt(
   store: TransitionStateStore,
   kind: I18nTransitionKind,
-  slug: string
+  slug: string,
+  options: {
+    /**
+     * Treat an entity with NO record as owing a copy in this locale.
+     *
+     * For installs that transitioned before transitions were recorded. They have a companion and
+     * no marker, so nothing can tell whether their content was ever copied across — and the one
+     * fact that cannot be re-derived is the language. An operator supplies it by running the
+     * repair with their configured default locale, which is the whole of what was missing.
+     *
+     * Only ever passed by `nextly migrate`. Unattended provisioning must not assume this: a
+     * from-birth localized entity is also untracked, and it owes nothing.
+     */
+    repairUntracked?: string;
+  } = {}
 ): Promise<CompanionSeedDebt | null> {
   const { readI18nTransitionState } = await import(
     "../migration/transition-state"
@@ -631,6 +645,14 @@ export async function resolveCompanionSeedDebt(
   }
   if (recorded.status === "restored") {
     return { sourceLocale: recorded.sourceLocale, overwriteExisting: true };
+  }
+  if (recorded.status === "untracked" && options.repairUntracked) {
+    // Never overwriting: rows that already have a default-locale companion row are the ones a
+    // previous transition did copy, and their translations must survive the repair.
+    return {
+      sourceLocale: options.repairUntracked,
+      overwriteExisting: false,
+    };
   }
   return null;
 }

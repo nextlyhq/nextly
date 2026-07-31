@@ -818,7 +818,24 @@ export async function ensureLocalizedCompanions(
    * already exists, since only those can hold content and a companion's foreign key needs a main
    * table the push has not yet created for anything newer.
    */
-  phase: "beforeApply" | "afterApply" = "afterApply"
+  phase: "beforeApply" | "afterApply" = "afterApply",
+  options: {
+    /**
+     * Run even in production, and repair entities that carry no transition record.
+     *
+     * Only `nextly migrate` passes this. The production guard below exists to stop UNATTENDED
+     * schema changes — a running deployment must not alter its own schema because a config file
+     * changed — and `migrate` is attended by definition, which is why it is also the remedy the
+     * refusal message names in production.
+     *
+     * The repair covers installs that transitioned before transitions were recorded: they have a
+     * companion, no marker, and no way to tell whether their content was ever copied across. The
+     * one fact that cannot be re-derived is the language, and running this supplies it from the
+     * configured default. The copy itself is guarded on rows that have no default-locale companion
+     * row, so an install that does not need it gets a scan and nothing else.
+     */
+    supervised?: boolean;
+  } = {}
 ): Promise<void> {
   const { logger } = context;
   // Same policy `performAutoSync` applies: production never gets unattended schema
@@ -826,7 +843,7 @@ export async function ensureLocalizedCompanions(
   // each call site so no caller can reintroduce the hole. In production the
   // companion is `nextly migrate`'s job, and the write guard keeps a non-default
   // write from destroying content until it runs.
-  if (process.env.NODE_ENV === "production") return;
+  if (process.env.NODE_ENV === "production" && !options.supervised) return;
   const dialect = adapter.getCapabilities().dialect;
   const {
     ensureCompanionTable,
@@ -978,7 +995,14 @@ export async function ensureLocalizedCompanions(
           // companion outlived a disable, so its default-locale rows describe a main table that
           // has been authoritative ever since and must be overwritten rather than trusted.
           seedIncomplete: transitions
-            ? () => resolveCompanionSeedDebt(transitions, kind, entity.slug!)
+            ? () =>
+                resolveCompanionSeedDebt(transitions, kind, entity.slug!, {
+                  // Only under supervision. A from-birth localized entity is untracked too and
+                  // owes nothing, so an unattended pass must not read absence as a debt.
+                  repairUntracked: options.supervised
+                    ? transitions.defaultLocale
+                    : undefined,
+                })
             : undefined,
           settleTransition: transitions
             ? () =>

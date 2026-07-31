@@ -86,6 +86,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -897,8 +898,7 @@ export class SingleMutationService extends BaseService {
         const refuse = (): never => {
           throw NextlyError.conflict({
             reason: "state",
-            message:
-              "Translations are not ready for this single yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+            message: companionNotReadyMessage("single"),
             logContext: {
               cause: "localized-write-without-companion",
               single: singleMeta.slug,

@@ -34,6 +34,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 
@@ -201,8 +202,7 @@ export class FieldGroupMutationService extends BaseService {
       if (writeLocale !== this.localization.defaultLocale) {
         throw NextlyError.conflict({
           reason: "state",
-          message:
-            "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          message: companionNotReadyMessage("field group"),
           logContext: {
             cause: "localized-write-without-companion",
             fieldGroupTable: schema.companionTableName,
@@ -222,8 +222,7 @@ export class FieldGroupMutationService extends BaseService {
       if (readiness === "broken") {
         throw NextlyError.conflict({
           reason: "state",
-          message:
-            "Translations are not ready for this field group yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          message: companionNotReadyMessage("field group"),
           logContext: {
             cause: "localized-write-without-companion",
             fieldGroupTable: schema.companionTableName,

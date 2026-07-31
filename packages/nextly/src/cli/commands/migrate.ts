@@ -285,6 +285,30 @@ export async function runMigrate(
       process.exit(1);
     }
 
+    // Localization companions, after the schema is in step.
+    //
+    // The push pipeline does not manage companion tables, so a localized entity can be fully
+    // migrated and still have nowhere to store translations — and in production nothing else may
+    // create one, because boot deliberately refuses to run DDL there. This is the supervised path
+    // the refusal message names, and the only one an install that transitioned before transitions
+    // were recorded can be repaired from.
+    //
+    // After the migrations, not before: a companion carries a foreign key to its main table, and
+    // the columns it seeds from are whatever the migrations have just left in place.
+    try {
+      const { ensureLocalizedCompanions } = await import("./dev-build");
+      await ensureLocalizedCompanions(
+        configResult.config,
+        adapter,
+        context,
+        "afterApply",
+        { supervised: true }
+      );
+    } catch (err) {
+      logger.error(describeError(err));
+      process.exit(1);
+    }
+
     const duration = Date.now() - startTime;
     logger.divider();
     logger.success(`migrate completed in ${formatDuration(duration)}`);

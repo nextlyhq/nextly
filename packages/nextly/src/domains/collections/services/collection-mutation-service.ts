@@ -92,6 +92,7 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   cachedCompanionReadiness,
+  companionNotReadyMessage,
   isCompanionReady,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
@@ -1028,8 +1029,7 @@ export class CollectionMutationService extends BaseService {
       if (requested !== this.localization.defaultLocale) {
         throw NextlyError.conflict({
           reason: "state",
-          message:
-            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          message: companionNotReadyMessage("collection"),
           logContext: {
             cause: "localized-write-without-companion",
             collection: collectionName,
@@ -1049,8 +1049,7 @@ export class CollectionMutationService extends BaseService {
       if (readiness === "broken") {
         throw NextlyError.conflict({
           reason: "state",
-          message:
-            "Translations are not ready for this collection yet. Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.",
+          message: companionNotReadyMessage("collection"),
           logContext: {
             cause: "localized-write-without-companion",
             collection: collectionName,

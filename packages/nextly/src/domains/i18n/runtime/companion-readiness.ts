@@ -144,6 +144,31 @@ export async function isCompanionReady(
   return true;
 }
 
+/**
+ * The message a caller gets when its localized write is refused because the companion is not
+ * there, phrased for the environment it is running in.
+ *
+ * One message served both, and it named the wrong command in the one that matters. Boot
+ * deliberately refuses to run DDL in production — a running deployment must not alter its own
+ * schema because a config file changed — so `db:sync`, which is a development tool, cannot be the
+ * remedy there. `nextly migrate` is. Telling an operator to run something that will not help is
+ * worse than saying nothing, because it costs them the time to try it before they start looking
+ * for the real answer.
+ *
+ * In development the reverse is true: the reload path provisions the companion in-process, so this
+ * refusal should be close to unreachable, and when it does appear the operator can act at once.
+ *
+ * `subject` names what could not be written ("collection", "single", "field group") so the message
+ * reads naturally at each call site without three copies of the sentence drifting apart.
+ */
+export function companionNotReadyMessage(subject: string): string {
+  const remedy =
+    process.env.NODE_ENV === "production"
+      ? "Run `nextly migrate` to create its translation table."
+      : "Restart the app (or re-run `nextly db:sync`) to create its translation table, then try again.";
+  return `Translations are not ready for this ${subject} yet. ${remedy}`;
+}
+
 /** The parts of a loaded companion schema that readiness is decided from. */
 export interface ReadinessSubject {
   companionTableName: string;
