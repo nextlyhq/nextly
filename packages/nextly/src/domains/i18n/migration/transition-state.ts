@@ -84,17 +84,45 @@ export interface SeededTransition {
   sourceLocale: string;
 }
 
+/**
+ * Localization was turned off again and the companion's values were copied back onto the main
+ * table, which is authoritative from that point on.
+ *
+ * Distinct from having no record at all, and the difference is the whole reason this state exists.
+ * Unattended provisioning is additive, so the companion is left standing rather than dropped — and
+ * a companion that is present but no longer read goes stale the moment the next edit lands on
+ * main. If localization is enabled again, an empty-or-stale companion is exactly what the enable
+ * path must NOT trust: it has to overwrite the default locale's rows from main instead of assuming
+ * the rows it finds are current.
+ *
+ * `sourceLocale` is the locale whose values were restored, which is therefore the language the
+ * main table now holds. Recorded rather than re-derived because the default locale may change
+ * again before localization is re-enabled.
+ */
+export interface RestoredTransition {
+  status: "restored";
+  sourceLocale: string;
+}
+
 export type I18nTransitionState =
   | UntrackedTransition
   | EnablingTransition
-  | SeededTransition;
+  | SeededTransition
+  | RestoredTransition;
 
 /** Stored shape. Separate from the public union so a read can validate it. */
 interface StoredMarker {
   version: number;
-  status: "enabling" | "seeded";
+  status: "enabling" | "seeded" | "restored";
   sourceLocale?: string;
 }
+
+/** The stored statuses, in one place so the reader's validation cannot drift from the writers. */
+const STORED_STATUSES: ReadonlySet<string> = new Set([
+  "enabling",
+  "seeded",
+  "restored",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -157,7 +185,7 @@ export async function readI18nTransitionState(
       `marker version ${String(marker.version)} is not supported by this build`
     );
   }
-  if (marker.status !== "enabling" && marker.status !== "seeded") {
+  if (!STORED_STATUSES.has(marker.status)) {
     throw markerCorrupt(key, `unknown marker status ${String(marker.status)}`);
   }
   // The source locale is the whole point of the record: a marker without one
@@ -181,6 +209,12 @@ export async function readI18nTransitionState(
  * copy that has run, so that is refused. Re-writing `enabling` over `enabling`
  * is allowed and idempotent: a retry after a failed transition is expected, and
  * the recorded source locale does not change between attempts.
+ *
+ * `restored` is a legal predecessor, and unlike `enabling` it may name a
+ * different source locale. Localization was off in between, so the main table
+ * was authoritative and may have been edited under a default locale that has
+ * since changed; refusing here would block a legitimate re-enable on the
+ * strength of a transition that has already been undone.
  */
 export async function beginI18nTransition(
   store: TransitionStateStore,
@@ -256,6 +290,50 @@ export async function settleI18nTransition(
     version: I18N_TRANSITION_MARKER_VERSION,
     status: "seeded",
     sourceLocale: current.sourceLocale,
+  };
+  await store.set(key, marker);
+}
+
+/**
+ * Record that the companion's values have been copied back onto the main table and localization is
+ * off for this entity.
+ *
+ * Written AFTER the copy, which is the opposite of {@link beginI18nTransition} and for the mirrored
+ * reason. Nothing is created here, so a crash mid-restore leaves the companion intact and the
+ * record still saying the companion is authoritative — the next pass simply restores again, which
+ * is idempotent. Recording first would instead declare main authoritative while it still held stale
+ * values, and every later pass would believe it.
+ *
+ * Overwrites `enabling` as readily as `seeded`: disabling localization part-way through a
+ * transition is legitimate, and what matters afterwards is which locale main now holds, not how
+ * far the abandoned copy had got. Refuses only when nothing was ever recorded, because then there
+ * is no evidence this entity's companion was ever the authority and the restore did not come from
+ * a transition this system performed.
+ */
+export async function recordI18nRestore(
+  store: TransitionStateStore,
+  args: {
+    kind: I18nTransitionKind;
+    slug: string;
+    sourceLocale: string;
+  }
+): Promise<void> {
+  requireIdentifier(args.sourceLocale, "sourceLocale");
+  const key = markerKey(args.kind, args.slug);
+  const current = await readI18nTransitionState(store, args.kind, args.slug);
+  if (current.status === "untracked") {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "cannot restore a localization transition that never began",
+        key,
+      },
+    });
+  }
+
+  const marker: StoredMarker = {
+    version: I18N_TRANSITION_MARKER_VERSION,
+    status: "restored",
+    sourceLocale: args.sourceLocale,
   };
   await store.set(key, marker);
 }

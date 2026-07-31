@@ -1,5 +1,5 @@
 import { ddlType, lit, q } from "./ddl-types";
-import type { CompanionMigrationSpec } from "./types";
+import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
 
 /** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
  *  enable UP and the create-only path so the companion shape stays identical. */
@@ -156,6 +156,38 @@ export function buildLocalizationUpStatements(
       );
 
   return [create, ...seed, ...relaxations, ...drops];
+}
+
+/**
+ * Overwrite the default locale's companion values from the main row, one correlated UPDATE per
+ * column, for exactly `columnNames`.
+ *
+ * The inverse of the restore in `generate-down`, and needed for the one case where the seed's
+ * usual `INSERT ... WHERE NOT EXISTS` does the wrong thing: re-enabling localization on an entity
+ * whose companion survived a previous disable. Those default-locale rows are real, so an insert
+ * guarded on their absence skips them — and they are stale, because main has been authoritative
+ * ever since the disable. Skipping them reverts every edit made while localization was off.
+ *
+ * Written as an UPDATE rather than an upsert deliberately: the three dialects spell conflict
+ * handling three different ways, while a correlated UPDATE is the same statement everywhere and is
+ * already the shape the restore uses. Rows the companion does not have yet are not this
+ * statement's job — the guarded insert that follows adds them.
+ */
+export function buildDefaultLocaleRefreshStatements(
+  spec: CompanionCopyRef,
+  columnNames: readonly string[]
+): string[] {
+  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const comp = q(companionTable, dialect);
+  const main = q(mainTable, dialect);
+  return columnNames.map(name => {
+    const col = q(name, dialect);
+    return (
+      `UPDATE ${comp} SET ${col} = ` +
+      `(SELECT ${col} FROM ${main} WHERE ${main}.${q("id", dialect)} = ${comp}.${q("_parent", dialect)}) ` +
+      `WHERE ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}`
+    );
+  });
 }
 
 /**

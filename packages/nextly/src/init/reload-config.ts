@@ -639,8 +639,12 @@ async function ensureLocalizedCompanionsForReload(
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
   if (process.env.NODE_ENV === "production") return { preservationFailed };
 
-  const { ensureCompanionTable, reconcileCompanionColumns, mainTableExists } =
-    await import("../domains/i18n/runtime/companion-io");
+  const {
+    ensureCompanionTable,
+    reconcileCompanionColumns,
+    mainTableExists,
+    resolveCompanionSeedDebt,
+  } = await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
@@ -679,19 +683,55 @@ async function ensureLocalizedCompanionsForReload(
     ],
   ];
 
-  // Where a newly created companion's transition gets recorded. Undefined when the app
-  // names no default locale, in which case nothing below can be localized anyway.
-  const { resolveTransitionRecorder } = await import(
+  // Where transitions are recorded. Resolved whether or not the app names a default locale: an app
+  // that has just removed its `localization` block still has companions to unwind, and asking for a
+  // locale first would hide exactly those entities.
+  const { bindTransitionRecorder, resolveTransitionStore } = await import(
     "../domains/i18n/migration/transition-recorder"
   );
-  const { beginI18nTransition, readI18nTransitionState, settleI18nTransition } =
-    await import("../domains/i18n/migration/transition-state");
-  const transitions = await resolveTransitionRecorder(config, adapter);
+  const { beginI18nTransition, settleI18nTransition } = await import(
+    "../domains/i18n/migration/transition-state"
+  );
+  const transitionStore = await resolveTransitionStore(adapter);
+  // The same store, plus the locale a newly created companion gets recorded with.
+  const transitions = bindTransitionRecorder(transitionStore, config);
 
   for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {
-      if (!entity.slug || entity.localized !== true) continue;
+      if (!entity.slug) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
+      if (entity.localized !== true) {
+        // Turning localization off is a transition too. Only the Schema Builder used to perform
+        // it, so an entity localized from configuration and then un-localized kept its content in
+        // a companion nothing reads any more, and fell back to whatever the main table held before
+        // it was localized. Restoring runs after the apply, which is what puts those columns back.
+        if (phase === "afterApply") {
+          const { restoreDisabledCompanion } = await import(
+            "../domains/i18n/runtime/restore-companion"
+          );
+          await restoreDisabledCompanion(
+            adapter,
+            {
+              kind,
+              slug: entity.slug,
+              tableName: resolveTableName(entity),
+              fields: entity.fields ?? [],
+              dialect: adapter.dialect,
+              defaultLocale: transitions?.defaultLocale,
+              store: transitionStore,
+            },
+            error => {
+              console.warn(
+                `[nextly] Could not restore "${entity.slug}" from its translations table after ` +
+                  `localization was turned off. Its content is still in ` +
+                  `${resolveTableName(entity)}_locales: ` +
+                  `${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          );
+        }
+        continue;
+      }
       const tableName = resolveTableName(entity);
       if (
         phase === "beforeApply" &&
@@ -724,21 +764,12 @@ async function ensureLocalizedCompanionsForReload(
                   sourceLocale: transitions.defaultLocale,
                 })
             : undefined,
-          // Lets an existing companion be finished rather than skipped. A record still reading
-          // `enabling` means an earlier run created the table and did not complete the copy.
+          // Lets an existing companion be finished rather than skipped. `enabling` means an
+          // earlier run created the table and did not complete the copy; `restored` means the
+          // companion outlived a disable, so its default-locale rows describe a main table that
+          // has been authoritative ever since and must be overwritten rather than trusted.
           seedIncomplete: transitions
-            ? async () => {
-                const recorded = await readI18nTransitionState(
-                  transitions,
-                  kind,
-                  entity.slug!
-                );
-                // The locale the interrupted run recorded, so the resume labels the values with
-                // the language they were actually written in rather than today's default.
-                return recorded.status === "enabling"
-                  ? recorded.sourceLocale
-                  : null;
-              }
+            ? () => resolveCompanionSeedDebt(transitions, kind, entity.slug!)
             : undefined,
           settleTransition: transitions
             ? () =>

@@ -16,6 +16,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { LocalizedFieldRef } from "../companion-join";
+import type {
+  I18nTransitionKind,
+  TransitionStateStore,
+} from "../migration/transition-state";
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
 
@@ -497,6 +501,52 @@ export async function localizedColumnsOnMain(
 }
 
 /**
+ * The translatable columns that BOTH the main table and its companion physically carry.
+ *
+ * Copying a value in either direction needs a column at each end, and the two paths that copy —
+ * restoring main from the companion when localization is turned off, and refreshing a stale
+ * companion when it is turned back on — need the same intersection. Resolved in a single
+ * introspection so the two sides cannot be observed at different moments, and shared so a column
+ * counted as present by one copy direction is present for the other.
+ *
+ * Field flags are not consulted. Turning localization off usually clears them, and what can be
+ * copied is decided by what exists.
+ */
+export async function localizedColumnsOnBothTables(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string,
+  companionTableName: string,
+  fields: readonly CompanionFieldLike[]
+): Promise<{ companionExists: boolean; columns: string[] }> {
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName, companionTableName]
+  );
+  const columnsOf = (table: string) =>
+    snapshot.tables.find(t => t.name === table)?.columns.map(c => c.name);
+  const onMain = new Set(columnsOf(tableName) ?? []);
+  const companionColumns = columnsOf(companionTableName);
+  const onCompanion = new Set(companionColumns ?? []);
+  const { fieldToLocalizedColumnSpec } = await import(
+    "../migration/field-to-column-spec"
+  );
+  return {
+    // Reported from the same snapshot as the columns, so a caller that has to decide whether the
+    // companion is there at all cannot get that answer from a different moment than the columns
+    // it then acts on.
+    companionExists: companionColumns !== undefined,
+    columns: fields
+      .map(f => fieldToLocalizedColumnSpec(f, adapter.dialect)?.name)
+      .filter((name): name is string => typeof name === "string")
+      .filter(name => onMain.has(name) && onCompanion.has(name)),
+  };
+}
+
+/**
  * Whether creating a companion here would hide anything.
  *
  * Content is what makes it unsafe, not shape. A table that does not exist, or exists with no rows,
@@ -534,6 +584,58 @@ async function creatingWouldHideContent(
 }
 
 /**
+ * What an existing companion still owes, and in which language.
+ *
+ * Two different situations put content on the main table that the companion does not hold, and
+ * they want opposite treatment for the rows the companion DOES hold — which is why this is a
+ * shape rather than a locale string.
+ */
+export interface CompanionSeedDebt {
+  /** The language the main table's values are in, as recorded when the transition began. */
+  sourceLocale: string;
+  /**
+   * Whether the companion's existing rows in that locale must be overwritten from main.
+   *
+   * False while a first copy is still unfinished: the rows already there came from main, and
+   * anything written since is a real translation that must survive.
+   *
+   * True when localization was turned off and back on. Main was authoritative in between, so those
+   * rows are stale by definition and leaving them would revert every edit made while it was off.
+   */
+  overwriteExisting: boolean;
+}
+
+/**
+ * Turn an entity's recorded transition state into what its existing companion still owes.
+ *
+ * Every provisioning path needs the same mapping, and getting it wrong is silent: reading
+ * `restored` as "nothing owed" leaves a re-enabled entity serving stale rows, and reading `seeded`
+ * as owing a copy re-manufactures default-locale rows for entries deliberately authored only in
+ * another language. Resolved once here so the paths cannot answer it differently.
+ *
+ * The locale comes from the record, never from today's configuration. A default locale that
+ * changed since must not relabel values written under the old one, which is the reason the
+ * transition is recorded rather than inferred.
+ */
+export async function resolveCompanionSeedDebt(
+  store: TransitionStateStore,
+  kind: I18nTransitionKind,
+  slug: string
+): Promise<CompanionSeedDebt | null> {
+  const { readI18nTransitionState } = await import(
+    "../migration/transition-state"
+  );
+  const recorded = await readI18nTransitionState(store, kind, slug);
+  if (recorded.status === "enabling") {
+    return { sourceLocale: recorded.sourceLocale, overwriteExisting: false };
+  }
+  if (recorded.status === "restored") {
+    return { sourceLocale: recorded.sourceLocale, overwriteExisting: true };
+  }
+  return null;
+}
+
+/**
  * Finish a copy that an earlier run started and did not complete.
  *
  * The companion already exists, so its CREATE is not reissued — only the copy is, and only for the
@@ -541,6 +643,10 @@ async function creatingWouldHideContent(
  * safe to run repeatedly: a partially seeded companion keeps the rows it already has, and a fully
  * seeded one is a no-op. Re-copying instead would either collide on the composite primary key or
  * overwrite translations written since the transition.
+ *
+ * `overwriteExisting` adds a correlated UPDATE ahead of that insert, for the one case where the
+ * rows already present are the stale ones: a companion that outlived a disable. The insert still
+ * follows, because rows created while localization was off have no companion row at all.
  *
  * Nothing is dropped from the main table here. The interrupted run may or may not have relaxed or
  * removed its source columns, and the next schema apply reconciles that; this call is responsible
@@ -554,6 +660,7 @@ async function resumeInterruptedSeed(
     dialect: SupportedDialect;
     status?: boolean;
     sourceLocale?: string;
+    overwriteExisting?: boolean;
     settleTransition?: () => Promise<void>;
   },
   newLocalized: CompanionFieldLike[],
@@ -577,6 +684,31 @@ async function resumeInterruptedSeed(
     `AND ${companion}.${q("_locale")} = '${args.sourceLocale ?? ""}')`;
 
   try {
+    if (args.overwriteExisting) {
+      const { columns } = await localizedColumnsOnBothTables(
+        adapter,
+        args.tableName,
+        companionTableName,
+        newLocalized
+      );
+      if (columns.length > 0) {
+        const { buildDefaultLocaleRefreshStatements } = await import(
+          "../migration/generate-up"
+        );
+        const refresh = buildDefaultLocaleRefreshStatements(
+          {
+            dialect: args.dialect,
+            mainTable: args.tableName,
+            companionTable: companionTableName,
+            defaultLocale: args.sourceLocale ?? "",
+          },
+          columns
+        );
+        for (const statement of refresh) {
+          await adapter.executeQuery(statement);
+        }
+      }
+    }
     for (const statement of copy) {
       // Only the INSERT ... SELECT is row-producing and therefore needs the guard; anything else
       // the plan carries (a nullability relax, for instance) is already idempotent.
@@ -729,17 +861,20 @@ export async function ensureCompanionTable(
      */
     recordTransition?: () => Promise<void>;
     /**
-     * Whether a transition was recorded for this entity but never finished.
+     * What an existing companion still owes, or null when it owes nothing.
      *
-     * Consulted only when the companion already exists. `CREATE TABLE` and the copy that follows
-     * are separate statements, and MySQL commits DDL implicitly, so a failure between them leaves
-     * a real companion holding none of the entity's content. Every later run would take the early
-     * return and the content would stay hidden for good.
+     * Consulted only when the companion already exists, which normally means there is nothing to
+     * do. Two recorded states say otherwise. An unfinished transition: `CREATE TABLE` and the copy
+     * that follows are separate statements, and MySQL commits DDL implicitly, so a failure between
+     * them leaves a real companion holding none of the entity's content, and every later run would
+     * take the early return and leave it hidden for good. A companion that outlived a disable: it
+     * is real and its default-locale rows are stale, because main was authoritative while
+     * localization was off.
      *
-     * Returning true makes this call finish what the interrupted one started, so a reported
-     * failure is fixed by running `db:sync` again rather than by hand-editing `nextly_meta`.
+     * Answering here makes both recoverable by running `db:sync` again rather than by hand-editing
+     * `nextly_meta`.
      */
-    seedIncomplete?: () => Promise<string | null>;
+    seedIncomplete?: () => Promise<CompanionSeedDebt | null>;
     /**
      * Record that the copy finished, so a later pass stops treating it as owed.
      *
@@ -770,11 +905,15 @@ export async function ensureCompanionTable(
       // The RECORDED locale, not the one configured now. A default locale that changed since the
       // interrupted run must not relabel values written under the old one — that is the whole
       // reason the transition is recorded rather than inferred.
-      const owedLocale = (await args.seedIncomplete?.()) ?? null;
-      if (owedLocale !== null) {
+      const owed = (await args.seedIncomplete?.()) ?? null;
+      if (owed !== null) {
         return await resumeInterruptedSeed(
           adapter,
-          { ...args, sourceLocale: owedLocale },
+          {
+            ...args,
+            sourceLocale: owed.sourceLocale,
+            overwriteExisting: owed.overwriteExisting,
+          },
           newLocalized,
           companionTableName,
           onError

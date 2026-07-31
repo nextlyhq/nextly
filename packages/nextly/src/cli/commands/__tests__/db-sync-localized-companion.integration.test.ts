@@ -481,6 +481,172 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     ).resolves.toEqual({ status: "untracked" });
   });
 
+  it("restores content from the companion when localization is turned off", async () => {
+    // The round trip the enable fix left half-finished. Provisioning skipped every entity that was
+    // not currently localized, so setting `localized: false` in configuration abandoned the
+    // companion where all the content is and fell back to the main table's retained columns —
+    // which hold whatever they held before the entity was localized, because every write since
+    // went to the companion alone. The user's edits are on disk and invisible.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_offagain",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_offagain",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_offagain" ("id", "slug", "title") VALUES ('row1', 'r1', 'Before localizing')`
+    );
+    await runSync(localized);
+
+    // An edit made while the entity was localized. It lands on the companion, which is what makes
+    // the retained main column stale.
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_offagain_locales" SET "title" = 'Edited in English' WHERE "_locale" = 'en'`
+    );
+
+    await runSync(unlocalized);
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_offagain" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Edited in English" }]);
+    // Additive: `db:sync` persists registry metadata before its destructive prompt, so dropping
+    // here would run even for an operator who then declined the change. The companion stays until
+    // `nextly migrate` removes it under supervision.
+    expect(await tableExists("dc_dbsync_offagain_locales")).toBe(true);
+  });
+
+  it("does not overwrite a main row that has no companion row in the default locale", async () => {
+    // A correlated UPDATE with no guard assigns SQL NULL when the subquery finds nothing, so an
+    // entry authored only in another language would have its main column blanked by the restore
+    // instead of being left alone. There is nothing to restore for such a row.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_partial",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_partial",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_partial" ("id", "slug", "title") VALUES ('row1', 'r1', 'Kept')`
+    );
+    await runSync(localized);
+    // Only a Spanish translation exists for this row; the English companion row is gone.
+    await adapter?.executeQuery(
+      `DELETE FROM "dc_dbsync_partial_locales" WHERE "_locale" = 'en'`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_partial_locales" ("_parent", "_locale", "title") VALUES ('row1', 'es', 'Guardado')`
+    );
+
+    await runSync(unlocalized);
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_partial" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Kept" }]);
+  });
+
+  it("re-seeds a companion that outlived a disable instead of trusting its rows", async () => {
+    // The trap the additive restore creates if nothing records it. The companion is left standing,
+    // so re-enabling localization finds a table full of default-locale rows and, under the resume's
+    // usual `WHERE NOT EXISTS`, leaves every one of them alone. They are stale by definition: main
+    // was authoritative for the whole period localization was off.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_roundtrip",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_roundtrip",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_roundtrip" ("id", "slug", "title") VALUES ('row1', 'r1', 'First')`
+    );
+    await runSync(localized);
+    await runSync(unlocalized);
+
+    // Edited with localization off, so it lands on the main table and the companion goes stale.
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_roundtrip" SET "title" = 'Edited while off' WHERE "id" = 'row1'`
+    );
+    await expect(
+      readTransition("collection", "dbsync_roundtrip")
+    ).resolves.toEqual({ status: "restored", sourceLocale: "en" });
+
+    await runSync(localized);
+
+    const rows = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_roundtrip_locales" WHERE "_locale" = 'en'`
+    );
+    expect(rows).toEqual([{ title: "Edited while off" }]);
+  });
+
+  it("leaves an entity that was never localized alone", async () => {
+    // The restore is gated on the durable record, not on physical shape, so a collection that
+    // never had a companion is not probed for one and nothing is written on its behalf.
+    const config = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_neverloc",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(config);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_neverloc" ("id", "slug", "title") VALUES ('row1', 'r1', 'Untouched')`
+    );
+    await runSync(config);
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_neverloc" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Untouched" }]);
+    await expect(
+      readTransition("collection", "dbsync_neverloc")
+    ).resolves.toEqual({ status: "untracked" });
+  });
+
   it("leaves a non-localized collection with no companion", async () => {
     await runSync(
       defineConfig({

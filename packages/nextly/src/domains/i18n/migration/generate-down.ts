@@ -1,5 +1,5 @@
 import { castText, ddlType, lit, q } from "./ddl-types";
-import type { CompanionMigrationSpec } from "./types";
+import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
 
 const ARCHIVE = "nextly_i18n_archive";
 
@@ -39,6 +39,39 @@ export interface LocalizationDownOptions {
   existingMainColumns?: readonly string[];
 }
 
+/**
+ * Copy the default locale's companion values back onto the main row, one correlated UPDATE per
+ * column, for exactly `columnNames`.
+ *
+ * Shared rather than inlined because two paths owe the same copy for different reasons. A disable
+ * migration restores before it drops the companion. Unattended provisioning restores when an
+ * entity's config stops being localized, and must not drop anything — but the values it moves and
+ * the direction it moves them in are identical, and two builders would drift.
+ *
+ * `WHERE EXISTS` matters in both. Without it a row that has no companion row in the default locale
+ * — an entry authored only in another language, or one created while the transition was
+ * incomplete — assigns SQL NULL, so restoring would blank the main column instead of leaving it
+ * alone. There is nothing to restore for such a row, and nothing is what it should get.
+ */
+export function buildDefaultLocaleRestoreStatements(
+  spec: CompanionCopyRef,
+  columnNames: readonly string[]
+): string[] {
+  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const comp = q(companionTable, dialect);
+  const main = q(mainTable, dialect);
+  const match =
+    `${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)} ` +
+    `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}`;
+  return columnNames.map(name => {
+    const col = q(name, dialect);
+    return (
+      `UPDATE ${main} SET ${col} = (SELECT ${col} FROM ${comp} WHERE ${match}) ` +
+      `WHERE EXISTS (SELECT 1 FROM ${comp} WHERE ${match})`
+    );
+  });
+}
+
 export function buildLocalizationDownStatements(
   spec: CompanionMigrationSpec,
   options: LocalizationDownOptions = {}
@@ -74,16 +107,12 @@ export function buildLocalizationDownStatements(
   }
 
   // 2. restore default-locale value onto the main row (one correlated UPDATE per column)
-  for (const c of onMain) {
-    const col = q(c.name, dialect);
-    const comp = q(companionTable, dialect);
-    const main = q(mainTable, dialect);
-    stmts.push(
-      `UPDATE ${main} SET ${col} = (SELECT ${col} FROM ${comp} ` +
-        `WHERE ${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)} ` +
-        `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)})`
-    );
-  }
+  stmts.push(
+    ...buildDefaultLocaleRestoreStatements(
+      spec,
+      onMain.map(c => c.name)
+    )
+  );
 
   // 3. archive non-default translations
   for (const c of columns) {
