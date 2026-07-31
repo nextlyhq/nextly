@@ -75,6 +75,10 @@ import {
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+import {
+  assertPluginFieldDeclarations,
+  describeDeclarationFailure,
+} from "../../shared/lib/assert-plugin-field-declarations";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -136,6 +140,26 @@ export async function runMigrateCheck(
     });
   } catch (error) {
     logger.error(`Failed to load config: ${describeError(error)}`);
+    process.exit(1);
+  }
+
+  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
+  // first moment an unknown field type can be told apart from one a plugin had
+  // not contributed yet: the `define*` validators defer that question because
+  // the config bundle is evaluated before any plugin registers. Asked here, a
+  // misspelled or wrong-surface token fails the command instead of silently
+  // generating primitive fallback types and a snapshot that production boot
+  // then refuses.
+  try {
+    assertPluginFieldDeclarations({
+      collections: configResult.config.collections,
+      singles: configResult.config.singles,
+      fieldGroups: configResult.config.fieldGroups,
+    });
+  } catch (error) {
+    // Reported and exited rather than thrown, so an invalid declaration reads
+    // like every other check failure instead of an unhandled crash.
+    logger.error(describeDeclarationFailure(error));
     process.exit(1);
   }
 

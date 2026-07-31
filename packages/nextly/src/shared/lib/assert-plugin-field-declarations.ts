@@ -18,6 +18,7 @@
  */
 import { ALL_FIELD_TYPES } from "../../collections/fields/types";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { describeError } from "../../errors/describe-error";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { pluginFieldOptionIssues } from "./plugin-field-options";
@@ -116,4 +117,24 @@ export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
   if (errors.length > 0) {
     throw NextlyError.validation({ errors });
   }
+}
+
+/**
+ * Render a declaration failure as the lines a CLI command reports.
+ *
+ * The thrown error carries one entry per bad declaration in its public data,
+ * while its own message is the generic validation summary — so a command that
+ * printed only the message would tell the user something failed without saying
+ * which field. Lives beside the throw so the two cannot describe the same
+ * failure differently.
+ */
+export function describeDeclarationFailure(error: unknown): string {
+  if (!(error instanceof NextlyError)) return describeError(error);
+  const data = error.publicData as
+    | { errors?: Array<{ path?: string; message?: string }> }
+    | undefined;
+  const lines = (data?.errors ?? [])
+    .map(issue => `${issue.path ?? ""}: ${issue.message ?? ""}`.trim())
+    .filter(line => line !== ":");
+  return lines.length > 0 ? lines.join("\n") : describeError(error);
 }
