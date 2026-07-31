@@ -923,6 +923,20 @@ export type RelationshipDbExecutor = {
   execute?(query: unknown): Promise<unknown>;
 };
 
+// The columns a related-row read reaches for on a target's table.
+//
+// A dynamic collection's Drizzle table is built at runtime from stored field
+// metadata, so there is no compile-time type for it and the loader hands back
+// an untyped value. Naming the two columns that are actually read keeps those
+// accesses checked, and keeps the rest of the table opaque rather than
+// asserting a shape it may not have: `status` is optional because a collection
+// without Draft/Published has no such column, and `id` is `unknown` because it
+// is only ever handed to Drizzle as a column reference, never read as a value.
+type TargetTableColumns = {
+  id: unknown;
+  status?: unknown;
+};
+
 export class CollectionRelationshipService extends BaseService {
   /**
    * Decides whether a caller may read a TARGET collection at all.
@@ -1019,8 +1033,7 @@ export class CollectionRelationshipService extends BaseService {
    */
   private async resolveTargetStatusValue(
     targetCollection: string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any,
+    schema: TargetTableColumns,
     access: RelatedRowAccess
   ): Promise<string | undefined> {
     if (isSystemEntity(targetCollection)) return undefined;
@@ -1457,8 +1470,7 @@ export class CollectionRelationshipService extends BaseService {
    */
   private async buildTargetLocalizedContext(
     targetCollection: string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any,
+    schema: TargetTableColumns,
     access: RelatedRowAccess,
     constraint: Record<string, unknown>,
     /** The status a read of this target resolves to, or undefined for none. */
