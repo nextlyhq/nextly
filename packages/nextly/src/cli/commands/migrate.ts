@@ -36,6 +36,7 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { runFieldGroupMigration } from "../../domains/field-groups/migration/run";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
@@ -57,6 +58,7 @@ import {
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
+import type { Logger } from "../../shared/types";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -316,11 +318,15 @@ export interface MigrateCoreDeps {
   reconcileCoreFn?: typeof reconcileCore;
   runFileMigrationsFn?: typeof runFileMigrations;
   withLock?: typeof withMigrateLock;
+  /** Seam for the storage-format phase, so tests can run the others alone. */
+  migrateFieldGroupStorageFn?: typeof runFieldGroupMigration;
 }
 
 export interface MigrateCoreResult {
   applied: number;
   coreChanged: boolean;
+  /** Whether the field-group storage format was migrated by this run. */
+  storageMigrated: boolean;
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
@@ -339,8 +345,11 @@ export async function migrateCore(
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
   const lock = deps.withLock ?? withMigrateLock;
+  const migrateStorage =
+    deps.migrateFieldGroupStorageFn ?? runFieldGroupMigration;
   let applied = 0;
   let coreChanged = false;
+  let storageMigrated = false;
 
   await lock(
     deps.db,
@@ -359,7 +368,36 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
-      deps.logger.info("Phase 2: applying user migrations...");
+      // Between the two phases, and that placement is load-bearing on both
+      // sides. After the core reconcile, because the migration's own marker
+      // lives in `nextly_meta` and its lock table has to exist before it can
+      // contend for anything. Before the user's files, because a committed
+      // migration may name a field-group table and this phase changes those
+      // names — running the files first would apply them against names that
+      // are about to move.
+      //
+      // The field-group lock is taken inside this one. Nothing else in the
+      // codebase holds the two together, and everything that takes the
+      // field-group lock (db:sync, the HMR reload) takes it alone, so this
+      // ordering is the only one and cannot deadlock against a reverse.
+      deps.logger.info("Phase 2: migrating field group storage format...");
+      // The CLI logger carries cosmetic helpers this does not need, so only the
+      // four levels are forwarded. `info` goes to debug: the phase announces
+      // itself above, and a run with nothing to do should not add noise.
+      const storageLogger: Logger = {
+        debug: (message: string) => deps.logger.debug(message),
+        info: (message: string) => deps.logger.debug(message),
+        warn: (message: string) => deps.logger.warn(message),
+        error: (message: string) => deps.logger.error(message),
+      };
+      const storage = await migrateStorage({
+        adapter: deps.adapter as unknown as DrizzleAdapter,
+        logger: storageLogger,
+        direction: "up",
+      });
+      storageMigrated = storage.ran;
+
+      deps.logger.info("Phase 3: applying user migrations...");
       applied = await runFiles({
         adapter: deps.adapter,
         db: deps.db,
@@ -380,7 +418,7 @@ export async function migrateCore(
     }
   );
 
-  return { applied, coreChanged };
+  return { applied, coreChanged, storageMigrated };
 }
 
 /**
