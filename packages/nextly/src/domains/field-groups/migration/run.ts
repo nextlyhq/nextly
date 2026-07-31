@@ -31,6 +31,7 @@ import {
   resolveCatalogName,
   type IdentifierCaseRules,
 } from "../../schema/utils/resolve-catalog-name";
+import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
 import { resolveStorageVerdict } from "./guard";
 import {
@@ -332,6 +333,14 @@ export async function runFieldGroupMigration(
           ? { generation, appliedManifest: entries }
           : { generation }
       );
+
+      // 🔴 The run just invalidated its own process's answer. Readers memoize
+      // which registry table this database holds — it is a schema fact, and
+      // asking per query would cost a catalog round trip on every registry read
+      // — so the one thing that can change it has to say so. Without this,
+      // every `FieldGroupRegistryService` call in this process keeps addressing
+      // the pre-migration name until a restart.
+      forgetFieldGroupStorageNames(adapter);
 
       logger.info(
         `Field group storage migrated ${direction} (${String(steps.length)} steps).`

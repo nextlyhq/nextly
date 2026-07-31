@@ -25,7 +25,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
-import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
+import {
+  chooseTypeColumns,
+  resolveFieldGroupRegistryName,
+} from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
@@ -107,6 +110,10 @@ type LoggerLike = {
 interface AdapterLike {
   readonly dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle<T = unknown>(): T;
+  // Needed to resolve which field-group registry this database holds: the
+  // storage migration renames it, so the name is read from the catalog rather
+  // than spelled here.
+  listTables(): Promise<string[]>;
   // Needed to provision the localized companion below: creating the table and adding
   // columns to it are both DDL, and the status backfill that accompanies a new `_status`
   // column is a write.
@@ -1236,11 +1243,40 @@ async function applyReload(opts?: {
     fields: MinimalField[];
     localized?: boolean;
   }> = [];
+  // 🔴 The STORED physical name wins over the one derived from the slug.
+  //
+  // `resolveComponentTableName` answers what this release's creator WOULD name
+  // a table; the registry records what the table is actually called. Those
+  // differ for an author-chosen `dbName`, and — after the storage migration —
+  // for every field group. Deriving the name would make the reload diff against
+  // a table that is not there, decide the component is new, and create an empty
+  // one beside the populated one it meant to edit.
+  //
+  // Best effort by design: a registry that cannot be read leaves every name
+  // derived, which is exactly the behaviour of a database that has no registry
+  // yet.
+  const storedComponentTables = new Map<string, string>();
+  try {
+    const registryTable = await resolveFieldGroupRegistryName(adapter);
+    const rows = await adapter.executeQuery<{
+      slug: string;
+      table_name: string;
+    }>(`SELECT slug, table_name FROM ${registryTable}`);
+    for (const row of rows) {
+      if (typeof row.slug === "string" && typeof row.table_name === "string") {
+        storedComponentTables.set(row.slug, row.table_name);
+      }
+    }
+  } catch {
+    // No registry yet, or a transient catalog failure. Derived names below.
+  }
+
   for (const c of newConfig.fieldGroups ?? []) {
     if (!c.slug) continue;
     componentTargets.push({
       slug: c.slug,
-      tableName: resolveComponentTableName(c.slug),
+      tableName:
+        storedComponentTables.get(c.slug) ?? resolveComponentTableName(c.slug),
       fields: (c.fields ?? []) as MinimalField[],
       // i18n: carry `localized` so the HMR diff omits translatable columns from the
       // component's main table and registers its companion.

@@ -162,7 +162,12 @@ export async function loadDynamicSlugs(
   };
   await read("dynamic_collections", collections);
   await read("dynamic_singles");
-  await read(await resolveFieldGroupRegistryName(adapter));
+  try {
+    await read(await resolveFieldGroupRegistryName(adapter));
+  } catch {
+    // Same contract as `read` itself: a catalog probe that cannot answer leaves
+    // the sets as they are rather than failing the boot that called it.
+  }
   return { all, collections };
 }
 
@@ -228,9 +233,22 @@ export async function loadBuilderEntities(
     }
   };
 
+  // The registry NAME is resolved inside the same best-effort boundary as the
+  // read it feeds. Resolving outside it turns a transient catalog failure — a
+  // `listTables` blip, or a denied `lower_case_table_names` query on MySQL —
+  // into a rejection that aborts service registration, where this helper's
+  // whole contract is to answer with an empty list instead.
+  const readComponents = async (): Promise<LoadedBuilderEntity[]> => {
+    try {
+      return await read(await resolveFieldGroupRegistryName(adapter), false);
+    } catch {
+      return [];
+    }
+  };
+
   return {
     collections: await read("dynamic_collections", true),
     singles: await read("dynamic_singles", true),
-    components: await read(await resolveFieldGroupRegistryName(adapter), false),
+    components: await readComponents(),
   };
 }
