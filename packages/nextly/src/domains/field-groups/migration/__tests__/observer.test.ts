@@ -1,7 +1,77 @@
-import { describe, expect, it } from "vitest";
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import { findLostIndexes, refuseLostIndexes } from "../observer";
+import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
+
+vi.mock("../../../schema/pipeline/diff/introspect-live", () => ({
+  introspectLiveSnapshot: vi.fn(),
+}));
+
+import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
+import {
+  createStorageObserver,
+  findLostIndexes,
+  refuseLostIndexes,
+} from "../observer";
+import type { MigrationSession } from "../session";
+
+const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
+
+// 🔴 This runs once per rename, and `introspectLiveSnapshot` costs per table it
+// is handed — on SQLite three PRAGMAs each. Handing it the whole catalog makes
+// the migration scale with the size of the USER'S database rather than with the
+// number of field groups, which is the wrong variable entirely.
+describe("dataTables introspects only what it may address", () => {
+  function observerOver(tables: string[]) {
+    const adapter = {
+      getCapabilities: () => ({ dialect: "postgresql" }),
+      getDrizzle: () => ({}),
+      listTables: () => Promise.resolve(tables),
+    } as unknown as DrizzleAdapter;
+    // Cleared per fixture: these assertions are about which names reach the
+    // introspection, so calls left over from another test would answer for it.
+    vi.mocked(introspectLiveSnapshot).mockReset();
+    vi.mocked(introspectLiveSnapshot).mockImplementation((_db, _d, names) =>
+      Promise.resolve({
+        tables: names.map(name => ({
+          name,
+          columns: [
+            { name: "id", type: "text", nullable: false },
+            { name: "_parent_table", type: "text", nullable: false },
+          ],
+        })),
+      })
+    );
+    return createStorageObserver(adapter, PRESERVING);
+  }
+
+  const session = {} as MigrationSession;
+
+  it("passes only the owned names the catalog holds", async () => {
+    const observer = observerOver([
+      "comp_hero",
+      "app_orders",
+      "app_invoices",
+      "dc_pages",
+    ]);
+    await observer.dataTables(session, ["comp_hero", "fg_hero"]);
+
+    // `fg_hero` is owned but not yet present; the host's tables are present but
+    // not owned. Neither may be introspected.
+    expect(vi.mocked(introspectLiveSnapshot).mock.calls[0]?.[2]).toEqual([
+      "comp_hero",
+    ]);
+  });
+
+  it("does not introspect at all when nothing owned is present", async () => {
+    const observer = observerOver(["app_orders", "app_invoices"]);
+    const result = await observer.dataTables(session, ["comp_hero"]);
+
+    expect(result).toEqual([]);
+    expect(vi.mocked(introspectLiveSnapshot)).not.toHaveBeenCalled();
+  });
+});
 
 describe("findLostIndexes", () => {
   // Renaming a table keeps its indexes on all three dialects, so a name missing

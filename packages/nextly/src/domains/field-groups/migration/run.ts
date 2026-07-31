@@ -55,6 +55,7 @@ import { withMigrationSession, type MigrationDialect } from "./session";
 import {
   beginMigration,
   MIGRATION_MARKER_VERSION,
+  MIN_COMPLETE_MARKER_VERSION,
   readMigrationState,
   settleMigration,
   type MigrationDirection,
@@ -127,6 +128,30 @@ export async function runFieldGroupMigration(
       // before the run, or a table dropped since — and a marker believed on its
       // own would report success over storage the read path cannot serve.
       if (state.status === "settled" && state.generation === generation) {
+        // 🔴 Asked before the catalog, because it is the question the catalog
+        // cannot answer. A marker written by an older build claims a generation
+        // that build defined, and this one performs work that build did not:
+        // the tables and columns would all check out while stored field
+        // definitions, ledger keys and parent pointers still held the legacy
+        // vocabulary. Refusing is the only honest answer — the data steps
+        // address the registry under its legacy name, so this build cannot
+        // simply finish the job on storage whose registry has already moved.
+        if (
+          state.generation === "field-groups-v2" &&
+          state.version !== undefined &&
+          state.version < MIN_COMPLETE_MARKER_VERSION
+        ) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration cannot accept a marker written before this build's storage work existed",
+            logContext: {
+              phase: FIELD_GROUP_MIGRATION_PHASE,
+              reason: "settled marker predates work this build performs",
+              recordedVersion: state.version,
+              requiredVersion: MIN_COMPLETE_MARKER_VERSION,
+            },
+          });
+        }
         await assertStorageAtGeneration({
           adapter,
           dialect,
@@ -426,12 +451,16 @@ function assertProbeMatchesGeneration(args: {
 /**
  * Registry rows, read from whichever registry is present.
  *
+ * Exported for its own tests: `hasCompanion` decides whether a table enters the
+ * rename plan, and that decision is not observable from the outcome of a run
+ * that reports there is nothing to do.
+ *
  * Legacy first, then the migrated name. The registry renames last, so for every
  * step but the final one the rows are still under the legacy name — and the
  * final step has the same commit-before-marker window as any other, so a resume
  * has to find them under the new one.
  */
-async function readRegistryRows(
+export async function readRegistryRows(
   adapter: DrizzleAdapter
 ): Promise<RegistryRow[]> {
   const table = (await adapter.tableExists(STORAGE_FORMAT.registryTable))
@@ -441,27 +470,27 @@ async function readRegistryRows(
       : undefined;
   if (table === undefined) return [];
 
-  // Issued as a Drizzle statement rather than through the typed query builder:
-  // that resolves a table through the schema registry, and mid-run the registry
-  // is under whichever name the plan has reached.
-  const rows = await adapter.queryStatement<{
-    id: string;
-    slug: string;
-    table_name: string;
-  }>(
-    sql`SELECT ${sql.identifier("id")}, ${sql.identifier("slug")}, ${sql.identifier("table_name")}
-        FROM ${sql.identifier(table)}`
-  );
+  const rows = await readRegistryTable(adapter, table);
 
   const suffix = STORAGE_FORMAT.companionSuffix;
   const out: RegistryRow[] = [];
   for (const row of rows) {
-    // Read from the catalog rather than inferred from a `localized` flag: a
-    // localized group with no translatable fields has no companion, and the
-    // plan must not name a table that was never created.
-    const hasCompanion = await adapter.tableExists(
-      `${row.table_name}${suffix}`
-    );
+    // 🔴 Both conditions, and neither alone is enough.
+    //
+    // The catalog is asked because a localized group with no translatable
+    // fields has no companion, and the plan must not name a table that was
+    // never created. The registry's own flag is asked because presence is not
+    // ownership: Nextly runs inside the user's database, and a table of theirs
+    // that happens to be called `<field group>_locales` would otherwise be
+    // adopted into the plan and renamed out from under them. A group that is
+    // not localized has no companion, whatever sits on the derived name.
+    //
+    // A leftover companion from a group since un-localized is left behind by
+    // this rule rather than renamed. That is the safe direction: nothing reads
+    // it, whereas renaming a table Nextly does not own is not recoverable.
+    const hasCompanion =
+      isLocalized(row.localized) &&
+      (await adapter.tableExists(`${row.table_name}${suffix}`));
     out.push({
       id: String(row.id),
       slug: String(row.slug),
@@ -470,6 +499,72 @@ async function readRegistryRows(
     });
   }
   return out;
+}
+
+/** One registry row, as far as reading it here is concerned. */
+interface RegistryTableRow {
+  id: string;
+  slug: string;
+  table_name: string;
+  localized?: boolean | number | null;
+}
+
+/**
+ * Whether a registry row's localization flag is set.
+ *
+ * Both forms are accepted because both are stored: Postgres holds a boolean
+ * where MySQL and SQLite hold `1`/`0`. Anything else — including the column
+ * being absent on a database that predates it — reads as not localized, which
+ * is the true answer there rather than a guess. Matches
+ * `di/load-dynamic-tables.ts`, which reads the same column for the same reason.
+ */
+function isLocalized(value: boolean | number | null | undefined): boolean {
+  return value === true || value === 1;
+}
+
+/**
+ * Read the registry, tolerating a database that predates the i18n column.
+ *
+ * `localized` is added by the core-schema reconcile, so a database that has not
+ * run it yet does not have the column and selecting it throws. Such a database
+ * also has no companion tables at all, which is why the fallback reports every
+ * row as not localized rather than as unknown: that is the true answer there,
+ * not a guess. The same tolerance exists in `di/load-dynamic-tables.ts`, for the
+ * same reason.
+ *
+ * Issued as Drizzle statements rather than through the typed query builder: that
+ * resolves a table through the schema registry, and mid-run the registry is
+ * under whichever name the plan has reached.
+ */
+async function readRegistryTable(
+  adapter: DrizzleAdapter,
+  table: string
+): Promise<RegistryTableRow[]> {
+  const columns = [
+    sql.identifier("id"),
+    sql.identifier("slug"),
+    sql.identifier("table_name"),
+  ];
+  try {
+    return await adapter.queryStatement<RegistryTableRow>(
+      sql`SELECT ${sql.join(columns, sql`, `)}, ${sql.identifier("localized")}
+          FROM ${sql.identifier(table)}`
+    );
+  } catch (error) {
+    // Only a MISSING column may fall back. A transient, permission or
+    // missing-table failure has to propagate: converting one of those into
+    // "nothing is localized" would drop every companion from the plan and leave
+    // real storage behind under its legacy name.
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      !/localized|no such column|does not exist|unknown column/i.test(message)
+    ) {
+      throw error;
+    }
+    return adapter.queryStatement<RegistryTableRow>(
+      sql`SELECT ${sql.join(columns, sql`, `)} FROM ${sql.identifier(table)}`
+    );
+  }
 }
 
 /** Every table name, and the columns of the ones the plan cares about. */

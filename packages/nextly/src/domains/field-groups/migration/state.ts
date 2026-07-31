@@ -74,6 +74,25 @@ export const MIGRATION_MARKER_VERSION = 3;
 export const MIN_READABLE_MANIFEST_VERSION = 2;
 
 /**
+ * Oldest marker version whose *settled* state represents all the work this
+ * build performs.
+ *
+ * The third of the three questions a version answers, and the one that decides
+ * whether a finished-looking database is actually finished. `generation` names
+ * what the storage reached, but what that generation MEANS is a property of the
+ * build that wrote it: version 2 executed renames only, while version 3 also
+ * rewrites stored field definitions, ledger keys and parent pointers. A version
+ * 2 marker reading `field-groups-v2` therefore describes storage this build
+ * would consider half-migrated, and accepting it would report success over
+ * legacy vocabulary that no later run would ever revisit.
+ *
+ * Raise this whenever a version adds work to a run — never merely because the
+ * marker version moved. A build that only reorders or renumbers steps leaves
+ * what a settled marker claims untouched.
+ */
+export const MIN_COMPLETE_MARKER_VERSION = 3;
+
+/**
  * Whether a marker's recorded plan is in a format this build can execute.
  *
  * Bounded above as well as below: a marker from a newer build may record an
@@ -130,6 +149,14 @@ export interface SettledState {
    * unexplained rather than expected.
    */
   recorded: boolean;
+  /**
+   * Marker version that recorded this, absent when no marker did.
+   *
+   * Kept because a generation means whatever the build that wrote it made it
+   * mean, and only the version says which build that was. See
+   * `MIN_COMPLETE_MARKER_VERSION`.
+   */
+  version?: number;
   /**
    * The plan that produced this generation, kept so a rollback can reverse it.
    *
@@ -280,6 +307,7 @@ export async function readMigrationState(
       status: "settled",
       generation: marker.generation,
       recorded: true,
+      version: marker.version,
       // Kept for every build that can still read the entry shape, which is not
       // the same question as whether this build wrote the marker: a step-list
       // bump leaves the recorded entries untouched, and discarding them there

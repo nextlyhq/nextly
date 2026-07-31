@@ -26,7 +26,7 @@ vi.mock("../../../schema/pipeline/diff/introspect-live", () => ({
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { FIELD_GROUP_MIGRATION_KEY } from "../state";
 
-import { runFieldGroupMigration } from "../run";
+import { readRegistryRows, runFieldGroupMigration } from "../run";
 
 const LEGACY_REGISTRY = "dynamic_components";
 const TARGET_REGISTRY = "dynamic_field_groups";
@@ -42,7 +42,14 @@ interface RunWorld {
   /** Columns per table, defaulted for anything the test does not name. */
   columns?: Record<string, string[]>;
   /** Rows the registry holds. */
-  registryRows?: { id: string; slug: string; table_name: string }[];
+  registryRows?: {
+    id: string;
+    slug: string;
+    table_name: string;
+    localized?: boolean | number;
+  }[];
+  /** Model a database predating the i18n `localized` column. */
+  noLocalizedColumn?: boolean;
 }
 
 /**
@@ -106,14 +113,32 @@ function createRunWorld(world: RunWorld) {
       if (lock.owner === params[1]) lock.owner = null;
       return [];
     }
-    const registry = /^SELECT "id", "slug", "table_name" FROM "(\w+)"$/.exec(
-      flat
-    );
+    // Two spellings, because production tries the localized column first and
+    // falls back when the database predates it. A double that answered only one
+    // would certify a read path that cannot run on the other kind of database.
+    const registry =
+      /^SELECT "id", "slug", "table_name", "localized" FROM "(\w+)"$/.exec(
+        flat
+      );
     if (registry?.[1] !== undefined) {
       if (!world.tables.includes(registry[1])) {
         throw new Error(`relation "${registry[1]}" does not exist`);
       }
+      if (world.noLocalizedColumn === true) {
+        throw new Error('column "localized" does not exist');
+      }
       return world.registryRows ?? [];
+    }
+    const registryLegacy =
+      /^SELECT "id", "slug", "table_name" FROM "(\w+)"$/.exec(flat);
+    if (registryLegacy?.[1] !== undefined) {
+      if (!world.tables.includes(registryLegacy[1])) {
+        throw new Error(`relation "${registryLegacy[1]}" does not exist`);
+      }
+      // The column is absent, so no row can report itself localized.
+      return (world.registryRows ?? []).map(
+        ({ localized: _localized, ...rest }) => rest
+      );
     }
     throw new Error(`unrecognised statement: ${flat}`);
   }
@@ -322,5 +347,117 @@ describe("runFieldGroupMigration", () => {
     if (NextlyError.is(error)) {
       expect(error.logContext?.reason).toBe("rollback has no recorded plan");
     }
+  });
+});
+
+describe("companion ownership", () => {
+  /**
+   * Asked of `readRegistryRows` directly, not of a run's outcome.
+   *
+   * `hasCompanion` decides whether a table enters the rename plan, and a run
+   * that reports `already-migrated` builds no plan at all — so an assertion on
+   * its outcome cannot tell a correct answer from a wrong one. Measured: with
+   * the ownership condition removed, every outcome-level assertion still passed.
+   */
+  async function companionFor(
+    over: Partial<RunWorld> & {
+      rows: { localized?: boolean | number };
+    }
+  ): Promise<boolean | undefined> {
+    const { adapter } = createRunWorld({
+      tables: [TARGET_REGISTRY, "fg_hero", "fg_hero_locales"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", ...over.rows },
+      ],
+      ...over,
+    });
+    const rows = await readRegistryRows(adapter);
+    return rows[0]?.hasCompanion;
+  }
+
+  // 🔴 Nextly runs inside the user's own database. A non-localized field group
+  // has no companion, so a table sitting on the derived `_locales` name belongs
+  // to the application — and adopting it into the plan renames it away.
+  it("claims no companion for a group the registry says is not localized", async () => {
+    await expect(companionFor({ rows: { localized: 0 } })).resolves.toBe(false);
+  });
+
+  it("claims the companion when the flag and the table agree", async () => {
+    await expect(companionFor({ rows: { localized: 1 } })).resolves.toBe(true);
+  });
+
+  // The flag alone is not enough either: a localized group with no translatable
+  // fields has no companion, and the plan must not name a table never created.
+  it("claims no companion when the table was never created", async () => {
+    await expect(
+      companionFor({
+        tables: [TARGET_REGISTRY, "fg_hero"],
+        rows: { localized: 1 },
+      })
+    ).resolves.toBe(false);
+  });
+
+  // MySQL and SQLite store the flag as 1/0 where Postgres stores a boolean, so
+  // reading it as a strict `=== true` would drop every companion on two of the
+  // three dialects and leave real storage behind under its legacy name.
+  it("reads the flag in both stored forms", async () => {
+    await expect(companionFor({ rows: { localized: true } })).resolves.toBe(
+      true
+    );
+    await expect(companionFor({ rows: { localized: 1 } })).resolves.toBe(true);
+  });
+
+  // A database that predates the i18n column has no companions at all, so the
+  // fallback reporting every row as not localized is the true answer there.
+  it("falls back when the database predates the localized column", async () => {
+    await expect(
+      companionFor({ noLocalizedColumn: true, rows: {} })
+    ).resolves.toBe(false);
+  });
+});
+
+describe("a settled marker older than this build's work", () => {
+  // 🔴 `generation` names what storage reached; what that generation MEANS is a
+  // property of the build that wrote it. Version 2 ran renames only, version 3
+  // also rewrites field definitions, ledger keys and parent pointers — so a
+  // version 2 marker describes storage this build considers half-migrated, and
+  // every table and column would still check out.
+  it("refuses rather than reporting the work complete", async () => {
+    const { adapter } = createRunWorld({
+      marker: { version: 2, status: "settled", generation: "field-groups-v2" },
+      tables: [TARGET_REGISTRY, "fg_hero"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: 0 },
+      ],
+    });
+
+    const error = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+    }).catch((caught: unknown) => caught);
+
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toBe(
+        "settled marker predates work this build performs"
+      );
+    }
+  });
+
+  // A `legacy` marker claims no work was done, which is the same claim in every
+  // build. Refusing there would strand a rollback that has nothing left to undo.
+  it("accepts a legacy marker whatever version wrote it", async () => {
+    const { adapter } = createRunWorld({
+      marker: { version: 2, status: "settled", generation: "legacy" },
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "comp_hero", localized: 0 },
+      ],
+    });
+
+    await expect(
+      runFieldGroupMigration({ adapter, logger, direction: "down" })
+    ).resolves.toEqual({ ran: false, reason: "already-migrated" });
   });
 });

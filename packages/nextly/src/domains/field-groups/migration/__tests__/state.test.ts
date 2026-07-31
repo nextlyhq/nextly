@@ -624,10 +624,15 @@ describe("field-group migration marker", () => {
       status: "settled",
       generation: "field-groups-v2",
     });
+    // The version travels with the state: a generation means whatever the build
+    // that wrote it made it mean, and only the version says which build that
+    // was. Dropping it here is what let an older marker be read as this build's
+    // completeness claim.
     await expect(readMigrationState(meta)).resolves.toEqual({
       status: "settled",
       generation: "field-groups-v2",
       recorded: true,
+      version: MIGRATION_MARKER_VERSION - 1,
     });
   });
 
@@ -649,6 +654,7 @@ describe("field-group migration marker", () => {
       status: "settled",
       generation: "field-groups-v2",
       recorded: true,
+      version: MIN_READABLE_MANIFEST_VERSION,
       appliedManifest: PLAN_ENTRIES,
     });
   });
