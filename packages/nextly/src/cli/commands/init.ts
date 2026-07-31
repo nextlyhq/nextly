@@ -315,9 +315,16 @@ export async function getNextlyInstance(): Promise<Nextly> {
   // initializeNextly() would cycle, since that function boots by calling
   // this one.
 
+  // Booting is what completes initialization, so record it here as well: a
+  // caller using this directly has initialized just as fully as one going
+  // through initializeNextly(), and isNextlyInitialized() should say so.
+  initialized = true;
+
   // Get the Nextly instance with minimal storage/image processor config
   // In a real app, you'd configure these with actual implementations
   return getNextly({
+    // Required on every call, and the reason this module imports the config.
+    config: nextlyConfig,
     storage: {
       upload: async () => ({ path: "", url: "" }),
       delete: async () => {},

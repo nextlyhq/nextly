@@ -47,7 +47,7 @@ describe("code-first collection hooks (integration)", () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
-          slug: "docs",
+          slug: "cfhdocs",
           access: { create: () => true, read: () => true, update: () => true },
           hooks: {
             beforeChange: [record("beforeChange")],
@@ -64,7 +64,7 @@ describe("code-first collection hooks (integration)", () => {
       current.getService<CollectionsHandler>("collectionsHandler");
 
     const created = await handler.createEntry(
-      { collectionName: "docs", overrideAccess: true },
+      { collectionName: "cfhdocs", overrideAccess: true },
       { title: "T" }
     );
     expect(created.success).toBe(true);
@@ -73,7 +73,7 @@ describe("code-first collection hooks (integration)", () => {
 
     fired.length = 0;
     const read = await handler.getEntry({
-      collectionName: "docs",
+      collectionName: "cfhdocs",
       entryId: (created.data as { id: string }).id,
       user: { id: "u1" },
       routeAuthorized: true,
@@ -90,7 +90,7 @@ describe("code-first collection hooks (integration)", () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
-          slug: "docs",
+          slug: "cfhdocs",
           access: { create: () => true, read: () => true },
           hooks: {
             beforeChange: [
@@ -108,7 +108,7 @@ describe("code-first collection hooks (integration)", () => {
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
-      { collectionName: "docs", overrideAccess: true },
+      { collectionName: "cfhdocs", overrideAccess: true },
       { title: "Draft" }
     );
 
@@ -126,12 +126,12 @@ describe("code-first collection hooks (integration)", () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
-          slug: "kept",
+          slug: "cfhkept",
           access: { create: () => true, read: () => true },
           hooks: {
             beforeChange: [
               async ({ data }: { data?: unknown }) => {
-                fired.push("kept");
+                fired.push("cfhkept");
                 return data;
               },
             ],
@@ -151,7 +151,7 @@ describe("code-first collection hooks (integration)", () => {
           contributes: {
             collections: [
               defineCollection({
-                slug: "fromdisabled",
+                slug: "cfhfromdisabled",
                 access: { create: () => true, read: () => true },
                 hooks: {
                   beforeChange: [
@@ -172,10 +172,10 @@ describe("code-first collection hooks (integration)", () => {
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     await handler.createEntry(
-      { collectionName: "kept", overrideAccess: true },
+      { collectionName: "cfhkept", overrideAccess: true },
       { title: "T" }
     );
 
-    expect(fired).toEqual(["kept"]);
+    expect(fired).toEqual(["cfhkept"]);
   });
 });
