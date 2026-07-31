@@ -213,6 +213,41 @@ describe("draft/published split — updateEntry (integration)", () => {
     );
   });
 
+  it("makes the working draft reachable through the Direct API findByID draft option", async () => {
+    // End-to-end reachability: the split engine's read overlay is dormant unless
+    // a caller-facing surface forwards the opt-in. This drives the full
+    // Direct API -> handler -> entry service -> query service chain.
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Stash a pending edit as the working draft (a trusted status-less save).
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited-in-draft" }
+    );
+
+    // A plain findByID returns the live published row.
+    const live = await handle!.nextly.findByID({
+      collection: COLLECTION,
+      id,
+      overrideAccess: true,
+    });
+    expect((live as { title?: string } | null)?.title).toBe("live");
+
+    // The `draft: true` opt-in surfaces the pending working draft instead.
+    const draft = await handle!.nextly.findByID({
+      collection: COLLECTION,
+      id,
+      draft: true,
+      overrideAccess: true,
+    });
+    expect((draft as { title?: string } | null)?.title).toBe("edited-in-draft");
+  });
+
   it("surfaces the working draft to an access-enforced authenticated editor, but not to an anonymous read", async () => {
     // A collection whose reads are access-enforced: only an authenticated caller
     // reads it, and everyone who reads it may also update it.
