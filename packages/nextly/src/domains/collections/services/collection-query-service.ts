@@ -21,6 +21,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
@@ -95,7 +96,10 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
-import { buildRestorePayload } from "../../versions/restore-snapshot";
+import {
+  buildRestorePayload,
+  type ComponentSchemas,
+} from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import { VersionsRepository } from "../../versions/versions-repository";
 
@@ -2377,22 +2381,37 @@ export class CollectionQueryService extends BaseService {
           // draft's own component values, and re-reading components from their
           // tables would replace the pending edits with live content.
           if (params.depth !== 0) {
+            const expandOptions: Parameters<
+              CollectionRelationshipService["expandRelationships"]
+            >[3] = {
+              depth: params.depth,
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
+              locale: localeChain?.[0],
+              status:
+                params.status === "all" || params.overrideAccess === true
+                  ? "all"
+                  : undefined,
+            };
             draftEntry = await this.relationshipService.expandRelationships(
               draftEntry,
               params.collectionName,
               fields,
-              {
-                depth: params.depth,
-                enforceFieldAccess: true,
-                user: params.user,
-                overrideAccess: params.overrideAccess,
-                authenticatedScope: params.authenticatedScope,
-                locale: localeChain?.[0],
-                status:
-                  params.status === "all" || params.overrideAccess === true
-                    ? "all"
-                    : undefined,
-              }
+              expandOptions
+            );
+            // The parent-schema expansion above does not traverse component
+            // fields, so a relationship inside a draft component would stay an id
+            // while a live read populates it through the component data service.
+            // Expand those relations on the snapshot's own component values, so a
+            // draft read matches a live read at depth > 0 without re-reading the
+            // live component rows (which would replace the pending edits).
+            draftEntry = await this.expandDraftComponentRelations(
+              draftEntry,
+              fields as FieldConfig[],
+              draftComponentSchemas,
+              expandOptions
             );
           }
           expandedEntry = draftEntry;
@@ -2522,6 +2541,95 @@ export class CollectionQueryService extends BaseService {
   // ============================================================
   // PRIVATE HELPER METHODS
   // ============================================================
+
+  /**
+   * Expand relationship fields nested inside a working draft's component values,
+   * using each component's own schema and WITHOUT re-reading the component rows.
+   *
+   * The parent-schema `expandRelationships` does not traverse component fields,
+   * so a relationship inside a draft component would otherwise stay an id on a
+   * draft read while a live read populates it. The draft snapshot already carries
+   * the component values (re-reading them would replace the pending edits with
+   * live content), so this walks and expands them in place.
+   */
+  private async expandDraftComponentRelations(
+    entry: Record<string, unknown>,
+    parentFields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null,
+    options: Parameters<CollectionRelationshipService["expandRelationships"]>[3]
+  ): Promise<Record<string, unknown>> {
+    if (!componentSchemas) return entry;
+    const out = { ...entry };
+    for (const field of parentFields) {
+      if (!isFieldGroupField(field)) continue;
+      const name = (field as { name?: unknown }).name;
+      if (typeof name !== "string" || !(name in out)) continue;
+      out[name] = await this.expandComponentInstanceRelations(
+        out[name],
+        field,
+        componentSchemas,
+        options
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Expand one component value, or each element when the field is repeatable or a
+   * dynamic zone, resolving each instance against its own component schema.
+   */
+  private async expandComponentInstanceRelations(
+    value: unknown,
+    field: FieldConfig,
+    componentSchemas: ComponentSchemas,
+    options: Parameters<CollectionRelationshipService["expandRelationships"]>[3]
+  ): Promise<unknown> {
+    if (Array.isArray(value)) {
+      return Promise.all(
+        value.map(item =>
+          this.expandComponentInstanceRelations(
+            item,
+            field,
+            componentSchemas,
+            options
+          )
+        )
+      );
+    }
+    if (value === null || typeof value !== "object") return value;
+
+    const instance = value as Record<string, unknown>;
+    // A dynamic-zone row records the component it holds; a single-component field
+    // takes it from the field's declared slug.
+    const tagged = instance._componentType;
+    const declared = (field as { component?: unknown }).component;
+    const slug =
+      typeof tagged === "string"
+        ? tagged
+        : typeof declared === "string"
+          ? declared
+          : undefined;
+    if (slug === undefined) return instance;
+
+    const schema = componentSchemas.get(slug);
+    if (!schema || !schema.resolved) return instance;
+
+    // Expand this component's own relationship fields, then recurse into any
+    // component nested inside it.
+    let expanded = await this.relationshipService.expandRelationships(
+      instance,
+      slug,
+      schema.fields as unknown as FieldDefinition[],
+      options
+    );
+    expanded = await this.expandDraftComponentRelations(
+      expanded,
+      schema.fields,
+      componentSchemas,
+      options
+    );
+    return expanded;
+  }
 
   /**
    * Build WHERE condition for full-text search across multiple fields.

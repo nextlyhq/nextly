@@ -8,6 +8,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  relationship,
   text,
 } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
@@ -591,6 +592,64 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(live.title).toBe("restored");
     // The pending draft survived the restore.
     expect(await workingDraftCount(id)).toBe(1);
+  });
+
+  it("expands relationships inside a draft component at depth > 0", async () => {
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "linker",
+          fields: [relationship({ name: "rel", relationTo: "tags" })],
+        }),
+      ],
+      collections: [
+        defineCollection({ slug: "tags", fields: [text({ name: "name" })] }),
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "linker", component: "linker" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    const tag = await entries.createEntry(
+      { collectionName: "tags", overrideAccess: true },
+      { name: "t1" }
+    );
+    const tagId = (tag.data as { id: string }).id;
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      linker: { rel: tagId },
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A status-less edit stores the component in the draft snapshot with its
+    // relation captured as an id.
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+
+    // A draft read at depth 1 must expand the relation inside the component, like
+    // a live read, rather than leaving it a bare id.
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+      depth: 1,
+    });
+    const linker = (draftRead.data as { linker?: { rel?: unknown } }).linker;
+    const rel = linker?.rel;
+    expect(rel !== null && typeof rel === "object").toBe(true);
+    expect((rel as { name?: string })?.name).toBe("t1");
   });
 });
 
