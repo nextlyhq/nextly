@@ -163,6 +163,31 @@ describe("read hooks narrow the query", () => {
     }
   });
 
+  it("a beforeRead returning null clears the filter rather than being ignored", async () => {
+    // `HookRegistry.execute` distinguishes `null` (a deliberate return) from
+    // `undefined` (no return), so a `??` fallback here would leave a hook
+    // unable to widen a read it had decided should not be narrowed.
+    const t = await boot();
+    await seed(t);
+
+    const clear: HookHandler = () => null;
+    registerHook("beforeRead", SLUG, clear);
+
+    try {
+      const listed = await handlerOf(t).listEntries({
+        collectionName: SLUG,
+        overrideAccess: true,
+        where: { tenant: { equals: "t1" } },
+      });
+
+      // The caller asked for t1; the hook cleared that, so every row comes back.
+      expect(listed.data!.docs).toHaveLength(3);
+      expect(listed.data!.totalDocs).toBe(3);
+    } finally {
+      unregisterHook("beforeRead", SLUG, clear);
+    }
+  });
+
   it("a list runs its read hooks once, not once per nested count", async () => {
     // `listEntries` calls `countEntries` for the total. Running the chain in
     // both would fire every side effect twice for one request.

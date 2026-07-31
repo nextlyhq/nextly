@@ -376,9 +376,12 @@ export class CollectionQueryService extends BaseService {
       })
     );
 
-    // `execute` returns the data it was given when nothing is registered, so a
-    // read with no hooks is unchanged rather than emptied.
-    return beforeReadResult ?? afterBeforeOperation;
+    // `undefined` means the hook returned nothing, so the filter is unchanged;
+    // `null` is a deliberate return the registry preserves, and it means the
+    // hook cleared the filter. Collapsing the two would leave a hook unable to
+    // widen a read it had decided should not be narrowed.
+    if (beforeReadResult === undefined) return afterBeforeOperation;
+    return beforeReadResult ?? undefined;
   }
 
   private buildLocalizedQueryContext(
@@ -1001,7 +1004,13 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
-            where: cleanedWhere, // Use cleaned where (without geo operators)
+            // Geo operators removed (the count cannot apply them), but component
+            // predicates kept: `cleanedWhere` has BOTH stripped, and the count
+            // builds its own EXISTS conditions from the ones it is given. Sending
+            // the component-stripped filter counts rows the page excluded, so a
+            // read filtered on `seo.metaTitle` reported a total describing rows
+            // it had correctly withheld.
+            where: whereAfterGeo,
             // The read hooks already ran for this request and `cleanedWhere`
             // is what they settled on. Running them again here would fire every
             // side effect twice -- an audit entry, a rate-limit tick -- for one
