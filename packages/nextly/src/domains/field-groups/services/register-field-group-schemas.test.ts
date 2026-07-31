@@ -5,7 +5,11 @@
  * runtime schema for every component the database knows about.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../migration/manifest";
+import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
 import { registerComponentSchemas } from "./register-field-group-schemas";
 
@@ -16,14 +20,25 @@ const silentLogger = {
   error: vi.fn(),
 };
 
-/** Adapter returning `components` from the `dynamic_components` registry table. */
-function makeAdapter(components: Array<Record<string, unknown>>) {
+/**
+ * Adapter returning `components` from whichever registry `tables` says is there.
+ *
+ * `listTables` is not decoration: the registry table is resolved from the
+ * catalog because the storage migration renames it, so a double that cannot
+ * answer what tables exist certifies a path production cannot take.
+ */
+function makeAdapter(
+  components: Array<Record<string, unknown>>,
+  tables: string[] = [STORAGE_FORMAT.registryTable]
+) {
   return {
-    dialect: "postgresql",
+    dialect: "postgresql" as const,
     getCapabilities: () => ({ dialect: "postgresql" }),
     select: vi.fn().mockResolvedValue(components),
     selectOne: vi.fn().mockResolvedValue(null),
     executeQuery: vi.fn().mockResolvedValue([]),
+    listTables: vi.fn().mockResolvedValue(tables),
+    getDrizzle: () => ({}),
   };
 }
 
@@ -47,6 +62,10 @@ function componentRow(overrides: Record<string, unknown> = {}) {
 }
 
 describe("registerComponentSchemas", () => {
+  // The resolution is memoized per adapter; each fixture builds its own, and
+  // this keeps a shared module instance from carrying one answer into the next.
+  beforeEach(() => forgetFieldGroupStorageNames());
+
   it("registers a runtime schema for every component in the database", async () => {
     const adapter = makeAdapter([
       componentRow(),
@@ -83,6 +102,33 @@ describe("registerComponentSchemas", () => {
     const registered = registry.registerDynamicSchema.mock.calls.map(c => c[0]);
     expect(registered).toContain("comp_hero");
     expect(registered).toContain("comp_hero_locales");
+  });
+
+  // 🔴 The whole reason this helper had to change. Before the registry name was
+  // resolved it addressed `dynamic_components` by constant, so on a database
+  // whose storage migration has run it read a table that no longer exists and
+  // registered nothing at all — every field group unreadable, silently.
+  it("reads the migrated registry on a database whose storage moved", async () => {
+    const adapter = makeAdapter(
+      [componentRow({ table_name: "fg_hero" })],
+      [MIGRATION_TARGET.registryTable]
+    );
+    const registry = { registerDynamicSchema: vi.fn() };
+
+    const count = await registerComponentSchemas({
+      adapter: adapter as never,
+      registry: registry as never,
+      dialect: "postgresql",
+      logger: silentLogger as never,
+    });
+
+    expect(adapter.select.mock.calls.map(call => call[0])).toEqual([
+      MIGRATION_TARGET.registryTable,
+    ]);
+    expect(count).toBe(1);
+    expect(registry.registerDynamicSchema.mock.calls.map(c => c[0])).toContain(
+      "fg_hero"
+    );
   });
 
   it("is a no-op when the database holds no components", async () => {

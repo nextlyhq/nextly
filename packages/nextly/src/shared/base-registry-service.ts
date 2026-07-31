@@ -129,6 +129,19 @@ export abstract class BaseRegistryService<
   /** The metadata table name (e.g., "dynamic_collections"). */
   protected abstract readonly registryTableName: string;
 
+  /**
+   * The metadata table to address for this call.
+   *
+   * Separate from {@link registryTableName} because one registry's table can be
+   * renamed under a running database: the field-group storage migration moves
+   * it, so its name is an observation rather than a constant there. Every query
+   * below goes through this, and the default answers with the declared name, so
+   * a registry whose table never moves costs nothing and reads identically.
+   */
+  protected async resolveRegistryTableName(): Promise<string> {
+    return this.registryTableName;
+  }
+
   /** Human-readable resource type for error messages (e.g., "Collection"). */
   protected abstract readonly resourceType: string;
 
@@ -156,7 +169,7 @@ export abstract class BaseRegistryService<
   ): Promise<TRecord | null> {
     try {
       const result = await this.adapter.selectOne<TRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         {
           where: this.whereEq("slug", slug),
         },
@@ -206,7 +219,7 @@ export abstract class BaseRegistryService<
       const conditions = this.buildFilterConditions(options);
 
       const results = await this.adapter.select<TRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         {
           where: conditions.length > 0 ? { and: conditions } : undefined,
           orderBy: [{ column: "created_at", direction: "asc" }],
@@ -258,7 +271,7 @@ export abstract class BaseRegistryService<
 
       // Get total count (without pagination)
       const allResults = await this.adapter.select<{ id: string }>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         {
           where: whereClause,
           columns: ["id"],
@@ -268,7 +281,7 @@ export abstract class BaseRegistryService<
 
       // Get paginated results
       const results = await this.adapter.select<TRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         {
           where: whereClause,
           orderBy: [{ column: "created_at", direction: "asc" }],
@@ -322,7 +335,7 @@ export abstract class BaseRegistryService<
       }
 
       const results = await this.adapter.update(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         updateData,
         this.whereEq("slug", slug),
         { returning: "*" }
@@ -398,7 +411,7 @@ export abstract class BaseRegistryService<
   protected async getRecordsWithPendingMigrations(): Promise<TRecord[]> {
     try {
       const results = await this.adapter.select<TRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         {
           where: {
             and: [

@@ -27,6 +27,7 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
@@ -106,6 +107,19 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
+  }
+
+  /**
+   * The registry table this database actually holds.
+   *
+   * Unlike the collection and single registries, this one is renamed by the
+   * field-group storage migration, so the declared name above is what a
+   * database has *before* that runs and not a fact about the database in front
+   * of us. Resolved from the catalog and memoized per adapter, so the answer
+   * costs one catalog read per process rather than one per query.
+   */
+  protected override async resolveRegistryTableName(): Promise<string> {
+    return resolveRegistryTableName(this.adapter);
   }
 
   protected getSearchColumns(): string[] {
@@ -211,7 +225,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     try {
       const result = await this.adapter.insert<DynamicFieldGroupRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         record,
         { returning: "*" }
       );
@@ -236,7 +250,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     data: DynamicFieldGroupInsert
   ): Promise<DynamicFieldGroupRecord> {
     const existing = await tx.selectOne<DynamicFieldGroupRecord>(
-      this.registryTableName,
+      await this.resolveRegistryTableName(),
       {
         where: this.whereEq("slug", data.slug),
       }
@@ -276,7 +290,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     };
 
     const result = await tx.insert<DynamicFieldGroupRecord>(
-      this.registryTableName,
+      await this.resolveRegistryTableName(),
       record,
       { returning: "*" }
     );
@@ -359,7 +373,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     try {
       const results = await this.adapter.update<DynamicFieldGroupRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         updateData,
         this.whereEq("slug", slug),
         { returning: "*" }
@@ -442,7 +456,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
       // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
       await this.adapter.delete(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         this.whereEq("slug", slug)
       );
 
@@ -680,7 +694,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     try {
       const components = await this.adapter.select<Record<string, unknown>>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         { columns: ["slug", "fields"] }
       );
 
@@ -783,7 +797,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     try {
       const results = await this.adapter.select<DynamicFieldGroupRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         {
           where: {
             and: [

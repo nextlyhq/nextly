@@ -1012,13 +1012,23 @@ async function initializeSchemaRegistry(
   try {
     const { SchemaRegistry } = await import("../database/schema-registry");
     const { getDialectTables } = await import("../database/index");
+    const { getFieldGroupRegistryAliases } = await import(
+      "../domains/field-groups/storage/registry-schemas"
+    );
     const dialect = adapter.getCapabilities().dialect;
     const registry = new SchemaRegistry(dialect);
 
     container.registerSingleton("schemaRegistry", () => registry);
 
-    // Step 1: Register static system tables.
-    registry.registerStaticSchemas(getDialectTables(dialect));
+    // Step 1: Register static system tables. The field-group registry is
+    // declared under both of its names so a database whose storage migration
+    // has run is addressable — the schema registry keys a table by the
+    // physical name its Drizzle object carries, so the renamed table has no
+    // handle otherwise. Kept out of the push bundle above deliberately.
+    registry.registerStaticSchemas({
+      ...getDialectTables(dialect),
+      ...getFieldGroupRegistryAliases(dialect),
+    });
     adapter.setTableResolver(registry);
 
     // Step 1.5 (F8 PR 6): first-run static-table push. Probes for

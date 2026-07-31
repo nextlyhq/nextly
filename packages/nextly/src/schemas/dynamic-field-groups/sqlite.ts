@@ -58,156 +58,178 @@ import type { FieldGroupSource, FieldGroupMigrationStatus } from "./types";
  * - Migration status (synced, pending, generated, applied)
  * - Schema versioning and change detection
  */
-export const dynamicFieldGroupsSqlite = sqliteTable(
-  STORAGE_FORMAT.registryTable,
-  {
-    // --------------------------------------------------------
-    // Primary Key
-    // --------------------------------------------------------
+export function buildDynamicFieldGroupsSqlite(tableName: string) {
+  return sqliteTable(
+    tableName,
+    {
+      // --------------------------------------------------------
+      // Primary Key
+      // --------------------------------------------------------
 
-    /** Unique identifier (UUID v4, auto-generated) */
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => crypto.randomUUID()),
+      /** Unique identifier (UUID v4, auto-generated) */
+      id: text("id")
+        .primaryKey()
+        .$defaultFn(() => crypto.randomUUID()),
 
-    // --------------------------------------------------------
-    // Component Identity
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Component Identity
+      // --------------------------------------------------------
 
-    /**
-     * Unique slug identifier for the Component.
-     * Must be unique across all Components, Collections, AND Singles.
-     */
-    slug: text("slug").unique().notNull(),
+      /**
+       * Unique slug identifier for the Component.
+       * Must be unique across all Components, Collections, AND Singles.
+       */
+      slug: text("slug").unique().notNull(),
 
-    /**
-     * Display label for the Admin UI.
-     * Components only need a singular label.
-     */
-    label: text("label").notNull(),
+      /**
+       * Display label for the Admin UI.
+       * Components only need a singular label.
+       */
+      label: text("label").notNull(),
 
-    /**
-     * Database table name for this Component's data.
-     * Convention: prefix with `comp_` (e.g., 'comp_seo').
-     */
-    tableName: text("table_name").unique().notNull(),
+      /**
+       * Database table name for this Component's data.
+       * Convention: prefix with `comp_` (e.g., 'comp_seo').
+       */
+      tableName: text("table_name").unique().notNull(),
 
-    /** Optional description of the Component's purpose */
-    description: text("description"),
+      /** Optional description of the Component's purpose */
+      description: text("description"),
 
-    // --------------------------------------------------------
-    // Schema Definition
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Schema Definition
+      // --------------------------------------------------------
 
-    /**
-     * Field configurations defining the Component's structure.
-     * Supports all field types including nested component fields.
-     */
-    fields: text("fields", { mode: "json" }).$type<FieldConfig[]>().notNull(),
+      /**
+       * Field configurations defining the Component's structure.
+       * Supports all field types including nested component fields.
+       */
+      fields: text("fields", { mode: "json" }).$type<FieldConfig[]>().notNull(),
 
-    /**
-     * Admin UI configuration options.
-     * Controls category grouping, icon, visibility, etc.
-     */
-    admin: text("admin", { mode: "json" }).$type<FieldGroupAdminOptions>(),
+      /**
+       * Admin UI configuration options.
+       * Controls category grouping, icon, visibility, etc.
+       */
+      admin: text("admin", { mode: "json" }).$type<FieldGroupAdminOptions>(),
 
-    // --------------------------------------------------------
-    // Unified Model Fields
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Unified Model Fields
+      // --------------------------------------------------------
 
-    /**
-     * Where the Component was defined.
-     * - 'code': defineFieldGroup() in a config file
-     * - 'ui': Visual Component Builder
-     */
-    source: text("source").$type<FieldGroupSource>().default("ui").notNull(),
+      /**
+       * Where the Component was defined.
+       * - 'code': defineFieldGroup() in a config file
+       * - 'ui': Visual Component Builder
+       */
+      source: text("source").$type<FieldGroupSource>().default("ui").notNull(),
 
-    /**
-     * If true, the Component cannot be modified via the Admin UI.
-     * Code-first Components are locked by default.
-     */
-    locked: integer("locked", { mode: "boolean" }).default(false).notNull(),
+      /**
+       * If true, the Component cannot be modified via the Admin UI.
+       * Code-first Components are locked by default.
+       */
+      locked: integer("locked", { mode: "boolean" }).default(false).notNull(),
 
-    // i18n: whether the component is localized (translatable fields live in the
-    // companion `comp_<slug>_locales` table). Mirrors dynamic_collections/singles.
-    localized: integer("localized", { mode: "boolean" })
-      .default(false)
-      .notNull(),
+      // i18n: whether the component is localized (translatable fields live in the
+      // companion `comp_<slug>_locales` table). Mirrors dynamic_collections/singles.
+      localized: integer("localized", { mode: "boolean" })
+        .default(false)
+        .notNull(),
 
-    /**
-     * Path to the config file (code-first Components only).
-     * @example "src/components/seo.ts"
-     */
-    configPath: text("config_path"),
+      /**
+       * Path to the config file (code-first Components only).
+       * @example "src/components/seo.ts"
+       */
+      configPath: text("config_path"),
 
-    // --------------------------------------------------------
-    // Migration & Versioning
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Migration & Versioning
+      // --------------------------------------------------------
 
-    /**
-     * SHA-256 hash of the fields definition.
-     * Used for change detection during sync operations.
-     */
-    schemaHash: text("schema_hash").notNull(),
+      /**
+       * SHA-256 hash of the fields definition.
+       * Used for change detection during sync operations.
+       */
+      schemaHash: text("schema_hash").notNull(),
 
-    /**
-     * Schema version number, incremented on each change.
-     * Starts at 1 for new Components.
-     */
-    schemaVersion: integer("schema_version").default(1).notNull(),
+      /**
+       * Schema version number, incremented on each change.
+       * Starts at 1 for new Components.
+       */
+      schemaVersion: integer("schema_version").default(1).notNull(),
 
-    /**
-     * Current migration status.
-     */
-    migrationStatus: text("migration_status")
-      .$type<FieldGroupMigrationStatus>()
-      .default("pending")
-      .notNull(),
+      /**
+       * Current migration status.
+       */
+      migrationStatus: text("migration_status")
+        .$type<FieldGroupMigrationStatus>()
+        .default("pending")
+        .notNull(),
 
-    /**
-     * Reference to the last applied migration ID.
-     */
-    lastMigrationId: text("last_migration_id"),
+      /**
+       * Reference to the last applied migration ID.
+       */
+      lastMigrationId: text("last_migration_id"),
 
-    // --------------------------------------------------------
-    // Metadata
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Metadata
+      // --------------------------------------------------------
 
-    /** User ID who created the Component (optional) */
-    createdBy: text("created_by"),
+      /** User ID who created the Component (optional) */
+      createdBy: text("created_by"),
 
-    /** When the Component was created */
-    createdAt: integer("created_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
+      /** When the Component was created */
+      createdAt: integer("created_at", { mode: "timestamp" })
+        .notNull()
+        .$defaultFn(() => new Date()),
 
-    /** When the Component was last updated */
-    updatedAt: integer("updated_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  table => [
-    // --------------------------------------------------------
-    // Indexes for Query Performance
-    // --------------------------------------------------------
+      /** When the Component was last updated */
+      updatedAt: integer("updated_at", { mode: "timestamp" })
+        .notNull()
+        .$defaultFn(() => new Date()),
+    },
+    table => [
+      // --------------------------------------------------------
+      // Indexes for Query Performance
+      // --------------------------------------------------------
 
-    /** Index for filtering Components by source (code, ui) */
-    index(`${STORAGE_FORMAT.registryTable}_source_idx`).on(table.source),
+      /** Index for filtering Components by source (code, ui) */
+      index(`${STORAGE_FORMAT.registryTable}_source_idx`).on(table.source),
 
-    /** Index for finding Components needing migration */
-    index(`${STORAGE_FORMAT.registryTable}_migration_status_idx`).on(
-      table.migrationStatus
-    ),
+      /** Index for finding Components needing migration */
+      index(`${STORAGE_FORMAT.registryTable}_migration_status_idx`).on(
+        table.migrationStatus
+      ),
 
-    /** Index for filtering by creator */
-    index(`${STORAGE_FORMAT.registryTable}_created_by_idx`).on(table.createdBy),
+      /** Index for filtering by creator */
+      index(`${STORAGE_FORMAT.registryTable}_created_by_idx`).on(
+        table.createdBy
+      ),
 
-    /** Index for sorting by creation date */
-    index(`${STORAGE_FORMAT.registryTable}_created_at_idx`).on(table.createdAt),
+      /** Index for sorting by creation date */
+      index(`${STORAGE_FORMAT.registryTable}_created_at_idx`).on(
+        table.createdAt
+      ),
 
-    /** Index for sorting by last modified date */
-    index(`${STORAGE_FORMAT.registryTable}_updated_at_idx`).on(table.updatedAt),
-  ]
+      /** Index for sorting by last modified date */
+      index(`${STORAGE_FORMAT.registryTable}_updated_at_idx`).on(
+        table.updatedAt
+      ),
+    ]
+  );
+}
+
+/**
+ * The registry under the name this release's DDL creates.
+ *
+ * The factory exists because the storage migration renames this table, and a
+ * Drizzle object carries its physical name: addressing the renamed table needs
+ * an object built under that name. Index names are derived from the legacy
+ * constant in both instances on purpose — the migration renames the table and
+ * its type discriminator and nothing else, so a renamed table keeps the index
+ * names it was created with on every dialect.
+ */
+export const dynamicFieldGroupsSqlite = buildDynamicFieldGroupsSqlite(
+  STORAGE_FORMAT.registryTable
 );
 
 // ============================================================

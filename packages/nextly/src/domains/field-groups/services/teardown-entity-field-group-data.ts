@@ -40,12 +40,21 @@ import {
   indexCatalog,
   resolveCatalogName,
 } from "../../schema/utils/resolve-catalog-name";
+import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
 /** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
 const DEFAULT_MAX_DEPTH = 10;
 
-/** Registry table holding one row per component, including its physical table name. */
-const REGISTRY_TABLE = STORAGE_FORMAT.registryTable;
+/**
+ * Registry table holding one row per component, including its physical table
+ * name. Resolved rather than constant: the field-group storage migration
+ * renames it, so which of the two names a database holds is an observation.
+ */
+async function registryTableName(
+  adapter: TeardownComponentDataAdapter
+): Promise<string> {
+  return resolveRegistryTableName(adapter);
+}
 
 /**
  * Chunk size for `IN (...)` lists. Keeps a very large entity from exceeding a driver's
@@ -230,7 +239,8 @@ async function listRegisteredComponentTables(
   // *Which catalog entry is the registry* is physical identity, so it is resolved
   // through the server's comparison rules and the answer is the spelling the
   // catalog reports. That spelling is what the metadata exclusion below needs.
-  const registryTable = resolveCatalogName(catalog, REGISTRY_TABLE);
+  const declared = await registryTableName(adapter);
+  const registryTable = resolveCatalogName(catalog, declared);
   if (registryTable === undefined) return [];
 
   // *How to address the registry through the ORM* is a different question with a
@@ -247,12 +257,9 @@ async function listRegisteredComponentTables(
   // stays complete for everything such an executor can reach. Probing rather
   // than catching keeps genuine read failures propagating instead of being
   // mistaken for "nothing registered".
-  if (!(await isResolvable(adapter, REGISTRY_TABLE))) return [];
+  if (!(await isResolvable(adapter, declared))) return [];
 
-  const rows = await adapter.select<Record<string, unknown>>(
-    REGISTRY_TABLE,
-    {}
-  );
+  const rows = await adapter.select<Record<string, unknown>>(declared, {});
 
   return (
     rows
@@ -294,6 +301,7 @@ export async function teardownEntityComponentData(
   // scanned as parents).
   const discovered = await adapter.listTables();
   const registered = await listRegisteredComponentTables(adapter, discovered);
+  const registry = await registryTableName(adapter);
   const componentTables = [
     ...new Set([
       ...discovered.filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix)),
@@ -303,7 +311,7 @@ export async function teardownEntityComponentData(
     // at it would otherwise be probed as an instance table, where a missing
     // `_parent_table` column breaks the delete and a permissive adapter could
     // damage the metadata.
-  ].filter(name => name !== REGISTRY_TABLE && !isCompanionTable(name));
+  ].filter(name => name !== registry && !isCompanionTable(name));
 
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };
