@@ -107,6 +107,39 @@ export class MetaService extends BaseService {
     }
   }
 
+  /**
+   * Write a key only if no row for it exists yet, leaving any existing row untouched.
+   *
+   * `set` reads the row and then inserts or updates, so two processes writing the same new key both
+   * see nothing and both insert — one gets a primary-key violation, and if they disagree about the
+   * value the survivor is whichever landed last. That is fine for a flag being stamped with the
+   * same value from every caller, and not fine for a key whose value records a decision the losing
+   * caller must abide by.
+   *
+   * Resolved by the database rather than by reading first: the conflict clause makes the check and
+   * the write one statement. PostgreSQL and SQLite express it as `ON CONFLICT DO NOTHING`; MySQL
+   * has no such clause and gets the equivalent no-op update of the key onto itself, so the row is
+   * matched and left as it is. The builder is feature-detected because Drizzle exposes these under
+   * different names per dialect.
+   *
+   * Says nothing about who won, deliberately. A caller that needs to know reads the row afterwards
+   * and decides from its contents, which also covers losing to a caller that wrote the same value.
+   */
+  async insertIfAbsent(key: string, value: unknown): Promise<void> {
+    const insert = this.drizzle
+      .insert(this.table)
+      .values({ key, value: JSON.stringify(value), updatedAt: new Date() });
+    if (typeof insert.onConflictDoNothing === "function") {
+      await insert.onConflictDoNothing();
+      return;
+    }
+    if (typeof insert.onDuplicateKeyUpdate === "function") {
+      await insert.onDuplicateKeyUpdate({ set: { key } });
+      return;
+    }
+    await insert;
+  }
+
   async delete(key: string): Promise<void> {
     await this.drizzle.delete(this.table).where(eq(this.table.key, key));
   }

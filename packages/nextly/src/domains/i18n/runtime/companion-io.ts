@@ -805,11 +805,18 @@ async function buildSeedingCreateStatements(
   const columnsOnMain = spec.columns
     .map(c => c.name)
     .filter(name => present.has(name));
+  // Whether the main table has been reshaped for Draft/Published YET, which is a different
+  // question from whether the entity has it. This copy runs before the schema push, so one
+  // configuration edit turning on both localization and Draft/Published reaches here with
+  // `spec.status` true and no `status` column to select from.
+  const statusOnMain =
+    spec.status === true &&
+    (await mainTableHasColumns(adapter, args.tableName, ["status"]));
   // No columns to copy is not the same as nothing to seed. A Draft/Published entity still needs a
   // default-locale companion row carrying the main row's status, or every published row drops out
   // of locale-aware published reads. `buildLocalizationUpStatements` handles the empty column set
-  // for exactly that case, so only bail when there is no status either.
-  if (columnsOnMain.length === 0 && !spec.status) return null;
+  // for exactly that case, so only bail when there is no readable status either.
+  if (columnsOnMain.length === 0 && !statusOnMain) return null;
 
   const { buildLocalizationUpStatements } = await import(
     "../migration/generate-up"
@@ -824,6 +831,7 @@ async function buildSeedingCreateStatements(
       // Retained columns that were required must stop being so, or the first create after this
       // transition fails: the value now goes to the companion, so the main insert omits it.
       relaxColumns: onMain.filter(c => !c.nullable).map(c => c.name),
+      statusOnMain,
     }
   );
 }

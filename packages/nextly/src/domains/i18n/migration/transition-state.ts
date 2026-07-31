@@ -35,6 +35,12 @@ import type { MetaEntry } from "../../meta/services/meta-service";
 export interface TransitionStateStore {
   getEntry<T = unknown>(key: string): Promise<MetaEntry<T>>;
   set(key: string, value: unknown): Promise<void>;
+  /**
+   * Write only if the key has no row yet. What makes the first record of a
+   * transition a claim rather than a suggestion — see
+   * {@link beginI18nTransition}.
+   */
+  insertIfAbsent(key: string, value: unknown): Promise<void>;
   delete(key: string): Promise<void>;
 }
 
@@ -261,7 +267,39 @@ export async function beginI18nTransition(
     status: "enabling",
     sourceLocale: args.sourceLocale,
   };
-  await store.set(key, marker);
+
+  // A record that already exists is being retried or superseded by this same caller's own history,
+  // so writing over it is safe and the read above has already refused the states where it is not.
+  if (current.status !== "untracked") {
+    await store.set(key, marker);
+    return;
+  }
+
+  // Recording the FIRST transition is a claim, not a write. Two processes provisioning the same
+  // entity — a `db:sync` and a dev server, or two dev servers — both read `untracked`, and a plain
+  // write would let the one that loses the companion CREATE still record the language. The record
+  // would then name a locale the seed never used, which defeats the only fact this whole mechanism
+  // exists to keep.
+  await store.insertIfAbsent(key, marker);
+
+  // Then confirm what actually landed. Losing to a caller that recorded the same locale is not a
+  // loss worth reporting: the transition proceeds under a language both agree on. Losing to a
+  // different one is fatal, because whichever companion gets seeded will be labelled with the
+  // winner's locale and this caller must not go on believing its own.
+  const claimed = await readI18nTransitionState(store, args.kind, args.slug);
+  if (
+    claimed.status !== "untracked" &&
+    claimed.sourceLocale !== args.sourceLocale
+  ) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "localization transition was claimed with a different locale",
+        key,
+        recorded: claimed.sourceLocale,
+        received: args.sourceLocale,
+      },
+    });
+  }
 }
 
 /**

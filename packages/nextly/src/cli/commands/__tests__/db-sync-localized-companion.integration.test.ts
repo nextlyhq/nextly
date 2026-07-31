@@ -135,6 +135,7 @@ async function transitionStore(): Promise<
   return {
     getEntry: key => meta.getEntry(key),
     set: (key, v) => meta.set(key, v),
+    insertIfAbsent: (key, v) => meta.insertIfAbsent(key, v),
     delete: key => meta.delete(key),
   };
 }
@@ -479,6 +480,50 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     await expect(
       readTransition("collection", "dbsync_deleted")
     ).resolves.toEqual({ status: "untracked" });
+  });
+
+  it("applies one edit that turns on localization and Draft/Published together", async () => {
+    // The copy runs before the schema push, so `status: true` in the desired config does not mean
+    // the main table has a `status` column yet. Reading it anyway made the seed fail after the
+    // companion had already been created, and because every later run found that companion and
+    // resumed into the same statement, this combination could never apply at all.
+    await runSync(
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_bothon",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_bothon" ("id", "slug", "title") VALUES ('row1', 'r1', 'Both at once')`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_bothon",
+            localized: true,
+            status: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    const rows = await adapter?.executeQuery<{
+      title: string;
+      _status: string;
+    }>(
+      `SELECT "title", "_status" FROM "dc_dbsync_bothon_locales" WHERE "_locale" = 'en'`
+    );
+    // The companion still gets `_status` — it is created once and the runtime reconcile refuses to
+    // add it later — and the row lands in the same state the main column's own default gives it.
+    expect(rows).toEqual([{ title: "Both at once", _status: "draft" }]);
   });
 
   it("restores content from the companion when localization is turned off", async () => {

@@ -71,6 +71,7 @@ export async function resolveTransitionStore(
   return {
     getEntry: key => meta.getEntry(key),
     set: (key, value) => meta.set(key, value),
+    insertIfAbsent: (key, value) => meta.insertIfAbsent(key, value),
     delete: key => meta.delete(key),
   };
 }

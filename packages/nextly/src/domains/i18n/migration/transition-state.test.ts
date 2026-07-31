@@ -40,6 +40,12 @@ function fakeStore(seed: Record<string, unknown> = {}): TransitionStateStore & {
       rows.set(key, value);
       return Promise.resolve();
     },
+    // Refuses to overwrite, exactly as the conflict clause does. A fake that just wrote would
+    // certify a claim the database does not actually make, which is the whole property under test.
+    insertIfAbsent(key: string, value: unknown): Promise<void> {
+      if (!rows.has(key)) rows.set(key, value);
+      return Promise.resolve();
+    },
     delete(key: string): Promise<void> {
       rows.delete(key);
       return Promise.resolve();
@@ -211,6 +217,56 @@ describe("beginI18nTransition", () => {
         sourceLocale: "",
       })
     ).rejects.toThrow(NextlyError);
+  });
+
+  it("claims the first record instead of writing over a concurrent one", async () => {
+    // Two processes provisioning the same entity — a `db:sync` and a dev server, or two dev
+    // servers — both read `untracked` before either writes. A plain write would let the one that
+    // loses the companion CREATE still record the language, so the record would name a locale the
+    // seed never used. The claim is refused instead, and the caller learns it did not win.
+    const store = fakeStore();
+    const winner = beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "de",
+    });
+    // Interleaved deliberately: `loser` reads before `winner` has written, which is the window.
+    const loser = beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+
+    await expect(winner).resolves.toBeUndefined();
+    await expect(loser).rejects.toThrow(NextlyError);
+    // The claim stands, so the copy and the record agree on one language.
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toEqual({ status: "enabling", sourceLocale: "de" });
+  });
+
+  it("lets a concurrent claim naming the same locale through", async () => {
+    // Losing the race is only a problem when the winner recorded something else. Two callers
+    // reading the same configured default agree about the language, so failing the second would
+    // turn an ordinary two-process dev setup into a hard error.
+    const store = fakeStore();
+
+    await Promise.all([
+      beginI18nTransition(store, {
+        kind: "collection",
+        slug: "posts",
+        sourceLocale: "en",
+      }),
+      beginI18nTransition(store, {
+        kind: "collection",
+        slug: "posts",
+        sourceLocale: "en",
+      }),
+    ]);
+
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toEqual({ status: "enabling", sourceLocale: "en" });
   });
 
   it("refuses a slug containing a dot", async () => {

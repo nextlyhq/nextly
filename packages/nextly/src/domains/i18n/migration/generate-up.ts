@@ -84,6 +84,24 @@ export interface LocalizationUpOptions {
    * column has to be relaxed or removed; leaving it as-is breaks writes outright.
    */
   relaxColumns?: readonly string[];
+  /**
+   * Whether the main table PHYSICALLY carries its `status` column yet.
+   *
+   * `spec.status` says the entity has Draft/Published, which decides whether the companion gets a
+   * per-locale `_status`. It does not say the main table has been reshaped to match. One
+   * configuration edit can turn on localization and Draft/Published together, and the copy runs
+   * before the schema push — so the companion is created correctly while `SELECT status FROM main`
+   * addresses a column that does not exist yet. The seed fails, and because the companion now
+   * exists every retry reaches the same statement, so that combination could never apply.
+   *
+   * Omitting a status the seed cannot read costs nothing here: the main column is created
+   * `NOT NULL DEFAULT 'draft'` and the companion's `_status` carries the same default, so rows
+   * gaining Draft/Published in this edit end up in the same state on both sides either way.
+   *
+   * Defaults to `spec.status`, which is right for a migration file and for the Builder toggle:
+   * both run against a main table that already has the column.
+   */
+  statusOnMain?: boolean;
 }
 
 /**
@@ -114,15 +132,16 @@ export function buildLocalizationUpStatements(
 
   // When the collection has Draft/Published, the seeded default-locale rows carry the existing
   // main row's `status` into the companion `_status` so enabling localization doesn't silently
-  // un-publish live content.
-  const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
-  const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
+  // un-publish live content. Only when main actually has the column to read — see `statusOnMain`.
+  const copiesStatus = spec.status === true && options.statusOnMain !== false;
+  const statusInsertCol = copiesStatus ? `, ${q("_status", dialect)}` : "";
+  const statusSelectCol = copiesStatus ? `, ${q("status", dialect)}` : "";
 
   // Skip the seed entirely when there is nothing on main to copy — no pre-existing translatable
-  // columns and no status. An INSERT with an empty value list would be invalid SQL, and there
-  // is no existing content to preserve.
+  // columns and no status to carry across. An INSERT with an empty value list would be invalid
+  // SQL, and there is no existing content to preserve.
   const seed =
-    onMain.length > 0 || spec.status
+    onMain.length > 0 || copiesStatus
       ? [
           `INSERT INTO ${q(companionTable, dialect)} ` +
             `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
