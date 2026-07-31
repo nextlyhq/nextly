@@ -4435,7 +4435,7 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
 
-      // Stage B draft/published split: an update to a PUBLISHED document that
+      // The draft/published split: an update to a PUBLISHED document that
       // names no status is non-destructive on a split-enabled collection — it is
       // stored as the working draft, leaving the live row untouched, and a
       // publish later promotes that draft to the live row. Requires the
@@ -4482,7 +4482,7 @@ export class CollectionMutationService extends BaseService {
         fields
       );
 
-      // Stage B promote-on-publish: a publish or unpublish on a split collection
+      // Promote-on-publish: a publish or unpublish on a split collection
       // must apply the whole accumulated working draft to the live row, not only
       // the dirty fields the caller sent (the admin Publish sends just the fields
       // touched this session). The component schemas the draft snapshot is
@@ -4559,7 +4559,7 @@ export class CollectionMutationService extends BaseService {
           // This locale's committed status before the write, reused by both the
           // prior document and the post-write overlay so the two stay symmetric.
           let committedLocaleStatus: string | null = null;
-          // Stage B: set once the row-locked prior state is read below — true
+          // Set once the row-locked prior state is read below — true
           // when this update should be stored as the working draft.
           let storeAsWorkingDraft = false;
 
@@ -4732,7 +4732,7 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // Stage B: decide the draft edit from the ROW-LOCKED prior status —
+          // Decide the draft edit from the ROW-LOCKED prior status —
           // the main row, or the write locale's companion `_status` — the same
           // locked reads the transition guard uses, so the decision is
           // TOCTOU-safe (a concurrent publish/unpublish committed before the
@@ -4813,7 +4813,7 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // Stage B promote-on-publish: with the row lock held and the publish
+          // Promote-on-publish: with the row lock held and the publish
           // authorized above, fold any accumulated working draft into this write
           // so the live row receives the draft's whole content with the caller's
           // fields overlaid. The admin Publish sends only the fields dirtied this
@@ -4923,7 +4923,7 @@ export class CollectionMutationService extends BaseService {
             })
             .join(", ");
           sqlParams.push(params.entryId);
-          // Stage B: skip the live-row UPDATE for a draft edit — the pending
+          // Skip the live-row UPDATE for a draft edit — the pending
           // change is stored as the working draft below, not written to the row.
           if (!storeAsWorkingDraft) {
             await tx.execute(
@@ -5210,7 +5210,7 @@ export class CollectionMutationService extends BaseService {
                 });
               }
 
-              // Stage B: a status-less update to a published document is stored
+              // A status-less update to a published document is stored
               // as the working draft — the live row and its relations were left
               // untouched above — instead of updating the live row and capturing
               // a published version. The parent overlay already produced the
@@ -5283,7 +5283,7 @@ export class CollectionMutationService extends BaseService {
                 });
               }
 
-              // Stage B promote-on-publish: the accumulated draft has been folded
+              // Promote-on-publish: the accumulated draft has been folded
               // into the live write above, so drop the sidecar in the SAME
               // transaction — its content is now the live row, and a surviving
               // draft would shadow the freshly published document on the next

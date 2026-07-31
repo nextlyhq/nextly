@@ -8,7 +8,7 @@ import {
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 
-// Stage B walking skeleton: on a split-enabled collection (a draft/publish
+// On a split-enabled collection (a draft/publish
 // lifecycle + drafts-enabled versioning), an update to a PUBLISHED document that
 // names no status is non-destructive — the live row is left untouched and the
 // pending edit is stored as the working draft.

@@ -2240,7 +2240,7 @@ export class CollectionQueryService extends BaseService {
         });
       }
 
-      // Stage B: on a trusted draft-view read, surface the working draft
+      // On a trusted draft-view read, surface the working draft
       // (pending edits to a published document) in place of the live row, when
       // one exists. Placed AFTER the live assembly above so re-reading LIVE
       // relations/components/localized values by the shared entry id cannot
