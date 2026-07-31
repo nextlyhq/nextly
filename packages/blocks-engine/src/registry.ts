@@ -15,7 +15,12 @@ import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { BlockTypeLookup } from "./validation";
 
-/** A style capability blocks may opt into. */
+/**
+ * A style capability blocks may opt into.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
 export interface SupportDefinition {
   /** The key blocks use inside `supports`, e.g. "spacing". */
   key: string;

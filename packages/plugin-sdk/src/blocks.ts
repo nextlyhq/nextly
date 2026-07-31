@@ -28,6 +28,11 @@
  *   shape settles.
  */
 export { defineBlock } from "@nextlyhq/blocks-engine";
+
+/**
+ * @experimental Carried by the same freeze as `defineBlock`: these describe the
+ *   definition shape, so they change with it.
+ */
 export type {
   AnyBlockDefinition,
   BlockDefinition,
