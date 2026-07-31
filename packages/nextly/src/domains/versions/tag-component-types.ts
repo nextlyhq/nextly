@@ -18,6 +18,7 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { storageTypeToken } from "../../shared/lib/plugin-storage";
 
 import type { ComponentSchemas } from "./restore-snapshot";
 
@@ -466,7 +467,9 @@ export function rehydrateSnapshotDates(
     const name = (field as { name?: unknown }).name;
     if (typeof name !== "string" || !(name in value)) continue;
 
-    if (field.type === "date") {
+    // A timestamp-backed plugin type serializes to a string too, so resolve the
+    // storage primitive rather than matching the literal `date` type token.
+    if (storageTypeToken(field) === "date") {
       const raw = value[name];
       if (typeof raw === "string") {
         const parsed = new Date(raw);
