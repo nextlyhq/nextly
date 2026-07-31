@@ -17,9 +17,9 @@
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
-import type { PluginFieldValidationResult } from "../../../plugins/contributions";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
-import { detachedField } from "../../../shared/lib/detached-field";
+import type { ValidatableField } from "../../../shared/lib/entry-validation";
+import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
   pluginEmptyValue,
@@ -119,9 +119,20 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
  * contributed control may be read-only — so the row could not then be repaired
  * from the UI.
  *
- * Only the type's own rules run: the field's `validate` and the built-in
- * primitive checks belong to the write path, and running them here would newly
- * refuse defaults that boot fine today.
+ * The value is checked against the type's declared STORAGE PRIMITIVE and then
+ * against the type's own rules — the same order, and the same implementation,
+ * the write path uses. Checking only the type's own rules would let a type that
+ * declares none accept anything: a `number`-backed default resolving to
+ * `"not-a-number"` would reach the insert and fail at the database on a strict
+ * dialect, or store the wrong representation on SQLite.
+ *
+ * Two rules are deliberately NOT applied, by handing the walker a declaration
+ * without them. `required` cannot be violated by a default, which IS the value.
+ * The field's own `validate` is the author's rule about submitted content; it
+ * has never run against a default, and applying it now would newly refuse
+ * configs that boot today. Everything else is kept, because a contributed
+ * type's rule reads the field's own options — which kinds a document accepts —
+ * and would judge an unrestricted policy if handed only a name and a type.
  */
 export async function assertValidPluginDefault(
   field: { name?: string; type?: string },
@@ -131,50 +142,29 @@ export async function assertValidPluginDefault(
   if (typeof field.type !== "string" || value === null || value === undefined) {
     return;
   }
-  const registered = getFieldType(field.type);
-  if (!registered?.validate) return;
+  // Nothing to say about a type core does not know: an unregistered token is
+  // refused by the boot gate, not here.
+  if (!getFieldType(field.type)) return;
 
   const name = field.name ?? "";
-  let result: PluginFieldValidationResult;
-  try {
-    // The declaration as written, not a rebuilt identity: a rule that reads the
-    // field's own options — which kinds a document field accepts — would judge
-    // an unrestricted policy if it were handed only a name and a type.
-    result = await registered.validate(value, {
-      data: {},
-      req: {},
-      field: detachedField(field as { name?: string; type: string }),
-      path: name,
-      mode: "create",
-    });
-  } catch {
-    // A throwing validator is a refusal, as the contract says, not an internal
-    // failure. Escaping here would surface a plugin's exception from a READ as
-    // a server error instead of the validation envelope every caller expects.
-    result = `${name} default was refused by its field type.`;
-  }
+  const {
+    required: _required,
+    validate: _validate,
+    ...checked
+  } = field as ValidatableField;
 
-  if (result === true) return;
+  const issues = await validateEntryData({ [name]: value }, [checked], {
+    mode: "create",
+  });
 
-  const issues =
-    typeof result === "string"
-      ? [{ path: name, code: "INVALID_VALUE", message: result }]
-      : Array.isArray(result)
-        ? result.map(issue => ({
-            path: issue.path ?? name,
-            code: "INVALID_VALUE",
-            message: issue.message,
-          }))
-        : [
-            {
-              path: name,
-              code: "INVALID_VALUE",
-              message: `${name} default was refused by its field type.`,
-            },
-          ];
+  if (issues.length === 0) return;
 
   throw NextlyError.validation({
-    errors: issues,
+    errors: issues.map(issue => ({
+      path: issue.path || name,
+      code: issue.code,
+      message: issue.message,
+    })),
     logContext: { single: singleSlug, field: field.name, reason: "default" },
   });
 }
