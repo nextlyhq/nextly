@@ -18,6 +18,7 @@ const disable = {
   dialect: "postgresql" as const,
   defaultLocale: "en",
   status: false,
+  wasStatus: false,
   wasLocalized: true,
   isLocalized: false,
   oldFields: [{ name: "title", type: "text", localized: true }],

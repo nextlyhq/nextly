@@ -86,6 +86,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       dialect: "sqlite",
       defaultLocale: "en",
       status: false,
+      wasStatus: false,
       wasLocalized: false,
       isLocalized: true,
       oldFields: FIELDS,
@@ -123,6 +124,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       dialect: "sqlite",
       defaultLocale: "en",
       status: false,
+      wasStatus: false,
       wasLocalized: false,
       isLocalized: true,
       oldFields: FIELDS,
@@ -167,6 +169,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       dialect: "sqlite",
       defaultLocale: "en",
       status: false,
+      wasStatus: false,
       wasLocalized: false,
       isLocalized: true,
       oldFields: [...FIELDS, SUB_TITLE_FIELD],
@@ -197,6 +200,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       dialect: "sqlite",
       defaultLocale: "en",
       status: false,
+      wasStatus: false,
       wasLocalized: false,
       isLocalized: true,
       oldFields: [...FIELDS, { name: "gallery", type: "component" as const }],
@@ -224,6 +228,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
       dialect: "sqlite",
       defaultLocale: "en",
       status: false,
+      wasStatus: false,
       wasLocalized: false,
       isLocalized: true,
       oldFields: FIELDS,
@@ -245,6 +250,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
       dialect: "sqlite",
       defaultLocale: "en",
       status: false,
+      wasStatus: false,
       wasLocalized: true,
       isLocalized: false,
       oldFields: FIELDS,
@@ -312,7 +318,17 @@ describe("buildCompanionTransitionStatements — disable", () => {
  * can only say the statement was emitted, which is true of a copy that never runs.
  */
 describe("buildCompanionTransitionStatements — disable with Draft/Published", () => {
-  const withStatus = (over: Record<string, unknown>) => ({
+  const withStatus = (
+    over: Omit<
+      Parameters<typeof buildCompanionTransitionStatements>[0],
+      | "slug"
+      | "tableName"
+      | "dialect"
+      | "defaultLocale"
+      | "oldFields"
+      | "newFields"
+    >
+  ) => ({
     slug: "hero",
     tableName: "single_hero",
     dialect: "sqlite" as const,
@@ -333,6 +349,7 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
     const enable = buildCompanionTransitionStatements(
       withStatus({
         status: true,
+        wasStatus: true,
         wasLocalized: false,
         isLocalized: true,
         companionExists: false,
@@ -375,6 +392,7 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
     const enable = buildCompanionTransitionStatements(
       withStatus({
         status: true,
+        wasStatus: true,
         wasLocalized: false,
         isLocalized: true,
         companionExists: false,
@@ -406,6 +424,7 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
     const enable = buildCompanionTransitionStatements(
       withStatus({
         status: false,
+        wasStatus: false,
         wasLocalized: false,
         isLocalized: true,
         companionExists: false,
