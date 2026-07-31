@@ -67,7 +67,7 @@ const NORMALIZED_USER_FIELD_KEYS: readonly string[] = [
  * lossy conversion a success. What matters is whether the value was already one
  * of JSON's own shapes, not whether it can be coerced into one.
  */
-function isJsonShape(value: unknown, seen: Set<object> = new Set()): boolean {
+function isJsonShape(value: unknown, path: Set<object> = new Set()): boolean {
   if (value === null) return true;
   const kind = typeof value;
   if (kind === "string" || kind === "boolean") return true;
@@ -75,19 +75,34 @@ function isJsonShape(value: unknown, seen: Set<object> = new Set()): boolean {
   if (kind !== "object") return false;
 
   const asObject = value as object;
-  // A cycle cannot be serialized at all; guarding here reports it as a bad
-  // option instead of throwing out of the walk.
-  if (seen.has(asObject)) return false;
-  seen.add(asObject);
-
-  if (Array.isArray(value)) {
-    return value.every(entry => isJsonShape(entry, seen));
+  // The ACTIVE path, not everything visited: a cycle is a reference to
+  // something still being walked. Keeping every object ever seen would reject
+  // one referenced twice without a cycle, which serializes perfectly well at
+  // both locations.
+  if (path.has(asObject)) return false;
+  path.add(asObject);
+  try {
+    if (Array.isArray(value)) {
+      // Indexed rather than `every`, which skips holes entirely and so calls a
+      // sparse array clean. Read by index a hole is `undefined`, which the
+      // non-object branch above refuses — and it has to be refused, because
+      // serialization turns each hole into `null` and the component then
+      // receives different data.
+      for (let index = 0; index < value.length; index++) {
+        if (!isJsonShape(value[index], path)) return false;
+      }
+      return true;
+    }
+    // Only a plain object: anything with a different prototype (Date, Set, Map,
+    // a class instance) loses what makes it that thing when serialized.
+    const proto = Object.getPrototypeOf(asObject);
+    if (proto !== Object.prototype && proto !== null) return false;
+    return Object.values(asObject).every(entry => isJsonShape(entry, path));
+  } finally {
+    // Popped so a sibling may reference the same object; only an ancestor
+    // reference is a cycle.
+    path.delete(asObject);
   }
-  // Only a plain object: anything with a different prototype (Date, Set, Map, a
-  // class instance) loses what makes it that thing when serialized.
-  const proto = Object.getPrototypeOf(asObject);
-  if (proto !== Object.prototype && proto !== null) return false;
-  return Object.values(asObject).every(entry => isJsonShape(entry, seen));
 }
 
 /**
