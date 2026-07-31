@@ -104,8 +104,9 @@ describe("read hooks narrow the query", () => {
         )
       ).toBe(true);
       // ...and the total describing the same set. A total of 3 beside 2 rows
-      // discloses that a third exists, which is what #348 established as a
-      // disclosure rather than a rounding error.
+      // tells the caller a third row exists, which is the fact the hook was
+      // written to withhold -- so an inflated total leaks what the filtered
+      // rows were meant to hide.
       expect(listed.data!.totalDocs).toBe(2);
     } finally {
       unregisterHook("beforeRead", SLUG, scope);

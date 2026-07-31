@@ -369,12 +369,17 @@ export class CollectionQueryService extends BaseService {
     if (CollectionQueryService.readHooksRunning.getStore()) {
       return params.where;
     }
+    const seededWhere = params.where ?? {};
     return CollectionQueryService.readHooksRunning.run(true, async () => {
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
           operation: "read",
-          args: { where: params.where },
+          // An object, for the same reason `beforeRead` gets one below: a
+          // handler scoping in place (`ctx.args.where.tenant = ...`) would
+          // otherwise throw on every unfiltered read instead of adding its
+          // predicate. The settled filter keeps `undefined` as its own value.
+          args: { where: seededWhere },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
             : undefined,
@@ -385,8 +390,14 @@ export class CollectionQueryService extends BaseService {
       // that omits `where` -- or sets it to `undefined` -- is clearing the filter,
       // not declining to change it. Only the absence of a returned object leaves
       // the caller's filter in place.
+      // The seeded object is an input convenience, not a filter. If it comes
+      // back untouched and still empty, the read has no filter -- turning that
+      // into `{}` would make every downstream `if (where)` believe one exists.
+      const returnedWhere = beforeOpArgs ? beforeOpArgs.where : params.where;
       const afterBeforeOperation = (
-        beforeOpArgs ? beforeOpArgs.where : params.where
+        returnedWhere === seededWhere && Object.keys(seededWhere).length === 0
+          ? params.where
+          : returnedWhere
       ) as WhereFilter | undefined;
 
       const beforeReadResult = await this.hookService.hookRegistry.execute(
@@ -1440,8 +1451,12 @@ export class CollectionQueryService extends BaseService {
    * Security checks are applied in order:
    * 1. Collection-level access (AccessControlService)
    *
-   * Note: Hooks are NOT executed for count operations as there is no
-   * document data to transform. This provides optimal performance.
+   * Runs the read hooks that precede a query -- `beforeOperation` and
+   * `beforeRead` -- so the total describes the rows a list would return. There
+   * is no after phase: those reshape a document, and a count has none.
+   *
+   * Skipped when the caller sets `readHooksAlreadyRan`, which `listEntries`
+   * does for the count it takes for its own total.
    *
    * @param params - Collection name, optional user context, and optional search query
    * @returns Count result with totalDocs or error
