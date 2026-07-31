@@ -775,7 +775,10 @@ async function ensureLocalizedCompanionsForReload(
           // companion outlived a disable, so its default-locale rows describe a main table that
           // has been authoritative ever since and must be overwritten rather than trusted.
           seedIncomplete: transitions
-            ? () => resolveCompanionSeedDebt(transitions, kind, entity.slug!)
+            ? () =>
+                resolveCompanionSeedDebt(transitions, kind, entity.slug!, {
+                  defaultLocale: transitions.defaultLocale,
+                })
             : undefined,
           settleTransition: transitions
             ? () =>

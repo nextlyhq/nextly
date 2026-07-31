@@ -121,6 +121,26 @@ async function runSync(config: LoadConfigResult["config"]): Promise<void> {
   await ensureLocalizedCompanions(config, cli, context);
 }
 
+/**
+ * The pass `nextly migrate` runs: supervised, so absence of a record counts as a debt.
+ *
+ * Deliberately NOT the whole migrate command — that owns lock handling and file discovery, and
+ * what this file is about is the companion work it delegates.
+ */
+async function runSupervisedRepair(
+  config: LoadConfigResult["config"]
+): Promise<void> {
+  const logger = createLogger({ quiet: true });
+  const context = { logger, options: {}, cwd: dir } as CommandContext;
+  await ensureLocalizedCompanions(
+    config,
+    adapter as unknown as CLIDatabaseAdapter,
+    context,
+    "afterApply",
+    { supervised: true }
+  );
+}
+
 /** The production store, so tests act on the same rows the runtime does. */
 async function transitionStore(): Promise<
   Parameters<typeof readI18nTransitionState>[0]
@@ -664,6 +684,116 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       `SELECT "title" FROM "dc_dbsync_roundtrip_locales" WHERE "_locale" = 'en'`
     );
     expect(rows).toEqual([{ title: "Edited while off" }]);
+  });
+
+  it("labels a re-enabled entity with the default locale in force now", async () => {
+    // The trap in reusing the restore marker's locale. Localization goes off, the app changes its
+    // default while it is off, and localization comes back on. Main has been authoritative the
+    // whole time and carries no language of its own, so enabling declares its content to be in
+    // TODAY's default — exactly as a first enable does. Labelling the rows with the locale the
+    // restore recorded writes them under a code reads no longer look for, and may not even be a
+    // configured locale any more, so every edit made while localization was off disappears.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_relocale",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const localizedIn = (defaultLocale: string) =>
+      defineConfig({
+        localization: { locales: ["en", "de"], defaultLocale },
+        collections: [
+          defineCollection({
+            slug: "dbsync_relocale",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_relocale" ("id", "slug", "title") VALUES ('row1', 'r1', 'First')`
+    );
+    await runSync(localizedIn("en"));
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_relocale" SET "title" = 'Edited while off' WHERE "id" = 'row1'`
+    );
+
+    // The app's default locale moves while localization is off.
+    await runSync(localizedIn("de"));
+
+    const rows = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_relocale_locales" WHERE "_locale" = 'de'`
+    );
+    expect(rows).toEqual([{ title: "Edited while off" }]);
+    // And the record now describes the transition that just happened, not the one before it.
+    await expect(
+      readTransition("collection", "dbsync_relocale")
+    ).resolves.toEqual({ status: "seeded", sourceLocale: "de" });
+  });
+
+  it("repairs an install whose companion predates transition records", async () => {
+    // What `nextly migrate --supervised` exists for. These have a companion, no marker, and no way
+    // to tell whether their content was ever copied across — the one fact that cannot be
+    // re-derived is the language, which running the repair supplies from the configured default.
+    // An unattended pass must NOT read that absence as a debt, because a from-birth localized
+    // entity is untracked too and owes nothing.
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_legacy",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_legacy",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_legacy" ("id", "slug", "title") VALUES ('row1', 'r1', 'Predates the record')`
+    );
+    await runSync(localized);
+
+    // Reproduce the legacy shape: a real companion holding nothing, and no record of why it
+    // exists — which is every install that transitioned before this was written.
+    await adapter?.executeQuery(`DELETE FROM "dc_dbsync_legacy_locales"`);
+    await forgetI18nTransition(
+      await transitionStore(),
+      "collection",
+      "dbsync_legacy"
+    );
+
+    // An ordinary sync leaves it alone: absence is not a debt without supervision.
+    await runSync(localized);
+    expect(
+      await adapter?.executeQuery(`SELECT * FROM "dc_dbsync_legacy_locales"`)
+    ).toEqual([]);
+
+    await runSupervisedRepair(localized);
+
+    const rows = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_legacy_locales" WHERE "_locale" = 'en'`
+    );
+    expect(rows).toEqual([{ title: "Predates the record" }]);
+    // Settled, not left owing. A repair that copies and then cannot record that it did would fail
+    // the command and repeat identically on every retry.
+    await expect(
+      readTransition("collection", "dbsync_legacy")
+    ).resolves.toEqual({ status: "seeded", sourceLocale: "en" });
   });
 
   it("leaves an entity that was never localized alone", async () => {

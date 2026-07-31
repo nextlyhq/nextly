@@ -997,11 +997,10 @@ export async function ensureLocalizedCompanions(
           seedIncomplete: transitions
             ? () =>
                 resolveCompanionSeedDebt(transitions, kind, entity.slug!, {
+                  defaultLocale: transitions.defaultLocale,
                   // Only under supervision. A from-birth localized entity is untracked too and
                   // owes nothing, so an unattended pass must not read absence as a debt.
-                  repairUntracked: options.supervised
-                    ? transitions.defaultLocale
-                    : undefined,
+                  repairUntracked: options.supervised === true,
                 })
             : undefined,
           settleTransition: transitions

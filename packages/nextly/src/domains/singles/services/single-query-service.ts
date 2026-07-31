@@ -771,16 +771,19 @@ export class SingleQueryService extends BaseService {
           statusFilterValue
         );
       } catch (error) {
-        // Only strict rethrows, and the result builder puts a bare Error's own
-        // message on the wire — companion table and column names.
-        if (!strict) throw error;
+        // Normalized whether or not the caller is judging an access rule on the result. A
+        // companion read used to be swallowed when it failed, so only the strict path could throw
+        // and only that path needed wrapping; now every failure propagates, and the result builder
+        // puts a bare Error's own message on the wire — companion table and column names with it.
         throw NextlyError.is(error)
           ? error
           : NextlyError.internal({
               cause: error instanceof Error ? error : undefined,
               logContext: {
                 single: slug,
-                reason: "translation-load-failed-during-authorization",
+                reason: strict
+                  ? "translation-load-failed-during-authorization"
+                  : "translation-load-failed",
               },
             });
       }
@@ -1796,14 +1799,17 @@ export class SingleQueryService extends BaseService {
     try {
       await this.populateTranslationMeta(slug, singleMeta, doc);
     } catch (error) {
-      if (!strict) throw error;
+      // Same reasoning as the overlay above: the failure now always reaches here, so it is always
+      // the one that has to be normalized rather than handed to the wire as the driver wrote it.
       throw NextlyError.is(error)
         ? error
         : NextlyError.internal({
             cause: error instanceof Error ? error : undefined,
             logContext: {
               single: slug,
-              reason: "translation-overview-failed-during-authorization",
+              reason: strict
+                ? "translation-overview-failed-during-authorization"
+                : "translation-overview-failed",
             },
           });
     }

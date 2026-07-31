@@ -622,8 +622,10 @@ export async function resolveCompanionSeedDebt(
   kind: I18nTransitionKind,
   slug: string,
   options: {
+    /** The locale the app configures today. What a NEW transition labels main's content with. */
+    defaultLocale: string;
     /**
-     * Treat an entity with NO record as owing a copy in this locale.
+     * Treat an entity with NO record as owing a copy.
      *
      * For installs that transitioned before transitions were recorded. They have a companion and
      * no marker, so nothing can tell whether their content was ever copied across — and the one
@@ -633,26 +635,49 @@ export async function resolveCompanionSeedDebt(
      * Only ever passed by `nextly migrate`. Unattended provisioning must not assume this: a
      * from-birth localized entity is also untracked, and it owes nothing.
      */
-    repairUntracked?: string;
-  } = {}
+    repairUntracked?: boolean;
+  }
 ): Promise<CompanionSeedDebt | null> {
-  const { readI18nTransitionState } = await import(
+  const { beginI18nTransition, readI18nTransitionState } = await import(
     "../migration/transition-state"
   );
   const recorded = await readI18nTransitionState(store, kind, slug);
+
+  // A copy already recorded and unfinished. Continue it in the language it recorded — a default
+  // locale that changed since must not relabel values written under the old one.
   if (recorded.status === "enabling") {
     return { sourceLocale: recorded.sourceLocale, overwriteExisting: false };
   }
+
+  // The two cases below are NEW transitions, not continuations, so each records one before any
+  // copy runs. Without that the copy would finish and `settleI18nTransition` would then refuse —
+  // it has no `enabling` record to settle — leaving the marker untouched and the same failure
+  // waiting on every retry. It is also the module's own ordering rule: the record goes in before
+  // the statements, because MySQL commits DDL implicitly.
+  const claim = async (): Promise<void> => {
+    await beginI18nTransition(store, {
+      kind,
+      slug,
+      sourceLocale: options.defaultLocale,
+    });
+  };
+
+  // The companion outlived a disable. Main has been authoritative ever since and carries no
+  // language of its own, so enabling now declares its content to be in TODAY's default — exactly
+  // as a first enable does. The restore's locale described what main held at the time and has no
+  // claim on what reads will look for once localization is back on; reusing it would label the
+  // rows with a locale that may no longer even be configured, and hide every edit made while
+  // localization was off.
   if (recorded.status === "restored") {
-    return { sourceLocale: recorded.sourceLocale, overwriteExisting: true };
+    await claim();
+    return { sourceLocale: options.defaultLocale, overwriteExisting: true };
   }
+
   if (recorded.status === "untracked" && options.repairUntracked) {
+    await claim();
     // Never overwriting: rows that already have a default-locale companion row are the ones a
     // previous transition did copy, and their translations must survive the repair.
-    return {
-      sourceLocale: options.repairUntracked,
-      overwriteExisting: false,
-    };
+    return { sourceLocale: options.defaultLocale, overwriteExisting: false };
   }
   return null;
 }
