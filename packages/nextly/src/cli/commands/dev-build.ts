@@ -12,6 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import { resolveTransitionRecorder } from "../../domains/i18n/migration/transition-recorder";
@@ -324,7 +325,20 @@ export async function syncComponents(
 
   let result: SyncComponentResult;
   try {
-    result = await componentRegistry.syncCodeFirstComponents(codeFirstConfigs);
+    // Held across the whole sync, for the same reason the boot path holds it:
+    // the sync decides what changed from a world it has already read, so an
+    // exclusion covering only the writes would let a storage migration move
+    // that world underneath the decision. `syncCodeFirstComponents` uses
+    // unguarded writes and relies on this.
+    result = await withMigrationExcluded(
+      {
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger,
+        label: "code-first field group sync",
+        mayCreateLock: false,
+      },
+      () => componentRegistry.syncCodeFirstComponents(codeFirstConfigs)
+    );
   } catch (error) {
     logger.error("Components sync failed while registering components.");
     throw error;

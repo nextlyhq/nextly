@@ -534,6 +534,21 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   /**
    * Sync code-first Components with the registry.
    */
+  /**
+   * Reconcile code-declared field groups into the registry.
+   *
+   * 🔴 **Callers must already hold the storage-migration exclusion.** The writes
+   * below therefore use the unguarded bodies: taking the exclusion per write
+   * would contend with the caller that is already holding it, and the lock
+   * refuses any occupied owner — including one that looks like our own, since
+   * claims are unique per invocation. Nested acquisition would mean no
+   * code-first field group could ever synchronize.
+   *
+   * Held by the caller rather than here because the caller's scope is the right
+   * granularity: a sync reads the world, decides what changed, and writes it
+   * back, and an exclusion that covered only the writes would let a migration
+   * start against the world this sync had already decided from.
+   */
   async syncCodeFirstComponents(
     configs: CodeFirstComponentConfig[]
   ): Promise<SyncComponentResult> {
@@ -607,7 +622,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           }
         }
         if (!existing) {
-          await this.registerComponent({
+          await this.registerComponentUnguarded({
             slug: config.slug,
             label: config.label,
             tableName: desiredTableName,
@@ -626,7 +641,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
           (config.localized === true) !== (existing.localized === true)
         ) {
-          await this.updateComponent(
+          await this.updateComponentUnguarded(
             config.slug,
             {
               label: config.label,
@@ -643,7 +658,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           );
           result.updated.push(config.slug);
         } else if (this.adminConfigChanged(config.admin, existing.admin)) {
-          await this.updateComponent(
+          await this.updateComponentUnguarded(
             config.slug,
             {
               admin: config.admin,
