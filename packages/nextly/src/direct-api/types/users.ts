@@ -86,8 +86,14 @@ export interface FindOneUserArgs extends DirectAPIConfig {
 
 /**
  * Arguments for finding a user by ID.
+ *
+ * `draft` is omitted from the shared find-by-ID options: the working-draft
+ * overlay applies to drafts-enabled content collections, and the users
+ * namespace does not forward it, so exposing it here would advertise an option
+ * that is silently ignored.
  */
-export interface FindUserByIDArgs extends Omit<FindByIDArgs, "collection"> {
+export interface FindUserByIDArgs
+  extends Omit<FindByIDArgs, "collection" | "draft"> {
   /** User collection slug (defaults to 'users') */
   collection?: string;
 }
