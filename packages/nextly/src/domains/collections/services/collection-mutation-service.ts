@@ -73,6 +73,7 @@ import {
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
+  hasPasswordField,
   hashPasswordFieldValues,
   stripPasswordFieldValues,
   stripSystemOwnerField,
@@ -4486,11 +4487,27 @@ export class CollectionMutationService extends BaseService {
             schema => schema.localized || !schema.resolved
           )
         : false;
+      // A password field cannot ride safely in a working draft: the snapshot
+      // strips passwords so no plaintext credential is stored at rest, and the
+      // promote filter drops any field whose subtree holds one, so a draft can
+      // neither carry a password change nor preserve an ordinary edit made
+      // alongside a password in the same component. Until drafts persist password
+      // changes through a secure path, a collection with a reachable password
+      // field (top-level or inside a reachable component) is excluded from the
+      // split and edits the live row directly, exactly as before the split.
+      const hasReachablePassword =
+        hasPasswordField(fields) ||
+        (splitComponentSchemas
+          ? [...splitComponentSchemas.values()].some(schema =>
+              hasPasswordField(schema.fields)
+            )
+          : false);
       const splitEnabled =
         collectionHasStatus &&
         versionsConfig?.drafts?.enabled === true &&
         !documentLocalized &&
-        !hasIneligibleComponent;
+        !hasIneligibleComponent &&
+        !hasReachablePassword;
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).

@@ -8,6 +8,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  password,
   relationship,
   text,
 } from "../../../../config";
@@ -650,6 +651,44 @@ describe("draft/published split — promote on publish (integration)", () => {
     const rel = linker?.rel;
     expect(rel !== null && typeof rel === "object").toBe(true);
     expect((rel as { name?: string })?.name).toBe("t1");
+  });
+
+  it("keeps a status-less edit live (no draft) when the collection has a password field", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), password({ name: "secret" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      secret: "s3cret-value",
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A password field cannot ride safely in a working draft, so the collection
+    // is ineligible for the split and a status-less edit writes the live row
+    // directly rather than storing a draft.
+    const res = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited" }
+    );
+    expect(res.success).toBe(true);
+
+    const [live] = await handle.adapter.select<LiveRow>(TABLE);
+    expect(live.title).toBe("edited");
+    expect(await workingDraftCount(id)).toBe(0);
   });
 });
 

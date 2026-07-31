@@ -2322,22 +2322,26 @@ export class CollectionQueryService extends BaseService {
           // found regardless of the request locale.
           null
         );
-        // Mirror the write gate's reachable-component check before overlaying:
-        // a component that turned localized, or that can no longer be resolved,
-        // after this draft was written cannot have its sidecar promoted or
-        // deleted by any write, so the live row must not be shadowed by a draft
-        // nothing can complete. Resolved only once a draft actually exists, to
-        // keep the registry reads off the common read path; the schemas double
-        // as the prune filter below.
+        // Mirror the write gate's eligibility check before overlaying: a
+        // component that turned localized or unresolvable after this draft was
+        // written — or a password field that appeared on the collection or a
+        // reachable component — makes the sidecar unpromotable by any write, so
+        // the live row must not be shadowed by a draft nothing can complete.
+        // Resolved only once a draft actually exists, to keep the registry reads
+        // off the common read path; the schemas double as the prune filter below.
         const draftComponentSchemas = workingDraft
           ? await resolveComponentSchemas(fields as FieldConfig[])
           : null;
-        const draftComponentIneligible = draftComponentSchemas
-          ? [...draftComponentSchemas.values()].some(
-              schema => schema.localized || !schema.resolved
+        const draftIneligible = draftComponentSchemas
+          ? hasPasswordField(fields) ||
+            [...draftComponentSchemas.values()].some(
+              schema =>
+                schema.localized ||
+                !schema.resolved ||
+                hasPasswordField(schema.fields)
             )
           : false;
-        if (workingDraft && !draftComponentIneligible) {
+        if (workingDraft && !draftIneligible) {
           const rawSnapshot = workingDraft.snapshot as Record<string, unknown>;
           // Shape the snapshot to the current schema before exposing it. A field
           // removed or renamed while the draft was pending leaves a key the
