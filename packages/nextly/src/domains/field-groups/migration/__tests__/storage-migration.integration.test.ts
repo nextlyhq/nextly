@@ -5,11 +5,14 @@
  * stores a PHYSICAL table name, so a field group nested inside another
  * addresses its parent by the very name a rename changes — and the read path
  * treats a parent it cannot match as *no rows* rather than as an error. A
- * migration that renamed the tables and left those strings behind reported
- * success over content that had silently become unreachable, and it survived
- * four slices and thirty-odd review findings because **no test in this program
- * had ever constructed a nested field group.** The fixture shaped the blind
- * spot.
+ * migration that renames the tables without rewriting those strings therefore
+ * reports success over content that has silently become unreachable: nothing
+ * throws, and nothing is missing until someone reads it.
+ *
+ * Only a **nested** fixture can catch that. A top-level instance points at a
+ * collection table, which this migration never renames, so it survives a broken
+ * rewrite unchanged; the association only breaks one level down, where the
+ * parent is itself a field group.
  *
  * So the load-bearing test writes nested content, migrates, and reads it back
  * by the association the read path uses, in both directions.
@@ -51,6 +54,7 @@ import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { versionsTables } from "../../../../schemas/versions";
 import { webhookTables } from "../../../../schemas/webhooks";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
+import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../services/field-group-schema-service";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
@@ -151,6 +155,7 @@ for (const entry of DIALECTS) {
     let adapter: TestAdapter;
     let registry: SchemaRegistry;
     let schemaService: FieldGroupSchemaService;
+    let collectionSchemaService: DynamicCollectionSchemaService;
 
     // 🔴 The tag goes in the SLUG, not in the table name. `retargetName` only
     // produces a rename when `tableName === resolveComponentTableName(slug)`,
@@ -319,9 +324,9 @@ for (const entry of DIALECTS) {
      * Resolve an embedded instance by the association the read path uses.
      *
      * Matching `_parent_id` + `_parent_table` + `_parent_field` is exactly what
-     * `getExistingInstances` does, and the association is what a rename breaks:
-     * a row that still exists but no longer resolves is the failure that
-     * shipped unnoticed.
+     * `getExistingInstances` does, and the association is what a rename breaks.
+     * Asserting the row exists would not detect that: the row survives a broken
+     * rename intact, and only stops being *reachable*.
      *
      * 🔴 Issued as SQL rather than through the typed CRUD, and NOT for
      * convenience. Every runtime Drizzle schema declares the discriminator
@@ -378,6 +383,10 @@ for (const entry of DIALECTS) {
         adapter = entry.make(entry.url as string);
         await adapter.connect();
         schemaService = new FieldGroupSchemaService(entry.dialect as never);
+        collectionSchemaService = new DynamicCollectionSchemaService(
+          undefined,
+          entry.dialect
+        );
       }
       registry = new SchemaRegistry(entry.dialect);
       // The system tables go in too, not just the field-group ones. The typed
@@ -391,12 +400,25 @@ for (const entry of DIALECTS) {
       await dropEverything();
       await createSystemTables();
 
-      const text = entry.dialect === "postgresql" ? "text" : "varchar(191)";
+      // The parent comes from the collection generator production uses, not a
+      // hand-written CREATE TABLE. It is only ever addressed as a
+      // `_parent_table` VALUE here, so a minimal stand-in would function — and
+      // that is exactly how a fixture drifts from the storage it claims to
+      // represent. This suite already learned that lesson once: an invented
+      // system table omitted a column the marker reads.
+      for (const statement of splitStatements([
+        collectionSchemaService.generateMigrationSQL(parentTable, [
+          { name: "title", type: "text" },
+        ] as never),
+      ])) {
+        await adapter.executeQuery(statement);
+      }
+      // `slug` is NOT NULL on a real collection — the generator emits the system
+      // columns a hand-written stand-in omitted, which is the whole reason to
+      // use it.
       await adapter.executeQuery(
-        `CREATE TABLE ${q(parentTable)} (${q("id")} ${text} PRIMARY KEY NOT NULL)`
-      );
-      await adapter.executeQuery(
-        `INSERT INTO ${q(parentTable)} (${q("id")}) VALUES ('page-1')`
+        `INSERT INTO ${q(parentTable)} (${q("id")}, ${q("title")}, ${q("slug")})
+         VALUES ('page-1', 'Page', 'page-1')`
       );
 
       await createFieldGroupTable(outerTable, [
