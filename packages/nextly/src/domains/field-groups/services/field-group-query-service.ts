@@ -246,17 +246,28 @@ export class FieldGroupQueryService extends BaseService {
     // language-keyed maps, so mirror that for the embedded component's translatable fields —
     // otherwise they would be missing entirely (the main comp_* table omits those columns).
     if (locale === "all") {
-      await populateCompanionFieldsAllLocales({
-        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-          typeof populateCompanionFieldsAllLocales
-        >[0]["db"],
-        companionTable: companion.table,
-        localizedFields: companion.localizedFields,
-        rows: dataArray,
-        locales: this.localization.locales.map(l => l.code),
-        idKey: "id",
-        readiness: await this.companionReadiness(companion, executor),
-      });
+      const allReadiness = await this.companionReadiness(companion, executor);
+      // Read out here: the narrowing the guard above established does not survive into the
+      // closure, and re-asserting it there would be a cast rather than a check.
+      const configuredLocales = this.localization.locales.map(l => l.code);
+      const ran = await this.runContainedOverlay(
+        meta.slug,
+        companion.companionTableName,
+        executor,
+        () =>
+          populateCompanionFieldsAllLocales({
+            db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+              typeof populateCompanionFieldsAllLocales
+            >[0]["db"],
+            companionTable: companion.table,
+            localizedFields: companion.localizedFields,
+            rows: dataArray,
+            locales: configuredLocales,
+            idKey: "id",
+            readiness: allReadiness,
+          })
+      );
+      if (!ran) return;
       this.decodeJsonLocalizedValues(
         meta,
         companion.localizedFields,
@@ -290,36 +301,59 @@ export class FieldGroupQueryService extends BaseService {
         readiness,
       });
 
-    if (executor !== undefined) {
-      // On the caller's transaction connection a failure has already aborted it, so there is
-      // nothing left to salvage: the next statement would fail anyway, blaming something
-      // unrelated. Propagating keeps the error attached to the query that caused it.
-      await overlay();
-      return;
-    }
-
-    try {
-      await overlay();
-    } catch (error) {
-      // Readiness said the companion is usable, so this is drift, a permission, or a transient
-      // fault rather than a missing table. Contained HERE rather than left to the caller: the
-      // component read above catches anything this throws and replaces the whole field with null
-      // or an empty list, which would discard the shared values it just loaded successfully along
-      // with the translation it could not. Losing the overlay costs the reader a translation;
-      // losing the component costs them the record.
-      this.logger.error(
-        `Could not read translations for component "${meta.slug}" from ` +
-          `${companion.companionTableName}. Its shared values are being returned untranslated: ` +
-          `${error instanceof Error ? error.message : String(error)}`
-      );
-      return;
-    }
+    const ran = await this.runContainedOverlay(
+      meta.slug,
+      companion.companionTableName,
+      executor,
+      overlay
+    );
+    if (!ran) return;
     this.decodeJsonLocalizedValues(
       meta,
       companion.localizedFields,
       dataArray,
       false
     );
+  }
+
+  /**
+   * Run a companion overlay, containing a failure the caller could not survive.
+   *
+   * Shared by both overlay shapes so they cannot drift, which they already did once: the
+   * single-locale branch was contained and the all-locale branch returned before reaching it.
+   *
+   * Off a transaction, a failure is contained. The overlay runs AFTER the component's shared values
+   * are deserialized, and the component read above replaces the whole field with null or an empty
+   * list when anything throws — so a fault that costs the reader one translation was costing them
+   * the record. Losing the overlay is the smaller loss, and it is logged rather than silent.
+   *
+   * On the caller's transaction connection it propagates. The failure has already aborted that
+   * transaction, so containing it here would only move the error onto whatever statement runs next,
+   * which is the failure mode these reads stopped catching in order to fix.
+   *
+   * Returns whether the overlay ran, so a caller can skip the decoding that depends on it.
+   */
+  private async runContainedOverlay(
+    slug: string,
+    companionTableName: string,
+    executor: unknown,
+    overlay: () => Promise<unknown>
+  ): Promise<boolean> {
+    if (executor !== undefined) {
+      await overlay();
+      return true;
+    }
+    try {
+      await overlay();
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Could not read translations for component "${slug}" from ` +
+          `${companionTableName}. Its shared values are being returned untranslated: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      return false;
+    }
   }
 
   /**

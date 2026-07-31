@@ -1510,6 +1510,58 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(unguarded).toEqual([{ title: "Stale main value" }]);
   });
 
+  it("restores an untracked companion after the localization block is removed", async () => {
+    // The case with the least to go on, and it is exactly where refusing hurt most: an entity
+    // localized from birth has no transition record, and deleting the `localization` block leaves
+    // no configured default either. The copy does not need a locale named — it ranks each parent's
+    // own rows — so all that was missing was something true to write in the record. A locale the
+    // companion demonstrably holds is that.
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "de" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_noblock",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_noblock" ("id", "slug") VALUES ('row1', 'r1')`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_noblock_locales" ("_parent", "_locale", "title") VALUES ('row1', 'de', 'Nur im Companion')`
+    );
+    // From birth, so nothing recorded a transition.
+    await forgetI18nTransition(
+      await transitionStore(),
+      "collection",
+      "dbsync_noblock"
+    );
+
+    // The localization block goes entirely, along with the entity's flag.
+    await runSync(
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_noblock",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_noblock" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Nur im Companion" }]);
+    await expect(
+      readTransition("collection", "dbsync_noblock")
+    ).resolves.toMatchObject({ status: "restored", sourceLocale: "de" });
+  });
+
   it("leaves an entity that was never localized alone", async () => {
     // The restore is gated on the durable record, not on physical shape, so a collection that
     // never had a companion is not probed for one and nothing is written on its behalf.

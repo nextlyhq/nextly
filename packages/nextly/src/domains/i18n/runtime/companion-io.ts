@@ -696,20 +696,31 @@ export async function resolveCompanionSeedDebt(
   );
   const recorded = await readI18nTransitionState(store, kind, slug);
 
-  const claimIn = async (sourceLocale: string): Promise<CompanionClaim> => {
+  const claimIn = async (
+    sourceLocale: string,
+    refresh: boolean
+  ): Promise<CompanionClaim> => {
     const token = await beginI18nTransition(store, {
       kind,
       slug,
       sourceLocale,
+      refresh,
     });
     // Built here because this is where the kind, the slug and the locale are all in hand, and the
     // statement that needs it is several calls down.
     return {
       token,
-      guard: claimGuardCondition({ kind, slug, sourceLocale, token }),
+      guard: claimGuardCondition({
+        kind,
+        slug,
+        sourceLocale,
+        token,
+        refresh,
+      }),
     };
   };
-  const claim = (): Promise<CompanionClaim> => claimIn(options.defaultLocale);
+  const claim = (refresh: boolean) => (): Promise<CompanionClaim> =>
+    claimIn(options.defaultLocale, refresh);
 
   // A copy already recorded and unfinished. Continue it in the language it recorded — a default
   // locale that changed since must not relabel values written under the old one.
@@ -722,8 +733,12 @@ export async function resolveCompanionSeedDebt(
   if (recorded.status === "enabling") {
     return {
       sourceLocale: recorded.sourceLocale,
-      overwriteExisting: false,
-      claim: () => claimIn(recorded.sourceLocale),
+      // Whatever the interrupted claim owed. A re-enable over a companion that outlived a disable
+      // records that its copy is destructive, because the state saying so — `restored` — is the one
+      // the claim overwrote. Reading it back is what stops a crashed refresh being resumed as an
+      // ordinary guarded seed, which would skip the stale rows and settle over them.
+      overwriteExisting: recorded.refresh === true,
+      claim: () => claimIn(recorded.sourceLocale, recorded.refresh === true),
     };
   }
 
@@ -743,7 +758,8 @@ export async function resolveCompanionSeedDebt(
     return {
       sourceLocale: options.defaultLocale,
       overwriteExisting: true,
-      claim,
+      // Recorded on the claim, because claiming replaces the `restored` state that says so.
+      claim: claim(true),
     };
   }
 
@@ -755,7 +771,7 @@ export async function resolveCompanionSeedDebt(
       overwriteExisting: false,
       // The absence of a record is only evidence of a debt when main still holds the values.
       requireColumnsOnMain: true,
-      claim,
+      claim: claim(false),
     };
   }
   return null;
@@ -1068,6 +1084,9 @@ export async function ensureCompanionTable(
   // treating that as a lost race would suppress the error and leave the content uncopied, with
   // every later run returning early because the table now exists.
   let created = false;
+  // Declared out here so the catch can tell whether this run holds the transition. Losing the
+  // CREATE race after claiming is not the same as losing it before.
+  let claimToken: string | undefined;
   const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
   const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
   try {
@@ -1129,7 +1148,7 @@ export async function ensureCompanionTable(
       return false;
     }
     // Ordered ahead of every statement below. See `recordTransition`.
-    const claimToken = await args.recordTransition?.();
+    claimToken = await args.recordTransition?.();
     const statements =
       (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
       buildCompanionReconcileStatements({
@@ -1175,6 +1194,28 @@ export async function ensureCompanionTable(
         () => false
       ))
     ) {
+      // Losing the race AFTER claiming is a different situation, and it cannot be reported as a
+      // quiet non-creation. This run now holds the marker for a table another run made, and that
+      // run may have died between creating it and seeding it — so the companion can be empty
+      // while the transition reads as claimed and in progress. A caller told nothing records no
+      // preservation failure, and the schema apply that follows is then free to drop the
+      // main-table columns whose values have not reached the companion, after which the debt the
+      // marker still describes can never be completed.
+      //
+      // Reported so the apply is abandoned. The next pass finds the table present and the marker
+      // `enabling`, which is exactly the resume path, so this recovers rather than dead-ends.
+      if (claimToken !== undefined) {
+        onError?.(
+          NextlyError.conflict({
+            reason: "state",
+            message:
+              `The translations table for "${args.slug}" was created by another process while ` +
+              `this one held its transition, so its content may not have been copied across yet.`,
+            logContext: { slug: args.slug },
+          })
+        );
+        return false;
+      }
       // Reported as not-created on purpose: whoever won the race owns recording why
       // the companion exists, and a second record of the same transition could name
       // a different source locale.

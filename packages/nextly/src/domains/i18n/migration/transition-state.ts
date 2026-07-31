@@ -95,6 +95,8 @@ export interface EnablingTransition {
   sourceLocale: string;
   /** See {@link StoredMarker.owner}. Absent on a marker written before tokens existed. */
   owner?: string;
+  /** See {@link StoredMarker.refresh}. */
+  refresh?: boolean;
 }
 
 /** The copy finished. Nothing further is owed for this entity. */
@@ -152,6 +154,20 @@ interface StoredMarker {
    * is claimable by whoever moves it first, which is what the compare-and-set already decides.
    */
   owner?: string;
+  /**
+   * Whether this claim owes a DESTRUCTIVE refresh, not just a guarded seed.
+   *
+   * A re-enable over a companion that outlived a disable has to overwrite its default-locale rows,
+   * because main was authoritative for the whole period localization was off. That fact lives in
+   * the state the claim moved FROM — `restored` — and the claim overwrites it with `enabling`. A
+   * run that crashes in between leaves a marker indistinguishable from an ordinary unfinished
+   * seed, so the retry does the guarded insert instead, skips the rows that already exist, settles,
+   * and leaves stale values hiding every edit made while localization was off.
+   *
+   * Recorded so recovery repeats the work the original claim owed. Absent means an ordinary seed,
+   * which is also what a marker written before this field says.
+   */
+  refresh?: boolean;
 }
 
 /**
@@ -165,12 +181,14 @@ function storedMarker(state: {
   status: StoredMarker["status"];
   sourceLocale: string;
   owner?: string;
+  refresh?: boolean;
 }): StoredMarker {
   return {
     version: I18N_TRANSITION_MARKER_VERSION,
     status: state.status,
     sourceLocale: state.sourceLocale,
     ...(state.owner === undefined ? {} : { owner: state.owner }),
+    ...(state.refresh === true ? { refresh: true } : {}),
   };
 }
 
@@ -263,6 +281,7 @@ export async function readI18nTransitionState(
     ...(typeof marker.owner === "string" && marker.owner.length > 0
       ? { owner: marker.owner }
       : {}),
+    ...(marker.refresh === true ? { refresh: true } : {}),
   };
 }
 
@@ -291,6 +310,14 @@ export async function beginI18nTransition(
     kind: I18nTransitionKind;
     slug: string;
     sourceLocale: string;
+    /**
+     * This claim owes a destructive refresh — see {@link StoredMarker.refresh}.
+     *
+     * Passed rather than inferred from the state being claimed, because the caller is the one that
+     * decided what work it is about to do. Inferring it here would tie the record to a state
+     * transition that the caller may not be acting on.
+     */
+    refresh?: boolean;
   }
 ): Promise<string> {
   // The writer holds itself to the reader's rules. Persisting a marker the next
@@ -339,6 +366,11 @@ export async function beginI18nTransition(
     status: "enabling",
     sourceLocale: args.sourceLocale,
     owner,
+    // Carried forward from a marker already owing one, so a takeover that recovers an abandoned
+    // refresh does not quietly downgrade it to a guarded seed.
+    refresh:
+      args.refresh === true ||
+      (current.status === "enabling" && current.refresh === true),
   });
 
   // Taking over an existing record is a claim too, not a write.
@@ -484,7 +516,12 @@ export async function settleI18nTransition(
   return store.compareAndSet(
     key,
     storedMarker(current),
-    storedMarker({ ...current, status: "seeded" })
+    // The intent does not survive the settlement: the work it described has been done.
+    storedMarker({
+      status: "seeded",
+      sourceLocale: current.sourceLocale,
+      owner: current.owner,
+    })
   );
 }
 
@@ -575,14 +612,18 @@ export function claimGuardCondition(args: {
   slug: string;
   sourceLocale: string;
   token: string | undefined;
+  /** The state the row is expected to be in. Defaults to a live claim. */
+  status?: StoredMarker["status"];
+  refresh?: boolean;
 }): { key: string; value: string } {
   return {
     key: markerKey(args.kind, args.slug),
     value: JSON.stringify(
       storedMarker({
-        status: "enabling",
+        status: args.status ?? "enabling",
         sourceLocale: args.sourceLocale,
         owner: args.token,
+        refresh: args.refresh,
       })
     ),
   };

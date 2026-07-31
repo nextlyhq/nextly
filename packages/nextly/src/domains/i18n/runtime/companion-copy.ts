@@ -114,6 +114,13 @@ async function resolveCopyShape(args: CopyArgs): Promise<{
   };
 }
 
+/** The `nextly_meta` table for a dialect, so both guarded copies name the same one. */
+function metaTableFor(dialect: SupportedDialect) {
+  if (dialect === "postgresql") return nextlyMetaPg;
+  if (dialect === "mysql") return nextlyMetaMysql;
+  return nextlyMetaSqlite;
+}
+
 /**
  * The slice of Drizzle this copy drives.
  *
@@ -146,6 +153,13 @@ interface UpdatableDb {
  * authored only in another language — assigns SQL NULL, so restoring would blank the main column
  * instead of leaving it alone. There is nothing to restore for such a row.
  *
+ * `guard` is the transition this copy runs under, carried into the statement for the same reason
+ * the re-enable refresh carries its claim: this is a destructive write. Two processes disabling the
+ * same entity can both read one `seeded` marker and reach here; if the first copies, records
+ * `restored` and publishes the non-localized configuration, edits land on main and the second's
+ * copy overwrites them from a companion that is stale by then. Detecting the lost comparison
+ * afterwards cannot recover the overwritten edit, so the condition travels with the update.
+ *
  * `status` carries the selected row's `_status` back with its values. While an entity is
  * localized, publishing is per locale: a publish under a non-default locale updates that
  * companion row and deliberately leaves main alone. Restoring the values without the status they
@@ -153,7 +167,10 @@ interface UpdatableDb {
  */
 export async function copyDefaultLocaleOntoMain(
   adapter: CompanionIntrospectAdapter,
-  args: CopyArgs & { fallbackLocale?: string }
+  args: CopyArgs & {
+    fallbackLocale?: string;
+    guard?: { key: string; value: string };
+  }
 ): Promise<void> {
   const shape = await resolveCopyShape(args);
   if (!shape) return;
@@ -209,12 +226,19 @@ export async function copyDefaultLocaleOntoMain(
   // Guarded on the parent having any companion row at all. Without it a parent with none — one
   // created after localization was switched off, say — would be assigned SQL NULL, blanking the
   // main column instead of leaving it alone. There is nothing to restore for such a row.
+  const hasRow = sql`exists (select 1 from ${shape.companionTable} where ${parentRow})`;
+  const meta = metaTableFor(adapter.dialect);
   await adapter
     .getDrizzle<UpdatableDb>()
     .update(shape.mainTable)
     .set(values)
     .where(
-      sql`exists (select 1 from ${shape.companionTable} where ${parentRow})`
+      args.guard
+        ? and(
+            hasRow,
+            sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${eq(meta.value as never, args.guard.value as never)})`
+          )
+        : hasRow
     );
 }
 
@@ -265,12 +289,7 @@ export async function refreshDefaultLocaleFromMain(
   }
   if (Object.keys(values).length === 0) return;
 
-  const meta =
-    adapter.dialect === "postgresql"
-      ? nextlyMetaPg
-      : adapter.dialect === "mysql"
-        ? nextlyMetaMysql
-        : nextlyMetaSqlite;
+  const meta = metaTableFor(adapter.dialect);
   const thisLocale = eq(resolved.companion._locale as never, args.locale);
   await adapter
     .getDrizzle<UpdatableDb>()

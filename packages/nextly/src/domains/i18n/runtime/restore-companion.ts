@@ -41,6 +41,7 @@ import type {
 } from "../migration/transition-state";
 import {
   beginI18nTransition,
+  claimGuardCondition,
   forgetI18nTransition,
   readI18nTransitionState,
   recordI18nRestore,
@@ -141,7 +142,12 @@ export async function restoreDisabledCompanion(
 
     // The state this restore is based on. `untracked` needs establishing first; the other two
     // already describe a transition.
-    const based = await basisForRestore(args, recorded, companionIsThere);
+    const based = await basisForRestore(
+      adapter,
+      args,
+      recorded,
+      companionIsThere
+    );
     if (!based) return false;
 
     // Which locale actually holds this entity's content. The configured default is the right
@@ -171,6 +177,20 @@ export async function restoreDisabledCompanion(
             ? args.defaultLocale
             : based.sourceLocale,
         columns: present,
+        // The state the copy is based on, carried into the statement. Two processes disabling the
+        // same entity can both read one marker and reach here; if the first finishes, records
+        // `restored` and publishes the non-localized configuration, edits land on main and this
+        // copy would overwrite them from a companion that is stale by then. Noticing the lost
+        // record afterwards cannot bring those edits back, so the condition travels with the
+        // update and a transition that has moved on matches no rows.
+        guard: claimGuardCondition({
+          kind: args.kind,
+          slug: args.slug,
+          sourceLocale: based.sourceLocale,
+          token: based.owner,
+          status: based.status,
+          refresh: based.refresh,
+        }),
         // Decided by the physical tables, not the configuration. Publishing is per locale while
         // an entity is localized, so a row published only under a non-default locale carries that
         // state on its companion row alone; restoring its values without it would publish a draft
@@ -223,6 +243,8 @@ interface RestoreBasis {
   status: "enabling" | "seeded";
   sourceLocale: string;
   owner?: string;
+  /** Carried so the guard names the row byte for byte — see {@link claimGuardCondition}. */
+  refresh?: boolean;
 }
 
 /**
@@ -248,6 +270,7 @@ interface RestoreBasis {
  * name as the one main will hold.
  */
 async function basisForRestore(
+  adapter: CompanionIntrospectAdapter,
   args: RestoreCompanionArgs,
   recorded: EnablingTransition | SeededTransition | UntrackedTransition,
   companionIsThere: boolean
@@ -264,19 +287,23 @@ async function basisForRestore(
   // No companion and no record: never localized, nothing to bring back.
   if (!companionIsThere) return null;
 
-  const sourceLocale = args.defaultLocale;
-  if (typeof sourceLocale !== "string" || sourceLocale.length === 0) {
-    // Nothing recorded the language, and the configuration no longer names one either. Refusing is
-    // the only honest answer: the copy has to declare what language main ends up holding, and
-    // inventing that is the guesswork the record exists to stop.
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          "cannot restore an untracked companion without a configured default locale",
-        slug: args.slug,
-        kind: args.kind,
-      },
-    });
+  // The language to record. The configured default when there is one; otherwise a locale the
+  // companion actually holds.
+  //
+  // Refusing without a configured default was too strict, and it refused in the case that needs
+  // this most: removing the `localization` block entirely is exactly when an untracked companion
+  // has no recorded fallback either. Meanwhile the copy itself no longer needs a locale to be
+  // named — it ranks each parent's rows and takes the best one — so what is left is deciding what
+  // the record should SAY main now holds. A locale the companion demonstrably has is a true answer
+  // to that; inventing one is not, and there is nothing to invent from when the companion is empty.
+  const sourceLocale =
+    args.defaultLocale && args.defaultLocale.length > 0
+      ? args.defaultLocale
+      : await anyLocaleInCompanion(adapter, args);
+  if (sourceLocale === undefined) {
+    // No configured default and no rows to learn one from. Nothing can be copied either, so
+    // there is nothing lost by leaving the record absent for a later pass with more to go on.
+    return null;
   }
 
   await beginI18nTransition(args.store, {
@@ -292,6 +319,49 @@ async function basisForRestore(
     args.slug
   );
   return claimed.status === "enabling" ? claimed : null;
+}
+
+/**
+ * Any locale the companion physically holds, chosen deterministically.
+ *
+ * Used only to label a restore that has no configured default and no record to read one from. The
+ * copy does not depend on it — it ranks each parent's own rows — so this decides what the record
+ * says the main table now holds, and the smallest locale present is both a true answer and the
+ * same answer on every dialect and re-run.
+ */
+async function anyLocaleInCompanion(
+  adapter: CompanionIntrospectAdapter,
+  args: RestoreCompanionArgs
+): Promise<string | undefined> {
+  const companion = buildCompanionRuntimeTable({
+    slug: args.tableName,
+    tableName: args.tableName,
+    fields: restorableFields(args.fields).map(f => ({
+      ...f,
+      localized: true,
+    })),
+    dialect: args.dialect,
+    localized: true,
+  });
+  if (!companion) return undefined;
+  const columns = companion.table as Record<string, unknown>;
+  const rows = await adapter
+    .getDrizzle<LocaleScanDb>()
+    .select({ locale: columns._locale })
+    .from(companion.table)
+    .orderBy(columns._locale)
+    .limit(1);
+  const locale = (rows[0] as { locale?: unknown } | undefined)?.locale;
+  return typeof locale === "string" && locale.length > 0 ? locale : undefined;
+}
+
+/** The slice of Drizzle the locale scan drives — declared like the other structural ports here. */
+interface LocaleScanDb {
+  select(projection: Record<string, unknown>): {
+    from(table: unknown): {
+      orderBy(column: unknown): { limit(n: number): Promise<unknown[]> };
+    };
+  };
 }
 
 /**

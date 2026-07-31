@@ -403,6 +403,61 @@ describe("beginI18nTransition", () => {
     ).resolves.toMatchObject({ status: "enabling", sourceLocale: "de" });
   });
 
+  it("remembers that a claim owes a destructive refresh", async () => {
+    // The fact that a re-enable must OVERWRITE the surviving companion rows lives in the state it
+    // claims FROM — `restored` — and claiming replaces that state with `enabling`. A run that
+    // crashes in between would otherwise leave a marker indistinguishable from an ordinary
+    // unfinished seed, and the retry would do the guarded insert, skip the stale rows, and settle
+    // over them.
+    const store = fakeStore();
+    const first = await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token: first,
+    });
+    await recordI18nRestore(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "de",
+      refresh: true,
+    });
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toMatchObject({ status: "enabling", refresh: true });
+
+    // And a takeover recovering that abandoned claim keeps the debt rather than downgrading it.
+    const recovering = await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "de",
+    });
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toMatchObject({ status: "enabling", refresh: true });
+
+    // Settling clears it: the work it described has been done.
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token: recovering,
+    });
+    const settled = await readI18nTransitionState(store, "collection", "posts");
+    expect(
+      settled.status === "untracked" ? undefined : settled.refresh
+    ).toBeUndefined();
+  });
+
   it("refuses a slug containing a dot", async () => {
     // The key joins its parts with dots, so a dotted slug could collide with a
     // different kind-and-slug pair and put two entities on one record.
