@@ -30,7 +30,12 @@
  */
 
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
-import type { HookType, HookHandler } from "@nextly/hooks/types";
+import type {
+  BeforeOperationHandler,
+  HookContextPhase,
+  HookType,
+  HookHandler,
+} from "@nextly/hooks/types";
 
 /**
  * Register a database lifecycle hook
@@ -75,12 +80,40 @@ import type { HookType, HookHandler } from "@nextly/hooks/types";
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default requires `any` for type-erased hook registry
 export function registerHook<T = any>(
-  hookType: HookType,
+  hookType: HookContextPhase,
   collection: string,
   handler: HookHandler<T>
 ): void {
   const registry = getHookRegistry();
   registry.register(hookType, collection, handler);
+}
+
+/**
+ * Register a `beforeOperation` hook.
+ *
+ * Separate from {@link registerHook} because the handler is shaped differently:
+ * it receives the operation's `args` -- the data, id or where clause about to
+ * be used -- rather than a document, and returning a modified set replaces
+ * them.
+ *
+ * @param collection - Collection name or '*' for global hooks
+ * @param handler - Hook function to execute
+ *
+ * @example
+ * ```typescript
+ * registerBeforeOperationHook('posts', (context) => {
+ *   if (context.operation === 'read') {
+ *     return { ...context.args, where: { ...context.args.where, archived: false } };
+ *   }
+ * });
+ * ```
+ */
+export function registerBeforeOperationHook<T = unknown>(
+  collection: string,
+  handler: BeforeOperationHandler<T>
+): void {
+  const registry = getHookRegistry();
+  registry.registerBeforeOperation(collection, handler);
 }
 
 /**
@@ -106,12 +139,27 @@ export function registerHook<T = any>(
  * ```
  */
 export function unregisterHook(
-  hookType: HookType,
+  hookType: HookContextPhase,
   collection: string,
   handler: HookHandler
 ): void {
   const registry = getHookRegistry();
   registry.unregister(hookType, collection, handler);
+}
+
+/**
+ * Unregister a `beforeOperation` hook, the counterpart to
+ * {@link registerBeforeOperationHook}.
+ *
+ * @param collection - Collection name or '*'
+ * @param handler - The exact handler function to remove
+ */
+export function unregisterBeforeOperationHook<T = unknown>(
+  collection: string,
+  handler: BeforeOperationHandler<T>
+): void {
+  const registry = getHookRegistry();
+  registry.unregisterBeforeOperation(collection, handler);
 }
 
 /**
@@ -198,5 +246,15 @@ export function getHookCount(hookType: HookType, collection: string): number {
   return registry.getHookCount(hookType, collection);
 }
 
-// Re-export types for consumer convenience
-export type { HookType, HookHandler, HookContext } from "@nextly/hooks/types";
+// Re-export types for consumer convenience. The `BeforeOperation*` trio travels
+// together: a consumer typing a standalone handler needs the context it
+// receives and the args it returns, not just the handler signature.
+export type {
+  BeforeOperationArgs,
+  BeforeOperationContext,
+  BeforeOperationHandler,
+  HookContextPhase,
+  HookType,
+  HookHandler,
+  HookContext,
+} from "@nextly/hooks/types";

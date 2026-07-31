@@ -73,6 +73,7 @@ import {
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
+  hasPasswordField,
   hashPasswordFieldValues,
   stripPasswordFieldValues,
   stripSystemOwnerField,
@@ -99,12 +100,21 @@ import {
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  buildRestorePayload,
+  type ComponentSchemas,
+  type RestoreSchemaContext,
+} from "../../versions/restore-snapshot";
+import { resolveComponentSchemas } from "../../versions/restore-version";
+import {
+  addressableFields,
+  rehydrateSnapshotDates,
   resolveComponentFieldMap,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
@@ -1116,6 +1126,164 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Turn post-hook update input into the column/relation shapes the write path
+   * persists, mutating `data` in place into the main-row payload and returning
+   * the pieces that live outside it. Relationships and uploads are reduced to
+   * ids; component and many-to-many fields are pulled out of `data` (they store
+   * in their own tables); JSON, date, slug, and upload columns are serialized.
+   *
+   * Pure and free of database access, so it runs the same off-transaction for a
+   * normal write and inside the transaction when a publish promotes an
+   * accumulated working draft — the draft's stored snapshot is shaped through
+   * this exact path so promoted content reaches the row identically to a direct
+   * write. `manyToManyFields` is passed in rather than recomputed because the
+   * caller reuses the same list for the junction rewrite later in the write.
+   */
+  private shapeWriteParts(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[],
+    manyToManyFields: FieldDefinition[],
+    collection: unknown
+  ): {
+    manyToManyData: Record<string, string[]>;
+    componentFieldData: Record<string, unknown>;
+  } {
+    // Normalize relationship field values (extract IDs from objects with display properties)
+    // This must happen before many-to-many extraction and JSON serialization
+    // Walks containers too: a reference left populated inside a group or
+    // repeater is serialized to JSON as the row and never read back as a
+    // reference.
+    normalizeRelationshipFields(data, fields as unknown as FieldConfig[]);
+
+    // Normalize upload field values (extract IDs from populated media objects)
+    normalizeUploadFields(data, fields);
+
+    const manyToManyData: Record<string, string[]> = {};
+
+    // Extract many-to-many data from data (after hooks)
+    manyToManyFields.forEach(field => {
+      if (data[field.name] !== undefined) {
+        manyToManyData[field.name] = Array.isArray(data[field.name])
+          ? (data[field.name] as string[])
+          : data[field.name] === null
+            ? []
+            : [data[field.name] as string];
+        delete data[field.name]; // Remove from main update
+      }
+    });
+
+    // Extract component field data (stored in separate comp_{slug} tables)
+    // Component fields should not be stored in the collection table
+    const componentFieldData: Record<string, unknown> = {};
+    fields.forEach(field => {
+      if (isFieldGroupField(field) && data[field.name] !== undefined) {
+        componentFieldData[field.name] = data[field.name];
+        delete data[field.name]; // Remove from main update
+      }
+    });
+
+    // Normalize relationship data inside repeater/group fields before serialization.
+    // The admin panel may send full relationship objects ({id, title, slug, ...})
+    // inside repeater rows — strip these down to just IDs to prevent bloated JSON.
+    fields.forEach(field => {
+      if (
+        (field.type === "repeater" || field.type === "group") &&
+        data[field.name] != null &&
+        typeof data[field.name] === "object"
+      ) {
+        const nestedFields = field.fields || [];
+        if (
+          nestedFields.some(
+            f =>
+              isRelationshipField(f.type) ||
+              f.type === "repeater" ||
+              f.type === "group"
+          )
+        ) {
+          if (field.type === "repeater" && Array.isArray(data[field.name])) {
+            data[field.name] = (data[field.name] as unknown[]).map(
+              (row: unknown) =>
+                row && typeof row === "object" && !Array.isArray(row)
+                  ? normalizeNestedRelationships(
+                      row as Record<string, unknown>,
+                      nestedFields
+                    )
+                  : row
+            );
+          } else if (
+            field.type === "group" &&
+            !Array.isArray(data[field.name])
+          ) {
+            data[field.name] = normalizeNestedRelationships(
+              data[field.name] as Record<string, unknown>,
+              nestedFields
+            );
+          }
+        }
+      }
+    });
+
+    // Serialize JSON fields (richtext, blocks, array, group, json)
+    fields.forEach(field => {
+      if (isJsonFieldType(field.type, field) && data[field.name] != null) {
+        data[field.name] = toJsonColumnValue(data[field.name]);
+      }
+    });
+
+    this.serializeHasManyRelationships(data, fields);
+
+    // Convert date-field strings into `Date` objects so Drizzle can bind
+    // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+    // failure mode this guards against.
+    coerceDateFieldsToDate(data, fields);
+
+    // Sanitize slug if provided in update
+    // - Dynamic collections (UI-created) always have a slug column
+    // - Plugin collections (isPlugin: true) only have slug if explicitly defined
+    const isPluginCollection =
+      (
+        (collection as Record<string, unknown>).admin as
+          | Record<string, unknown>
+          | undefined
+      )?.isPlugin === true;
+    const hasSlugField = fields.some(f => f.name === "slug");
+    const shouldHandleSlug = isPluginCollection ? hasSlugField : true;
+
+    if (shouldHandleSlug && data.slug !== undefined) {
+      if (typeof data.slug === "string" && data.slug.trim()) {
+        data.slug = generateSlug(data.slug);
+      } else {
+        // If slug is empty/null, remove it from update to keep existing value
+        delete data.slug;
+      }
+    }
+
+    // Final safety pass: ensure upload field values are IDs, not populated objects.
+    fields.forEach(field => {
+      if (field.type === "upload" && data[field.name] != null) {
+        const val = data[field.name];
+        if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+          data[field.name] =
+            "id" in val &&
+            typeof (val as Record<string, unknown>).id === "string"
+              ? (val as Record<string, unknown>).id
+              : null;
+        } else if (Array.isArray(val)) {
+          data[field.name] = val.map((item: unknown) =>
+            typeof item === "string"
+              ? item
+              : typeof item === "object" && item !== null && "id" in item
+                ? (item as Record<string, unknown>).id
+                : item
+          );
+        }
+      }
+    });
+
+    return { manyToManyData, componentFieldData };
+  }
+
+  /**
    * Return a shallow copy of `row` with JSON-backed field values (richtext,
    * blocks, array, group, json) parsed from their stored string form, matching
    * the read shape so a version snapshot equals a normal read. Non-JSON and
@@ -1364,6 +1532,172 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Assemble the document a draft promotion actually persists: the draft with the
+   * caller's scalars overlaid, the caller's single-component patches merged onto
+   * the draft's components (a patch wins per sub-field, recursing into nested
+   * single components; a dynamic zone, a repeatable component, and a many-to-many
+   * set are replaced whole). `shapeWriteParts` extracts component and m2m fields
+   * out of the caller payload before promotion, so field-level write access and
+   * validation would otherwise judge the draft's OLD copy of those fields while
+   * the caller's copy is folded back in and persisted. Building the full document
+   * here lets the access and validation passes see the real final values, at every
+   * depth, for column, component, and many-to-many fields alike.
+   */
+  private assemblePromotedDocument(
+    draftInput: Record<string, unknown>,
+    callerScalars: Record<string, unknown>,
+    callerComponentData: Record<string, unknown>,
+    callerManyToManyData: Record<string, string[]>,
+    fields: FieldDefinition[],
+    manyToManyFields: FieldDefinition[],
+    componentSchemas: ComponentSchemas | null
+  ): Record<string, unknown> {
+    // Read the draft's own component and m2m values straight off the draft
+    // document, NOT through `shapeWriteParts` — that serializes groups/json to
+    // strings and would hide a nested field from the access and validation passes
+    // that run on the returned document. These only seed the merges below; the
+    // merged values overwrite the same keys in the returned document.
+    const draftComponents: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (!isFieldGroupField(field)) continue;
+      const name = (field as { name?: unknown }).name;
+      if (typeof name === "string" && name in draftInput) {
+        draftComponents[name] = draftInput[name];
+      }
+    }
+    const draftManyToMany: Record<string, string[]> = {};
+    for (const field of manyToManyFields) {
+      if (!(field.name in draftInput)) continue;
+      const value = draftInput[field.name];
+      draftManyToMany[field.name] = Array.isArray(value)
+        ? (value as string[])
+        : value == null
+          ? []
+          : [value as string];
+    }
+    // Caller scalars win over the draft; the caller's single-component patches
+    // merge onto the draft's components (a patch wins per sub-field); the caller's
+    // m2m replaces the draft's.
+    const mergedComponents = this.mergeSingleComponentPatches(
+      draftComponents,
+      callerComponentData,
+      fields as unknown as FieldConfig[],
+      componentSchemas
+    );
+    const mergedManyToMany = {
+      ...draftManyToMany,
+      ...callerManyToManyData,
+    };
+    return {
+      ...draftInput,
+      ...callerScalars,
+      ...mergedComponents,
+      ...mergedManyToMany,
+    };
+  }
+
+  /**
+   * Shape a working-draft snapshot into the read document the response and hooks
+   * see, the same way the read overlay does: prune it to the current schema
+   * (dropping a field a later change removed and the single-component type markers
+   * the persisted snapshot keeps for promotion), copy back the immutable id and
+   * timestamp columns `buildRestorePayload` holds out, and rehydrate JSON date
+   * strings to Date at every depth. Used for the newly accumulated draft and for
+   * the prior draft the afterUpdate hooks compare against.
+   */
+  private shapeDraftForResponse(
+    rawDraft: Record<string, unknown>,
+    fields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null,
+    collectionHasStatus: boolean,
+    isPluginCollection: boolean
+  ): Record<string, unknown> {
+    const { payload } = buildRestorePayload(rawDraft, fields, {
+      hasStatus: collectionHasStatus,
+      hasSlug: !isPluginCollection || fields.some(f => f.name === "slug"),
+      hasTitle: !isPluginCollection || fields.some(f => f.name === "title"),
+      componentSchemas: componentSchemas ?? undefined,
+      documentLocalized: false,
+      localeUnknown: false,
+    });
+    for (const key of [
+      "id",
+      "createdAt",
+      "created_at",
+      "updatedAt",
+      "updated_at",
+    ]) {
+      if (key in rawDraft) payload[key] = rawDraft[key];
+    }
+    for (const key of ["createdAt", "updatedAt"]) {
+      const value = payload[key];
+      if (typeof value === "string") {
+        const parsed = new Date(value);
+        if (!Number.isNaN(parsed.getTime())) payload[key] = parsed;
+      }
+    }
+    rehydrateSnapshotDates(payload, fields, componentSchemas);
+    return payload;
+  }
+
+  /**
+   * Overlay `patch` onto `base`, recursively merging single (non-repeatable)
+   * component objects instead of replacing them.
+   *
+   * A patch-shaped save carries only the sub-fields it changed, so replacing a
+   * component's whole object would drop sub-fields an earlier save set. Recurses
+   * according to the resolved component schemas so a component nested inside a
+   * component is merged at every depth. A dynamic zone (array), a repeatable
+   * component, and a scalar are replaced whole (patch wins).
+   */
+  private mergeSingleComponentPatches(
+    base: Record<string, unknown>,
+    patch: Record<string, unknown>,
+    fields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null
+  ): Record<string, unknown> {
+    // Flatten unnamed presentational groups (matching `tagComponentTypes`): a
+    // single component declared inside such a group stores its value at the
+    // enclosing level, so without flattening the lookup would miss it and treat
+    // it as a scalar, replacing rather than merging a nested component patch.
+    const byName = new Map<string, FieldConfig>();
+    for (const f of addressableFields(fields)) {
+      const name = (f as { name?: unknown }).name;
+      if (typeof name === "string") byName.set(name, f);
+    }
+    const out: Record<string, unknown> = { ...base };
+    for (const [key, patchVal] of Object.entries(patch)) {
+      const field = byName.get(key);
+      const slug =
+        field &&
+        typeof (field as { component?: unknown }).component === "string" &&
+        (field as { repeatable?: unknown }).repeatable !== true
+          ? ((field as { component?: string }).component as string)
+          : undefined;
+      const baseVal = out[key];
+      if (
+        slug !== undefined &&
+        baseVal !== null &&
+        typeof baseVal === "object" &&
+        !Array.isArray(baseVal) &&
+        patchVal !== null &&
+        typeof patchVal === "object" &&
+        !Array.isArray(patchVal)
+      ) {
+        out[key] = this.mergeSingleComponentPatches(
+          baseVal as Record<string, unknown>,
+          patchVal as Record<string, unknown>,
+          componentSchemas?.get(slug)?.fields ?? [],
+          componentSchemas
+        );
+      } else {
+        out[key] = patchVal;
+      }
+    }
+    return out;
+  }
+
+  /**
    * The document parts a version records, with component types tagged.
    *
    * A separate shape from what the outbox carries: the same parts feed both,
@@ -1394,9 +1728,19 @@ export class CollectionMutationService extends BaseService {
       : new Map<string, FieldConfig[]>();
     const resolve = (slug: string) => componentFields.get(slug);
 
+    const components = tagComponentTypes(parts.components, schema, resolve);
+    // A working draft stores the caller's RAW component input (the component
+    // saver that hashes nested passwords is skipped for a draft edit), so a
+    // password field inside a component would otherwise land in the snapshot in
+    // plaintext and leak on a trusted draft read. The normal capture path reads
+    // components back through the query layer, which already strips them, so
+    // this is a no-op there. Runs after tagging so a dynamic zone's per-instance
+    // `_componentType` resolves each row's own schema.
+    this.stripComponentPasswordsInPlace(components, schema, componentFields);
+
     return {
       ...parts,
-      components: tagComponentTypes(parts.components, schema, resolve),
+      components,
       // A component declared inside a group or repeater rides in that
       // container's JSON on the parent row rather than appearing as its own
       // key, so it has to be reached through the row.
@@ -1406,6 +1750,94 @@ export class CollectionMutationService extends BaseService {
         resolve
       ) as Record<string, unknown>,
     };
+  }
+
+  /**
+   * Delete password-field values from component instances in a snapshot's
+   * component map, descending through nested components. `stripPasswordFieldValues`
+   * handles a component instance's own passwords and any nested in a
+   * group/repeater, but cannot follow a component referenced by slug; this
+   * resolves each instance's schema (from the tagged `_componentType`, or the
+   * field's single declared component) and recurses so a password two components
+   * deep is removed too. Mutates in place: on every path that reaches here the
+   * component data has already been saved (promote) or will never be saved
+   * (draft edit), so stripping the snapshot copy cannot affect a live write.
+   */
+  private stripComponentPasswordsInPlace(
+    components: Record<string, unknown>,
+    schema: FieldConfig[],
+    componentFields: Map<string, FieldConfig[]>
+  ): void {
+    const declaredSlugs = (field: FieldConfig): string[] => {
+      const one = (field as { component?: unknown }).component;
+      const many = (field as { components?: unknown }).components;
+      const slugs: string[] = [];
+      if (typeof one === "string") slugs.push(one);
+      if (Array.isArray(many)) {
+        for (const s of many) if (typeof s === "string") slugs.push(s);
+      }
+      return slugs;
+    };
+    const stripInstance = (instance: unknown, cfields: FieldConfig[]): void => {
+      if (
+        !instance ||
+        typeof instance !== "object" ||
+        Array.isArray(instance)
+      ) {
+        return;
+      }
+      const rec = instance as Record<string, unknown>;
+      stripPasswordFieldValues(rec, cfields);
+      for (const child of cfields) {
+        const childSlugs = declaredSlugs(child);
+        if (childSlugs.length > 0) stripField(rec, child, childSlugs);
+      }
+    };
+    const stripField = (
+      owner: Record<string, unknown>,
+      field: FieldConfig,
+      slugs: string[]
+    ): void => {
+      if (!field.name) return;
+      const value = owner[field.name];
+      const isArray = Array.isArray(value);
+      const instances = isArray ? value : value != null ? [value] : [];
+      const kept: unknown[] = [];
+      let dropped = false;
+      for (const inst of instances) {
+        if (!inst || typeof inst !== "object") {
+          kept.push(inst);
+          continue;
+        }
+        const tagged = (inst as Record<string, unknown>)._componentType;
+        const slug =
+          typeof tagged === "string"
+            ? tagged
+            : slugs.length === 1
+              ? slugs[0]
+              : undefined;
+        const cfields = slug ? componentFields.get(slug) : undefined;
+        if (cfields) {
+          stripInstance(inst, cfields);
+          kept.push(inst);
+        } else {
+          // The instance's schema cannot be resolved (a dynamic-zone row naming
+          // a component the field does not allow, or one absent from the
+          // registry), so a password nested inside it cannot be located and
+          // removed. Drop the instance rather than store an un-inspected value
+          // in plaintext, the same safe direction the restore filter takes for
+          // an unknown subtree.
+          dropped = true;
+        }
+      }
+      if (!dropped) return;
+      if (isArray) owner[field.name] = kept;
+      else delete owner[field.name];
+    };
+    for (const field of schema) {
+      const slugs = declaredSlugs(field);
+      if (slugs.length > 0) stripField(components, field, slugs);
+    }
   }
 
   private async buildFullSnapshotRelations(
@@ -3993,8 +4425,10 @@ export class CollectionMutationService extends BaseService {
             sharedContext
           )
         );
-      const finalData = (storedBeforeResult.data ??
-        dataAfterCodeHooks) as Record<string, unknown>;
+      let finalData = (storedBeforeResult.data ?? dataAfterCodeHooks) as Record<
+        string,
+        unknown
+      >;
 
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
@@ -4073,156 +4507,28 @@ export class CollectionMutationService extends BaseService {
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
 
-      // Normalize relationship field values (extract IDs from objects with display properties)
-      // This must happen before many-to-many extraction and JSON serialization
-      // Walks containers too: a reference left populated inside a group or
-      // repeater is serialized to JSON as the row and never read back as a
-      // reference.
-      normalizeRelationshipFields(
-        finalData,
-        fields as unknown as FieldConfig[]
-      );
-
-      // Normalize upload field values (extract IDs from populated media objects)
-      normalizeUploadFields(finalData, fields);
-
-      // Separate regular fields from many-to-many relations
+      // Many-to-many field defs drive both the extraction inside shapeWriteParts
+      // and the junction rewrite later in this transaction, so they are resolved
+      // once here and reused rather than recomputed.
       const manyToManyFields = fields.filter(
         f =>
           f.type === "relationship" &&
-          // Only UI-built manyToMany routes through a junction table.
-          // Code-first `hasMany: true` is stored as a JSON array on the
-          // parent column (see field-column-descriptor.ts kind="json")
-          // and is serialized later in the same finalData pass.
+          // Only UI-built manyToMany routes through a junction table. Code-first
+          // `hasMany: true` is stored as a JSON array on the parent column and is
+          // serialized in the same shaping pass.
           f.options?.relationType === "manyToMany"
       );
-      const manyToManyData: Record<string, string[]> = {};
 
-      // Extract many-to-many data from finalData (after hooks)
-      manyToManyFields.forEach(field => {
-        if (finalData[field.name] !== undefined) {
-          manyToManyData[field.name] = Array.isArray(finalData[field.name])
-            ? (finalData[field.name] as string[])
-            : finalData[field.name] === null
-              ? []
-              : [finalData[field.name] as string];
-          delete finalData[field.name]; // Remove from main update
-        }
-      });
-
-      // Extract component field data (stored in separate comp_{slug} tables)
-      // Component fields should not be stored in the collection table
-      const componentFieldData: Record<string, unknown> = {};
-      fields.forEach(field => {
-        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
-          componentFieldData[field.name] = finalData[field.name];
-          delete finalData[field.name]; // Remove from main update
-        }
-      });
-
-      // Normalize relationship data inside repeater/group fields before serialization.
-      // The admin panel may send full relationship objects ({id, title, slug, ...})
-      // inside repeater rows — strip these down to just IDs to prevent bloated JSON.
-      fields.forEach(field => {
-        if (
-          (field.type === "repeater" || field.type === "group") &&
-          finalData[field.name] != null &&
-          typeof finalData[field.name] === "object"
-        ) {
-          const nestedFields = field.fields || [];
-          if (
-            nestedFields.some(
-              f =>
-                isRelationshipField(f.type) ||
-                f.type === "repeater" ||
-                f.type === "group"
-            )
-          ) {
-            if (
-              field.type === "repeater" &&
-              Array.isArray(finalData[field.name])
-            ) {
-              finalData[field.name] = (finalData[field.name] as unknown[]).map(
-                (row: unknown) =>
-                  row && typeof row === "object" && !Array.isArray(row)
-                    ? normalizeNestedRelationships(
-                        row as Record<string, unknown>,
-                        nestedFields
-                      )
-                    : row
-              );
-            } else if (
-              field.type === "group" &&
-              !Array.isArray(finalData[field.name])
-            ) {
-              finalData[field.name] = normalizeNestedRelationships(
-                finalData[field.name] as Record<string, unknown>,
-                nestedFields
-              );
-            }
-          }
-        }
-      });
-
-      // Serialize JSON fields (richtext, blocks, array, group, json)
-      fields.forEach(field => {
-        if (
-          isJsonFieldType(field.type, field) &&
-          finalData[field.name] != null
-        ) {
-          finalData[field.name] = toJsonColumnValue(finalData[field.name]);
-        }
-      });
-
-      this.serializeHasManyRelationships(finalData, fields);
-
-      // Convert date-field strings into `Date` objects so Drizzle can bind
-      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
-      // failure mode this guards against.
-      coerceDateFieldsToDate(finalData, fields);
-
-      // Sanitize slug if provided in update
-      // - Dynamic collections (UI-created) always have a slug column
-      // - Plugin collections (isPlugin: true) only have slug if explicitly defined
-      const isPluginCollection =
-        (
-          (collection as Record<string, unknown>).admin as
-            | Record<string, unknown>
-            | undefined
-        )?.isPlugin === true;
-      const hasSlugField = fields.some(f => f.name === "slug");
-      const shouldHandleSlug = isPluginCollection ? hasSlugField : true;
-
-      if (shouldHandleSlug && finalData.slug !== undefined) {
-        if (typeof finalData.slug === "string" && finalData.slug.trim()) {
-          finalData.slug = generateSlug(finalData.slug);
-        } else {
-          // If slug is empty/null, remove it from update to keep existing value
-          delete finalData.slug;
-        }
-      }
-
-      // Final safety pass: ensure upload field values are IDs, not populated objects.
-      fields.forEach(field => {
-        if (field.type === "upload" && finalData[field.name] != null) {
-          const val = finalData[field.name];
-          if (typeof val === "object" && val !== null && !Array.isArray(val)) {
-            finalData[field.name] =
-              "id" in val &&
-              typeof (val as Record<string, unknown>).id === "string"
-                ? (val as Record<string, unknown>).id
-                : null;
-          } else if (Array.isArray(val)) {
-            finalData[field.name] = val.map((item: unknown) =>
-              typeof item === "string"
-                ? item
-                : typeof item === "object" && item !== null && "id" in item
-                  ? (item as Record<string, unknown>).id
-                  : item
-            );
-          }
-        }
-      });
+      // Shape the post-hook input into the row payload (mutating finalData) plus
+      // the component and many-to-many pieces that persist outside the main row.
+      // `let` because a publish that promotes an accumulated working draft
+      // rebinds these to the merged draft+payload shape below.
+      let { manyToManyData, componentFieldData } = this.shapeWriteParts(
+        finalData,
+        fields,
+        manyToManyFields,
+        collection
+      );
 
       // Update main entry
       // Use Date object (not .toISOString() string) because Drizzle's timestamp()
@@ -4378,6 +4684,72 @@ export class CollectionMutationService extends BaseService {
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
 
+      // The draft/published split: an update to a PUBLISHED document that
+      // names no status is non-destructive on a split-enabled collection — it is
+      // stored as the working draft, leaving the live row untouched, and a
+      // publish later promotes that draft to the live row. Requires the
+      // draft/publish lifecycle (`status`) and drafts-enabled versioning, and is
+      // scoped to non-localized collections: a localized document keeps
+      // draft/published state per locale, so coalescing per-locale drafts and
+      // aligning the working-draft locale key with the read overlay needs its own
+      // design and is handled separately.
+      const documentLocalized =
+        (collection as { localized?: boolean }).localized === true;
+      // The component schemas reachable from this collection, resolved once off
+      // the transaction (registry reads on the pooled connection, the same reason
+      // as `webhookFields` below) and reused by the promote path. Skipped when a
+      // disqualifier already known without the registry rules the split out: a
+      // localized document or a top-level password field. Component resolution can
+      // fail on a transient registry error, so an ordinary live write on such a
+      // collection must not acquire that dependency for a split it can never take.
+      const splitComponentSchemas =
+        collectionHasStatus &&
+        versionsConfig?.drafts?.enabled === true &&
+        !documentLocalized &&
+        !hasPasswordField(fields)
+          ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
+          : null;
+      // A localized component stores its values per locale, but a working draft
+      // is keyed under one unlocalized slot, so a draft saved under one locale
+      // would be promoted under another and misfile the translation into the
+      // wrong companion. A component whose schema cannot be resolved is treated
+      // the same way: it could itself be localized, and promoting a draft while
+      // it stays unresolvable drops the component subtree (the restore filter
+      // cannot see inside a schema it cannot load) before the sidecar is deleted,
+      // silently losing the pending edit. Until per-locale drafts exist, either
+      // kind of component makes the collection ineligible for the split,
+      // alongside a localized document.
+      const hasIneligibleComponent = splitComponentSchemas
+        ? [...splitComponentSchemas.values()].some(
+            schema => schema.localized || !schema.resolved
+          )
+        : false;
+      // A password field cannot ride safely in a working draft: the snapshot
+      // strips passwords so no plaintext credential is stored at rest, and the
+      // promote filter drops any field whose subtree holds one, so a draft can
+      // neither carry a password change nor preserve an ordinary edit made
+      // alongside a password in the same component. Until drafts persist password
+      // changes through a secure path, a collection with a reachable password
+      // field (top-level or inside a reachable component) is excluded from the
+      // split and edits the live row directly, exactly as before the split.
+      const hasReachablePassword =
+        hasPasswordField(fields) ||
+        (splitComponentSchemas
+          ? [...splitComponentSchemas.values()].some(schema =>
+              hasPasswordField(schema.fields)
+            )
+          : false);
+      const splitEnabled =
+        collectionHasStatus &&
+        versionsConfig?.drafts?.enabled === true &&
+        !documentLocalized &&
+        !hasIneligibleComponent &&
+        !hasReachablePassword;
+      // No status named ⇒ neither the main row nor the write-locale companion
+      // `_status` is being set (matches the transition guard's own build gate at
+      // `transitionNextStatus !== undefined`).
+      const namesNoStatus = transitionNextStatus === undefined;
+
       // Resolved BEFORE the transaction opens, for the reason given on the
       // create path: expansion reads the component registry on the pooled
       // connection. Hoisting it also keeps a conflict retry from re-running the
@@ -4386,6 +4758,119 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         fields
       );
+
+      // Promote-on-publish: a publish or unpublish on a split collection
+      // must apply the whole accumulated working draft to the live row, not only
+      // the dirty fields the caller sent (the admin Publish sends just the fields
+      // touched this session). The component schemas the draft snapshot is
+      // filtered against are read from the registry here, off the transaction —
+      // the same pooled-connection reason as `webhookFields` — and the restore
+      // context records which system columns the live row actually has. Both are
+      // unused unless a draft is found under the row lock below. `promotePossible`
+      // is the publish/unpublish counterpart of the status-less draft edit: the
+      // two are disjoint on `namesNoStatus`.
+      // A restore write (a `sourceVersionNo` is set) names the restored version's
+      // status and so is not status-less, but it is not a publish of the pending
+      // draft either: folding the draft would fill fields the historical snapshot
+      // omits with unrelated pending edits and then delete the draft. Apply the
+      // restore payload directly and leave any working draft in place.
+      const isRestoreWrite =
+        params.sourceVersionNo !== undefined && params.sourceVersionNo !== null;
+      const promotePossible = splitEnabled && !namesNoStatus && !isRestoreWrite;
+      const isPluginForRestore =
+        (
+          (collection as Record<string, unknown>).admin as
+            | Record<string, unknown>
+            | undefined
+        )?.isPlugin === true;
+      const promoteRestoreCtx: RestoreSchemaContext | null = promotePossible
+        ? {
+            hasStatus: collectionHasStatus,
+            hasSlug: !isPluginForRestore || fields.some(f => f.name === "slug"),
+            hasTitle:
+              !isPluginForRestore || fields.some(f => f.name === "title"),
+            componentSchemas: splitComponentSchemas ?? undefined,
+            // The split is non-localized-only, so the document holds no per-locale
+            // values and the snapshot's locale is the resolved request locale.
+            documentLocalized: false,
+            localeUnknown: false,
+          }
+        : null;
+
+      // Revalidate the promoted draft against the CURRENT schema before the
+      // transaction opens. The caller validation above ran on the caller's
+      // payload only, which for a publish is just `{ status }`; promote then
+      // folds the whole accumulated draft into the live write, so a draft field
+      // the schema has since made stricter (a tightened `minLength`/`max`/
+      // `pattern`/`options`, or an emptied value that is now required) would
+      // otherwise reach the live row unchecked. Read the draft advisory rather
+      // than under the promote's row lock — validators are pure of the write
+      // connection, but a lock taken here would be a second one against a small
+      // pool — and validate the SAME merged shape the in-transaction fold
+      // persists (`buildRestorePayload` output with the caller's fields on top).
+      // The fold below stays authoritative for the write; this only gates it.
+      if (promotePossible && promoteRestoreCtx) {
+        const advisoryDraft = await new VersionsRepository(
+          this.adapter
+        ).findWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          },
+          null
+        );
+        if (advisoryDraft) {
+          const { payload: draftInput } = buildRestorePayload(
+            advisoryDraft.snapshot,
+            fields as unknown as FieldConfig[],
+            promoteRestoreCtx
+          );
+          // Assemble the full document the promotion will persist so both the
+          // access filter and the validation below judge the real final values.
+          // The caller gate above ran on the caller's payload only (a publish
+          // sends just the status), and `shapeWriteParts` has already pulled the
+          // caller's component and m2m fields out of `finalData`; folding them back
+          // in gates a denied value at every depth (top-level, or nested in a
+          // group/repeater/component) and covers component and m2m fields, not only
+          // columns. The authoritative pass runs again on the locked draft in the
+          // transaction (see the promote block).
+          const merged = this.assemblePromotedDocument(
+            draftInput,
+            finalData,
+            componentFieldData,
+            manyToManyData,
+            fields,
+            manyToManyFields,
+            splitComponentSchemas
+          );
+          await applyFieldWriteAccess({
+            kind: "collection",
+            slug: params.collectionName,
+            data: merged,
+            operation: "update",
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+            id: params.entryId,
+          });
+          const localeCtx = await this.localizedRequiredContext(
+            params.collectionName,
+            params.locale
+          );
+          const promoteIssues = await validateEntryData(
+            this.validationView(merged, fields),
+            attachFieldValidators("collection", params.collectionName, fields),
+            {
+              mode: "update",
+              req: params.user ? { user: params.user } : {},
+              ...localeCtx,
+            }
+          );
+          if (promoteIssues.length > 0) {
+            throw NextlyError.validation({ errors: promoteIssues });
+          }
+        }
+      }
 
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
@@ -4402,6 +4887,17 @@ export class CollectionMutationService extends BaseService {
       // resolves, so a rolled-back attempt (a version conflict) or a commit
       // failure never flags a durable event that isn't there.
       let recorded = false;
+      // Set when this update was stored as a working draft (see the split below).
+      // The live row is left untouched, so the row re-fetched after the
+      // transaction is the OLD published content; the response, afterUpdate/
+      // afterChange hooks, and the reaction event must use this pending document
+      // instead, and the public revalidation and reaction event are skipped
+      // because the live document a visitor sees did not change.
+      let workingDraftDocument: Record<string, unknown> | undefined;
+      // The prior working draft (shaped like a read), set only when a later
+      // status-less save accumulates onto an existing draft, so the afterUpdate
+      // hooks diff against it rather than the unchanged published row.
+      let priorWorkingDraftDocument: Record<string, unknown> | undefined;
       // Verify every localized field group in this payload can actually be written
       // BEFORE the transaction opens. Inside it the probes would borrow a second
       // connection and deadlock a single-connection pool, and a NextlyError raised in
@@ -4412,10 +4908,28 @@ export class CollectionMutationService extends BaseService {
         data: componentFieldData,
         locale: params.locale,
       });
+      // `withVersionConflictRetry` re-runs the closure on a version_no conflict,
+      // and the promote fold inside it rebinds these payloads (and sets the
+      // pending-draft document). Capture the caller's own shaped input so each
+      // attempt starts from it rather than from a prior attempt's merged draft.
+      const baseFinalData = { ...finalData };
+      const baseManyToManyData = { ...manyToManyData };
+      const baseComponentFieldData = { ...componentFieldData };
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;
-          const updatePayload = {
+          // Reset the payloads the promote fold rebinds, so a retried attempt
+          // re-decides the split from the caller's input; and clear the pending
+          // draft document, so a stale one from a promoted attempt cannot suppress
+          // the outbox/reaction events or the revalidation intent of a committed
+          // live write on the retry.
+          finalData = { ...baseFinalData };
+          manyToManyData = { ...baseManyToManyData };
+          componentFieldData = { ...baseComponentFieldData };
+          workingDraftDocument = undefined;
+          // `let` because promote-on-publish rebinds it from the merged
+          // draft+payload after the working draft is folded in below.
+          let updatePayload = {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
           };
@@ -4423,6 +4937,9 @@ export class CollectionMutationService extends BaseService {
           // This locale's committed status before the write, reused by both the
           // prior document and the post-write overlay so the two stay symmetric.
           let committedLocaleStatus: string | null = null;
+          // Set once the row-locked prior state is read below — true
+          // when this update should be stored as the working draft.
+          let storeAsWorkingDraft = false;
 
           // Take the row lock the UPDATE below needs anyway, before reading the
           // prior state. Without it two concurrent updates to the same entry
@@ -4588,6 +5105,20 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
+          // Decide the draft edit from the ROW-LOCKED prior status —
+          // the main row, or the write locale's companion `_status` — the same
+          // locked reads the transition guard uses, so the decision is
+          // TOCTOU-safe (a concurrent publish/unpublish committed before the
+          // lock is seen). A never-published (`draft`) or per-locale-absent
+          // (`null`) document fails the test and edits in place.
+          const draftLiveStatus = isNonDefaultLocaleStatusWrite
+            ? committedLocaleStatus
+            : (((preUpdateRow as { status?: unknown } | undefined)?.status as
+                | string
+                | undefined) ?? null);
+          storeAsWorkingDraft =
+            splitEnabled && namesNoStatus && draftLiveStatus === "published";
+
           // TOCTOU-safe authorization: classify the transition against the
           // status just read UNDER THE ROW LOCK (`preUpdateRow` /
           // `committedLocaleStatus`), not the pre-transaction read, and enforce
@@ -4655,6 +5186,122 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
+          // Promote-on-publish: with the row lock held and the publish
+          // authorized above, fold any accumulated working draft into this write
+          // so the live row receives the draft's whole content with the caller's
+          // fields overlaid. The admin Publish sends only the fields dirtied this
+          // session, so without this a publish drops edits made in earlier ones.
+          // Fetched here, under the lock, so a concurrent draft edit is
+          // serialized: it either lands before this read (and is promoted) or
+          // after this transaction commits (against the now-published row). The
+          // draft is deleted in the same transaction below, so promote is atomic:
+          // any failure rolls back the live write and leaves the draft intact.
+          let promotedDraft = false;
+          if (promotePossible && promoteRestoreCtx) {
+            const workingDraft = await new VersionsRepository(
+              tx
+              // The split is non-localized only, so the working draft is keyed
+              // under the unlocalized `locale IS NULL` slot — the same key the
+              // read overlay and the store use, so a publish under any request
+              // locale still finds the pending draft it would show the editor.
+            ).findWorkingDraft(
+              {
+                scopeKind: "collection",
+                scopeSlug: params.collectionName,
+                entryId: params.entryId,
+              },
+              null
+            );
+            if (workingDraft) {
+              // Promoting a working draft publishes (or unpublishes) its pending
+              // content, so it needs the same permission as a status transition
+              // even when the main-row status does not change: a
+              // published -> published re-publish is a no-op for the transition
+              // guard above, yet folding the draft still pushes pending content
+              // live. Enforce the pre-resolved guard here against the row-locked
+              // document. For a real transition the guard already fired and
+              // passed above, so this is a no-op re-check; for the no-op
+              // re-publish it is the only place the publish permission is
+              // enforced.
+              if (transitionGuard) {
+                if (transitionGuard.permissionDenied) {
+                  transitionDeniedResult = transitionGuard.permissionDenied;
+                  throw new StatusTransitionDeniedError();
+                }
+                if (transitionGuard.documentRule && preUpdateRow) {
+                  const promoteDenied =
+                    await this.accessService.evaluateTransitionDocumentRule(
+                      transitionGuard.documentRule.accessRules,
+                      transitionGuard.op,
+                      transitionGuard.documentRule.user,
+                      preUpdateRow as Record<string, unknown>
+                    );
+                  if (promoteDenied) {
+                    transitionDeniedResult = promoteDenied;
+                    throw new StatusTransitionDeniedError();
+                  }
+                }
+              }
+              // The snapshot is stored read-shaped, so buildRestorePayload turns
+              // it into a safe update input (immutable ids stripped, removed
+              // columns and password fields dropped, component subtrees whose
+              // schema no longer resolves reported rather than written blind).
+              // Shaping that input through the SAME pure pass the caller's input
+              // took yields matching column and relation parts, so merging the
+              // caller over the draft (caller wins per key, including the
+              // published/draft `status`) and rebinding makes the writes below
+              // persist the promoted content with no separate code path.
+              const { payload: draftInput } = buildRestorePayload(
+                workingDraft.snapshot,
+                fields as unknown as FieldConfig[],
+                promoteRestoreCtx
+              );
+              // Assemble the full document the promotion persists (the locked
+              // draft, the caller's scalars overlaid, the caller's single-component
+              // patches merged onto the draft's components, and the caller's m2m),
+              // then filter it through the current field-level write access. A rule
+              // that depends on a sibling the publish patch supplies (e.g. a field
+              // writable only when `approved` is true, where the publish sets it
+              // false) is judged on the real final values, and a denied value is
+              // dropped at any depth for column, component, and m2m fields alike.
+              // Re-extracting the write parts from the FILTERED document keeps a
+              // denied component/m2m value out of the persisted parts, which the
+              // earlier after-access merge would have restored.
+              const mergedPromoteData = this.assemblePromotedDocument(
+                draftInput,
+                finalData,
+                componentFieldData,
+                manyToManyData,
+                fields,
+                manyToManyFields,
+                splitComponentSchemas
+              );
+              await applyFieldWriteAccess({
+                kind: "collection",
+                slug: params.collectionName,
+                data: mergedPromoteData,
+                operation: "update",
+                user: params.user,
+                overrideAccess: params.overrideAccess,
+                id: params.entryId,
+              });
+              const draftParts = this.shapeWriteParts(
+                mergedPromoteData,
+                fields,
+                manyToManyFields,
+                collection
+              );
+              finalData = mergedPromoteData;
+              componentFieldData = draftParts.componentFieldData;
+              manyToManyData = draftParts.manyToManyData;
+              updatePayload = {
+                ...stripImmutableSystemFields(finalData),
+                updatedAt: updatePayload.updatedAt,
+              };
+              promotedDraft = true;
+            }
+          }
+
           // Dialect-aware identifier quoting and placeholder syntax.
           // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
           const isMysql = this.dialect === "mysql";
@@ -4672,16 +5319,28 @@ export class CollectionMutationService extends BaseService {
             })
             .join(", ");
           sqlParams.push(params.entryId);
-          await tx.execute(
-            `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
-            sqlParams as (string | number | boolean | Date | null | undefined)[]
-          );
+          // Skip the live-row UPDATE for a draft edit — the pending
+          // change is stored as the working draft below, not written to the row.
+          if (!storeAsWorkingDraft) {
+            await tx.execute(
+              `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
+              sqlParams as (
+                | string
+                | number
+                | boolean
+                | Date
+                | null
+                | undefined
+              )[]
+            );
+          }
 
           // Capture the committed per-locale `_status` BEFORE the upsert so the
           // post-commit event can report the real prior value. Only when the
           // write actually changes this locale's status (companion `_status` is
           // present only when `status` was explicitly in the patch).
           if (
+            !storeAsWorkingDraft &&
             localizedUpdate &&
             typeof localizedUpdate.companionData._status === "string"
           ) {
@@ -4696,6 +5355,7 @@ export class CollectionMutationService extends BaseService {
           // i18n M5: upsert the translatable values into the companion row for the write's locale
           // (same transaction). Only the provided localized columns are touched.
           if (
+            !storeAsWorkingDraft &&
             localizedUpdate &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
@@ -4717,6 +5377,7 @@ export class CollectionMutationService extends BaseService {
 
           // Save component field data to separate comp_{slug} tables
           if (
+            !storeAsWorkingDraft &&
             this.fieldGroupDataService &&
             Object.keys(attemptComponentData).length > 0
           ) {
@@ -4740,7 +5401,10 @@ export class CollectionMutationService extends BaseService {
           // tx-scoped Drizzle handle binds the junction writes to this tx.
           const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
           for (const field of manyToManyFields) {
-            if (manyToManyData[field.name] !== undefined) {
+            if (
+              !storeAsWorkingDraft &&
+              manyToManyData[field.name] !== undefined
+            ) {
               await this.relationshipService.deleteManyToManyRelations(
                 params.collectionName,
                 params.entryId,
@@ -4899,7 +5563,7 @@ export class CollectionMutationService extends BaseService {
                 // locale-specific too — the singles path counts it the same way.
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
-              if (versionsConfig?.enabled) {
+              if (versionsConfig?.enabled && !storeAsWorkingDraft) {
                 await captureInTx(tx, this.versionCapture, {
                   ref: {
                     scopeKind: "collection",
@@ -4941,26 +5605,224 @@ export class CollectionMutationService extends BaseService {
                 });
               }
 
+              // A status-less update to a published document is stored
+              // as the working draft — the live row and its relations were left
+              // untouched above — instead of updating the live row and capturing
+              // a published version. The parent overlay already produced the
+              // intended parent with no write; overlay the in-memory intended
+              // relations onto the (unchanged) live relations read for the
+              // snapshot so a changed component/m2m field is reflected.
+              if (storeAsWorkingDraft) {
+                const draftParts = await this.snapshotPartsFor(
+                  {
+                    parentRow,
+                    components: {
+                      ...snapshotComponents,
+                      ...componentFieldData,
+                    },
+                    manyToMany: { ...snapshotM2M, ...manyToManyData },
+                  },
+                  fields,
+                  tx
+                );
+                // This document is built from the live parent + relations with
+                // only the CURRENT patch overlaid. Accumulate it onto an existing
+                // working draft rather than the live row: a second status-less
+                // save of different fields would otherwise re-derive from live and
+                // revert the first pending edit. Read the draft under the row lock
+                // (already held above) and, when one exists, overlay only the
+                // fields this patch touched onto it, at the assembled read shape.
+                // Reused after the transaction as the response/hook document,
+                // since the live row the re-fetch returns is the unchanged
+                // published content.
+                const draftRepo = new VersionsRepository(tx);
+                const patchedDocument = assembleDocument(draftParts);
+                const draftRef = {
+                  scopeKind: "collection" as const,
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                };
+                const existingDraft = await draftRepo.findWorkingDraft(
+                  draftRef,
+                  null
+                );
+                // The fields this save actually touched, at the assembled read
+                // shape. `patchedDocument` overlaid the current patch onto the live
+                // relations and REPLACED a single component whole, so a partial
+                // patch is captured here (touched keys only) and merged onto the
+                // base below rather than replacing it.
+                const touched = new Set<string>([
+                  ...Object.keys(updatePayload),
+                  ...Object.keys(componentFieldData),
+                  ...Object.keys(manyToManyData),
+                ]);
+                const patchFields = Object.fromEntries(
+                  Object.entries(patchedDocument).filter(([key]) =>
+                    touched.has(key)
+                  )
+                );
+                // Accumulate onto the existing working draft, or onto the live
+                // document on the first save. The live base is assembled through
+                // the same snapshot shaping so its components carry the type markers
+                // promotion needs, and merging (not replacing) keeps a live single
+                // component's other sub-fields when the patch only changed some.
+                const draftBase = existingDraft
+                  ? (existingDraft.snapshot as Record<string, unknown>)
+                  : assembleDocument(
+                      await this.snapshotPartsFor(
+                        {
+                          parentRow,
+                          components: snapshotComponents ?? {},
+                          manyToMany: snapshotM2M ?? {},
+                        },
+                        fields,
+                        tx
+                      )
+                    );
+                // A single (non-repeatable) component holds an object of sub-fields,
+                // and a patch-shaped save carries only the ones it changed. Merge
+                // the patch's component objects onto the base recursively (into
+                // nested single components) rather than overwriting them, so
+                // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
+                // repeatable component, and a scalar are replaced whole.
+                const draftDocument = this.mergeSingleComponentPatches(
+                  draftBase,
+                  patchFields,
+                  fields as unknown as FieldConfig[],
+                  splitComponentSchemas
+                );
+                // The response and hooks see the draft as an ordinary read, so
+                // shape the accumulated snapshot through the current schema the
+                // same way the read overlay does. The persisted `draftDocument`
+                // below keeps its markers for promotion.
+                const responseDeclaredFields =
+                  fields as unknown as FieldConfig[];
+                const draftIsPluginCollection =
+                  (collection as { admin?: { isPlugin?: boolean } }).admin
+                    ?.isPlugin === true;
+                workingDraftDocument = this.shapeDraftForResponse(
+                  draftDocument,
+                  responseDeclaredFields,
+                  splitComponentSchemas ?? null,
+                  collectionHasStatus,
+                  draftIsPluginCollection
+                );
+                // The afterUpdate/afterChange hooks compare against the document
+                // BEFORE this save: the published row on the first draft save, but
+                // the prior working draft on a later one, so a hook diffing old and
+                // new does not see an earlier save's edits as changing again. Shape
+                // it the same way so the comparison is like-for-like.
+                if (existingDraft) {
+                  priorWorkingDraftDocument = this.shapeDraftForResponse(
+                    existingDraft.snapshot as Record<string, unknown>,
+                    responseDeclaredFields,
+                    splitComponentSchemas ?? null,
+                    collectionHasStatus,
+                    draftIsPluginCollection
+                  );
+                }
+                await draftRepo.upsertWorkingDraft({
+                  ref: draftRef,
+                  // The split is non-localized only, so the working draft is one
+                  // logical document with no per-locale variant: key it under the
+                  // unlocalized `locale IS NULL` slot. Keying it by the resolved
+                  // request locale would orphan it when a later read or publish
+                  // arrives under a different locale in a localization-configured
+                  // app. The read overlay and promote use the same null key.
+                  locale: null,
+                  snapshot: draftDocument,
+                  createdBy: params.user?.id ?? null,
+                });
+              }
+
+              // Promote-on-publish: the accumulated draft has been folded
+              // into the live write above, so drop the sidecar in the SAME
+              // transaction — its content is now the live row, and a surviving
+              // draft would shadow the freshly published document on the next
+              // trusted read. Uses the locale key the fetch used, so it removes
+              // exactly the row that was promoted.
+              if (promotedDraft) {
+                await new VersionsRepository(tx).deleteWorkingDraft(
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  // Same unlocalized key the fetch and store use.
+                  null
+                );
+              }
+
+              // Invalidate a stale working draft on any live write the split no
+              // longer covers: drafts were turned off, versioning or the status
+              // lifecycle was removed, or the collection became localized /
+              // password-bearing / gained an ineligible component after a draft was
+              // written. Once status or versioning is dropped the config no longer
+              // signals that a sidecar could exist, so this cannot be narrowed to
+              // the current status/versioning flags — a removed lifecycle would
+              // leave the sidecar to resurface if the split were re-enabled. The
+              // delete is a cheap indexed no-op when none exists, and it never hits
+              // a just-stored draft: that path keeps `splitEnabled` true.
+              if (!splitEnabled) {
+                await new VersionsRepository(tx).deleteWorkingDraft(
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  null
+                );
+              }
+
+              // A restore that lands a non-published status turns the live row
+              // into a draft, which breaks the working-draft invariant: a sidecar
+              // is pending edits OVER a published row, and once the row is a draft
+              // no status-less edit can accumulate onto it (storeAsWorkingDraft
+              // needs a published row) while editor reads still overlay the stale
+              // sidecar and a later publish would promote it over the restored
+              // content. A restore deliberately does not fold the sidecar, so drop
+              // it here. A no-op when none exists; a restore to `published` keeps
+              // the invariant and is left untouched.
+              if (
+                isRestoreWrite &&
+                splitEnabled &&
+                transitionNextStatus !== undefined &&
+                transitionNextStatus !== "published"
+              ) {
+                await new VersionsRepository(tx).deleteWorkingDraft(
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  null
+                );
+              }
+
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
-              // `recorded` is false when the collection opted out of recording.
+              // `recorded` is false when the collection opted out of recording. A
+              // draft edit records no public event: the live document did not
+              // change.
               const updatedDocument = assembleDocument(documentParts);
-              recorded = await recordMutationEvent(tx, {
-                type: "entry.updated",
-                resource: {
-                  kind: "entry",
-                  collection: params.collectionName,
-                  id: params.entryId,
-                  // The resolved write locale — see the create path.
-                  ...(localizedUpdate
-                    ? { locale: localizedUpdate.writeLocale }
-                    : {}),
-                },
-                data: updatedDocument,
-                previous: previousDocument,
-                fields: webhookFields,
-                actor: actorForWrite(params.actor, params.user),
-              });
+              if (!storeAsWorkingDraft) {
+                recorded = await recordMutationEvent(tx, {
+                  type: "entry.updated",
+                  resource: {
+                    kind: "entry",
+                    collection: params.collectionName,
+                    id: params.entryId,
+                    // The resolved write locale — see the create path.
+                    ...(localizedUpdate
+                      ? { locale: localizedUpdate.writeLocale }
+                      : {}),
+                  },
+                  data: updatedDocument,
+                  previous: previousDocument,
+                  fields: webhookFields,
+                  actor: actorForWrite(params.actor, params.user),
+                });
+              }
 
               // D69 status lifecycle events, recorded in the SAME transaction as
               // entry.updated (mirrors the post-commit transitionStatus, but
@@ -5116,30 +5978,45 @@ export class CollectionMutationService extends BaseService {
       // recording/revalidation opt-outs below.
       committedWrite = true;
 
+      // A pure draft edit leaves the live row untouched, so the re-fetched
+      // `updated` is the OLD published content. Everything that reports what this
+      // update produced — the response, the afterUpdate/afterChange hooks — uses
+      // the pending draft document instead.
+      const responseSource = (workingDraftDocument ?? updated) as Record<
+        string,
+        unknown
+      >;
+
       // The tags this update invalidates: the id and current-slug tags, plus the
       // previous-slug tag when the slug changed (captured in the transaction), so
       // a read cached under the old URL clears. Built on the committed write, NOT
       // the outbox-event flag: reaching here past the 404 guard means the row was
       // written, so an opted-out (`webhooks: false`) update — which records no
-      // event — must still bust its tags, exactly as create and delete do.
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: params.entryId,
-          slug: readStringField(updated as Record<string, unknown>, "slug"),
-          previousSlug,
-          locale: localizedUpdate?.writeLocale,
-        }
-      );
+      // event — must still bust its tags, exactly as create and delete do. A
+      // draft edit changes nothing a visitor sees, so it busts no public tags.
+      if (!workingDraftDocument) {
+        revalidationIntent = buildEntryRevalidationIntent(
+          params.collectionName,
+          readRevalidateConfig(collection),
+          {
+            id: params.entryId,
+            slug: readStringField(updated as Record<string, unknown>, "slug"),
+            previousSlug,
+            locale: localizedUpdate?.writeLocale,
+          }
+        );
+      }
 
       // Execute afterUpdate hooks (code-registered)
       // Hooks run after database update completes (for side effects)
       const afterContext = this.hookService.buildHookContext({
         collection: params.collectionName,
         operation: "update" as const,
-        data: updated,
-        originalData: existingEntry,
+        data: responseSource,
+        // On a repeat status-less save `responseSource` is the accumulated draft,
+        // so diff it against the prior draft rather than the unchanged published
+        // row; otherwise a hook reports an earlier save's fields as changing again.
+        originalData: priorWorkingDraftDocument ?? existingEntry,
         user: params.user,
         context: sharedContext, // Pass shared context from beforeUpdate
       });
@@ -5153,20 +6030,24 @@ export class CollectionMutationService extends BaseService {
         this.hookService.buildPrebuiltHookContext(
           params.collectionName,
           "update",
-          updated,
+          responseSource,
           this.queryDatabaseFn,
           params.user,
           sharedContext
         )
       );
 
-      // Post-commit reaction event (D8/D51).
-      emitCollectionEvent(
-        "updated",
-        params.collectionName,
-        updated,
-        params.user
-      );
+      // Post-commit reaction event (D8/D51). Skipped for a pure draft edit: the
+      // live document did not change, so no cache reaction is owed — mirroring
+      // the outbox `entry.updated` event, which is already suppressed above.
+      if (!workingDraftDocument) {
+        emitCollectionEvent(
+          "updated",
+          params.collectionName,
+          updated,
+          params.user
+        );
+      }
 
       // D69 document-level status events. Status is a user-defined field;
       // emit only when a `status` field value actually changed on update.
@@ -5220,15 +6101,19 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      // Deserialize JSON fields (richtext, blocks, array, group, json) for response
+      // Deserialize JSON fields (richtext, blocks, array, group, json) for
+      // response. A no-op on the draft document, whose JSON fields are already
+      // parsed by the snapshot builder.
       fields.forEach(field => {
         if (
           isJsonFieldType(field.type, field) &&
-          updated[field.name] &&
-          typeof updated[field.name] === "string"
+          responseSource[field.name] &&
+          typeof responseSource[field.name] === "string"
         ) {
           try {
-            updated[field.name] = JSON.parse(updated[field.name] as string);
+            responseSource[field.name] = JSON.parse(
+              responseSource[field.name] as string
+            );
           } catch {
             // If parsing fails, keep as string
           }
@@ -5242,17 +6127,19 @@ export class CollectionMutationService extends BaseService {
         kind: "collection",
         slug: params.collectionName,
         phase: "afterChange",
-        data: updated as Record<string, unknown>,
+        data: responseSource,
         operation: "update",
         user: params.user,
       });
 
-      // Expand relationships in response if depth is specified
-      let responseEntry = updated;
+      // Expand relationships in response if depth is specified. Runs on the
+      // draft document too for a draft edit, so a trusted editor's save response
+      // populates top-level relations at the requested depth just like a read.
+      let responseEntry = responseSource;
       if (depth !== undefined && depth > 0) {
         try {
           responseEntry = await this.relationshipService.expandRelationships(
-            updated,
+            responseSource,
             params.collectionName,
             fields,
             {
@@ -5291,7 +6178,7 @@ export class CollectionMutationService extends BaseService {
       // Redact the response: drop write-only password hashes and any field
       // the caller may write but not read (parity with the query path).
       await this.redactResponseFields(
-        responseEntry as Record<string, unknown>,
+        responseEntry,
         fields,
         {
           user: params.user,
@@ -5592,6 +6479,19 @@ export class CollectionMutationService extends BaseService {
         // duplicate `entry.deleted` for a row it did not remove.
         if (deletedCount === 0) return;
         deletedRow = true;
+
+        // Remove any pending working-draft sidecar for the deleted entry in the
+        // same transaction: it is keyed by entry id and excluded from history and
+        // retention queries, so after the row it belongs to is gone it would
+        // otherwise linger unreachable in nextly_versions. A no-op when none.
+        await new VersionsRepository(tx).deleteWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          },
+          null
+        );
 
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
@@ -7024,6 +7924,18 @@ export class CollectionMutationService extends BaseService {
         };
       }
       deleteNeedsRollback = true;
+
+      // Remove any pending working-draft sidecar for the deleted entry in the
+      // same transaction, so it does not linger unreachable in nextly_versions
+      // after its row is gone. A no-op when none exists.
+      await new VersionsRepository(tx).deleteWorkingDraft(
+        {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        },
+        null
+      );
 
       // Append the outbox event in the same transaction so a delete performed
       // through this helper (batch/cascade/internal) is observable too, in the
@@ -8552,6 +9464,18 @@ export class CollectionMutationService extends BaseService {
         };
       }
       deleteNeedsRollback = true;
+
+      // Remove any pending working-draft sidecar for the deleted entry in the
+      // same transaction, so a batch delete does not leave it unreachable in
+      // nextly_versions after its row is gone. A no-op when none exists.
+      await new VersionsRepository(tx).deleteWorkingDraft(
+        {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId,
+        },
+        null
+      );
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the

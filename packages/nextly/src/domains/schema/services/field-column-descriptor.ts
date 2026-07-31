@@ -223,7 +223,6 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
     case "group":
     case "json":
     case "chips":
-    case "blocks":
       return "json";
 
     case "component":

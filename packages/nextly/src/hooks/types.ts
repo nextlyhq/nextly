@@ -66,6 +66,16 @@ export type HookType =
   | "afterRead";
 
 /**
+ * The phases whose handlers take a {@link HookContext}, which is every phase
+ * except `beforeOperation`.
+ *
+ * `beforeOperation` handlers take a {@link BeforeOperationContext} instead and
+ * reshape the operation's `args` rather than its `data`. Naming the rest as a
+ * type keeps the two signatures from being registered through one another.
+ */
+export type HookContextPhase = Exclude<HookType, "beforeOperation">;
+
+/**
  * Context object passed to hook handlers containing operation metadata.
  *
  * The context provides all information needed for hooks to make decisions:
@@ -285,10 +295,16 @@ export interface HookContext<T = any> {
  *   // No return value needed for after hooks
  * };
  *
- * // Error handling (beforeCreate)
+ * // Rejecting input (beforeCreate). Throw a NextlyError, not a plain Error:
+ * // a plain one is indistinguishable from a crash, so its message is replaced
+ * // with a generic server-fault message before the caller sees it.
  * const validatePrice: HookHandler<Product> = (context) => {
  *   if (context.data.price < 0) {
- *     throw new Error('Price cannot be negative');
+ *     throw NextlyError.validation({
+ *       errors: [
+ *         { path: 'price', code: 'INVALID', message: 'Price cannot be negative.' },
+ *       ],
+ *     });
  *   }
  *   return context.data;
  * };
@@ -297,6 +313,43 @@ export interface HookContext<T = any> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default requires `any` for type-erased hook registry
 export type HookHandler<T = any> = (
   context: HookContext<T>
+) => Promise<T | void> | T | void;
+
+/**
+ * What a FIELD-level hook is handed.
+ *
+ * A field hook is scoped to one field, so it is given that field's value and
+ * name alongside the row it belongs to. This is deliberately NOT
+ * {@link HookContext}: a collection-level hook receives the whole document as
+ * `data` and has no single field in view, while a field hook is called once per
+ * field and returns that field's replacement value.
+ */
+export interface FieldHookContext<T = unknown> {
+  /** Collection or single the field belongs to. */
+  collection: string;
+
+  /** Operation that triggered the hook. */
+  operation: "create" | "read" | "update" | "delete";
+
+  /** Name of the field this call is for. */
+  fieldName: string;
+
+  /** The field's current value. */
+  value: T;
+
+  /** The row the field belongs to, so a hook can read its siblings. */
+  data: Record<string, unknown>;
+
+  /** The authenticated caller, when there is one. */
+  user?: Record<string, unknown>;
+}
+
+/**
+ * A field-level hook. Returning a value replaces the field's value; returning
+ * nothing leaves it as it was.
+ */
+export type FieldHookHandler<T = unknown> = (
+  context: FieldHookContext<T>
 ) => Promise<T | void> | T | void;
 
 /**
@@ -393,15 +446,15 @@ export interface BeforeOperationArgs<T = any> {
  *
  * @example
  * ```typescript
- * import { registerHook } from 'nextly';
+ * import { registerBeforeOperationHook } from 'nextly';
  *
  * // Global logging for all operations
- * registerHook('beforeOperation', '*', async (context) => {
+ * registerBeforeOperationHook('*', async (context) => {
  *   console.log(`[${context.operation}] ${context.collection}`, context.args);
  * });
  *
  * // Modify operation arguments
- * registerHook('beforeOperation', 'posts', async (context) => {
+ * registerBeforeOperationHook('posts', async (context) => {
  *   if (context.operation === 'create' && context.args.data) {
  *     return {
  *       ...context.args,
@@ -508,10 +561,12 @@ export interface BeforeOperationContext<T = any> {
  *   return context.args;
  * };
  *
- * // Abort operation (throw error)
+ * // Abort the operation. A NextlyError, not a plain one: a plain Error is
+ * // indistinguishable from a crash, so its message and status are replaced
+ * // with a generic server fault before the caller sees them.
  * const rateLimit: BeforeOperationHandler = async (context) => {
  *   if (await isRateLimited(context.user?.id)) {
- *     throw new Error('Rate limit exceeded');
+ *     throw NextlyError.rateLimited({});
  *   }
  * };
  * ```

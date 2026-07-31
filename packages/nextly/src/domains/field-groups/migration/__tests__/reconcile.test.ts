@@ -49,6 +49,59 @@ function capture(run: () => unknown): NextlyError {
   expect.fail("expected a refusal, but the call returned normally");
 }
 
+// 🔴 A rollback torn between a rename and its registry pointer update leaves
+// the row naming the migrated table while the catalog already holds the legacy
+// one. `retargetName` maps a legacy spelling FORWARD and returns null for
+// anything else, so it cannot name where a rollback is taking a migrated table —
+// only the directed plan can, and without it the row's storage reads as absent.
+describe("a rollback torn before its pointer update", () => {
+  const migratedRow = { ...row(), tableName: "fg_hero" };
+  const down = invertManifest(buildMigrationManifest([row()]).entries).entries;
+
+  // Going down the registry renames first and the table last, so reaching the
+  // table step means the two before it are recorded. Its rename then committed
+  // -- MySQL commits DDL as it is issued -- while the registry pointer update
+  // that shares its transaction did not, which is the supported
+  // commit-before-marker window.
+  const TORN_CATALOG = ["dynamic_components", "comp_hero"];
+
+  function reconcileTorn() {
+    return reconcilePlan({
+      entries: down,
+      rows: [migratedRow],
+      tables: TORN_CATALOG,
+      columns: columnsFor(TORN_CATALOG),
+      run: { recorded: true, direction: "down", step: 2 },
+      direction: "down",
+      identifierCase: PRESERVING,
+    });
+  }
+
+  it("recognises the storage the rollback already restored", () => {
+    expect(() => reconcileTorn()).not.toThrow();
+  });
+
+  // Widening must not reach past the plan: a row whose storage is genuinely
+  // absent still has to be refused, or the migration renames around data that
+  // is already gone.
+  it("still refuses a row whose storage is absent under either name", () => {
+    const error = capture(() =>
+      reconcilePlan({
+        entries: down,
+        rows: [migratedRow],
+        tables: ["dynamic_components"],
+        columns: columnsFor(["dynamic_components"]),
+        run: { recorded: true, direction: "down", step: 2 },
+        direction: "down",
+        identifierCase: PRESERVING,
+      })
+    );
+    expect(error.logContext?.reason).toBe(
+      "registry rows name storage that does not exist"
+    );
+  });
+});
+
 describe("field-group migration reconciliation", () => {
   const rows = [row()];
   const plan = buildMigrationManifest(rows).entries;

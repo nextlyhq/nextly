@@ -12,7 +12,7 @@
 
 import type React from "react";
 
-import type { HookHandler } from "@nextly/hooks/types";
+import type { FieldHookHandler } from "@nextly/hooks/types";
 
 // ============================================================
 // Field Type Union
@@ -54,8 +54,6 @@ export type FieldType =
   | "json"
   // Component types
   | "component"
-  // Page-builder document
-  | "blocks"
   // Array-like types
   | "chips";
 
@@ -458,25 +456,25 @@ export interface FieldHooks {
    * Runs before field validation.
    * Can transform the field value before validation rules are applied.
    */
-  beforeValidate?: HookHandler[];
+  beforeValidate?: FieldHookHandler[];
 
   /**
    * Runs before the field value is saved to the database.
    * Can transform the final value to be stored.
    */
-  beforeChange?: HookHandler[];
+  beforeChange?: FieldHookHandler[];
 
   /**
    * Runs after the field value has been saved to the database.
    * Useful for side effects like sending notifications.
    */
-  afterChange?: HookHandler[];
+  afterChange?: FieldHookHandler[];
 
   /**
    * Runs after the field value is read from the database.
    * Can transform the value before it's returned to the client.
    */
-  afterRead?: HookHandler[];
+  afterRead?: FieldHookHandler[];
 }
 
 // ============================================================

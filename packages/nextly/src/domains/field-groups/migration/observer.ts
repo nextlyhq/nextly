@@ -22,6 +22,7 @@ import {
   type IdentifierCaseRules,
 } from "../../schema/utils/resolve-catalog-name";
 
+import { parentPointerTables } from "./parent-pointers";
 import type { ObservedColumn, StorageObserver } from "./steps";
 
 /** The registry column holding a row's physical table name. */
@@ -78,6 +79,39 @@ export function createStorageObserver(
       return rows
         .map(row => row[REGISTRY_TABLE_NAME_COLUMN])
         .filter((value): value is string => typeof value === "string");
+    },
+
+    dataTables: async (_session, owned): Promise<string[]> => {
+      const names = await adapter.listTables();
+      if (names.length === 0 || owned.length === 0) return [];
+      // Narrowed to owned names BEFORE introspecting, not after. This runs once
+      // per rename, and `introspectLiveSnapshot` costs per table it is handed —
+      // on SQLite three PRAGMAs each — so passing the whole catalog would make
+      // the migration scale with the size of the user's database rather than
+      // with the number of field groups.
+      const catalog = indexCatalog(names, identifierCase.tables);
+      const present = owned
+        .map(name => resolveCatalogName(catalog, name))
+        .filter((name): name is string => name !== undefined);
+      if (present.length === 0) return [];
+      // Read through the same introspection every other observation uses. The
+      // shape narrows the owned names further rather than replacing them: it
+      // tells a field-group data table from the collection and single tables
+      // sharing the same registry vocabulary, while ownership stays a question
+      // only the caller can answer.
+      const snapshot = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect,
+        present
+      );
+      return parentPointerTables({
+        columns: snapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        identifierCase,
+        owned,
+      });
     },
 
     indexNames: async (table): Promise<string[] | undefined> => {

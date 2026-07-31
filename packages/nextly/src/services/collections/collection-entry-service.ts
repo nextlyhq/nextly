@@ -221,6 +221,12 @@ export class CollectionEntryService extends BaseService {
      * query service which maps it to a SQL predicate.
      */
     status?: "published" | "draft" | "all";
+    /**
+     * Opt in to the working-draft overlay (draft/published split): a trusted
+     * editor read returns the pending working draft in place of the live row.
+     * Forwarded to the query service, which gates it on update trust.
+     */
+    includeWorkingDraft?: boolean;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */

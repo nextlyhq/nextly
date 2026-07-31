@@ -131,6 +131,54 @@ describe("the plugin options container", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("refuses a default that contradicts the type's storage primitive", () => {
+    // `validateOptions` runs on this write but only ever looks at the field's
+    // options, so a default was reaching the manifest with nothing checking it
+    // — and from there into the read-only create control, rejected only on
+    // submit.
+    registerRecorder();
+
+    const parsed = uiSchemaFieldSchema.safeParse({
+      name: "score",
+      type: "star-rating",
+      defaultValue: "five",
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts a default its storage primitive allows", () => {
+    registerRecorder();
+
+    const parsed = uiSchemaFieldSchema.safeParse({
+      name: "score",
+      type: "star-rating",
+      defaultValue: 5,
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("states no shape for a json-backed type's default", () => {
+    // A document is whatever its type says it is, and judging that needs the
+    // type's own async validator. Guessing here would reject the contributed
+    // defaults this manifest exists to carry.
+    registerFieldType({
+      type: "doc",
+      storage: "json",
+      component: "@acme/docs/admin#Input",
+      surfaces: ["entries"],
+    });
+
+    const parsed = uiSchemaFieldSchema.safeParse({
+      name: "body",
+      type: "doc",
+      defaultValue: { kind: "page", nodes: [] },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("accepts a container using any other name", () => {
     const parsed = uiSchemaFieldSchema.safeParse({
       name: "score",

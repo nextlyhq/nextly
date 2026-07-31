@@ -30,6 +30,7 @@ export { definePlugin } from "nextly";
 export type {
   PluginDefinition,
   PluginContributions,
+  PluginDeclaration,
   PluginCategory,
   PluginContext,
   PluginHookRegistry,
@@ -61,6 +62,30 @@ export { text, textarea, checkbox, upload, group } from "nextly";
 export type { FieldConfig } from "nextly";
 
 /**
+ * Declaring a field of a type the plugin itself contributes. The built-in
+ * factories cover only the built-in types, so a contributed type has no factory
+ * to build its field with; `pluginField` brands one so the authoring surfaces
+ * accept it without widening the canonical union every internal reader holds.
+ * @public Exercised by `plugin-page-builder` (its `blocks()` factory).
+ */
+export { pluginField } from "nextly";
+export type {
+  AuthorableFieldConfig,
+  PluginDataFieldConfig,
+  PluginFieldInput,
+} from "nextly";
+
+/**
+ * The shapes a contributed field type's own config extends: the presentation
+ * options every field carries, and the request context its callbacks are
+ * handed. A plugin declaring a field type has to name both to type its own
+ * config interface, so leaving them off this surface forced it to import them
+ * from the core entry instead.
+ * @public Exercised by `plugin-page-builder` (its `BlocksFieldConfig`).
+ */
+export type { FieldAdminOptions, RequestContext } from "nextly";
+
+/**
  * Validating values against field declarations. A plugin storing structured
  * content of its own — block props, form submissions — applies the same rules a
  * write does instead of reimplementing `required`, the per-type checks and
@@ -76,6 +101,22 @@ export type {
   FieldValueDeclarationInput,
   ValidationIssue,
 } from "nextly";
+
+/**
+ * The canonical error type, so a hook or route a plugin contributes can reject
+ * input the way core does.
+ *
+ * A hook that throws a plain `Error` is indistinguishable from one that
+ * crashed, so its message is treated as a server fault and replaced before it
+ * reaches the caller. `NextlyError.validation()` and its siblings carry the
+ * status, code and field issues that say the rejection was deliberate.
+ *
+ * A Direct API caller receives that error as thrown. Over REST the dispatcher
+ * currently reconstructs a subset of statuses and maps the rest to 500, so do
+ * not build client behaviour on a status reaching REST until that is closed.
+ * @public
+ */
+export { NextlyError } from "nextly";
 
 /**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich
@@ -126,10 +167,24 @@ export type {
 /**
  * Hook types.
  * @public `HookContext` — exercised by `plugin-form-builder`'s collection hook.
- * @experimental `HookType`, `HookHandler` — the `ctx.hooks` plugin-registration
- *   path is not yet exercised by a first-party plugin.
+ * @experimental `HookType`, `HookContextPhase`, `HookHandler` — the `ctx.hooks`
+ *   plugin-registration path is not yet exercised by a first-party plugin.
+ *
+ * `HookContextPhase` is what `ctx.hooks.on`/`off` accept: every phase except
+ * `beforeOperation`, whose handler takes the operation's args instead. The
+ * `BeforeOperation*` types below are what `ctx.hooks.onBeforeOperation`/
+ * `offBeforeOperation` accept, and are exported so a plugin can type a handler
+ * it holds in a variable in order to unregister the same function later.
  */
-export type { HookType, HookHandler, HookContext } from "nextly";
+export type {
+  BeforeOperationArgs,
+  BeforeOperationContext,
+  BeforeOperationHandler,
+  HookContext,
+  HookContextPhase,
+  HookHandler,
+  HookType,
+} from "nextly";
 
 /**
  * Event bus (D8/D51) — `ctx.events` surface + types.

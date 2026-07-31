@@ -17,12 +17,26 @@
  */
 
 import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
-
+// Taken from the SDK rather than the core entry: the SDK is the only import
+// surface a plugin author is offered, and a first-party plugin reaching past it
+// is the example third parties copy.
 import type {
-  BaseFieldConfig,
   FieldAdminOptions,
+  FieldConfig,
   RequestContext,
-} from "./base";
+} from "@nextlyhq/plugin-sdk";
+
+import type { BLOCKS_TYPE } from "./blocksField";
+
+/**
+ * The parts of a field declaration this type adds to.
+ *
+ * Taken from the published `FieldConfig` union rather than core's internal
+ * base interfaces: a plugin authors against the surface core publishes, and
+ * reaching into `collections/fields/types/base` would tie this to a module
+ * that is not part of the contract.
+ */
+type BaseFieldConfig = Extract<FieldConfig, { name: string }>;
 
 // Re-exported so the field layer names document kinds without every consumer
 // reaching into the engine package.
@@ -74,7 +88,7 @@ export interface BlocksFieldConfig
   /**
    * Field type identifier. Must be 'blocks'.
    */
-  type: "blocks";
+  type: typeof BLOCKS_TYPE;
 
   /**
    * Which blocks and document kinds this field accepts.

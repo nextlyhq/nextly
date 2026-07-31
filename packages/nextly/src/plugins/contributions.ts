@@ -4,7 +4,7 @@ import type {
   FieldSurface,
   FieldTypeCategory,
 } from "../collections/fields/catalog";
-import type { FieldConfig } from "../collections/fields/types";
+import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { EmailProviderAdapter } from "../domains/email/types";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -277,6 +277,30 @@ export interface PluginFieldType {
    * diff.
    */
   codegen?: PluginFieldCodegen;
+
+  /**
+   * What a field of this type holds when nothing has been written to it.
+   *
+   * Two paths need it and must agree: backfilling a NOT NULL column added to a
+   * table that already has rows, and seeding a required field on a record
+   * created without one — a single auto-created on first read. Core derives
+   * both from the storage primitive (`{}` for `json`, `0` for `number`), which
+   * is right for a type that stores a bag and wrong for one that stores a
+   * structured document: `{}` satisfies the column and then fails every read
+   * that expects the structure.
+   *
+   * Returns the VALUE, never SQL and never a pre-serialized string. A
+   * `boolean`-backed type returning `"false"` would seed a truthy string into
+   * a boolean column, so the type states what it holds and each caller renders
+   * it: the DDL path quotes and escapes it for the dialect being generated,
+   * the runtime path serializes it only when the column stores JSON. Returning
+   * nothing keeps the primitive's default.
+   *
+   * The field is passed as declared, so the value can honour the options on it
+   * — a document field restricted to one kind can seed a document of that kind
+   * rather than a generic one.
+   */
+  emptyValue?: (field: PluginFieldInstance) => unknown;
 }
 
 /** A type-only import a generated file needs for one field type's expressions. */
@@ -417,8 +441,18 @@ export interface PluginContributions {
   singles?: SingleConfig[];
   /** @public Plugin-owned field groups. */
   fieldGroups?: FieldGroupConfig[];
-  /** @public Add fields to existing entities by slug. */
-  extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
+  /**
+   * @public Add fields to existing entities by slug.
+   *
+   * Authored fields, not canonical ones: `collections`, `singles` and
+   * `fieldGroups` each arrive through a `define*` call that has already
+   * narrowed them, while these are written inline with nothing to narrow them,
+   * so a plugin's own contributed type has to be nameable here.
+   */
+  extend?: Array<{
+    target: string | string[];
+    fields: AuthorableFieldConfig[];
+  }>;
   /** @public Custom permissions; CRUD is auto-seeded separately. */
   permissions?: PluginPermission[];
   /** @experimental Role bundles — named sets of permissions, seeded on boot. */
@@ -431,6 +465,36 @@ export interface PluginContributions {
    * their own `ctx.services.plugins.<name>.<key>`.
    */
   services?: Record<string, (ctx: PluginContext) => unknown>;
+  /**
+   * @experimental Static data this plugin publishes for OTHER plugins, keyed by
+   * the consuming plugin's name. Core stores it and never reads inside it.
+   *
+   * The counterpart to `services`, and the reason it exists: a service is a
+   * factory, so its contents are knowable only once a plugin's `init` has run.
+   * Everything else here is plain data, which is what lets `nextly generate:types`
+   * build generated artifacts by reading the config alone — it loads no plugin
+   * runtime and opens no database. A capability offered only through `services`
+   * is therefore invisible to generation, and cannot appear in an import map, a
+   * manifest, or generated types.
+   *
+   * Declaring the data here and registering FROM it at boot keeps one source for
+   * both, so tooling and runtime cannot disagree about what a plugin provides.
+   *
+   * Keyed by consumer name rather than by capability so core stays out of it:
+   * a page builder reads `declarations["@nextlyhq/plugin-page-builder"]` and
+   * decides what its own shape means, exactly as it already does for the
+   * service it hands back.
+   *
+   * @example
+   * ```ts
+   * contributes: {
+   *   declarations: {
+   *     "@nextlyhq/plugin-page-builder": { blocks: [pricingTable] },
+   *   },
+   * }
+   * ```
+   */
+  declarations?: Record<string, unknown>;
   /**
    * @experimental Scheduled tasks — **RESERVED, NOT EXECUTED** in this
    * release. The shape is published so authors aren't surprised by its absence,

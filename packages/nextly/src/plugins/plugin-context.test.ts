@@ -40,7 +40,15 @@ function makeCtx() {
     }
   }) as unknown as Parameters<typeof createPluginContext>[0];
 
-  const hookRegistry = { register: vi.fn(), unregister: vi.fn() };
+  // Mirrors the registry interface rather than a subset of it: a double that
+  // omits methods the real one requires certifies a context the production
+  // registry would reject.
+  const hookRegistry = {
+    register: vi.fn(),
+    unregister: vi.fn(),
+    registerBeforeOperation: vi.fn(),
+    unregisterBeforeOperation: vi.fn(),
+  };
   const ctx = createPluginContext(getServiceFn, hookRegistry);
   return { ctx, db, logger, collections, email };
 }

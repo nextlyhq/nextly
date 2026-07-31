@@ -39,6 +39,9 @@
  * ```
  */
 
+import type { FieldConfig } from "../../collections/fields/types";
+import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
+
 import type {
   FieldGroupConfig,
   FieldGroupLabel,
@@ -151,12 +154,37 @@ function toTitleCase(str: string): string {
  * });
  * ```
  */
-export function defineFieldGroup(config: FieldGroupConfig): FieldGroupConfig {
+/**
+ * What a field group may be declared with: every built-in field shape, plus a
+ * contributed one that went through `pluginField()`. The canonical
+ * `FieldGroupConfig` keeps the closed `FieldConfig[]`, so the openness lives at
+ * the authoring boundary only, exactly as `CollectionConfigInput` does it.
+ */
+export type FieldGroupConfigInput = Omit<FieldGroupConfig, "fields"> & {
+  fields: AuthorableFieldConfig[];
+};
+
+/**
+ * Narrow the authored fields back to the canonical union.
+ *
+ * A branded contributed field is structurally a declaration like any other; it
+ * is the closed union that cannot name it, not the value that fails to be one.
+ */
+function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
+  return fields as FieldConfig[];
+}
+
+export function defineFieldGroup(
+  config: FieldGroupConfigInput
+): FieldGroupConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================
 
-  assertValidFieldGroupConfig(config);
+  assertValidFieldGroupConfig({
+    ...config,
+    fields: asDeclaredFields(config.fields),
+  });
 
   // ============================================================
   // Apply Defaults
@@ -167,9 +195,12 @@ export function defineFieldGroup(config: FieldGroupConfig): FieldGroupConfig {
     singular: config.label?.singular ?? toTitleCase(config.slug),
   };
 
-  // Build normalized config with defaults
+  // Build normalized config with defaults. The authored fields narrow back to
+  // the canonical union here, so what leaves this function is the same closed
+  // shape every internal reader already holds.
   const normalized: FieldGroupConfig = {
     ...config,
+    fields: asDeclaredFields(config.fields),
     label,
     admin: {
       ...config.admin,

@@ -17,6 +17,8 @@
 import type { HookContext } from "nextly";
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "nextly";
+
 import { formsCollection } from "../forms";
 import type { ResolvedFormBuilderConfig } from "../../types";
 
@@ -43,6 +45,28 @@ function run(data: Record<string, unknown>, operation: string): unknown {
   return beforeValidate()({ data, operation } as unknown as HookContext);
 }
 
+/** The error the hook threw, or undefined if it did not throw. */
+function rejectionFrom(
+  data: Record<string, unknown>,
+  operation: string
+): unknown {
+  try {
+    run(data, operation);
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+/** A rejection is typed, and names the field it is about. */
+function expectFieldsRejection(error: unknown): void {
+  expect(NextlyError.is(error)).toBe(true);
+  expect(
+    (error as { publicData?: { errors?: { path?: string }[] } }).publicData
+      ?.errors?.[0]?.path
+  ).toBe("fields");
+}
+
 describe("forms beforeValidate", () => {
   it("accepts a partial update that does not touch fields", () => {
     // The regression: a rename carries only `name`, and the form's existing
@@ -53,19 +77,19 @@ describe("forms beforeValidate", () => {
   it("still rejects an update that empties the fields", () => {
     // The mirror. Skipping the check whenever `fields` is absent must not also
     // skip it when the patch deliberately sets it to nothing.
-    expect(() => run({ fields: [] }, "update")).toThrow(/at least one field/i);
+    // Typed, so the rejection reaches the caller as a validation failure with
+    // its field issue rather than as a server fault.
+    expectFieldsRejection(rejectionFrom({ fields: [] }, "update"));
   });
 
   it("rejects a create with no fields", () => {
     // On create the patch IS the document, so an absent `fields` really means
     // the form has none.
-    expect(() => run({ name: "New" }, "create")).toThrow(/at least one field/i);
+    expectFieldsRejection(rejectionFrom({ name: "New" }, "create"));
   });
 
   it("rejects a create with an empty fields array", () => {
-    expect(() => run({ name: "New", fields: [] }, "create")).toThrow(
-      /at least one field/i
-    );
+    expectFieldsRejection(rejectionFrom({ name: "New", fields: [] }, "create"));
   });
 
   it("accepts a create that has fields", () => {

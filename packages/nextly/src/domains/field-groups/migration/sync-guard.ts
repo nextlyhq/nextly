@@ -39,6 +39,15 @@ const META_TABLE = "nextly_meta";
 export async function assertNoMigrationInFlight(args: {
   adapter: DrizzleAdapter;
   logger: Logger;
+  /**
+   * What is being refused, in the operator's terms.
+   *
+   * Named by the caller rather than fixed here, because the two callers are
+   * refusing different things and the message is the only thing that tells an
+   * operator which. Someone whose Schema Builder edit was declined should not
+   * be told a schema sync was.
+   */
+  action: string;
 }): Promise<void> {
   // A database that has no `nextly_meta` at all has never recorded a marker, so
   // there is no run to be in flight. Asked explicitly rather than inferred from
@@ -54,8 +63,7 @@ export async function assertNoMigrationInFlight(args: {
   if (state.status !== "migrating") return;
 
   throw NextlyError.serviceUnavailable({
-    logMessage:
-      "schema sync refused: a field group storage migration is in flight",
+    logMessage: `${args.action} refused: a field group storage migration is in flight`,
     logContext: {
       reason: "field group storage migration is in flight",
       direction: state.direction,
@@ -119,6 +127,7 @@ export async function withMigrationExcluded<T>(
     },
     async () => {
       await assertNoMigrationInFlight({
+        action: args.label,
         adapter: args.adapter,
         logger: args.logger,
       });

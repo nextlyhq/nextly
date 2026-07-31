@@ -25,6 +25,11 @@
 
 import type { StoredHookConfig } from "@nextly/schemas/dynamic-collections/types";
 
+import { NextlyError } from "../errors/nextly-error";
+
+import type { SideEffectHookFailure } from "./hook-registry";
+import { isSideEffectHookType } from "./hook-registry";
+import { normalizeHookError } from "./normalize-hook-error";
 import type { PrebuiltHookContext } from "./prebuilt";
 import { getPrebuiltHook, mapHookType } from "./prebuilt";
 import type { HookType } from "./types";
@@ -50,6 +55,12 @@ export interface StoredHookExecutionResult<T = unknown> {
    * IDs of hooks that were skipped (disabled or not found).
    */
   skippedHookIds: string[];
+  /**
+   * Hooks in a post-commit phase that threw. Reported rather than raised: the
+   * write is already durable, so failing the operation would invite a retry
+   * that writes it a second time.
+   */
+  failures: SideEffectHookFailure[];
 }
 
 /**
@@ -149,6 +160,7 @@ export class StoredHookExecutor {
         data: context.data as T | undefined,
         executedCount: 0,
         skippedHookIds: [],
+        failures: [],
       };
     }
 
@@ -161,6 +173,8 @@ export class StoredHookExecutor {
     let currentData = context.data;
     let executedCount = 0;
     const skippedHookIds: string[] = [];
+    // Side-effect phases report their failures here rather than raising them.
+    const failures: SideEffectHookFailure[] = [];
 
     for (const storedHook of sortedHooks) {
       // Skip disabled hooks
@@ -214,11 +228,41 @@ export class StoredHookExecutor {
           );
         }
       } catch (error: unknown) {
-        // Re-throw with hook ID for debugging
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Stored hook "${storedHook.hookId}" failed for ${hookType} on ${context.collection}: ${message}`
+        // Same classification the runtime registry applies: a stored hook that
+        // rejects input is making a decision, and rebuilding it as a generic
+        // error turns that decision into a server fault.
+        const normalized = normalizeHookError(
+          error,
+          hookType,
+          context.collection,
+          { storedHookId: storedHook.hookId }
         );
+
+        // And the same rule about WHEN it may fail the operation: a phase that
+        // runs after the write committed reports its failure instead of raising
+        // it, or a durable row is returned to the caller as an error and the
+        // retry writes it twice. A stored hook and a code-registered one in the
+        // same phase have to behave identically.
+        if (!isSideEffectHookType(hookType)) throw normalized;
+
+        // Logged here because the operation is about to report success.
+        console.error(
+          `Stored hook "${storedHook.hookId}" failed for "${context.collection}" after the write committed:`,
+          normalized
+        );
+        failures.push({
+          phase: hookType,
+          collection: context.collection,
+          error: NextlyError.is(normalized)
+            ? normalized
+            : NextlyError.internal({
+                logContext: {
+                  hookType,
+                  collection: context.collection,
+                  storedHookId: storedHook.hookId,
+                },
+              }),
+        });
       }
     }
 
@@ -226,6 +270,7 @@ export class StoredHookExecutor {
       data: currentData as T | undefined,
       executedCount,
       skippedHookIds,
+      failures,
     };
   }
 

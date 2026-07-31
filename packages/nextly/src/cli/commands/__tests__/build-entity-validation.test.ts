@@ -99,6 +99,84 @@ afterEach(() => {
   loadConfig.mockReset();
 });
 
+describe("nextly build refuses a field type no plugin offers", () => {
+  it("fails on a token nothing registered", async () => {
+    // The `define*` validators defer an unknown token because the config
+    // bundle is evaluated before any plugin registers its types. `loadConfig`
+    // has registered them by the time the command runs, so this is the first
+    // point the question is answerable — and unasked, the command would emit
+    // primitive fallback types for a schema production boot then refuses.
+    stubConfig({
+      collections: [
+        { slug: "posts", fields: [{ name: "body", type: "no-such-type" }] },
+      ],
+      singles: [],
+    });
+
+    const { logger, lines } = createCaptureLogger();
+    const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
+    const exitSpy = stubExit();
+
+    await expect(runBuild({}, context)).rejects.toBeInstanceOf(NextlyError);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(lines.join("\n")).toContain("no-such-type");
+  });
+
+  it("fails on a type offered only on another surface", async () => {
+    // Registration alone is not authorization: a type that opted into `users`
+    // is not a collection field, and accepting it here would generate a column
+    // for a field the entries surface will not accept.
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "@acme/ratings/admin#Input",
+      surfaces: ["users"],
+    });
+
+    stubConfig({
+      collections: [
+        { slug: "posts", fields: [{ name: "score", type: "rating" }] },
+      ],
+      singles: [],
+    });
+
+    const { logger, lines } = createCaptureLogger();
+    const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
+    const exitSpy = stubExit();
+
+    await expect(runBuild({}, context)).rejects.toBeInstanceOf(NextlyError);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(lines.join("\n")).toContain("rating");
+  });
+
+  it("accepts a type that did opt into this surface", async () => {
+    // The refusals above are specific to a type the entries surface does not
+    // accept, so a type that did opt in has to stay accepted — otherwise the
+    // gate would reject every contributed collection field rather than the
+    // wrong-surface ones it exists to catch.
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "@acme/ratings/admin#Input",
+      surfaces: ["entries"],
+    });
+
+    stubConfig({
+      collections: [
+        { slug: "posts", fields: [{ name: "score", type: "rating" }] },
+      ],
+      singles: [],
+    });
+
+    const { logger } = createCaptureLogger();
+    const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
+    const exitSpy = stubExit();
+
+    await runBuild({ zod: false, types: false }, context);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("nextly build validates every entity kind", () => {
   it("fails a single-only project whose declaration its field type rejects", async () => {
     registerDocument();

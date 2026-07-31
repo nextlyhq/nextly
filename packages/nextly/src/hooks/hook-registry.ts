@@ -8,14 +8,63 @@
  * @since 1.0.0
  */
 
+import { NextlyError } from "../errors/nextly-error";
+
+import { normalizeHookError } from "./normalize-hook-error";
 import type {
   BeforeOperationArgs,
   BeforeOperationContext,
   BeforeOperationHandler,
   HookContext,
+  HookContextPhase,
   HookHandler,
   HookType,
 } from "./types";
+
+/**
+ * The phases whose handlers exist for their effects, not to reshape data.
+ *
+ * These run after the write has already committed, so there is nothing left for
+ * a return value to change. Honouring one would mean a second handler is shown
+ * whatever the first happened to return instead of the row that was persisted,
+ * and returning the result of a side-effect call -- a logger, a fetch, a cache
+ * write -- is an easy accident to make.
+ *
+ * `afterRead` is deliberately absent: it reshapes the response by design, and
+ * the read paths consume what it returns.
+ */
+/**
+ * A side-effect hook that threw after the write had already committed.
+ *
+ * Reported rather than raised: the row is durable and this phase cannot change
+ * it, so failing the operation would tell a caller its write did not happen and
+ * invite a retry that writes it twice.
+ */
+export interface SideEffectHookFailure {
+  /** The phase whose handler threw. */
+  phase: HookType;
+  /** The collection or single the operation was for. */
+  collection: string;
+  /** The normalized error, with its type and context preserved. */
+  error: NextlyError;
+}
+
+const SIDE_EFFECT_HOOK_TYPES: ReadonlySet<HookType> = new Set([
+  "afterCreate",
+  "afterUpdate",
+  "afterDelete",
+]);
+
+/**
+ * Whether a phase runs AFTER the write has committed.
+ *
+ * Shared by every executor so the two cannot disagree about which phases may
+ * fail an operation: a stored hook and a code-registered one in the same phase
+ * have to behave identically.
+ */
+export function isSideEffectHookType(hookType: HookType): boolean {
+  return SIDE_EFFECT_HOOK_TYPES.has(hookType);
+}
 
 /**
  * Global hook registry singleton
@@ -53,6 +102,20 @@ import type {
  *
  * @class HookRegistry
  */
+/**
+ * Turn whatever a hook threw into the error the boundary should see.
+ *
+ * A hook that rejects its input does so deliberately, and says how: a
+ * validation error carries field issues, a forbidden one carries a status.
+ * Rebuilding it as a generic error throws all of that away and the boundary
+ * answers 500, so a hook enforcing a rule reports a server fault instead of
+ * the rule.
+ *
+ * Anything else really is unexpected. The original is kept as `cause` rather
+ * than flattened into a message, so its stack survives, and the hook and
+ * collection travel in log context where they are useful without being
+ * disclosed to the caller.
+ */
 export class HookRegistry {
   /**
    * Internal storage for hooks
@@ -63,6 +126,44 @@ export class HookRegistry {
    * Wildcard key "*" matches all collections.
    */
   private hooks: Map<string, HookHandler[]> = new Map();
+
+  /**
+   * `beforeOperation` handlers, kept apart from the rest.
+   *
+   * Every other phase receives a `HookContext` and reshapes `data`;
+   * `beforeOperation` receives a `BeforeOperationContext` and reshapes `args`.
+   * Those are different function types, so storing them together would mean
+   * recovering the real one with a cast on the way out -- and a cast is exactly
+   * what let a handler be declared against the wrong context in the first place.
+   */
+  private beforeOperationHooks: Map<string, BeforeOperationHandler[]> =
+    new Map();
+
+  /** Append to a handler list, creating it on first use. */
+  private pushHandler<H>(store: Map<string, H[]>, key: string, handler: H) {
+    const existing = store.get(key);
+    if (existing) {
+      existing.push(handler);
+      return;
+    }
+    store.set(key, [handler]);
+  }
+
+  /** Remove one handler by identity, dropping the list once it is empty. */
+  private removeHandler<H>(store: Map<string, H[]>, key: string, handler: H) {
+    const handlers = store.get(key);
+    if (!handlers) return;
+
+    const index = handlers.indexOf(handler);
+    if (index > -1) {
+      handlers.splice(index, 1);
+    }
+
+    // Clean up empty arrays to avoid memory leaks
+    if (handlers.length === 0) {
+      store.delete(key);
+    }
+  }
 
   /**
    * Register a hook for a specific collection and hook type
@@ -90,14 +191,57 @@ export class HookRegistry {
    * });
    * ```
    */
-  register(hookType: HookType, collection: string, handler: HookHandler): void {
-    const key = this.makeKey(hookType, collection);
+  register(
+    hookType: HookContextPhase,
+    collection: string,
+    handler: HookHandler
+  ): void {
+    // The type already excludes `beforeOperation`, but JavaScript callers and
+    // untypechecked code do not see that. Storing it here would put the handler
+    // where `executeBeforeOperation` never looks, so it would simply never run
+    // -- a silent no-op is worse than a loud refusal.
+    this.rejectBeforeOperation(hookType, "register", "registerBeforeOperation");
+    this.pushHandler(this.hooks, this.makeKey(hookType, collection), handler);
+  }
 
-    if (!this.hooks.has(key)) {
-      this.hooks.set(key, []);
-    }
+  /**
+   * Refuse `beforeOperation` on a method that cannot honour it, naming the one
+   * that can.
+   */
+  private rejectBeforeOperation(
+    hookType: HookType,
+    method: string,
+    replacement: string
+  ): void {
+    if (hookType !== "beforeOperation") return;
 
-    this.hooks.get(key)!.push(handler);
+    throw NextlyError.invalidInput({
+      message: `Use ${replacement}() for a beforeOperation hook: its handler receives the operation's args rather than a document, so it is stored and executed separately from the other phases. "beforeOperation" cannot be passed to ${method}().`,
+      logContext: { hookType, method, replacement },
+    });
+  }
+
+  /**
+   * Register a `beforeOperation` hook.
+   *
+   * Separate from {@link register} because the handler signature is different:
+   * it is handed the operation's `args` -- the data, id or where clause the
+   * operation is about to use -- and returning a modified set replaces them.
+   * Handlers for every other phase receive `data` instead, and the two are not
+   * interchangeable.
+   *
+   * @param collection - Collection name or '*' for global hooks
+   * @param handler - Hook function to execute
+   */
+  registerBeforeOperation<T = unknown>(
+    collection: string,
+    handler: BeforeOperationHandler<T>
+  ): void {
+    this.pushHandler(
+      this.beforeOperationHooks,
+      this.makeKey("beforeOperation", collection),
+      handler
+    );
   }
 
   /**
@@ -120,24 +264,34 @@ export class HookRegistry {
    * ```
    */
   unregister(
-    hookType: HookType,
+    hookType: HookContextPhase,
     collection: string,
     handler: HookHandler
   ): void {
-    const key = this.makeKey(hookType, collection);
-    const handlers = this.hooks.get(key);
+    this.rejectBeforeOperation(
+      hookType,
+      "unregister",
+      "unregisterBeforeOperation"
+    );
+    this.removeHandler(this.hooks, this.makeKey(hookType, collection), handler);
+  }
 
-    if (handlers) {
-      const index = handlers.indexOf(handler);
-      if (index > -1) {
-        handlers.splice(index, 1);
-      }
-
-      // Clean up empty arrays to avoid memory leaks
-      if (handlers.length === 0) {
-        this.hooks.delete(key);
-      }
-    }
+  /**
+   * Unregister a specific `beforeOperation` hook, the counterpart to
+   * {@link registerBeforeOperation}.
+   *
+   * @param collection - Collection name or '*'
+   * @param handler - The exact handler function to remove
+   */
+  unregisterBeforeOperation<T = unknown>(
+    collection: string,
+    handler: BeforeOperationHandler<T>
+  ): void {
+    this.removeHandler(
+      this.beforeOperationHooks,
+      this.makeKey("beforeOperation", collection),
+      handler
+    );
   }
 
   /**
@@ -174,6 +328,12 @@ export class HookRegistry {
       const key = this.makeKey(hookType, collection);
       this.hooks.delete(key);
     }
+
+    // `beforeOperation` lives in its own store, so clearing a collection has to
+    // reach both or a cleared collection keeps running its operation hooks.
+    this.beforeOperationHooks.delete(
+      this.makeKey("beforeOperation", collection)
+    );
   }
 
   /**
@@ -192,6 +352,7 @@ export class HookRegistry {
    */
   clear(): void {
     this.hooks.clear();
+    this.beforeOperationHooks.clear();
   }
 
   /**
@@ -206,7 +367,9 @@ export class HookRegistry {
    *
    * **Data Flow:**
    * - For `before*` hooks: Each hook can modify data, which is passed to the next hook
-   * - For `after*` hooks: Return values are ignored (used for side effects)
+   * - For the after-write hooks in {@link SIDE_EFFECT_HOOK_TYPES}: return values
+   *   are ignored, so every handler and the caller see the persisted row
+   * - For `afterRead`: the return reshapes the response and is passed on
    *
    * **Error Handling:**
    * - If any hook throws an error, execution stops immediately
@@ -239,9 +402,23 @@ export class HookRegistry {
    * ```
    */
   async execute<T>(
-    hookType: HookType,
-    context: HookContext<T>
+    hookType: HookContextPhase,
+    context: HookContext<T>,
+    options?: {
+      /**
+       * Called for each side-effect handler that throws, so the caller can
+       * report it alongside the successful write. Omitting it does not make
+       * the failure silent -- it is logged either way.
+       */
+      onSideEffectError?: (failure: SideEffectHookFailure) => void;
+    }
   ): Promise<T | void> {
+    // `beforeOperation` handlers live in the other store and take a different
+    // context, so this method cannot run them. Reaching here with that phase
+    // would return `context.data` having executed nothing, which reads as "no
+    // hooks are registered" rather than "this is the wrong method".
+    this.rejectBeforeOperation(hookType, "execute", "executeBeforeOperation");
+
     // Get hooks for specific collection + global hooks
     const specificKey = this.makeKey(hookType, context.collection);
     const globalKey = this.makeKey(hookType, "*");
@@ -259,6 +436,11 @@ export class HookRegistry {
 
     let data = context.data;
 
+    // A side-effect phase runs after the write has committed, so a return value
+    // has nothing left to change: the row stays the persisted one for every
+    // later handler and for the caller.
+    const isSideEffectPhase = SIDE_EFFECT_HOOK_TYPES.has(hookType);
+
     // Execute hooks in series (FIFO order)
     for (const handler of allHandlers) {
       try {
@@ -269,14 +451,45 @@ export class HookRegistry {
         // If hook returns undefined, keep current data unchanged
         // This allows before* hooks to intentionally set null values
         // while after* hooks can skip returning (undefined) for side effects
-        if (result !== undefined) {
+        if (!isSideEffectPhase && result !== undefined) {
           data = result;
         }
       } catch (error: unknown) {
-        // Re-throw with additional context for debugging
-        throw new Error(
-          `Hook execution failed for ${hookType} on ${context.collection}: ${error instanceof Error ? error.message : String(error)}`
+        const normalized = normalizeHookError(
+          error,
+          hookType,
+          context.collection
         );
+        // A transforming phase runs before the write, so raising is how it
+        // refuses one -- that is the whole point of `before*`.
+        if (!isSideEffectPhase) throw normalized;
+
+        // A side-effect phase runs after the write committed. Raising here
+        // would report a durable row as a failure and invite a retry that
+        // writes it a second time, so the failure is reported instead.
+        //
+        // The remaining handlers still run: they are independent side effects,
+        // and letting the first failure cancel the rest turns one broken hook
+        // into several silently skipped ones.
+        // Logged here because nothing above this frame will: the operation
+        // reports success, so a side effect that vanished without a trace is
+        // exactly the failure this has to avoid.
+        console.error(
+          `Hook "${hookType}" failed for "${context.collection}" after the write committed:`,
+          normalized
+        );
+        // `normalizeHookError` rethrows a typed error untouched and wraps an
+        // untyped one, so this is a NextlyError in practice; the guard is what
+        // makes that a fact rather than an assumption.
+        options?.onSideEffectError?.({
+          phase: hookType,
+          collection: context.collection,
+          error: NextlyError.is(normalized)
+            ? normalized
+            : NextlyError.internal({
+                logContext: { hookType, collection: context.collection },
+              }),
+        });
       }
     }
 
@@ -313,7 +526,7 @@ export class HookRegistry {
    * @example
    * ```typescript
    * // Global logging for all operations
-   * registry.register('beforeOperation', '*', async (context) => {
+   * registry.registerBeforeOperation('*', async (context) => {
    *   console.log(`[${context.operation}] ${context.collection}`, context.args);
    * });
    *
@@ -335,14 +548,14 @@ export class HookRegistry {
     const specificKey = this.makeKey("beforeOperation", context.collection);
     const globalKey = this.makeKey("beforeOperation", "*");
 
-    const globalHandlers = this.hooks.get(globalKey) || [];
-    const specificHandlers = this.hooks.get(specificKey) || [];
+    const globalHandlers = this.beforeOperationHooks.get(globalKey) || [];
+    const specificHandlers = this.beforeOperationHooks.get(specificKey) || [];
 
     // Global hooks run first, then collection-specific hooks
-    const allHandlers = [
+    const allHandlers: BeforeOperationHandler<T>[] = [
       ...globalHandlers,
       ...specificHandlers,
-    ] as BeforeOperationHandler<T>[];
+    ];
 
     // If no hooks registered, return early (optimization)
     if (allHandlers.length === 0) {
@@ -363,11 +576,7 @@ export class HookRegistry {
           args = result;
         }
       } catch (error: unknown) {
-        // Re-throw with additional context for debugging
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Hook execution failed for beforeOperation on ${context.collection}: ${message}`
-        );
+        throw normalizeHookError(error, "beforeOperation", context.collection);
       }
     }
 
@@ -392,13 +601,24 @@ export class HookRegistry {
    * ```
    */
   hasHooks(hookType: HookType, collection: string): boolean {
-    const specificKey = this.makeKey(hookType, collection);
-    const globalKey = this.makeKey(hookType, "*");
+    return (
+      this.countAt(hookType, collection) > 0 || this.countAt(hookType, "*") > 0
+    );
+  }
 
-    const specificCount = this.hooks.get(specificKey)?.length ?? 0;
-    const globalCount = this.hooks.get(globalKey)?.length ?? 0;
-
-    return specificCount > 0 || globalCount > 0;
+  /**
+   * How many handlers one key holds, in whichever store owns that phase.
+   *
+   * Introspection stays whole-registry -- a caller asking whether a phase has
+   * hooks means every phase, including `beforeOperation` -- so the split in
+   * storage must not become a split in what can be counted.
+   */
+  private countAt(hookType: HookType, collection: string): number {
+    const key = this.makeKey(hookType, collection);
+    if (hookType === "beforeOperation") {
+      return this.beforeOperationHooks.get(key)?.length ?? 0;
+    }
+    return this.hooks.get(key)?.length ?? 0;
   }
 
   /**
@@ -417,8 +637,7 @@ export class HookRegistry {
    * ```
    */
   getHookCount(hookType: HookType, collection: string): number {
-    const key = this.makeKey(hookType, collection);
-    return this.hooks.get(key)?.length ?? 0;
+    return this.countAt(hookType, collection);
   }
 
   /**
@@ -427,12 +646,26 @@ export class HookRegistry {
    * Returns a snapshot of all registered hooks.
    * Useful for debugging and testing.
    *
+   * Excludes `beforeOperation`, whose handlers take a different context and are
+   * stored separately -- see {@link getAllBeforeOperation}.
+   *
    * @returns Map of hook keys to handler arrays
    * @internal
    */
   getAll(): Map<string, HookHandler[]> {
     // Return a copy to prevent external mutation
     return new Map(this.hooks);
+  }
+
+  /**
+   * Snapshot of the registered `beforeOperation` hooks, the counterpart to
+   * {@link getAll}.
+   *
+   * @returns Map of hook keys to handler arrays
+   * @internal
+   */
+  getAllBeforeOperation(): Map<string, BeforeOperationHandler[]> {
+    return new Map(this.beforeOperationHooks);
   }
 
   /**
@@ -484,10 +717,12 @@ export function getHookRegistry(): HookRegistry {
 }
 
 /**
- * Reset the global hook registry (for testing only)
+ * Clear every hook from the global registry.
  *
- * Clears all registered hooks from the global registry.
- * Should only be used in test cleanup.
+ * Called when services shut down or are cleared, because the registry outlives
+ * the DI container: handlers are registered from config on each init, so a
+ * registry left populated would hand a second instance in the same process a
+ * duplicate of every handler plus the dead instance's own.
  *
  * @internal
  * @example
