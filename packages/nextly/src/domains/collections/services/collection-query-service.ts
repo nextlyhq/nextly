@@ -2481,11 +2481,17 @@ export class CollectionQueryService extends BaseService {
 
       // An explicit `status: "draft"` read that opted into the working draft
       // dropped the draft predicate above so the published main row could be
-      // loaded for the overlay. When no draft was actually surfaced (none exists,
-      // it turned ineligible, or the caller is not trusted to edit), the loaded
-      // row is the published one, which the draft filter would never have matched.
-      // Return 404 rather than hand back content the caller did not ask for.
-      if (suppressDraftStatusFilter && !draftOverlaid) {
+      // loaded for the overlay. When no draft was surfaced (none exists, it turned
+      // ineligible, or the caller is not trusted to edit) AND the loaded row is not
+      // itself a draft, the row is the published one the draft filter would never
+      // have matched, so 404 rather than hand back content the caller did not ask
+      // for. A never-published entry whose main row IS `draft` matches the filter
+      // directly and is returned as loaded.
+      if (
+        suppressDraftStatusFilter &&
+        !draftOverlaid &&
+        (expandedEntry as { status?: unknown }).status !== statusFilter?.value
+      ) {
         return {
           success: false,
           statusCode: 404,

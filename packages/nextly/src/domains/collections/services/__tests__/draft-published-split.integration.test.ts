@@ -1222,6 +1222,38 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("returns a never-published draft row for a status=draft read", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "draft-only", status: "draft" });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // The main row is itself a draft (never published), so it matches the filter
+    // directly and must be returned rather than 404'd by the working-draft opt-in.
+    const res = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      status: "draft",
+      includeWorkingDraft: true,
+    });
+    expect(res.success).toBe(true);
+    expect((res.data as { title?: string }).title).toBe("draft-only");
+  });
+
   it("gives afterUpdate the prior working draft as originalData on a repeat save", async () => {
     const seen: unknown[] = [];
     handle = await createTestNextly({
