@@ -1081,13 +1081,17 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     // the contributed type is not registered and states nothing.
     const contributed = pluginEmptyValue(field ?? { type });
     if (contributed !== undefined) {
-      // The type states a value, not SQL. A structured one is a JSON document
-      // and is quoted as such; a scalar is rendered as its own literal, since
-      // wrapping `false` as JSON text would seed a truthy string into a
-      // boolean column.
-      return typeof contributed === "object" && contributed !== null
+      // The type states a value, not SQL. Which renderer applies is decided by
+      // the type's DECLARED STORAGE, never by the shape of the value it
+      // returned: a `Date` is an object too, so reading the shape would quote a
+      // timestamp-backed type's empty as JSON and write quote characters into a
+      // timestamp column. Only `json` storage is serialized; everything else is
+      // rendered as the literal its own primitive expects, which is also why
+      // `false` cannot become the truthy string `"false"` in a boolean column.
+      const storageToken = storageTypeToken(field ?? { type }) ?? type;
+      return storageToken === "json"
         ? quoteJsonSqlDefault(JSON.stringify(contributed), this.dialect)
-        : this.formatDefaultValue(contributed, type);
+        : this.formatDefaultValue(contributed, storageToken);
     }
 
     switch (type) {

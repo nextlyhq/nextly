@@ -126,6 +126,33 @@ describe("declaration checks reach every authoring path", () => {
     ).toThrow(/policy\.kinds must name at least one kind/);
   });
 
+  it("still checks the name of a field whose type it defers", () => {
+    // Deferring the TYPE must not defer the NAME: whether a name is usable as
+    // a column is independent of the type, and nothing downstream re-asks.
+    // The boot gate checks only whether the token was claimed, so a name left
+    // unchecked here is never checked at all.
+    const result = validateCollectionConfig({
+      slug: "posts",
+      fields: [
+        { name: "body", type: "doc" },
+        { name: "body", type: "doc" },
+      ],
+    } as unknown as CollectionConfig);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.map(e => e.code)).toContain("FIELD_NAME_DUPLICATE");
+  });
+
+  it("rejects an SQL-reserved name on a deferred plugin type", () => {
+    const result = validateCollectionConfig({
+      slug: "posts",
+      fields: [{ name: "select", type: "doc" }],
+    } as unknown as CollectionConfig);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
   it("defers an unregistered plugin type rather than refusing it", () => {
     // The cold-load ordering: a plugin registers its types when the app boots,
     // which is after every define* call has run. Refusing an unrecognised token
