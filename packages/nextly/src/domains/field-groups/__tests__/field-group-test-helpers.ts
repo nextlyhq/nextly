@@ -61,6 +61,19 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
       delete: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue({ rowCount: 0 }),
       }),
+      // The registry writes read the storage-migration marker out of
+      // `nextly_meta` before changing anything, so this models that table
+      // holding no marker -- a database on which no migration has ever run,
+      // which is the state every one of these tests describes. Returning no
+      // rows lets the real check run rather than short-circuiting it, so these
+      // tests exercise the guard instead of stepping around it.
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
     }),
     ...overrides,
   };

@@ -5,6 +5,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { NextlyError } from "../../../errors";
 import { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 
+import { hashManifest, type ManifestEntry } from "../migration/manifest";
+import { MIGRATION_MARKER_VERSION } from "../migration/state";
+
 import {
   createSilentLogger,
   createMockAdapter,
@@ -846,5 +849,94 @@ describe("FieldGroupRegistryService case-differing pointers", () => {
 
     expect(result.errors).toHaveLength(1);
     expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("FieldGroupRegistryService — refusing writes during a storage migration", () => {
+  /**
+   * A marker the real reader accepts: version, direction, id, step, both
+   * hashes, and a plan whose recorded hash describes it. Built through
+   * `hashManifest` rather than hand-written, so a change to the marker format
+   * fails here instead of silently making these tests assert nothing.
+   */
+  function inFlightMarker(): string {
+    const appliedManifest: ManifestEntry[] = [
+      { kind: "table", from: "comp_hero", to: "fg_hero" },
+      {
+        kind: "registry",
+        from: "dynamic_components",
+        to: "dynamic_field_groups",
+      },
+    ];
+    return JSON.stringify({
+      version: MIGRATION_MARKER_VERSION,
+      status: "migrating",
+      direction: "up",
+      migrationId: "run-1",
+      step: 1,
+      registryHash: "rows-1",
+      manifestHash: hashManifest(appliedManifest),
+      appliedManifest,
+    });
+  }
+
+  function migratingCtx(): ReturnType<typeof createCtx> {
+    const ctx = createCtx();
+    ctx.adapter.getDrizzle.mockReturnValue({
+      delete: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ value: inFlightMarker() }]),
+          }),
+        }),
+      }),
+    });
+    return ctx;
+  }
+
+  // 🔴 The window this closes cannot be detected after the fact. Inside it, an
+  // author repointing a field group's table produces a database byte-identical
+  // to the migration's own committed step, so a resume either adopts their
+  // table or renames it away. Prevention is the only remedy available.
+  it("refuses to register a field group", async () => {
+    const ctx = migratingCtx();
+    await expect(
+      ctx.service.registerComponent({
+        slug: "hero",
+        label: "Hero",
+        tableName: "comp_hero",
+        fields: [],
+        source: "ui",
+      } as never)
+    ).rejects.toMatchObject({
+      logContext: { reason: "field group storage migration is in flight" },
+    });
+  });
+
+  it("refuses to update a field group", async () => {
+    const ctx = migratingCtx();
+    await expect(
+      ctx.service.updateComponent("hero", { tableName: "renamed_by_author" })
+    ).rejects.toMatchObject({
+      logContext: { reason: "field group storage migration is in flight" },
+    });
+  });
+
+  it("refuses to delete a field group", async () => {
+    const ctx = migratingCtx();
+    await expect(ctx.service.deleteComponent("hero")).rejects.toMatchObject({
+      logContext: { reason: "field group storage migration is in flight" },
+    });
+  });
+
+  // The refusal has to come BEFORE the row is read, or a write could already be
+  // in flight against storage the migration is moving.
+  it("refuses before reading the row it would have changed", async () => {
+    const ctx = migratingCtx();
+    await expect(ctx.service.deleteComponent("hero")).rejects.toThrow();
+    expect(ctx.adapter.selectOne).not.toHaveBeenCalled();
   });
 });

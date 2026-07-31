@@ -27,6 +27,7 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { assertNoMigrationInFlight } from "../migration/sync-guard";
 
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
@@ -112,6 +113,32 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     return ["slug", "label"];
   }
 
+  /**
+   * Refuse to change the registry while a storage migration is in flight.
+   *
+   * The migration renames a field group's table and moves the registry row
+   * pointing at it as one step. An author changing `dbName` in that window
+   * produces a database state byte-identical to the migration's own committed
+   * step, so a resume cannot tell the two apart: it either adopts the author's
+   * table as its own work, or renames it away. Nothing observable distinguishes
+   * them afterwards, which is why this prevents rather than detects.
+   *
+   * Creating and deleting matter for a different reason: a run's identity
+   * covers which field groups existed when it was planned, so either one makes
+   * a resume refuse the plan it is resuming.
+   *
+   * Called before opening any transaction. The check reads through the adapter,
+   * which takes its own connection, so asking from inside one would wait for a
+   * second checkout and hang a pool sized to one.
+   */
+  private async assertMigrationNotInFlight(): Promise<void> {
+    await assertNoMigrationInFlight({
+      action: "field group change",
+      adapter: this.adapter,
+      logger: this.logger,
+    });
+  }
+
   async getComponentBySlug(
     slug: string,
     executor?: unknown
@@ -171,6 +198,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     data: DynamicFieldGroupInsert
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Registering Component", { slug: data.slug });
+    await this.assertMigrationNotInFlight();
 
     const existing = await this.getComponentBySlug(data.slug);
     if (existing) {
@@ -296,6 +324,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     options?: UpdateComponentOptions
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
+    await this.assertMigrationNotInFlight();
 
     const existing = await this.getComponent(slug);
 
@@ -389,6 +418,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    */
   async deleteComponent(slug: string): Promise<void> {
     this.logger.debug("Deleting Component", { slug });
+    await this.assertMigrationNotInFlight();
 
     const existing = await this.getComponent(slug);
 
