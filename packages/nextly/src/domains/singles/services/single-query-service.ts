@@ -772,9 +772,8 @@ export class SingleQueryService extends BaseService {
         );
       } catch (error) {
         // Normalized whether or not the caller is judging an access rule on the result. A
-        // companion read used to be swallowed when it failed, so only the strict path could throw
-        // and only that path needed wrapping; now every failure propagates, and the result builder
-        // puts a bare Error's own message on the wire — companion table and column names with it.
+        // companion read failure propagates, and the result builder puts a bare Error's own
+        // message on the wire — the failed query, with companion table and column names in it.
         throw NextlyError.is(error)
           ? error
           : NextlyError.internal({
@@ -1799,8 +1798,8 @@ export class SingleQueryService extends BaseService {
     try {
       await this.populateTranslationMeta(slug, singleMeta, doc);
     } catch (error) {
-      // Same reasoning as the overlay above: the failure now always reaches here, so it is always
-      // the one that has to be normalized rather than handed to the wire as the driver wrote it.
+      // Same reasoning as the overlay above: a failed overview read reaches here, and is
+      // normalized rather than handed to the wire as the driver wrote it.
       throw NextlyError.is(error)
         ? error
         : NextlyError.internal({

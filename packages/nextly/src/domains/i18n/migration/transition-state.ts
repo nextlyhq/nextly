@@ -325,15 +325,22 @@ async function confirmClaim(
   key: string
 ): Promise<void> {
   const claimed = await readI18nTransitionState(store, args.kind, args.slug);
+  // The STATUS has to be `enabling`, not just the locale. A conditional write can fail to match
+  // for reasons other than a competing claim, and a competitor can claim and settle before this
+  // re-read — in both cases the locale still agrees, and accepting that would let this caller run
+  // the copy with no `enabling` record for `settleI18nTransition` to settle afterwards, which is
+  // the failure the claim exists to prevent.
   if (
-    claimed.status !== "untracked" &&
+    claimed.status !== "enabling" ||
     claimed.sourceLocale !== args.sourceLocale
   ) {
     throw NextlyError.internal({
       logContext: {
-        reason: "localization transition was claimed with a different locale",
+        reason: "localization transition was claimed by another process",
         key,
-        recorded: claimed.sourceLocale,
+        recordedStatus: claimed.status,
+        recorded:
+          claimed.status === "untracked" ? undefined : claimed.sourceLocale,
         received: args.sourceLocale,
       },
     });
@@ -367,7 +374,21 @@ export async function settleI18nTransition(
     status: "seeded",
     sourceLocale: current.sourceLocale,
   };
-  await store.set(key, marker);
+  // Conditional on the state this settlement actually describes. Opposite transitions can
+  // interleave: while a re-enable is copying, a disable can restore the content and write
+  // `restored`, and an unconditional write here would bury that under `seeded` — after which the
+  // next enable trusts the companion and skips the refresh, reverting every edit made on main
+  // while localization was off. Losing means the entity moved on and this settlement no longer
+  // describes it, which is not an error: whatever moved it owns the state now.
+  await store.compareAndSet(
+    key,
+    {
+      version: I18N_TRANSITION_MARKER_VERSION,
+      status: current.status,
+      sourceLocale: current.sourceLocale,
+    } satisfies StoredMarker,
+    marker
+  );
 }
 
 /**
@@ -411,7 +432,18 @@ export async function recordI18nRestore(
     status: "restored",
     sourceLocale: args.sourceLocale,
   };
-  await store.set(key, marker);
+  // Conditional for the same reason settling is: a re-enable running concurrently may have claimed
+  // this entity, and overwriting its `enabling` record would leave that copy with nothing to
+  // settle. Losing means the entity moved on under someone else's claim.
+  await store.compareAndSet(
+    key,
+    {
+      version: I18N_TRANSITION_MARKER_VERSION,
+      status: current.status,
+      sourceLocale: current.sourceLocale,
+    } satisfies StoredMarker,
+    marker
+  );
 }
 
 // Mirrors the non-empty check the read applies, so the two cannot drift into a

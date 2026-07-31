@@ -1498,11 +1498,25 @@ async function applyReload(opts?: {
   // reload would return before ever reaching the call after the apply, which is exactly
   // the missing-companion state this repairs. Idempotent, so running it here and after
   // a successful apply costs one existence probe per localized entity.
-  await ensureLocalizedCompanionsForReload(
+  const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
     adapter,
     newConfig,
     deferredEntities
   );
+
+  // The same gate the post-apply path applies. Disabling localization on an entity whose main
+  // columns were retained produces no schema diff at all, so a failed restore would otherwise
+  // reach `syncCodeFirstMetadataOnly` below and publish the non-localized metadata anyway —
+  // pointing reads at main while its values are still the pre-localization ones.
+  if (noDdlProvisioning.restoreFailed.length > 0) {
+    logger?.error(
+      `[nextly] Localization stays on for ${noDdlProvisioning.restoreFailed.join(", ")}: their ` +
+        `content could not be copied back out of the translations table. Fix the error above and ` +
+        `save again — the content is intact where it is.`
+    );
+    abandonReload();
+    return;
+  }
 
   if (!hasChanges) {
     // Only sync when the schema is genuinely in step (every entity had a zero-op

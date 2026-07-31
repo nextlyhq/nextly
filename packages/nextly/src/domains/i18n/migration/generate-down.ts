@@ -40,8 +40,8 @@ export interface LocalizationDownOptions {
 }
 
 /**
- * Copy the default locale's companion values back onto the main row, one correlated UPDATE per
- * column, for exactly `columnNames`.
+ * Copy the default locale's companion values back onto the main row — one correlated UPDATE
+ * covering every column in `columnNames`.
  *
  * Shared rather than inlined because two paths owe the same copy for different reasons. A disable
  * migration restores before it drops the companion. Unattended provisioning restores when an
@@ -120,7 +120,7 @@ export function buildLocalizationDownStatements(
     );
   }
 
-  // 2. restore default-locale value onto the main row (one correlated UPDATE per column)
+  // 2. restore the default-locale values onto the main row (one UPDATE covering every column)
   stmts.push(
     ...buildDefaultLocaleRestoreStatements(
       spec,

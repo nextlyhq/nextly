@@ -178,8 +178,8 @@ export function buildLocalizationUpStatements(
 }
 
 /**
- * Overwrite the default locale's companion values from the main row, one correlated UPDATE per
- * column, for exactly `columnNames`.
+ * Overwrite the default locale's companion values from the main row — one correlated UPDATE
+ * covering every column in `columnNames`.
  *
  * The inverse of the restore in `generate-down`, and needed for the one case where the seed's
  * usual `INSERT ... WHERE NOT EXISTS` does the wrong thing: re-enabling localization on an entity
@@ -199,8 +199,8 @@ export function buildLocalizationUpStatements(
  * the meantime keeps being served. The guarded insert cannot correct it either, because the row it
  * would fix already exists.
  *
- * One statement for every column, for the same reason the restore is one: a refresh that lands
- * half-way leaves the companion holding a mixture with nothing recording that it did.
+ * ONE statement covering every column, for the same reason the restore is one: a refresh that
+ * lands half-way leaves the companion holding a mixture with nothing recording that it did.
  */
 export function buildDefaultLocaleRefreshStatements(
   spec: CompanionCopyRef,
@@ -218,7 +218,15 @@ export function buildDefaultLocaleRefreshStatements(
     copy(q(name, dialect), q(name, dialect))
   );
   if (options.refreshStatus) {
-    assignments.push(copy(q("_status", dialect), q("status", dialect)));
+    // The companion's `_status` is NOT NULL DEFAULT 'draft' while main's `status` need not be —
+    // an older shape, or a column added nullable, can hold NULL. Assigning it straight through
+    // violates the constraint, and because the transition stays unsettled every later pass
+    // replays the same statement. Defaulted to the value the companion's own DDL uses.
+    assignments.push(
+      `${q("_status", dialect)} = COALESCE(` +
+        `(SELECT ${q("status", dialect)} FROM ${main} WHERE ${correlate}), ` +
+        `${lit(COMPANION_DEFAULT_STATUS)})`
+    );
   }
   if (assignments.length === 0) return [];
 

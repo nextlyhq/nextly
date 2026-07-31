@@ -91,10 +91,10 @@ describe("populateCompanionFields (real SQLite)", () => {
   }
 
   it("does not touch the database at all when the companion is not ready", async () => {
-    // The property task 086 turns on. The old code decided existence by running the join and
-    // catching the failure, which is free on SQLite and MySQL and marks a PostgreSQL transaction
-    // aborted — and several of these reads run inside the caller's write transaction. A db that
-    // rejects every query stands in for that: if anything is issued, this rejects.
+    // Deciding existence by running the join and catching the failure is free on SQLite and
+    // MySQL and marks a PostgreSQL transaction aborted — and several of these reads run inside the
+    // caller's write transaction. A db that rejects every query stands in for that: if anything is
+    // issued at all, this rejects.
     const rows: Record<string, unknown>[] = [{ id: "p1" }];
     await populateCompanionFields({
       db: rejectingDb(new Error("should never be issued")) as never,

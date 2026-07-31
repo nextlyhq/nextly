@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
 import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
 import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
@@ -138,7 +139,16 @@ export class MetaService extends BaseService {
       await insert.onDuplicateKeyUpdate({ set: { key } });
       return;
     }
-    await insert;
+    // No fallback to a plain insert. The builder is feature-detected on an untyped handle, so a
+    // renamed or absent method would otherwise degrade silently into an unconditional write —
+    // which is exactly the behaviour callers use this method to avoid, and they would have no way
+    // to notice. Failing here is recoverable; a claim that quietly stopped claiming is not.
+    throw NextlyError.internal({
+      logContext: {
+        reason: "no conflict clause available for a conditional insert",
+        dialect: this.dialect,
+      },
+    });
   }
 
   /**

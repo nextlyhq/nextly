@@ -901,6 +901,131 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(rows).toEqual([{ _status: "published" }]);
   });
 
+  it("restores from the recorded locale when the configured default has no translation", async () => {
+    // The restore is guarded on a matching companion row, so preferring the configured default
+    // unconditionally copies nothing for an entity only ever authored under the locale the
+    // transition recorded — while the record still marks the transition finished. `restored` is
+    // terminal, so no later pass retries and the content stays in a companion nothing reads.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_otherloc",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const localizedIn = (defaultLocale: string) =>
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale },
+        collections: [
+          defineCollection({
+            slug: "dbsync_otherloc",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_otherloc" ("id", "slug", "title") VALUES ('row1', 'r1', 'Vor der Übersetzung')`
+    );
+    await runSync(localizedIn("de"));
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_otherloc_locales" SET "title" = 'Auf Deutsch' WHERE "_locale" = 'de'`
+    );
+
+    // The app's default moves to a locale this entity has no translation in, and localization is
+    // then turned off.
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_otherloc",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_otherloc" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Auf Deutsch" }]);
+  });
+
+  it("leaves a field that was made shared before the entity was disabled", async () => {
+    // Reconciliation is additive, so a field turned `localized: false` while its entity stays
+    // localized keeps its companion column while writes correctly go to the main one. A later
+    // entity-level disable must not copy that abandoned value back over the current one.
+    const localizedBoth = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_shared",
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            text({ name: "sku", localized: true }),
+          ],
+        }),
+      ],
+    });
+    // `sku` becomes shared; the entity stays localized.
+    const skuShared = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_shared",
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            text({ name: "sku" }),
+          ],
+        }),
+      ],
+    });
+
+    await runSync(localizedBoth);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_shared" ("id", "slug") VALUES ('row1', 'r1')`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_shared_locales" ("_parent", "_locale", "title", "sku") VALUES ('row1', 'en', 'Widget', 'OLD-SKU')`
+    );
+
+    await runSync(skuShared);
+    // The current value, written to main now that the field is shared.
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_shared" SET "sku" = 'NEW-SKU' WHERE "id" = 'row1'`
+    );
+
+    // Now the whole entity is disabled, with the per-field flags left as they are — which is what
+    // says which columns the companion still owns. A field that was made shared earlier no longer
+    // claims to be localized, so it is not restored from.
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_shared",
+            fields: [
+              text({ name: "title", localized: true }),
+              text({ name: "sku" }),
+            ],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ title: string; sku: string }>(
+      `SELECT "title", "sku" FROM "dc_dbsync_shared" WHERE "id" = 'row1'`
+    );
+    // `title` comes back from the companion; `sku` keeps the value main already had.
+    expect(main).toEqual([{ title: "Widget", sku: "NEW-SKU" }]);
+  });
+
   it("leaves an entity that was never localized alone", async () => {
     // The restore is gated on the durable record, not on physical shape, so a collection that
     // never had a companion is not probed for one and nothing is written on its behalf.

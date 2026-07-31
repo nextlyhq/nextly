@@ -394,6 +394,9 @@ export class DynamicCollectionService extends BaseService {
       companionExists && args.wasLocalized && args.isLocalized
         ? await companionHasStatusColumn(this.adapter, companionTable)
         : undefined;
+    const localizedOldNames = new Set(
+      resolveLocalizedFieldNames(args.oldFields, args.wasLocalized)
+    );
     const common = {
       slug: args.slug,
       tableName: args.tableName,
@@ -413,10 +416,14 @@ export class DynamicCollectionService extends BaseService {
     // value is current, because every localized write went to the companion alone.
     const { artefact, local } = buildCompanionTransitionPlans({
       ...common,
+      // Only the fields that were TRANSLATABLE before this save. The helper reports whichever of
+      // the names it is given exist on the main table, so handing it every old field would put
+      // ordinary shared columns into the list and let the local plan diverge from the artefact
+      // over columns no transition ever touched.
       existingMainColumns: await localizedColumnsOnMain(
         this.adapter,
         args.tableName,
-        args.oldFields
+        args.oldFields.filter(f => localizedOldNames.has(f.name))
       ).then(cols => cols.map(c => c.name)),
     });
 

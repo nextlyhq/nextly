@@ -255,9 +255,9 @@ export class SingleMutationService extends BaseService {
       localeChain: [locale],
       // Inside the caller's transaction, so the remembered verdict is read rather than resolved:
       // resolving would query, and a query against a missing relation aborts the whole transaction
-      // on PostgreSQL. Every other failure now propagates unconditionally, which is what this read
-      // needs — it feeds a durable webhook payload, and shipping nulled translations because a
-      // transient error was swallowed would corrupt it.
+      // on PostgreSQL. Any other failure propagates, which is what this read needs — it feeds a
+      // durable webhook payload, and shipping nulled translations because a transient error was
+      // swallowed would corrupt it.
       readiness: cachedCompanionReadiness(
         this.adapter,
         companion.companionTableName
@@ -1232,10 +1232,10 @@ export class SingleMutationService extends BaseService {
                 localizedFields: companion.localizedFields,
                 rows: [preLocaleRow],
                 localeChain: [writeLocale],
-                // Read, not resolved: this runs on the write transaction's connection. A real
-                // failure now propagates unconditionally, which this pre-image read needs — it
-                // feeds the durable webhook `previous` payload, and a silently nulled `previous`
-                // would corrupt `changedFields`.
+                // Read, not resolved: this runs on the write transaction's connection. Any real
+                // failure propagates, which this pre-image read needs — it feeds the durable
+                // webhook `previous` payload, and a silently nulled `previous` would corrupt
+                // `changedFields`.
                 readiness: cachedCompanionReadiness(
                   this.adapter,
                   companion.companionTableName
@@ -1597,8 +1597,14 @@ export class SingleMutationService extends BaseService {
             // updates `_status`. Then merge the written values back onto the
             // returned row so the PATCH response and afterChange/afterUpdate hooks
             // see the just-saved translation (the main row omits these columns).
+            // Gated on the companion actually being there. The default-locale fallback leaves the
+            // translatable values on main, so `companionData` is empty — but a payload carrying a
+            // status still reaches here, and upserting `_status` into a table that does not exist
+            // fails inside the transaction and rolls back the very write the fallback exists to
+            // let through.
             if (
               companion &&
+              companionPhysicallyExists &&
               writeLocale !== undefined &&
               (Object.keys(companionData).length > 0 ||
                 companionStatus !== undefined)

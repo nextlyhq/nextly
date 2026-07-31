@@ -41,7 +41,10 @@ import {
 } from "../migration/transition-state";
 
 import type { CompanionIntrospectAdapter } from "./companion-io";
-import { localizedColumnsOnBothTables } from "./companion-io";
+import {
+  companionTableExists,
+  localizedColumnsOnBothTables,
+} from "./companion-io";
 import { buildCompanionRuntimeTable } from "./companion-registration";
 
 /** Minimal field shape the restore needs — matches `CompanionFieldLike` in companion-io. */
@@ -101,17 +104,22 @@ export async function restoreDisabledCompanion(
     return false;
   }
 
-  const restoreLocale = args.defaultLocale ?? recorded.sourceLocale;
   const companionTableName = `${args.tableName}_locales`;
   try {
-    const { companionExists, columns: restorable } =
+    const { companionExists, columns: present } =
       await localizedColumnsOnBothTables(
         adapter,
         args.tableName,
         companionTableName,
-        args.fields
+        restorableFields(args.fields)
       );
-    if (!companionExists) {
+    // Confirmed through the write path's own probe before anything is forgotten. The snapshot
+    // above answers from introspection, and a false negative here is not recoverable: the record
+    // it deletes carries the source locale, which is the one fact nothing else can supply.
+    if (
+      !companionExists &&
+      !(await companionTableExists(adapter, companionTableName))
+    ) {
       // The companion is already gone — a `nextly migrate` run, or a teardown. There is nothing to
       // copy and nothing left for the record to describe, so it stops describing it rather than
       // leaving a restore permanently owed against a table that does not exist.
@@ -119,14 +127,27 @@ export async function restoreDisabledCompanion(
       return false;
     }
 
-    if (restorable.length > 0) {
+    // Which locale actually holds this entity's content. The configured default is the right
+    // answer whenever the companion has rows in it, and wrong when the entity was only ever
+    // authored under the locale the transition recorded — the restore is guarded on a matching
+    // companion row, so it would quietly copy nothing while the record below declared the
+    // transition over. `restored` is terminal, so no later pass would retry.
+    const restoreLocale = await resolveRestoreLocale(adapter, {
+      tableName: args.tableName,
+      fields: restorableFields(args.fields),
+      dialect: args.dialect,
+      preferred: args.defaultLocale,
+      recorded: recorded.sourceLocale,
+    });
+
+    if (present.length > 0) {
       await copyDefaultLocaleOntoMain(adapter, {
         tableName: args.tableName,
         companionTableName,
-        fields: args.fields,
+        fields: restorableFields(args.fields),
         dialect: args.dialect,
         locale: restoreLocale,
-        columns: restorable,
+        columns: present,
       });
     }
 
@@ -138,7 +159,7 @@ export async function restoreDisabledCompanion(
       slug: args.slug,
       sourceLocale: restoreLocale,
     });
-    return restorable.length > 0;
+    return present.length > 0;
   } catch (error) {
     // Reported rather than thrown, for the same reason the create path reports: provisioning must
     // not refuse to start over one entity. The record is left untouched, so the next pass tries
@@ -250,4 +271,72 @@ async function copyDefaultLocaleOntoMain(
     .update(mainTable)
     .set(values)
     .where(sql`exists (select 1 from ${companion.table} where ${matches})`);
+}
+
+/**
+ * The fields whose values the companion actually owns.
+ *
+ * A field can be made shared (`localized: false`) while its entity stays localized. Reconciliation
+ * is additive, so its companion column survives while writes correctly go to the restored
+ * main-table column — and a later entity-level disable would then copy that abandoned companion
+ * value over the current one.
+ *
+ * The flags decide when any of them are set, which is the case that produces the hazard. When none
+ * are — the ordinary shape after turning localization off, where the per-field flags are usually
+ * cleared along with the entity's — every field is a candidate and the physical intersection with
+ * the companion decides instead.
+ */
+function restorableFields(fields: RestorableField[]): RestorableField[] {
+  const claimed = fields.filter(f => f.localized === true);
+  return claimed.length > 0 ? claimed : fields;
+}
+
+/**
+ * The locale to restore from: the configured default when the companion holds it, otherwise the
+ * one the transition recorded.
+ *
+ * They differ when the default moved while the entity was localized and its content was only ever
+ * authored under the old one. Preferring the configured default unconditionally means the guarded
+ * copy matches no row, restores nothing, and the record still marks the transition finished — with
+ * the content left in a companion nothing reads.
+ */
+async function resolveRestoreLocale(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    tableName: string;
+    fields: RestorableField[];
+    dialect: SupportedDialect;
+    preferred?: string;
+    recorded: string;
+  }
+): Promise<string> {
+  const preferred = args.preferred;
+  if (!preferred || preferred === args.recorded) return args.recorded;
+
+  const companion = buildCompanionRuntimeTable({
+    slug: args.tableName,
+    tableName: args.tableName,
+    fields: args.fields.map(f => ({ ...f, localized: true })),
+    dialect: args.dialect,
+    localized: true,
+  });
+  if (!companion) return args.recorded;
+  const columns = companion.table as Record<string, unknown>;
+
+  const rows = await adapter
+    .getDrizzle<LocaleProbeDb>()
+    .select({ locale: columns._locale })
+    .from(companion.table)
+    .where(eq(columns._locale as never, preferred))
+    .limit(1);
+  return rows.length > 0 ? preferred : args.recorded;
+}
+
+/** The slice of Drizzle the locale probe drives — declared like the other structural ports here. */
+interface LocaleProbeDb {
+  select(projection: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): { limit(n: number): Promise<unknown[]> };
+    };
+  };
 }

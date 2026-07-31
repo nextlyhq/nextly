@@ -564,10 +564,9 @@ describe.each(getConfiguredTestDialects())(
  * was tolerated, and the next statement — the events insert — died. It ran inside the caller's
  * write transaction, so the fallback write it was meant to support is exactly what it killed.
  *
- * Written during PR #382 and removed again because it could not pass. It is restored here with the
- * fix, and it now runs against a suite that can see the failure: the aborted-transaction guard
- * records any such state and fails the run, so a future reintroduction trips on its own rather
- * than waiting for a reviewer.
+ * The suite can see this failure now: the aborted-transaction guard records any transaction left
+ * poisoned and fails the run, so a reintroduction trips on its own rather than waiting for a
+ * reviewer to read the code.
  */
 describe.each(getConfiguredTestDialects())(
   "default-locale field-group write with no companion on %s (integration)",
