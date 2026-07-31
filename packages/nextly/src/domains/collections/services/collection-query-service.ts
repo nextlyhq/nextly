@@ -11,6 +11,8 @@
  * - Apply field selection to filter response data
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, ilike, sql, asc, desc } from "drizzle-orm";
 
@@ -344,44 +346,70 @@ export class CollectionQueryService extends BaseService {
    * With no hooks registered both calls hand back what they were given, so the
    * caller's filter reaches the query untouched.
    */
+  /**
+   * Marks that a read's hooks are running on this async call stack.
+   *
+   * A `beforeRead` handler may call `nextly.count()` -- for a quota check, or
+   * for related state -- and that was safe while the count ran no hooks. Now
+   * that it does, the nested count would run the same handler again, and that
+   * handler would count again. The guard makes a nested read use the filter it
+   * was given and run no hooks, which is the behaviour such handlers were
+   * written against.
+   */
+  private static readonly readHooksRunning = new AsyncLocalStorage<true>();
+
   private async resolveReadWhere(params: {
     collectionName: string;
     where: WhereFilter | undefined;
     user?: UserContext;
     sharedContext: Record<string, unknown>;
   }): Promise<WhereFilter | undefined> {
-    const beforeOpArgs =
-      await this.hookService.hookRegistry.executeBeforeOperation({
-        collection: params.collectionName,
-        operation: "read",
-        args: { where: params.where },
-        user: params.user
-          ? { id: params.user.id, email: params.user.email }
-          : undefined,
-        context: params.sharedContext,
-      });
+    // Already inside a read's hooks: this call came from a handler, so it uses
+    // the filter it was given and runs nothing.
+    if (CollectionQueryService.readHooksRunning.getStore()) {
+      return params.where;
+    }
+    return CollectionQueryService.readHooksRunning.run(true, async () => {
+      const beforeOpArgs =
+        await this.hookService.hookRegistry.executeBeforeOperation({
+          collection: params.collectionName,
+          operation: "read",
+          args: { where: params.where },
+          user: params.user
+            ? { id: params.user.id, email: params.user.email }
+            : undefined,
+          context: params.sharedContext,
+        });
 
-    const afterBeforeOperation = (beforeOpArgs?.where ?? params.where) as
-      | WhereFilter
-      | undefined;
+      // Returning an args object replaces the arguments wholesale, so a handler
+      // that omits `where` -- or sets it to `undefined` -- is clearing the filter,
+      // not declining to change it. Only the absence of a returned object leaves
+      // the caller's filter in place.
+      const afterBeforeOperation = (
+        beforeOpArgs ? beforeOpArgs.where : params.where
+      ) as WhereFilter | undefined;
 
-    const beforeReadResult = await this.hookService.hookRegistry.execute(
-      "beforeRead",
-      this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "read" as const,
-        data: afterBeforeOperation,
-        user: params.user,
-        context: params.sharedContext,
-      })
-    );
+      const beforeReadResult = await this.hookService.hookRegistry.execute(
+        "beforeRead",
+        this.hookService.buildHookContext({
+          collection: params.collectionName,
+          operation: "read" as const,
+          // Always an object: handlers documented as "modify query parameters"
+          // assign onto it in place, and handing them `undefined` would throw on
+          // every unfiltered read rather than adding their predicate.
+          data: afterBeforeOperation ?? {},
+          user: params.user,
+          context: params.sharedContext,
+        })
+      );
 
-    // `undefined` means the hook returned nothing, so the filter is unchanged;
-    // `null` is a deliberate return the registry preserves, and it means the
-    // hook cleared the filter. Collapsing the two would leave a hook unable to
-    // widen a read it had decided should not be narrowed.
-    if (beforeReadResult === undefined) return afterBeforeOperation;
-    return beforeReadResult ?? undefined;
+      // `undefined` means the hook returned nothing, so the filter is unchanged;
+      // `null` is a deliberate return the registry preserves, and it means the
+      // hook cleared the filter. Collapsing the two would leave a hook unable to
+      // widen a read it had decided should not be narrowed.
+      if (beforeReadResult === undefined) return afterBeforeOperation;
+      return beforeReadResult ?? undefined;
+    });
   }
 
   private buildLocalizedQueryContext(
@@ -1531,6 +1559,23 @@ export class CollectionQueryService extends BaseService {
             user: params.user,
             sharedContext: { ...params.context },
           });
+
+      // A count cannot apply geo predicates: `listEntries` evaluates them in
+      // memory over the rows it fetched, and there are no rows here.
+      // `buildWhereClause` emits no SQL for them, so leaving one in place would
+      // return a total describing every candidate the geo filter was meant to
+      // exclude. Refusing says so instead of answering wrongly.
+      const { geoFilters: countGeoFilters } = extractGeoFilters(countWhere);
+      if (countGeoFilters.length > 0) {
+        throw NextlyError.invalidInput({
+          message:
+            "A geo filter cannot be counted. Geo predicates are evaluated over fetched rows, so they apply to a list but not to a count; remove the geo operator or take the total from the list instead.",
+          logContext: {
+            collection: params.collectionName,
+            operators: countGeoFilters.map(f => f.operator),
+          },
+        });
+      }
 
       // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
       // counts the SAME rows the page returns (count==list parity).
