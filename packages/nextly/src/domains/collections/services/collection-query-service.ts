@@ -2022,6 +2022,17 @@ export class CollectionQueryService extends BaseService {
      * copy). Undefined for session/system callers.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Whether the caller is an editor asking to SEE the working draft (pending
+     * unpublished edits) in place of the live row. Opt-in on purpose: a
+     * status-less read is the default for many internal callers (duplicate,
+     * reference labels), and they must keep seeing the published row, so draft
+     * visibility follows an explicit editor-view intent rather than every
+     * status-less read. Still gated by trust below (overrideAccess, or an actual
+     * update-capability decision against the loaded row), so setting it does not
+     * expose a draft to a caller who cannot edit the document.
+     */
+    includeWorkingDraft?: boolean;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -2254,22 +2265,23 @@ export class CollectionQueryService extends BaseService {
             versions?: { drafts?: { enabled?: boolean } };
           }
         ).versions?.drafts?.enabled === true &&
-        // Not an explicit published-only (or other specific-status) view. A
-        // trusted read's default resolves `statusFilter` to null; an
-        // access-enforced authenticated read defaults to a published-only
-        // filter, so the default view (no explicit `status`) is allowed too — an
-        // editor opening the document is asking to edit it, not to see the
-        // published copy. An explicit `?status=published` still suppresses the
-        // draft.
-        (statusFilter === null || params.status === undefined);
-      // A pending draft is surfaced only to a caller trusted to EDIT the
-      // document. `overrideAccess` is the only flag that attests that here.
+        // The caller explicitly asked to see the working draft (an editor
+        // opening the document to edit). This is opt-in on purpose: many
+        // internal callers issue a status-less read (duplicate, reference
+        // labels) and must keep seeing the published row, so draft visibility
+        // follows an explicit editor intent, not every status-less read.
+        params.includeWorkingDraft === true &&
+        // An explicit published view still suppresses the draft.
+        params.status !== "published";
+      // Even with the opt-in, a pending draft is surfaced only to a caller
+      // trusted to EDIT the document. `overrideAccess` attests that directly.
       // `routeAuthorized` is NOT trusted: on this read path the REST dispatcher
       // sets it from `!!user` after authorizing the READ, so it attests read, not
       // update — trusting it would leak drafts to a read-only authenticated
       // caller. Every non-override authenticated caller is instead judged by an
-      // actual update-capability probe, so an editor sees their own pending draft
-      // through any surface while a public or read-only caller never does.
+      // actual update-capability probe against the LOADED row, so an owner-only
+      // update rule (which the coarse check passes pending a row-level predicate)
+      // does not treat a non-owner reader as an editor.
       let draftView = false;
       if (draftEligible) {
         if (params.overrideAccess === true) {
@@ -2280,7 +2292,7 @@ export class CollectionQueryService extends BaseService {
             "update",
             params.user,
             entryId,
-            undefined,
+            entry as Record<string, unknown>,
             params.overrideAccess,
             // The route attested a read, never an update, so the update grant is
             // checked rather than assumed from `routeAuthorized`.
@@ -2307,13 +2319,16 @@ export class CollectionQueryService extends BaseService {
         if (workingDraft) {
           let draftEntry = workingDraft.snapshot as Record<string, unknown>;
           // The snapshot stores top-level relations as ids (captured at depth 0),
-          // so expand them at the requested depth to match a live read. Only
-          // relationship expansion runs here, never component population: the
-          // snapshot already carries the draft's own component values, and
-          // re-reading components from their tables would replace the pending
-          // edits with live content — the reason the overlay sits after the live
-          // assembly at all.
-          if (params.depth !== undefined && params.depth > 0) {
+          // so expand them at the requested depth to match a live read. The live
+          // assembly forwards `params.depth` unconditionally and
+          // `expandRelationships` applies its own default when it is undefined,
+          // so guard only the explicit `depth === 0` (ids-only) case — otherwise
+          // a draft read that omits depth would return bare ids while the live
+          // read for the same request expands. Only relationship expansion runs
+          // here, never component population: the snapshot already carries the
+          // draft's own component values, and re-reading components from their
+          // tables would replace the pending edits with live content.
+          if (params.depth !== 0) {
             draftEntry = await this.relationshipService.expandRelationships(
               draftEntry,
               params.collectionName,

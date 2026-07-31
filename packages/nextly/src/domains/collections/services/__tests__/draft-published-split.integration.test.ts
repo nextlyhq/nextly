@@ -137,7 +137,11 @@ describe("draft/published split — updateEntry (integration)", () => {
 
     // One coalesced draft holding BOTH edits.
     expect(await workingDraftCount(id)).toBe(1);
-    const draftRead = await entries.getEntry({ ...ctx, entryId: id });
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
     const data = draftRead.data as { title?: string; body?: string };
     expect(data.title).toBe("draft-t");
     expect(data.body).toBe("draft-b");
@@ -161,9 +165,13 @@ describe("draft/published split — updateEntry (integration)", () => {
       { title: "edited-in-draft" }
     );
 
-    // Draft view: no explicit status on a trusted read resolves the status
-    // filter to null, so the overlay returns the pending edit.
-    const draftRead = await entries.getEntry({ ...ctx, entryId: id });
+    // Draft view: the editor opts in to the working draft, so the overlay
+    // returns the pending edit.
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
     expect((draftRead.data as { title?: string }).title).toBe(
       "edited-in-draft"
     );
@@ -206,24 +214,39 @@ describe("draft/published split — updateEntry (integration)", () => {
     );
 
     // An authenticated read with access enforced (no overrideAccess, no
-    // routeAuthorized) — the Direct API findByID shape — surfaces the editor's
-    // own pending draft, because they can update this (public) collection.
+    // routeAuthorized) that opts into the working draft — the Direct API editor
+    // shape — surfaces the editor's own pending draft, because they can update
+    // this (public) collection.
     const editorRead = await entries.getEntry({
       collectionName: COLLECTION,
       entryId: id,
       user: { id: "editor-1" },
       overrideAccess: false,
+      includeWorkingDraft: true,
     });
     expect(editorRead.success).toBe(true);
     expect((editorRead.data as { title?: string }).title).toBe(
       "edited-in-draft"
     );
 
-    // An anonymous read (no user) never surfaces a draft — only the live row.
+    // The SAME editor, but a status-less read WITHOUT the opt-in — the shape an
+    // internal caller such as duplicate uses — gets the live row, never the
+    // draft, so a duplicate copies published content.
+    const internalRead = await entries.getEntry({
+      collectionName: COLLECTION,
+      entryId: id,
+      user: { id: "editor-1" },
+      overrideAccess: false,
+    });
+    expect((internalRead.data as { title?: string }).title).toBe("live");
+
+    // An anonymous read (no user) never surfaces a draft even with the opt-in —
+    // only the live row.
     const anonRead = await entries.getEntry({
       collectionName: COLLECTION,
       entryId: id,
       overrideAccess: false,
+      includeWorkingDraft: true,
     });
     expect(anonRead.success).toBe(true);
     expect((anonRead.data as { title?: string }).title).toBe("live");
@@ -258,14 +281,16 @@ describe("draft/published split — updateEntry (integration)", () => {
     );
 
     // The REST dispatcher sets routeAuthorized from the READ authorization, so a
-    // read-only authenticated caller arrives with routeAuthorized:true. The draft
-    // must stay hidden because they cannot update the document.
+    // read-only authenticated caller arrives with routeAuthorized:true. Even
+    // opting into the working draft, it must stay hidden because they cannot
+    // update the document.
     const readerRead = await entries.getEntry({
       collectionName: COLLECTION,
       entryId: id,
       user: { id: "reader-1" },
       routeAuthorized: true,
       overrideAccess: false,
+      includeWorkingDraft: true,
     });
     expect(readerRead.success).toBe(true);
     expect((readerRead.data as { title?: string }).title).toBe("live");
