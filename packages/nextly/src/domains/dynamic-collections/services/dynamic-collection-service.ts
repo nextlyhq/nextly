@@ -385,6 +385,8 @@ export class DynamicCollectionService extends BaseService {
     wasLocalized: boolean;
     isLocalized: boolean;
     status: boolean;
+    /** Whether the entity HAD Draft/Published before this save — see `wasStatus` on the args. */
+    wasStatus: boolean;
   }): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
     const companionTable = `${args.tableName}_locales`;
     const companionExists = await this.adapter.tableExists(companionTable);
@@ -409,6 +411,7 @@ export class DynamicCollectionService extends BaseService {
       newFields: args.newFields,
       companionExists,
       companionHasStatus,
+      wasStatus: args.wasStatus,
     };
 
     // Which translatable columns the main table still carries. A disable must not re-add one that
@@ -722,6 +725,7 @@ export class DynamicCollectionService extends BaseService {
           wasLocalized: collectionWasLocalized,
           isLocalized: collectionIsLocalized,
           status: hasStatus,
+          wasStatus,
         });
         const archiveSQL = needsArchive
           ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
@@ -787,6 +791,7 @@ export class DynamicCollectionService extends BaseService {
         wasLocalized: collectionWasLocalized,
         isLocalized: collectionIsLocalized,
         status: hasStatus,
+        wasStatus: wasStatusForUpdate,
       });
       const archiveSQL = needsArchive
         ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))

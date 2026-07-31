@@ -250,10 +250,26 @@ async function reconcileSingleCompanion(args: {
   /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
   wasLocalized: boolean;
   status: boolean;
+  /**
+   * Whether the single had Draft/Published BEFORE this apply.
+   *
+   * Separate from `status` because the disable restore asks a different question: not what the
+   * single is being saved as, but whether main carried `status` and the companion `_status`
+   * beforehand — a copy from columns that were not there fails the whole migration.
+   */
+  wasStatus: boolean;
   adapter: DrizzleAdapter;
 }): Promise<void> {
-  const { slug, tableName, oldFields, newFields, localized, status, adapter } =
-    args;
+  const {
+    slug,
+    tableName,
+    oldFields,
+    newFields,
+    localized,
+    status,
+    wasStatus,
+    adapter,
+  } = args;
   const wasLocalized = args.wasLocalized;
   // Nothing to do when the single was and remains non-localized.
   if (!wasLocalized && !localized) return;
@@ -284,6 +300,7 @@ async function reconcileSingleCompanion(args: {
     newFields,
     companionExists,
     companionHasStatus,
+    wasStatus,
     // Which translatable columns the main table still carries. A disable must not re-add one that
     // is already there, and must still restore it: presence says the column exists, never that its
     // value is current, because every localized write went to the companion alone.
@@ -712,6 +729,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 // A brand-new single was never localized before, so a localized create is a
                 // create-only companion (no seed/drop) rather than an enable transition.
                 wasLocalized: false,
+                // A single being created has no prior state at all.
+                wasStatus: false,
                 status: b.status === true,
                 adapter,
               });
@@ -1298,6 +1317,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   localized: isLocalized,
                   wasLocalized,
                   status: hasStatus,
+                  // Already computed above from the persisted record, for the shared ALTER. The
+                  // disable restore needs the same fact.
+                  wasStatus,
                   adapter,
                 });
               } catch (companionErr) {
@@ -1346,10 +1368,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             const tableName = existing.tableName;
             const existingFields =
               existing.fields as unknown as FieldDefinition[];
+            // What the single is being saved AS, and what it currently IS. The disable restore
+            // needs the second: whether main carried `status` and the companion `_status` before
+            // this apply.
+            const wasStatus =
+              (existing as { status?: boolean }).status === true;
             const hasStatus =
-              b.status !== undefined
-                ? b.status === true
-                : (existing as { status?: boolean }).status === true;
+              b.status !== undefined ? b.status === true : wasStatus;
             await reconcileSingleCompanion({
               slug,
               tableName,
@@ -1358,6 +1383,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               localized: isLocalized,
               wasLocalized,
               status: hasStatus,
+              wasStatus,
               adapter,
             });
             // Re-register the main runtime table so it reflects the new column shape: a disable
@@ -1618,6 +1644,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // seeds/restores existing rows rather than only creating an empty companion.
           wasLocalized: (single as { localized?: boolean }).localized === true,
           status: single.status === true,
+          // Read from the same persisted record as `wasLocalized`, so both describe the state
+          // before this apply.
+          wasStatus: single.status === true,
           adapter,
         });
       } catch (err) {

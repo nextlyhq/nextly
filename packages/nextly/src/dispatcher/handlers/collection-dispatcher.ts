@@ -790,6 +790,11 @@ const COLLECTIONS_METHODS: Record<
             status: collection.status === true,
             wasLocalized,
             isLocalized,
+            // The PERSISTED status, which is what the disable restore needs: it decides whether
+            // main carried `status` and the companion `_status` before this apply. `collection`
+            // here is the registry record, so this is the prior state for the same reason
+            // `wasLocalized` above is.
+            wasStatus: collection.status === true,
             oldFields,
             newFields,
             companionExists,
