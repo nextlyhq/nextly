@@ -2431,6 +2431,23 @@ export class CollectionQueryService extends BaseService {
               expandOptions
             );
           }
+          // Snapshot serialization turned Date values into ISO strings, but an
+          // ordinary live read hands the afterRead hooks Drizzle-decoded Date
+          // objects, so a hook that calls date methods would fail only for a
+          // drafted entry. Rehydrate the declared date fields and the system
+          // timestamps to Date before the read pipeline runs below.
+          for (const dateKey of [
+            ...declaredFields.filter(f => f.type === "date").map(f => f.name),
+            "createdAt",
+            "updatedAt",
+          ]) {
+            if (typeof dateKey !== "string") continue;
+            const value = draftEntry[dateKey];
+            if (typeof value === "string") {
+              const parsed = new Date(value);
+              if (!Number.isNaN(parsed.getTime())) draftEntry[dateKey] = parsed;
+            }
+          }
           expandedEntry = draftEntry;
         }
       }

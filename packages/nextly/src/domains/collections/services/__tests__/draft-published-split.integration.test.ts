@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  date,
   defineCollection,
   defineFieldGroup,
   fieldGroup,
@@ -932,6 +933,47 @@ describe("draft/published split — promote on publish (integration)", () => {
     ).seo;
     expect(seo?.metaTitle).toBe("draft-mt");
     expect(seo?.metaDesc).toBe("pub-md");
+  });
+
+  it("rehydrates date fields to Date objects on a draft read", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), date({ name: "publishAt" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      publishAt: new Date("2026-01-01T00:00:00.000Z"),
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { publishAt: new Date("2026-06-15T00:00:00.000Z") }
+    );
+
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    // The snapshot stores the date as an ISO string; the overlay must rehydrate
+    // it to a Date, matching a live read (whose afterRead hooks receive Dates).
+    const publishAt = (draftRead.data as { publishAt?: unknown }).publishAt;
+    expect(publishAt instanceof Date).toBe(true);
+    expect((publishAt as Date).toISOString()).toBe("2026-06-15T00:00:00.000Z");
   });
 });
 
