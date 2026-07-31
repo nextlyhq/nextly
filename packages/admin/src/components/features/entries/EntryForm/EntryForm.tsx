@@ -32,7 +32,11 @@ import { cn } from "@admin/lib/utils";
 
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 
-import { effectiveEntryStatus, useHasPublicAddress } from "./entry-address";
+import {
+  effectiveEntryStatus,
+  isSlugPerLocale,
+  useHasPublicAddress,
+} from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
@@ -296,11 +300,15 @@ export function EntryForm({
   // links, feeds, sitemaps and search results, so re-deriving it from an edited title retires a URL
   // the author never chose to change and the old one 404s. Editing the slug directly still works;
   // this only stops the automatic rewrite.
+  // The auto-injected slug is shared across languages, so one address serves them all and any
+  // published language keeps it frozen. Only a slug the author opted into localizing belongs to
+  // the language in view.
   const hasPublicAddress = useHasPublicAddress({
     mode,
     hasStatus,
     entry,
     locale,
+    slugLocalized: isSlugPerLocale(slugField, collection.localized === true),
   });
 
   useAutoSlug({

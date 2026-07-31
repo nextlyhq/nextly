@@ -3,7 +3,12 @@
 // warning that lies in either direction is worse than none.
 
 import { act, render, screen } from "@testing-library/react";
-import { FormProvider, useForm } from "react-hook-form";
+import {
+  FormProvider,
+  useForm,
+  type FieldValues,
+  type UseFormReturn,
+} from "react-hook-form";
 import { describe, expect, it } from "vitest";
 
 import { PublicUrlChangeNotice } from "../PublicUrlChangeNotice";
@@ -17,9 +22,9 @@ function Harness({
 }: {
   active: boolean;
   defaultSlug: string;
-  onReady: (form: ReturnType<typeof useForm>) => void;
+  onReady: (form: UseFormReturn<FieldValues>) => void;
 }) {
-  const form = useForm({ defaultValues: { slug: defaultSlug } });
+  const form = useForm<FieldValues>({ defaultValues: { slug: defaultSlug } });
   onReady(form);
   return (
     <FormProvider {...form}>
@@ -29,7 +34,7 @@ function Harness({
 }
 
 function setup(active: boolean, defaultSlug = "original-post") {
-  let form!: ReturnType<typeof useForm>;
+  let form!: UseFormReturn<FieldValues>;
   render(
     <Harness
       active={active}

@@ -10,12 +10,48 @@
  * @module components/features/entries/EntryForm/entry-address
  */
 
+import { isFieldLocalized } from "nextly/config";
 import { useRef } from "react";
 
 import type { EntryData } from "./useEntryForm";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function stringProp(source: object, key: string): string | undefined {
+  return key in source &&
+    typeof (source as Record<string, unknown>)[key] === "string"
+    ? ((source as Record<string, unknown>)[key] as string)
+    : undefined;
+}
+
+/**
+ * Whether the slug field is per-locale rather than shared.
+ *
+ * `FieldConfig` is a union whose members do not all carry `localized`, so the classifier's minimal
+ * shape is rebuilt from whichever properties are actually present. Falling back to `text` matches
+ * how the injected slug is declared, and the classifier answers false for any non-localized
+ * collection regardless.
+ */
+export function isSlugPerLocale(
+  slugField: object | undefined,
+  collectionLocalized: boolean
+): boolean {
+  if (!slugField) return false;
+  const localized =
+    "localized" in slugField &&
+    typeof (slugField as Record<string, unknown>).localized === "boolean"
+      ? ((slugField as Record<string, unknown>).localized as boolean)
+      : undefined;
+  return isFieldLocalized(
+    {
+      type: stringProp(slugField, "type") ?? "text",
+      name: stringProp(slugField, "name") ?? "slug",
+      localized,
+    },
+    collectionLocalized
+  );
 }
 
 /**
@@ -46,6 +82,25 @@ export function effectiveEntryStatus(
   return typeof entry?.status === "string" ? entry.status : undefined;
 }
 
+/**
+ * Whether any language of this entry is published.
+ *
+ * The translation overview reports every configured locale, so this is answerable from the row the
+ * editor already has. Without that map — a non-localized collection, or a request that did not ask
+ * for it — the row's own status is the only lifecycle there is.
+ */
+export function anyLocalePublished(
+  entry: EntryData | null | undefined
+): boolean {
+  const translations = entry?._translations;
+  if (!isRecord(translations)) {
+    return entry?.status === "published";
+  }
+  return Object.values(translations).some(
+    meta => isRecord(meta) && meta.status === "published"
+  );
+}
+
 export interface PublicAddressArgs {
   /** Create forms have no address yet; only a persisted entry can have one. */
   mode: "create" | "edit";
@@ -54,6 +109,15 @@ export interface PublicAddressArgs {
   entry: EntryData | null | undefined;
   /** The language being edited, or undefined for the implicit default. */
   locale: string | undefined;
+  /**
+   * Whether the slug field itself is per-locale.
+   *
+   * The auto-injected slug is `localized: false`, so by default ONE slug serves every language's
+   * URL. Deciding a shared slug's fate from the language in view means editing a draft
+   * translation's title rewrites the address the published language is already being served at.
+   * A slug the author opted into localizing is genuinely per-language and follows that language.
+   */
+  slugLocalized: boolean;
 }
 
 /**
@@ -64,37 +128,41 @@ export interface PublicAddressArgs {
  * - **No Draft/Published lifecycle.** A collection without status has no unpublished state: saving
  *   an entry makes it readable. Asking whether such an entry is "published" can only ever answer
  *   no, which would leave every entry in those collections auto-rewriting its live URL.
- * - **Published in the language being edited**, per {@link effectiveEntryStatus}.
+ * - **Published where this slug is served.** For a slug the author localized, that is the language
+ *   in view. For the default shared slug it is ANY language, because they all resolve through the
+ *   one field.
  * - **Published at any point while this editor has been open.** Unpublishing returns the row to
  *   draft, but the links, feeds and search results that accumulated while it was live do not go
- *   away, so republishing under a title-derived slug would silently move it. Latched per entry and
- *   locale so opening a different document does not inherit the previous one's history.
+ *   away, so republishing under a title-derived slug would silently move it.
  *
- * The latch is bounded by the editing session because nothing durable records that an entry was
- * once published: there is no first-published timestamp on the row. An entry unpublished, reloaded,
- * and then retitled still tracks. Closing that needs a persisted marker in core rather than a
- * longer-lived ref here.
+ * The latch is a set of addresses rather than a single slot, and is never cleared. Keys carry the
+ * entry id, so one document cannot inherit another's history; keeping every key means switching
+ * language, or navigating away and back, does not discard what was already observed. A single slot
+ * loses the first address the moment a second one is looked at.
+ *
+ * The latch is still bounded by the editing session, because nothing durable records that an entry
+ * was once published: there is no first-published timestamp on the row. An entry unpublished,
+ * reloaded, and then retitled still tracks. Closing that needs a persisted marker in core rather
+ * than a longer-lived ref here.
  */
 export function useHasPublicAddress({
   mode,
   hasStatus,
   entry,
   locale,
+  slugLocalized,
 }: PublicAddressArgs): boolean {
-  const key = `${entry?.id ?? ""}:${locale ?? ""}`;
-  const seen = useRef<{ key: string; published: boolean }>({
-    key,
-    published: false,
-  });
-  if (seen.current.key !== key) {
-    seen.current = { key, published: false };
-  }
+  // A shared slug is one address for every language, so its key must not carry the locale.
+  const addressKey = `${entry?.id ?? ""}${slugLocalized ? `:${locale ?? ""}` : ""}`;
+  const seenRef = useRef<Set<string> | null>(null);
+  seenRef.current ??= new Set<string>();
 
   if (mode !== "edit" || !entry) return false;
   if (!hasStatus) return true;
 
-  if (effectiveEntryStatus(entry, locale) === "published") {
-    seen.current.published = true;
-  }
-  return seen.current.published;
+  const liveNow = slugLocalized
+    ? effectiveEntryStatus(entry, locale) === "published"
+    : anyLocalePublished(entry);
+  if (liveNow) seenRef.current.add(addressKey);
+  return seenRef.current.has(addressKey);
 }
