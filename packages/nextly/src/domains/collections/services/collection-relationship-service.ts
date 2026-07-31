@@ -6,7 +6,6 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
-import { NextlyError } from "../../../errors/nextly-error";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
@@ -2898,25 +2897,44 @@ export class CollectionRelationshipService extends BaseService {
     const cached = state.fields.get(collectionName);
     if (cached) return cached;
 
-    // A system entity has no dynamic-collection record and no registered field
-    // hooks, so there is nothing to look up and nothing to fail closed over.
-    // `getCollectionFields` already reads it this way; the redaction helper
-    // does not, and treating its `null` as untrustworthy turned an ordinary
-    // `author -> users` expansion into an internal error.
+    // A system entity has no dynamic-collection record and registers no field
+    // hooks, so there is nothing to look up.
     if (isSystemEntity(collectionName)) {
       state.fields.set(collectionName, []);
       return [];
     }
 
-    const fields = await this.getRedactionFields(collectionName);
-    if (fields === null) {
-      throw NextlyError.internal({
-        logContext: {
-          reason: "nested-field-hooks-schema-unavailable",
-          collection: collectionName,
-        },
-      });
+    let fields: FieldDefinition[] = [];
+    try {
+      const collection =
+        await this.collectionService.getCollection(collectionName);
+      const raw =
+        (
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields ?? (collection as Record<string, unknown>).fields;
+      fields = Array.isArray(raw) ? (raw as FieldDefinition[]) : [];
+    } catch (error: unknown) {
+      // A target whose schema will not load runs no hooks here, and the read
+      // continues.
+      //
+      // Failing the read instead was tried and reverted: a relationship can
+      // point at something that is not a registered collection at all -- `media`
+      // behind an upload field, `users` behind an author -- and the lookup
+      // reports that the same way it reports a genuine failure, as an untyped
+      // "not found". Refusing on it broke ordinary reads carrying an upload,
+      // which is a far larger hole than the one it closed.
+      //
+      // Telling the two apart needs the registry to answer "is this a
+      // collection" separately from "give me its fields"; until it can, this
+      // logs rather than guesses.
+      console.error(
+        `Nested field hooks skipped for "${collectionName}": its schema could not be read.`,
+        error
+      );
     }
+
     state.fields.set(collectionName, fields);
     return fields;
   }

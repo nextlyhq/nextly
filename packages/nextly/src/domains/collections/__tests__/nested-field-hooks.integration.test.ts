@@ -7,7 +7,13 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, group, relationship, text } from "../../../config";
+import {
+  defineCollection,
+  group,
+  relationship,
+  text,
+  upload,
+} from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -102,6 +108,9 @@ async function boot(): Promise<TestNextly> {
           // The blog template's shape: a relationship to the built-in users
           // entity, which has no dynamic-collection record.
           relationship({ name: "owner", relationTo: "users" }),
+          // An upload: its `media` target is a built-in too, but not one
+          // `isSystemEntity` knows about.
+          upload({ name: "cover", relationTo: "media" }),
           // A relationship inside a container. Expansion populates it, so the
           // walk has to descend through the container to reach it.
           group({
@@ -304,6 +313,29 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     const doc = {
       title: "owned",
       owner: { id: "u1", email: "owner@example.test" },
+    };
+
+    await expect(
+      service.applyNestedFieldHooks(doc, POSTS, { enforceFieldAccess: true })
+    ).resolves.toBeUndefined();
+  });
+  it("walks an upload target without failing the read", async () => {
+    // `media` is a built-in with no dynamic-collection record, so the schema
+    // lookup raises not-found. Reading that as an untrustworthy lookup refused
+    // any read carrying a populated upload -- and uploads are everywhere.
+    // Not-registered and lookup-failed are different answers.
+    const t = await boot();
+    const service = t.getService("relationshipService") as unknown as {
+      applyNestedFieldHooks: (
+        entry: Record<string, unknown>,
+        collection: string,
+        access: Record<string, unknown>
+      ) => Promise<void>;
+    };
+
+    const doc = {
+      title: "illustrated",
+      cover: { id: "m1", filename: "cover.png" },
     };
 
     await expect(
