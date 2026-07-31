@@ -53,6 +53,7 @@ import { schemaEventsTables } from "../../../../schemas/schema-events";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { versionsTables } from "../../../../schemas/versions";
 import { webhookTables } from "../../../../schemas/webhooks";
+import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../services/field-group-schema-service";
@@ -246,10 +247,12 @@ for (const entry of DIALECTS) {
     /**
      * The system tables, generated from the PRODUCTION Drizzle definitions.
      *
-     * Never hand-written. A copied `CREATE TABLE` drifts the moment a column is
-     * added, and it drifts silently — the first version of this suite omitted
-     * `nextly_meta.updated_at` and every dialect failed on a column the marker
-     * reads.
+     * The invariant: every column the migration reads is present here because
+     * production declares it, not because this file lists it. A copied
+     * `CREATE TABLE` holds only the columns it was written with, and it goes
+     * out of date silently — the migration reads `nextly_meta.updated_at`, and
+     * a stand-in missing it fails on every dialect for a reason that looks
+     * like a product defect.
      */
     async function createSystemTables(): Promise<void> {
       const kit = await getDrizzleKitForDialect(entry.dialect);
@@ -354,6 +357,28 @@ for (const entry of DIALECTS) {
       return rows[0];
     }
 
+    /**
+     * The columns a table actually carries, per the live catalog.
+     *
+     * Read through the same introspection the migration uses, so a dialect that
+     * reports a name differently reports it identically to both. Structural
+     * assertions on `listTables` cannot see a column, so a discriminator rename
+     * that was skipped — or reconciled as already satisfied when it was not —
+     * is invisible without this.
+     */
+    async function columnsOf(table: string): Promise<string[]> {
+      const snapshot = await introspectLiveSnapshot(
+        (adapter as unknown as { getDrizzle(): unknown }).getDrizzle(),
+        entry.dialect,
+        [table]
+      );
+      return (
+        snapshot.tables
+          .find(spec => spec.name === table)
+          ?.columns.map(column => column.name) ?? []
+      );
+    }
+
     async function migrate(direction: "up" | "down") {
       return runFieldGroupMigration({
         adapter: adapter as never,
@@ -403,9 +428,8 @@ for (const entry of DIALECTS) {
       // The parent comes from the collection generator production uses, not a
       // hand-written CREATE TABLE. It is only ever addressed as a
       // `_parent_table` VALUE here, so a minimal stand-in would function — and
-      // that is exactly how a fixture drifts from the storage it claims to
-      // represent. This suite already learned that lesson once: an invented
-      // system table omitted a column the marker reads.
+      // a fixture that functions while describing storage production does not
+      // create is how a suite certifies a shape that does not exist.
       for (const statement of splitStatements([
         collectionSchemaService.generateMigrationSQL(parentTable, [
           { name: "title", type: "text" },
@@ -413,9 +437,8 @@ for (const entry of DIALECTS) {
       ])) {
         await adapter.executeQuery(statement);
       }
-      // `slug` is NOT NULL on a real collection — the generator emits the system
-      // columns a hand-written stand-in omitted, which is the whole reason to
-      // use it.
+      // `slug` is NOT NULL on a real collection. The generator emits every
+      // system column the real table has, which is the whole reason to use it.
       await adapter.executeQuery(
         `INSERT INTO ${q(parentTable)} (${q("id")}, ${q("title")}, ${q("slug")})
          VALUES ('page-1', 'Page', 'page-1')`
@@ -430,7 +453,7 @@ for (const entry of DIALECTS) {
 
       // The outer instance hangs off the page; the inner one hangs off the
       // OUTER INSTANCE, addressing it by `comp_outer<tag>`. That second row is
-      // the one a rename used to strand.
+      // the one a rename strands when the pointer is not rewritten with it.
       await insertInstance({
         table: outerTable,
         id: "outer-1",
@@ -492,6 +515,16 @@ for (const entry of DIALECTS) {
       expect(names).toContain(outerMigrated);
       expect(names).toContain(innerMigrated);
       expect(names).not.toContain(outerTable);
+
+      // The discriminator is a separate step from its table's rename, and the
+      // plan can record it as already satisfied. Both halves are asserted on
+      // both tables: present under the migrated name AND gone under the legacy
+      // one, so a column added rather than renamed does not read as success.
+      for (const table of [outerMigrated, innerMigrated]) {
+        const columns = await columnsOf(table);
+        expect(columns).toContain(MIGRATION_TARGET.columnType);
+        expect(columns).not.toContain(STORAGE_FORMAT.columns.type);
+      }
     });
 
     it("reports a second run as already migrated", async () => {
@@ -513,6 +546,15 @@ for (const entry of DIALECTS) {
       expect(names).toContain(STORAGE_FORMAT.registryTable);
       expect(names).toContain(outerTable);
       expect(names).not.toContain(outerMigrated);
+
+      // The inverse of the up assertion. A rollback that restores the names
+      // while leaving the discriminator migrated is structurally successful and
+      // unreadable, which is the same failure shape as a stranded pointer.
+      for (const table of [outerTable, innerTable]) {
+        const columns = await columnsOf(table);
+        expect(columns).toContain(STORAGE_FORMAT.columns.type);
+        expect(columns).not.toContain(MIGRATION_TARGET.columnType);
+      }
 
       const restored = await resolveEmbedded({
         table: innerTable,
