@@ -213,6 +213,55 @@ describe("beforeChange runs after the validation gate", () => {
     expect(observedOriginal).toBe("BEFORE");
   });
 
+  it("lets a single supply a required value from beforeValidate", async () => {
+    // The migration path this change depends on. Moving `beforeChange` past the
+    // gate takes away a single's only pre-validation phase unless one is put
+    // back, so a handler that fills in a required field has somewhere to go --
+    // and the value it supplies is what gets validated.
+    const seen: Phases = { beforeValidate: 0, beforeChange: 0 };
+    let observed: unknown;
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: SETTINGS,
+          fields: [
+            text({ name: "siteName" }),
+            text({ name: "contact", required: true }),
+          ],
+          hooks: {
+            beforeValidate: [
+              ctx => {
+                seen.beforeValidate++;
+                return {
+                  ...(ctx.data as Record<string, unknown>),
+                  contact: "supplied@example.test",
+                };
+              },
+            ],
+            beforeChange: [
+              ctx => {
+                seen.beforeChange++;
+                observed = (ctx.data as Record<string, unknown>).contact;
+                return ctx.data;
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    // Without `contact`, so only the handler can get this past the gate.
+    await current.nextly.updateSingle({
+      slug: SETTINGS,
+      data: { siteName: "Nextly" },
+      overrideAccess: true,
+    });
+
+    expect(seen.beforeValidate).toBe(1);
+    expect(seen.beforeChange).toBe(1);
+    expect(observed).toBe("supplied@example.test");
+  });
+
   it("does not run on a single whose update fails validation", async () => {
     // Singles register through their own mapping and execute on their own
     // write path, so the collection fix does not cover them by construction.

@@ -22,6 +22,7 @@ describe("registerSingleHooks", () => {
         hooks: {
           beforeRead: [noop],
           afterRead: [noop],
+          beforeValidate: [noop],
           beforeChange: [noop],
           afterChange: [noop],
         },
@@ -41,10 +42,12 @@ describe("registerSingleHooks", () => {
     // Registering it as `beforeUpdate` put it on the pre-validation queue,
     // which runs before the rules its contract says it follows.
     expect(registry.getHookCount("beforeChange", ns)).toBe(1);
-    expect(registry.getHookCount("beforeUpdate", ns)).toBe(0);
+    // beforeValidate takes the pre-validation queue beforeChange vacated, so a
+    // single still has a phase that runs before the gate.
+    expect(registry.getHookCount("beforeUpdate", ns)).toBe(1);
     expect(registry.getHookCount("beforeCreate", ns)).toBe(0);
 
-    expect(result.totalHooks).toBe(4);
+    expect(result.totalHooks).toBe(5);
     expect(result.singles).toEqual(["branding"]);
   });
 

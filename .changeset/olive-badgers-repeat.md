@@ -37,12 +37,18 @@ gate on every write path: collection create and update, both of their
 transactional forms, the transactional single paths, and the single update
 service.
 
+Singles gain `beforeValidate`, which they did not have. Moving `beforeChange`
+past the gate would otherwise leave a single with no hook running before
+validation at all, so the phase takes the pre-validation execution point
+`beforeChange` vacated. A single and a collection now agree on both phases.
+
 This changes when existing handlers run. A `beforeChange` that SUPPLIES a value
 the schema requires now runs too late to satisfy it, because validation has
-already been applied; move that work to `beforeValidate`, which still runs
-before the gate. This includes the Schema Builder's pre-built "Auto-generate
-Slug" hook when it targets a required field of your own. The framework's own
-`slug`/`title` derivation is unaffected: it does not run as a hook.
+already been applied; move that work to `beforeValidate`, which runs before the
+gate on collections and singles alike. This includes the Schema Builder's
+pre-built "Auto-generate Slug" hook when it targets a required field of your
+own. The framework's own `slug`/`title` derivation is unaffected: it does not
+run as a hook.
 
 What a `beforeChange` handler returns is written without being re-validated.
 That is the point of the phase, and it is now true rather than accidental.
