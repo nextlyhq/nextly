@@ -1218,10 +1218,16 @@ async function initializeSchemaRegistry(
     // registry last, and a table an author named itself keeps its own name
     // while its column still moves, so the two generations can be mixed across
     // the very set being registered here.
+    // Contained for the same reason the registry resolution above is: a failure
+    // here would reach `initializeSchemaRegistry`'s outer catch, which returns
+    // `undefined` and skips config-table registration entirely — discarding a
+    // boot that was otherwise fine over one metadata probe. An empty map sends
+    // every table to the documented default below, which is the spelling this
+    // release's DDL writes.
     const fieldGroupTypeColumns = await resolveTypeColumns(
       adapter,
       loadedFieldGroups.map(entry => entry.tableName)
-    );
+    ).catch(() => new Map<string, string>());
     for (const { tableName, fields, localized } of loadedFieldGroups) {
       const { FieldGroupSchemaService } = await import(
         "../services/field-groups/field-group-schema-service"

@@ -692,12 +692,16 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       });
     }
 
-    // Resolved once and reused by the failure log below: a message naming a
-    // table this code did not read sends an operator to the wrong place, and
-    // the two names differ on exactly the databases where a failure is hardest
-    // to diagnose.
-    const registryTable = await this.resolveRegistryTableName();
+    // Declared out here so the failure log can name it, ASSIGNED inside the
+    // try so a failed resolution is contained like any other read failure.
+    // This scan is best effort — it informs a reference check, and a catalog
+    // hiccup must not turn that into a hard failure — so the resolution has to
+    // sit inside the same boundary as the read it feeds. Its initial value is
+    // the name this release's DDL creates, which is what the message should say
+    // when resolution itself is what failed.
+    let registryTable: string = STORAGE_FORMAT.registryTable;
     try {
+      registryTable = await this.resolveRegistryTableName();
       const components = await this.adapter.select<Record<string, unknown>>(
         registryTable,
         { columns: ["slug", "fields"] }
