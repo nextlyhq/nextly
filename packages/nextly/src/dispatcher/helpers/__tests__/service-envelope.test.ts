@@ -95,6 +95,17 @@ describe("unwrapServiceResult rebuilds from the canonical code", () => {
     ["TOKEN_EXPIRED", 401],
     ["RATE_LIMITED", 429],
     ["SERVICE_UNAVAILABLE", 503],
+    // Codes an enumeration would have to remember. There are roughly thirty,
+    // so the rebuild reads the envelope instead of listing them.
+    ["PAYLOAD_TOO_LARGE", 413],
+    ["EXTERNAL_REQUEST_FAILED", 502],
+    ["UNSUPPORTED_MEDIA_TYPE", 415],
+    ["BUILDER_DISABLED", 403],
+    // Distinct from INTERNAL_ERROR even though they share a status: an
+    // operator reading the log needs to know which one it was.
+    ["DATABASE_ERROR", 500],
+    // A plugin's own code, outside the canonical enum entirely.
+    ["ACME_QUOTA_EXHAUSTED", 402],
   ])("keeps %s and its status instead of collapsing to 500", (code, status) => {
     const err = unwrapError({
       success: false,
@@ -147,14 +158,47 @@ describe("unwrapServiceResult rebuilds from the canonical code", () => {
     expect(err.code).toBe("NOT_FOUND");
   });
 
-  it("falls back to the status for a code it does not recognize", () => {
-    // An unknown code must not throw its way out of the boundary; the status
-    // is still a usable answer.
+  it("keeps a code it has never seen rather than remapping it", () => {
+    // A plugin declares its own codes, and the canonical enum is explicitly not
+    // a closed set. Rewriting one to the nearest built-in would tell a caller
+    // its request was forbidden when the plugin said something else entirely.
     const err = unwrapError({
       success: false,
       statusCode: 403,
-      code: "SOMETHING_NEW",
+      code: "ACME_TENANT_SUSPENDED",
+      message: "This workspace is suspended.",
     });
-    expect(err.code).toBe("FORBIDDEN");
+    expect(err.code).toBe("ACME_TENANT_SUSPENDED");
+    expect(err.statusCode).toBe(403);
+  });
+
+  it("carries the rate limit's retry interval so the route can send Retry-After", () => {
+    // The interval lives in `publicData`, not in the code, so an error rebuilt
+    // from its code alone arrives with the right status and no backoff. The
+    // route only emits `Retry-After` when the value is there, so the client is
+    // told to slow down without being told by how much.
+    const err = unwrapError({
+      success: false,
+      statusCode: 429,
+      code: "RATE_LIMITED",
+      message: "Too many requests.",
+      publicData: { retryAfterSeconds: 30 },
+    });
+
+    expect(err.code).toBe("RATE_LIMITED");
+    expect(err.publicData).toEqual({ retryAfterSeconds: 30 });
+  });
+
+  it("round-trips the error's own public message", () => {
+    // The envelope's message IS the original `publicMessage`, so replacing it
+    // with generic text loses what the thrower chose to say.
+    const err = unwrapError({
+      success: false,
+      statusCode: 413,
+      code: "PAYLOAD_TOO_LARGE",
+      message: "The upload exceeds the 10 MB limit.",
+    });
+
+    expect(err.publicMessage).toBe("The upload exceeds the 10 MB limit.");
   });
 });

@@ -35,6 +35,7 @@
 
 import type { PaginationMeta } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
+import type { PublicData } from "../../errors/public-data";
 
 /**
  * Translate the service-result `{ total, page, limit, totalPages }`
@@ -129,7 +130,7 @@ export function offsetPaginationToMeta(args: {
  * no driver text, no identifier echo, no value leaking).
  *
  * Reconstruction is keyed on the envelope's canonical `code` when it carries
- * one, because that identifies the error exactly; see {@link ERROR_BY_CODE}.
+ * one, because the envelope carries everything an exact rebuild needs.
  * The status mapping below is the fallback for envelopes built by hand that
  * carry no code:
  *   400: NextlyError.validation (with publicData.errors[])
@@ -181,42 +182,6 @@ function validationFromEnvelope(
   });
 }
 
-/**
- * Rebuild a NextlyError from its canonical code.
- *
- * The code is the only key that identifies an error exactly. Status cannot:
- * three codes share 401, two share 409, two share 500, and most statuses have
- * no branch at all, so dispatching on status alone sends `rateLimited` (429),
- * `serviceUnavailable` (503) and every 401 to the caller as a generic 500.
- *
- * A new code round-trips by adding a row here rather than by editing control
- * flow, and one that is missing falls through to the status mapping instead of
- * failing — so an envelope built by hand, carrying no code, behaves exactly as
- * it did before.
- *
- * `VALIDATION_ERROR` and `INVALID_INPUT` are absent on purpose: they carry more
- * than a log context (per-field issues and a public message respectively) and
- * are rebuilt explicitly below.
- */
-const ERROR_BY_CODE: Record<
-  string,
-  (logContext: Record<string, unknown>) => NextlyError
-> = {
-  AUTH_INVALID_CREDENTIALS: logContext =>
-    NextlyError.invalidCredentials({ logContext }),
-  AUTH_REQUIRED: logContext => NextlyError.authRequired({ logContext }),
-  TOKEN_EXPIRED: logContext => NextlyError.tokenExpired({ logContext }),
-  NOT_FOUND: logContext => NextlyError.notFound({ logContext }),
-  FORBIDDEN: logContext => NextlyError.forbidden({ logContext }),
-  CONFLICT: logContext => NextlyError.conflict({ logContext }),
-  DUPLICATE: logContext => NextlyError.duplicate({ logContext }),
-  RATE_LIMITED: logContext => NextlyError.rateLimited({ logContext }),
-  SERVICE_UNAVAILABLE: logContext =>
-    NextlyError.serviceUnavailable({ logContext }),
-  DATABASE_ERROR: logContext => NextlyError.internal({ logContext }),
-  INTERNAL_ERROR: logContext => NextlyError.internal({ logContext }),
-};
-
 export function unwrapServiceResult<T>(
   result: {
     success: boolean;
@@ -225,6 +190,9 @@ export function unwrapServiceResult<T>(
     // NextlyError; disambiguates statuses shared by several codes (409).
     code?: string;
     message?: string;
+    // The error's own public data, so a rebuild keeps meaning that lives there
+    // rather than in the code -- a rate limit's retry interval, for instance.
+    publicData?: unknown;
     data?: unknown;
     // Canonical {path, code} from collection results; legacy {field} from
     // SingleResult. Both normalize below.
@@ -243,22 +211,30 @@ export function unwrapServiceResult<T>(
   const status = result.statusCode ?? 500;
   const ctx = { legacyMessage: result.message, ...logContext };
 
-  // `invalidInput`'s message IS its public message, so it round-trips from the
-  // envelope rather than being replaced by the generic validation text.
-  if (result.code === "INVALID_INPUT" && result.message) {
-    throw NextlyError.invalidInput({
-      message: result.message,
+  // Rebuilt from the envelope itself, not from a table of known codes. There
+  // are roughly thirty canonical codes and plugins may define their own, so any
+  // enumeration here would silently send whatever it missed to the caller as a
+  // 500 -- which is the defect this fixes, reintroduced one code at a time. The
+  // envelope already carries everything an exact rebuild needs.
+  if (result.code) {
+    // Validation keeps its own path: it normalises the legacy `{field}` shape
+    // SingleResult still emits into the canonical `{path}` one the admin maps
+    // onto form fields.
+    if (result.code === "VALIDATION_ERROR") {
+      throw validationFromEnvelope(result.errors, ctx);
+    }
+    throw new NextlyError({
+      code: result.code,
+      // The envelope's message IS the original's `publicMessage` -- that is what
+      // `errorToServiceResult` copied -- so this round-trips rather than
+      // replacing it with generic text.
+      publicMessage: result.message ?? "The request could not be completed.",
+      // Carried explicitly: a plugin code has no entry in the status enum, and
+      // the envelope's status is the one the thrower chose.
+      statusCode: status,
+      publicData: result.publicData as PublicData | undefined,
       logContext: ctx,
     });
-  }
-  // Rebuilt from the code wherever the code says so, not only where the status
-  // happens to agree.
-  if (result.code === "VALIDATION_ERROR") {
-    throw validationFromEnvelope(result.errors, ctx);
-  }
-  if (result.code) {
-    const rebuild = ERROR_BY_CODE[result.code];
-    if (rebuild) throw rebuild(ctx);
   }
 
   if (status === 404) throw NextlyError.notFound({ logContext: ctx });
