@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+import type { SideEffectHookFailure } from "../hook-registry";
 import { HookRegistry, resetHookRegistry } from "../hook-registry";
 import type { HookContext, HookHandler, HookType } from "../types";
 import { NextlyError } from "../../errors/nextly-error";
@@ -620,13 +621,19 @@ describe("HookRegistry", () => {
 
       // The hook type and collection are still recorded, in log context where
       // operators see them, rather than in a message returned to the caller.
-      const error = await registry
-        .execute("afterUpdate", context)
-        .catch((e: unknown) => e);
-      expect(NextlyError.is(error)).toBe(true);
-      expect(
-        (error as { logContext?: Record<string, unknown> }).logContext
-      ).toMatchObject({ hookType: "afterUpdate", collection: "users" });
+      // A side-effect phase reports the failure instead of raising it, because
+      // the write it follows has already committed.
+      const failures: SideEffectHookFailure[] = [];
+      await registry.execute("afterUpdate", context, {
+        onSideEffectError: failure => failures.push(failure),
+      });
+
+      expect(failures).toHaveLength(1);
+      expect(NextlyError.is(failures[0].error)).toBe(true);
+      expect(failures[0].error.logContext).toMatchObject({
+        hookType: "afterUpdate",
+        collection: "users",
+      });
     });
   });
 
