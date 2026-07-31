@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { collectDeclarations } from "../declarations";
 import type { PluginDefinition } from "../plugin-context";
 
-import { PAGE_BUILDER_PLUGIN } from "./block-manifest";
+import { isPageBuilderActive, PAGE_BUILDER_PLUGIN } from "./block-manifest";
 
 /** Filename of the generated admin component import map. */
 export const COMPONENT_IMPORT_MAP_FILENAME =
@@ -83,6 +83,11 @@ export function collectBlockEditorComponentPaths(
   plugins: readonly PluginDefinition[]
 ): string[] {
   const paths: string[] = [];
+  // No page builder, no registry for these blocks to land in, so their editor
+  // components would be imported eagerly for a feature that cannot run. The
+  // manifest applies the same rule; disagreeing would describe two different
+  // apps from one config.
+  if (!isPageBuilderActive(plugins)) return paths;
   for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
     const value = declaration.value;
     if (typeof value !== "object" || value === null || Array.isArray(value)) {

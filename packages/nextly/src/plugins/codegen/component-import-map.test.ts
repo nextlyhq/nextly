@@ -96,6 +96,16 @@ describe("buildImportMapArtifact", () => {
   });
 });
 
+/** The page builder itself, without which no block can register. */
+function pageBuilder(enabled?: boolean): PluginDefinition {
+  return {
+    name: "@nextlyhq/plugin-page-builder",
+    version: "1.0.0",
+    nextly: "*",
+    enabled,
+  } as unknown as PluginDefinition;
+}
+
 /** A plugin declaring blocks for the page builder. */
 function declaringBlocks(
   blocks: unknown[],
@@ -115,6 +125,7 @@ function declaringBlocks(
 describe("block editor components", () => {
   it("collects the editor component a declared block names", () => {
     const paths = collectBlockEditorComponentPaths([
+      pageBuilder(),
       declaringBlocks([
         { name: "acme/hero", editor: { component: "@acme/blocks/admin#Hero" } },
       ]),
@@ -127,6 +138,7 @@ describe("block editor components", () => {
     // The point of the seam: the editor bundle loads a contributed block's
     // inspector with no hand-written import, exactly as admin pages already do.
     const code = buildComponentImportMap([
+      pageBuilder(),
       declaringBlocks([
         { name: "acme/hero", editor: { component: "@acme/blocks/admin#Hero" } },
       ]),
@@ -141,6 +153,7 @@ describe("block editor components", () => {
     // a contributed inspector unloadable.
     const artifact = buildImportMapArtifact(
       [
+        pageBuilder(),
         declaringBlocks([
           {
             name: "acme/hero",
@@ -174,6 +187,7 @@ describe("block editor components", () => {
     // Most blocks render from their prop schema and need no custom component.
     expect(
       collectBlockEditorComponentPaths([
+        pageBuilder(),
         declaringBlocks([{ name: "acme/plain", version: 1 }]),
       ])
     ).toEqual([]);
@@ -185,6 +199,37 @@ describe("block editor components", () => {
     expect(
       collectBlockEditorComponentPaths([
         declaringBlocks("nope" as unknown as unknown[]),
+      ])
+    ).toEqual([]);
+  });
+});
+
+describe("block editor components without an active page builder", () => {
+  it("collects nothing when the page builder is absent", () => {
+    // No page builder, no registry for the blocks to land in, so importing
+    // their editor components eagerly would load a feature that cannot run.
+    expect(
+      collectBlockEditorComponentPaths([
+        declaringBlocks([
+          {
+            name: "acme/hero",
+            editor: { component: "@acme/blocks/admin#Hero" },
+          },
+        ]),
+      ])
+    ).toEqual([]);
+  });
+
+  it("collects nothing when the page builder is disabled", () => {
+    expect(
+      collectBlockEditorComponentPaths([
+        pageBuilder(false),
+        declaringBlocks([
+          {
+            name: "acme/hero",
+            editor: { component: "@acme/blocks/admin#Hero" },
+          },
+        ]),
       ])
     ).toEqual([]);
   });

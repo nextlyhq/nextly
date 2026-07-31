@@ -171,6 +171,12 @@ function invalidDeclaration(message: string): NextlyError {
 }
 
 /** Whether the plugin these declarations are addressed to will actually run. */
+export function isPageBuilderActive(
+  plugins: readonly PluginDefinition[]
+): boolean {
+  return isConsumerActive(plugins, PAGE_BUILDER_PLUGIN);
+}
+
 function isConsumerActive(
   plugins: readonly PluginDefinition[],
   consumer: string

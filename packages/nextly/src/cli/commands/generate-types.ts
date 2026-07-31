@@ -47,7 +47,10 @@ import {
   buildBlockManifestArtifact,
 } from "../../plugins/codegen/block-manifest";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
-import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
+import {
+  buildImportMapArtifact,
+  COMPONENT_IMPORT_MAP_FILENAME,
+} from "../../plugins/codegen/component-import-map";
 // The option names the field identity would overwrite, refused here because a
 // code-defined user field never passes through the manifest schema.
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
@@ -344,6 +347,18 @@ async function generateTypes(
     await writeFile(importMapPath, importMap.code, "utf-8");
     result.componentImportMapFile = importMapPath;
     logger.debug(`Written plugin admin import map to: ${importMapPath}`);
+  } else {
+    // Nothing to register, which has to be expressed by removing any previous
+    // map. This one is worse than a stale data file: the generated module is
+    // IMPORTED by the app, so leaving it behind keeps importing a package that
+    // is no longer installed and breaks the next build.
+    await rm(
+      resolve(
+        cwd,
+        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
+      ),
+      { force: true }
+    );
   }
 
   // Generate Zod schemas if enabled
