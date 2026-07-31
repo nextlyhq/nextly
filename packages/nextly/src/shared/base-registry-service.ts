@@ -138,8 +138,11 @@ export abstract class BaseRegistryService<
    * below goes through this, and the default answers with the declared name, so
    * a registry whose table never moves costs nothing and reads identically.
    */
-  protected async resolveRegistryTableName(): Promise<string> {
-    return this.registryTableName;
+  protected resolveRegistryTableName(): Promise<string> {
+    // Not `async`: the default has nothing to await, and a registry whose table
+    // never moves should not pay a microtask per query for a constant. The
+    // field-group override is `async` because its answer comes from the catalog.
+    return Promise.resolve(this.registryTableName);
   }
 
   /** Human-readable resource type for error messages (e.g., "Collection"). */
