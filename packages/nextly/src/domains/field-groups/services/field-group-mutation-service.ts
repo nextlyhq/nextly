@@ -400,6 +400,22 @@ export class FieldGroupMutationService extends BaseService {
     const resolved = new Set<string>();
     for (const field of params.fields) {
       if (!isFieldGroupField(field)) continue;
+
+      // Warming comes FIRST, before the payload is consulted at all. A snapshot reads every
+      // component the entity holds, not the ones this save happens to mention, and it reads them
+      // through the caller's transaction where readiness can only be read and never resolved. A
+      // field omitted from the payload entirely is the commonest way to reach that state, so
+      // skipping it here would leave its components with no verdict and their translated values
+      // missing from the durable record.
+      //
+      // Warming is not refusing. The refusal below still walks only what the payload writes,
+      // because a permitted type whose companion is missing must not fail a save that never
+      // mentions it.
+      for (const permitted of field.components ?? [field.component]) {
+        if (typeof permitted !== "string") continue;
+        await this.resolveComponentReadiness(permitted);
+      }
+
       const value = params.data[field.name];
       if (value === undefined || value === null) continue;
       // Mirror `saveComponentData`'s dispatch exactly, including its precedence: a field
@@ -423,19 +439,6 @@ export class FieldGroupMutationService extends BaseService {
         }
       } else if (field.component) {
         slugs.add(field.component);
-      }
-      // Every type this field PERMITS, not only the ones this payload writes, has its readiness
-      // resolved. A version or webhook snapshot reads every component the entity holds through the
-      // caller's transaction, where readiness can only be read and never resolved — so a component
-      // left out of this payload would have no verdict there and its localized values would be
-      // silently omitted from the durable record.
-      //
-      // Resolving is not refusing. The refusal below still walks only what the payload writes,
-      // because a permitted type whose companion is missing must not fail a save that never
-      // mentions it.
-      for (const permitted of field.components ?? [field.component]) {
-        if (typeof permitted !== "string" || slugs.has(permitted)) continue;
-        await this.resolveComponentReadiness(permitted);
       }
       for (const slug of slugs) {
         if (resolved.has(slug)) continue;

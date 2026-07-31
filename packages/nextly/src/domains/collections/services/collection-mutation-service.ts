@@ -2853,6 +2853,21 @@ export class CollectionMutationService extends BaseService {
       // Defer a document-dependent (owner-only/custom) publish rule to the
       // under-lock re-check so it is judged against the row-locked document, not
       // the stale pre-transaction `existingEntry` — a custom rule keyed on a
+      // Readiness for this collection AND for every field-group type it can hold, resolved on the
+      // pool before the transaction opens. The snapshot built inside it reads all of them, and
+      // there it can only READ a verdict — resolving issues a query, and a query against a missing
+      // relation aborts the whole transaction on PostgreSQL. A publish is a plausible first act on
+      // a fresh worker, and an unresolved verdict reads as unusable, so every translated value
+      // would be missing from the durable event.
+      await this.warmCompanionReadiness(params.collectionName);
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: (publishCollection as { fields?: FieldConfig[] }).fields ?? [],
+        // Nothing is being written, so nothing is judged: this call is here purely for the
+        // verdicts it leaves behind.
+        data: {},
+        locale: undefined,
+      });
+
       // mutable field (e.g. an approval flag a concurrent writer clears) must
       // decide on the committed value this publish will overwrite.
       const publishStoredRules = this.accessService.getAccessRules(
