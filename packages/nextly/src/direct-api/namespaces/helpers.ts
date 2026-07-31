@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import type { RequestContext } from "../../shared/types/index";
 import type {
@@ -73,6 +74,10 @@ export interface ServiceResultLike {
    */
   code?: string;
   message: string;
+  /** Translation key for the public message, when the thrower set one. */
+  messageKey?: string;
+  /** The error's own public data -- a rate limit's retry interval, and such. */
+  publicData?: unknown;
   data: unknown;
   errors?: Array<{ path: string; code: string; message: string }>;
 }
@@ -81,22 +86,20 @@ export interface ServiceResultLike {
  * Convert a failed service-layer result into a `NextlyError`.
  */
 export function createErrorFromResult(result: ServiceResultLike): NextlyError {
-  // Per-field validation issues survive into the Direct API error so
-  // server-side callers (and agents) see exactly which fields failed.
-  if (result.statusCode === 400 && result.errors?.length) {
-    return NextlyError.validation({ errors: result.errors });
-  }
-  return new NextlyError({
-    // The envelope's own code wins: the status-derived fallback can only
-    // guess the primary code for a status (409 always guesses CONFLICT).
-    code: result.code ?? statusCodeToErrorCode(result.statusCode),
-    publicMessage: result.message,
-    statusCode: result.statusCode,
-    logContext:
-      result.data !== undefined && result.data !== null
-        ? { resultData: result.data }
-        : undefined,
-  });
+  // The shared converter, so a Direct API caller and a REST caller are handed
+  // the same error for the same failure. Its code-keyed rebuild carries the
+  // message key and public data that this boundary used to drop.
+  return errorFromServiceEnvelope(
+    {
+      ...result,
+      // A code-less envelope still needs the status-derived guess this boundary
+      // has always made, rather than falling through to a generic internal.
+      code: result.code ?? statusCodeToErrorCode(result.statusCode),
+    },
+    result.data !== undefined && result.data !== null
+      ? { resultData: result.data }
+      : {}
+  );
 }
 
 /**

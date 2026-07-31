@@ -202,3 +202,19 @@ describe("unwrapServiceResult rebuilds from the canonical code", () => {
     expect(err.publicMessage).toBe("The upload exceeds the 10 MB limit.");
   });
 });
+
+describe("unwrapServiceResult carries the remaining public fields", () => {
+  it("keeps the message key a localized error selected", () => {
+    // A NextlyError has five public response fields. Dropping this one leaves a
+    // client with nothing but the default string to render.
+    const err = unwrapError({
+      success: false,
+      statusCode: 429,
+      code: "RATE_LIMITED",
+      message: "Too many requests.",
+      messageKey: "errors.rateLimited",
+    });
+
+    expect(err.messageKey).toBe("errors.rateLimited");
+  });
+});

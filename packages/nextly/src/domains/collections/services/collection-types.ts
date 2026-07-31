@@ -34,6 +34,8 @@ export interface CollectionServiceResult<T = unknown> {
    * route needs to emit `Retry-After`.
    */
   publicData?: unknown;
+  /** Translation key for the public message, when the thrower set one. */
+  messageKey?: string;
   /**
    * Per-field validation issues (failure only). Carried through the
    * result shape so the dispatcher and Direct API can rebuild the

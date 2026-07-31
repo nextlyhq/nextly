@@ -237,6 +237,11 @@ function errorToServiceResult<T = unknown>(
       // The canonical code rides along so boundary translators can rebuild
       // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
       code: error.code,
+      // A localized error selects its message by key, so dropping it leaves a
+      // client unable to render anything but the default string.
+      ...(error.messageKey !== undefined
+        ? { messageKey: error.messageKey }
+        : {}),
       // Public by definition -- it is what `toResponseJSON` puts on the wire --
       // so it rides the envelope and the boundary can rebuild an error whose
       // meaning lives in it rather than in its code.

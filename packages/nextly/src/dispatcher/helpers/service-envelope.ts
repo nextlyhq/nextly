@@ -34,8 +34,7 @@
  */
 
 import type { PaginationMeta } from "../../api/response-shapes";
-import { NextlyError } from "../../errors/nextly-error";
-import type { PublicData } from "../../errors/public-data";
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 
 /**
  * Translate the service-result `{ total, page, limit, totalPages }`
@@ -150,38 +149,6 @@ export function offsetPaginationToMeta(args: {
  * entry, and singles services never return null on success), so the
  * cast is safe.
  */
-/**
- * Build the validation error from an envelope's per-field issues.
- *
- * Per-field issues survive into the wire envelope so the admin can map them
- * onto form fields; the generic single-issue shape is only the fallback for
- * detail-less 400s. Shared by the code-keyed and status-keyed paths so the two
- * cannot drift into producing different shapes for the same failure.
- */
-function validationFromEnvelope(
-  errors:
-    | Array<{ path?: string; field?: string; code?: string; message: string }>
-    | undefined,
-  logContext: Record<string, unknown>
-): NextlyError {
-  return NextlyError.validation({
-    errors: errors?.length
-      ? errors.map(e => ({
-          path: e.path ?? e.field ?? "",
-          code: e.code ?? "INVALID",
-          message: e.message,
-        }))
-      : [
-          {
-            path: "request",
-            code: "INVALID",
-            message: "The submitted data is invalid.",
-          },
-        ],
-    logContext,
-  });
-}
-
 export function unwrapServiceResult<T>(
   result: {
     success: boolean;
@@ -190,6 +157,8 @@ export function unwrapServiceResult<T>(
     // NextlyError; disambiguates statuses shared by several codes (409).
     code?: string;
     message?: string;
+    /** Translation key for the public message. */
+    messageKey?: string;
     // The error's own public data, so a rebuild keeps meaning that lives there
     // rather than in the code -- a rate limit's retry interval, for instance.
     publicData?: unknown;
@@ -208,50 +177,6 @@ export function unwrapServiceResult<T>(
   if (result.success) {
     return result.data as T;
   }
-  const status = result.statusCode ?? 500;
   const ctx = { legacyMessage: result.message, ...logContext };
-
-  // Rebuilt from the envelope itself, not from a table of known codes. There
-  // are roughly thirty canonical codes and plugins may define their own, so any
-  // enumeration here would silently send whatever it missed to the caller as a
-  // 500 -- which is the defect this fixes, reintroduced one code at a time. The
-  // envelope already carries everything an exact rebuild needs.
-  if (result.code) {
-    // Validation keeps its own path: it normalises the legacy `{field}` shape
-    // SingleResult still emits into the canonical `{path}` one the admin maps
-    // onto form fields.
-    if (result.code === "VALIDATION_ERROR") {
-      throw validationFromEnvelope(result.errors, ctx);
-    }
-    throw new NextlyError({
-      code: result.code,
-      // The envelope's message IS the original's `publicMessage` -- that is what
-      // `errorToServiceResult` copied -- so this round-trips rather than
-      // replacing it with generic text.
-      publicMessage: result.message ?? "The request could not be completed.",
-      // Carried explicitly: a plugin code has no entry in the status enum, and
-      // the envelope's status is the one the thrower chose.
-      statusCode: status,
-      publicData: result.publicData as PublicData | undefined,
-      logContext: ctx,
-    });
-  }
-
-  if (status === 404) throw NextlyError.notFound({ logContext: ctx });
-  if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
-  if (status === 409) {
-    // 409 is shared by two distinct failures: a unique-constraint duplicate
-    // ("Resource already exists.") and an optimistic-concurrency conflict
-    // ("The resource has changed..."). Only the envelope's code can tell
-    // them apart; without one, staleness is the safer default because it
-    // tells the user to refresh rather than implying the write is invalid.
-    if (result.code === "DUPLICATE") {
-      throw NextlyError.duplicate({ logContext: ctx });
-    }
-    throw NextlyError.conflict({ logContext: ctx });
-  }
-  if (status === 400) {
-    throw validationFromEnvelope(result.errors, ctx);
-  }
-  throw NextlyError.internal({ logContext: ctx });
+  throw errorFromServiceEnvelope(result, ctx);
 }
