@@ -1042,4 +1042,52 @@ describe("draft/published split — schema and component eligibility (integratio
     // not lost by a rejected publish.
     expect(await workingDraftCount(id)).toBe(1);
   });
+
+  it("invalidates a stale working draft when drafts are turned off", async () => {
+    const entries = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Store a working draft while the split is enabled.
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    expect(await workingDraftCount(id)).toBe(1);
+    await handle!.destroy();
+    handle = undefined;
+
+    // Re-open with drafts turned off: a status-less edit writes the live row
+    // directly and must invalidate the now-unpromotable sidecar so re-enabling
+    // drafts later cannot resurrect it over the intervening live edits.
+    const reopened = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    const res = await reopened.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "live-edit" }
+    );
+    expect(res.success).toBe(true);
+
+    const [live] = await handle!.adapter.select<LiveRow>(TABLE);
+    expect(live.title).toBe("live-edit");
+    expect(await workingDraftCount(id)).toBe(0);
+  });
 });

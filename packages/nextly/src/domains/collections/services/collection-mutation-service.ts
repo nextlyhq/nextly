@@ -5476,6 +5476,24 @@ export class CollectionMutationService extends BaseService {
                 );
               }
 
+              // Invalidate a stale working draft when the split no longer applies
+              // to a status collection: drafts were turned off, or the collection
+              // became localized / password-bearing / gained an ineligible
+              // component after a draft was written. This write went straight to
+              // the live row, so a retained sidecar can never be promoted and,
+              // were the split re-enabled, would shadow the edits made meanwhile.
+              // A no-op when no sidecar exists.
+              if (!splitEnabled && collectionHasStatus) {
+                await new VersionsRepository(tx).deleteWorkingDraft(
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  null
+                );
+              }
+
               // Append the outbox event in the same transaction, so it commits
               // with the entry and is never recorded for a write that rolls back.
               // `recorded` is false when the collection opted out of recording. A
