@@ -26,6 +26,8 @@
  * @module shared/lib/field-level-registry
  */
 
+import type { FieldHookHandler } from "../../hooks/types";
+
 import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
 
@@ -41,14 +43,9 @@ type FieldAccessFn = (args: {
   data?: Record<string, unknown>;
 }) => MaybePromise<boolean>;
 
-type FieldHookFn = (context: {
-  collection: string;
-  operation: "create" | "read" | "update" | "delete";
-  fieldName: string;
-  value: unknown;
-  data: Record<string, unknown>;
-  user?: Record<string, unknown>;
-}) => MaybePromise<unknown>;
+// The registry stores exactly what a field hook is declared as, so the shape
+// lives in one place rather than being restated here.
+type FieldHookFn = FieldHookHandler;
 
 export interface FieldFunctions {
   validate?: ValidatableField["validate"];

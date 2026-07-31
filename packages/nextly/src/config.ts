@@ -24,6 +24,10 @@ export {
   type HookHandler,
 } from "./collections/config/define-collection";
 
+// The context a FIELD-level hook is handed. `FieldHooks` is already public
+// through the field types below, so the handler it is declared with is too.
+export type { FieldHookContext, FieldHookHandler } from "./hooks/types";
+
 // Single configuration (defineSingle, SingleConfig, etc.)
 export {
   defineSingle,
