@@ -734,4 +734,60 @@ describe("draft/published split — schema and component eligibility (integratio
     });
     expect((draftRead.data as { title?: string }).title).toBe("live");
   });
+
+  it("rejects a publish when the pending draft violates a tightened schema rule", async () => {
+    const entries = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), text({ name: "subtitle" })],
+        }),
+      ],
+    });
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      subtitle: "initial",
+      status: "published",
+    });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // Draft a short subtitle, then tighten the schema to require a longer one.
+    await entries.updateEntry({ ...ctx, entryId: id }, { subtitle: "ab" });
+    expect(await workingDraftCount(id)).toBe(1);
+    await handle!.destroy();
+    handle = undefined;
+
+    const reopened = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "subtitle", minLength: 5 }),
+          ],
+        }),
+      ],
+    });
+
+    // Publishing folds the draft (subtitle "ab") into the live write; the value
+    // now violates minLength, so the promote is rejected rather than publishing
+    // an invalid document.
+    const res = await reopened.updateEntry(
+      { ...ctx, entryId: id },
+      { status: "published" }
+    );
+    expect(res.success).toBe(false);
+    expect(res.statusCode).toBe(400);
+
+    // The draft survives (the transaction rolled back), so the pending edit is
+    // not lost by a rejected publish.
+    expect(await workingDraftCount(id)).toBe(1);
+  });
 });

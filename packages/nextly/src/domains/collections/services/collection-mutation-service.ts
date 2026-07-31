@@ -4536,6 +4536,55 @@ export class CollectionMutationService extends BaseService {
           }
         : null;
 
+      // Revalidate the promoted draft against the CURRENT schema before the
+      // transaction opens. The caller validation above ran on the caller's
+      // payload only, which for a publish is just `{ status }`; promote then
+      // folds the whole accumulated draft into the live write, so a draft field
+      // the schema has since made stricter (a tightened `minLength`/`max`/
+      // `pattern`/`options`, or an emptied value that is now required) would
+      // otherwise reach the live row unchecked. Read the draft advisory rather
+      // than under the promote's row lock — validators are pure of the write
+      // connection, but a lock taken here would be a second one against a small
+      // pool — and validate the SAME merged shape the in-transaction fold
+      // persists (`buildRestorePayload` output with the caller's fields on top).
+      // The fold below stays authoritative for the write; this only gates it.
+      if (promotePossible && promoteRestoreCtx) {
+        const advisoryDraft = await new VersionsRepository(
+          this.adapter
+        ).findWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          },
+          null
+        );
+        if (advisoryDraft) {
+          const { payload: draftInput } = buildRestorePayload(
+            advisoryDraft.snapshot,
+            fields as unknown as FieldConfig[],
+            promoteRestoreCtx
+          );
+          const mergedForValidation = { ...draftInput, ...finalData };
+          const localeCtx = await this.localizedRequiredContext(
+            params.collectionName,
+            params.locale
+          );
+          const promoteIssues = await validateEntryData(
+            this.validationView(mergedForValidation, fields),
+            attachFieldValidators("collection", params.collectionName, fields),
+            {
+              mode: "update",
+              req: params.user ? { user: params.user } : {},
+              ...localeCtx,
+            }
+          );
+          if (promoteIssues.length > 0) {
+            throw NextlyError.validation({ errors: promoteIssues });
+          }
+        }
+      }
+
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
       // The content UPDATE is a deterministic SET, so re-applying it is safe.
