@@ -142,6 +142,34 @@ describe("collection read handlers forward the caller to the query service", () 
     expect(args).toHaveProperty("authenticatedScope");
   });
 
+  it("getEntry forwards the working-draft overlay opt-in from ?draft=true", async () => {
+    // Without this the merged draft/published-split engine is unreachable over
+    // HTTP: the query service honors `includeWorkingDraft`, but nothing sets it.
+    const getEntry = vi.fn().mockResolvedValue(docResult);
+    await dispatchCollections(
+      makeContainer({ getEntry }),
+      "getEntry",
+      { ...authedParams, entryId: "e1", draft: "true" },
+      undefined
+    );
+
+    expect(getEntry.mock.calls[0][0].includeWorkingDraft).toBe(true);
+  });
+
+  it("getEntry leaves the working-draft opt-in off when ?draft is absent", async () => {
+    // The overlay is opt-in: a plain read must keep returning the live row, so
+    // the flag is explicitly false rather than undefined-and-forgotten.
+    const getEntry = vi.fn().mockResolvedValue(docResult);
+    await dispatchCollections(
+      makeContainer({ getEntry }),
+      "getEntry",
+      { ...authedParams, entryId: "e1" },
+      undefined
+    );
+
+    expect(getEntry.mock.calls[0][0].includeWorkingDraft).toBe(false);
+  });
+
   it("countEntries counts under the same caller context listEntries filters by", async () => {
     const listEntries = vi.fn().mockResolvedValue(listResult);
     const countEntries = vi.fn().mockResolvedValue(countResult);

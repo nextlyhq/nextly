@@ -4,7 +4,7 @@
  * No database: both are decisions made from what has already been observed, and the point of the
  * cache is that the common case reaches no database at all.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   cachedCompanionReadiness,
@@ -127,14 +127,16 @@ describe("companion readiness", () => {
 
 describe("companionNotReadyMessage", () => {
   const withEnv = (value: string | undefined, run: () => void) => {
-    const previous = process.env.NODE_ENV;
-    if (value === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = value;
+    // Set NODE_ENV through Vitest's env stubbing rather than assigning
+    // `process.env.NODE_ENV` directly: stubbing restores the original on
+    // `unstubAllEnvs` and goes through an accessor that does not trip the
+    // read-only `NODE_ENV` typing a direct assignment or `delete` runs into.
+    // Passing `undefined` unsets it, covering the "NODE_ENV absent" case.
+    vi.stubEnv("NODE_ENV", value);
     try {
       run();
     } finally {
-      if (previous === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previous;
+      vi.unstubAllEnvs();
     }
   };
 

@@ -149,6 +149,18 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
   id: string;
 
   /**
+   * Return the pending working draft in place of the live row when one exists
+   * (draft/published split). Mirrors the read-side `draft` parameter in
+   * Payload's `findByID`. Effective only on a drafts-enabled, non-localized
+   * collection with the `status` lifecycle, and gated by an update-capability
+   * probe: a caller who cannot edit the document still gets the published row,
+   * so this never exposes a draft to a read-only caller.
+   *
+   * @default false
+   */
+  draft?: boolean;
+
+  /**
    * Specific fields to include/exclude.
    */
   select?: Record<string, boolean>;

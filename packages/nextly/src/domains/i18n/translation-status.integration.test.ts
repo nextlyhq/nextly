@@ -202,6 +202,10 @@ describe("populateTranslationStatus (real SQLite)", () => {
           locales: ["en", "de"],
           defaultLocale: "en",
           hasStatus: true,
+          // A missing companion table resolves as not-ready, so the readiness
+          // gate returns before any query runs — the no-op under test. Passing
+          // "ready" would instead query the absent table and throw.
+          readiness: "pre-migration",
         })
       ).resolves.toBeUndefined();
       expect(rows[0]._translations).toBeUndefined();

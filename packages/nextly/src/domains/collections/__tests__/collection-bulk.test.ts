@@ -177,7 +177,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const openTransaction = mockAdapter.transaction as ReturnType<
         typeof vi.fn
       >;
-      const realTransaction = openTransaction.getMockImplementation();
+      // getMockImplementation returns the impl under a loose signature; assert
+      // the known call shape so it can be invoked to preserve real behavior.
+      const realTransaction = openTransaction.getMockImplementation() as
+        | ((fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>)
+        | undefined;
       openTransaction.mockImplementation(
         (fn: (tx: unknown) => Promise<unknown>) => {
           order.push("transaction");
