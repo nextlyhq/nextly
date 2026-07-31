@@ -4446,10 +4446,28 @@ export class CollectionMutationService extends BaseService {
       // design and is handled separately.
       const documentLocalized =
         (collection as { localized?: boolean }).localized === true;
+      // The component schemas reachable from this collection, resolved once off
+      // the transaction (registry reads on the pooled connection, the same reason
+      // as `webhookFields` below) and reused by the promote path. Only resolved
+      // when the split could otherwise apply.
+      const splitComponentSchemas =
+        collectionHasStatus && versionsConfig?.drafts?.enabled === true
+          ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
+          : null;
+      // A localized component stores its values per locale, but a working draft
+      // is keyed under one unlocalized slot, so a draft saved under one locale
+      // would be promoted under another and misfile the translation into the
+      // wrong companion. Until per-locale drafts exist, a collection that embeds
+      // a localized component is excluded from the split, alongside a localized
+      // document.
+      const hasLocalizedComponent = splitComponentSchemas
+        ? [...splitComponentSchemas.values()].some(schema => schema.localized)
+        : false;
       const splitEnabled =
         collectionHasStatus &&
         versionsConfig?.drafts?.enabled === true &&
-        !documentLocalized;
+        !documentLocalized &&
+        !hasLocalizedComponent;
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).
@@ -4487,55 +4505,13 @@ export class CollectionMutationService extends BaseService {
             hasSlug: !isPluginForRestore || fields.some(f => f.name === "slug"),
             hasTitle:
               !isPluginForRestore || fields.some(f => f.name === "title"),
-            componentSchemas: await resolveComponentSchemas(
-              fields as unknown as FieldConfig[]
-            ),
+            componentSchemas: splitComponentSchemas ?? undefined,
             // The split is non-localized-only, so the document holds no per-locale
             // values and the snapshot's locale is the resolved request locale.
             documentLocalized: false,
             localeUnknown: false,
           }
         : null;
-
-      // When a publish could promote a working draft, the draft's components are
-      // folded into the write INSIDE the transaction — after the preflight below.
-      // A promoted localized component whose companion exists would otherwise
-      // reach the write with no presence entry and be misfiled (default locale)
-      // or refused (non-default). Read the draft on the pooled connection here
-      // (advisory only: the authoritative fetch runs under the row lock in the
-      // transaction, and this write neither stores nor deletes it) and turn its
-      // snapshot into a restore input, so the preflight probes exactly the
-      // component types the fold will write. The caller's own components override
-      // the draft's per field, matching the in-transaction merge.
-      const promoteComponentPreview: Record<string, unknown> = {};
-      if (promotePossible && promoteRestoreCtx) {
-        const advisoryDraft = await new VersionsRepository(
-          this.adapter
-        ).findWorkingDraft(
-          {
-            scopeKind: "collection",
-            scopeSlug: params.collectionName,
-            entryId: params.entryId,
-          },
-          null
-        );
-        if (advisoryDraft) {
-          const { payload: advisoryInput } = buildRestorePayload(
-            advisoryDraft.snapshot,
-            fields as unknown as FieldConfig[],
-            promoteRestoreCtx
-          );
-          for (const field of fields) {
-            if (
-              isFieldGroupField(field) &&
-              field.name &&
-              advisoryInput[field.name] !== undefined
-            ) {
-              promoteComponentPreview[field.name] = advisoryInput[field.name];
-            }
-          }
-        }
-      }
 
       // Retry the whole content+capture transaction on a version_no allocation
       // race (concurrent updates to the same doc); the re-run re-reads the max.
@@ -4567,9 +4543,7 @@ export class CollectionMutationService extends BaseService {
       const fieldGroupPresence =
         (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
           fields: fields as unknown as FieldConfig[],
-          // The draft's component types are included so a promote that folds them
-          // in has their companion presence resolved here, off the transaction.
-          data: { ...promoteComponentPreview, ...componentFieldData },
+          data: componentFieldData,
           locale: params.locale,
         })) ?? new Map<string, boolean>();
       await withVersionConflictRetry(() =>

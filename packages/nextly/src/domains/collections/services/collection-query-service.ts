@@ -2263,16 +2263,16 @@ export class CollectionQueryService extends BaseService {
         // draft.
         (statusFilter === null || params.status === undefined);
       // A pending draft is surfaced only to a caller trusted to EDIT the
-      // document. The trusted write paths already attest that: overrideAccess, or
-      // the REST route's `routeAuthorized` update attestation. An access-enforced
-      // authenticated read (the Direct API `findByID` with a user) forwards
-      // neither flag, so an editor who can update the collection would otherwise
-      // never see their own pending draft. Probe update capability as a fallback
-      // — only here, so the common trusted paths pay no extra access check, and a
-      // public or read-only caller (no update grant) still never sees a draft.
+      // document. `overrideAccess` is the only flag that attests that here.
+      // `routeAuthorized` is NOT trusted: on this read path the REST dispatcher
+      // sets it from `!!user` after authorizing the READ, so it attests read, not
+      // update — trusting it would leak drafts to a read-only authenticated
+      // caller. Every non-override authenticated caller is instead judged by an
+      // actual update-capability probe, so an editor sees their own pending draft
+      // through any surface while a public or read-only caller never does.
       let draftView = false;
       if (draftEligible) {
-        if (params.overrideAccess === true || params.routeAuthorized === true) {
+        if (params.overrideAccess === true) {
           draftView = true;
         } else if (params.user !== undefined) {
           const updateDenied = await this.accessService.checkCollectionAccess(

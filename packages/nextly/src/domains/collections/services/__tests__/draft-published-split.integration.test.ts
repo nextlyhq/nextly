@@ -228,6 +228,48 @@ describe("draft/published split — updateEntry (integration)", () => {
     expect(anonRead.success).toBe(true);
     expect((anonRead.data as { title?: string }).title).toBe("live");
   });
+
+  it("does not leak a draft to a read-only authenticated caller even with routeAuthorized", async () => {
+    // Reads are allowed, updates are not: a read-only role.
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: () => false },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      { title: "live", status: "published" }
+    );
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { title: "edited-in-draft" }
+    );
+
+    // The REST dispatcher sets routeAuthorized from the READ authorization, so a
+    // read-only authenticated caller arrives with routeAuthorized:true. The draft
+    // must stay hidden because they cannot update the document.
+    const readerRead = await entries.getEntry({
+      collectionName: COLLECTION,
+      entryId: id,
+      user: { id: "reader-1" },
+      routeAuthorized: true,
+      overrideAccess: false,
+    });
+    expect(readerRead.success).toBe(true);
+    expect((readerRead.data as { title?: string }).title).toBe("live");
+  });
 });
 
 // Publishing a document that has a pending working draft must apply the draft's
