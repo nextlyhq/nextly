@@ -6,26 +6,14 @@
  * re-exporting this one there would shadow it — silently turning an existing
  * consumer's registering helper into one that only returns its argument.
  *
- * The page builder rather than `@nextlyhq/plugin-sdk`, because a block is a
- * page-builder concept: routing it through the core SDK would put the engine's
- * types back into an API that deliberately no longer references them. The page
- * builder is a published package that states its own version, so a contributor
- * pins compatibility with `dependsOn` exactly as it would for any other plugin
- * it builds on.
+ * Only the REGISTRATION side lives here. The block contracts themselves —
+ * `defineBlock` and the definition types — come from `@nextlyhq/plugin-sdk/blocks`,
+ * because the SDK is the stable import surface a plugin author is offered. What
+ * belongs here is what is specific to this plugin: the registry a contributor
+ * hands its blocks to, and the name it declares in `dependsOn`.
  *
  * @module blocks
  */
-
-export { defineBlock } from "@nextlyhq/blocks-engine";
-export type {
-  AnyBlockDefinition,
-  BlockDefinition,
-  BlockRenderArgs,
-  BlockRenderResult,
-  BlockSupports,
-  InferBlockProps,
-  PropSchema,
-} from "@nextlyhq/blocks-engine";
 
 export {
   blockRegistry,

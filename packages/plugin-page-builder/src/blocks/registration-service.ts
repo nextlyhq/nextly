@@ -18,9 +18,11 @@
  */
 
 import {
-  clearBlockDefinitions,
+  clearBlocks,
   registerBlocks,
+  registerSupport,
   type AnyBlockDefinition,
+  type SupportDefinition,
 } from "@nextlyhq/blocks-engine";
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
@@ -49,6 +51,17 @@ export interface BlockRegistrationService {
     definitions: AnyBlockDefinition | AnyBlockDefinition[],
     source: string
   ): void;
+
+  /**
+   * Add a custom support — a capability key blocks may declare.
+   *
+   * Offered here rather than left to the engine's own `registerSupport` because
+   * supports share the block registry's per-boot lifecycle. Registered outside
+   * this service they either survive a reset that should have cleared them, and
+   * collide when the next boot re-registers, or are wiped by a reset that runs
+   * between the support and the blocks declaring it.
+   */
+  registerSupport(support: SupportDefinition): void;
 }
 
 /**
@@ -69,14 +82,21 @@ export interface BlockRegistrationService {
  * This factory is memoized per boot, so the reset happens exactly once, in the
  * same lifecycle as every registration that follows it.
  *
+ * Blocks AND supports are reset together, because both are per-boot: a support
+ * kept across boots collides when the next boot registers it again, and a
+ * support cleared independently of the blocks declaring it leaves those blocks
+ * refused as using an unknown one. Both are contributed through this service,
+ * so both are registered after the reset and neither can be caught by it.
+ *
  * The cost is that a contributor removed mid-process leaves its blocks behind:
  * with nothing resolving this service, nothing clears them. That is the smaller
  * problem — the registry lives on `globalThis`, so it does not outlive the
  * process and a restart begins empty.
  */
 export function createBlockRegistrationService(): BlockRegistrationService {
-  clearBlockDefinitions();
+  clearBlocks();
   return {
+    registerSupport,
     register(definitions, source) {
       const list = Array.isArray(definitions) ? definitions : [definitions];
       // Nothing to do rather than an error: a plugin whose block list is

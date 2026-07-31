@@ -16,14 +16,15 @@ import {
   getBlock,
   getBlockSource,
   getSupport,
-  registerSupport,
 } from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createTestNextly, type TestNextly } from "nextly/testing";
 
-import { blockRegistry, defineBlock } from "../index";
+import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+
+import { blockRegistry } from "../index";
 import { pageBuilder } from "../../plugin";
 
 let current: TestNextly | undefined;
@@ -118,13 +119,44 @@ describe("resetting blocks leaves the support vocabulary alone", () => {
       version: "1.0.0",
       nextly: ">=0.0.0",
       init: ctx => {
-        registerSupport({ key: "telepathy" });
-        blockRegistry(ctx).register(pricingTable, "@acme/support-blocks");
+        const registry = blockRegistry(ctx);
+        registry.registerSupport({ key: "telepathy" });
+        registry.register(pricingTable, "@acme/support-blocks");
       },
     });
 
     current = await createTestNextly({
       plugins: [pageBuilder(), withSupport],
+    });
+
+    expect(getSupport("telepathy")).toBeDefined();
+    expect(getBlock("acme/pricing-table")).toBeDefined();
+  });
+
+  it("re-registers a custom support without a collision", async () => {
+    // The second-boot test above proves nothing about supports, because its
+    // contributor declares none. A support kept across boots collides the
+    // moment the next boot registers it again — before the service is even
+    // resolved, if registration bypasses it.
+    const withSupport = () =>
+      definePlugin({
+        name: "@acme/support-blocks",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init: ctx => {
+          const registry = blockRegistry(ctx);
+          registry.registerSupport({ key: "telepathy" });
+          registry.register(pricingTable, "@acme/support-blocks");
+        },
+      });
+
+    current = await createTestNextly({
+      plugins: [pageBuilder(), withSupport()],
+    });
+    await current.destroy();
+
+    current = await createTestNextly({
+      plugins: [pageBuilder(), withSupport()],
     });
 
     expect(getSupport("telepathy")).toBeDefined();
