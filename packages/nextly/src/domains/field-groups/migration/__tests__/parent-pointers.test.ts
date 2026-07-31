@@ -251,6 +251,36 @@ describe("assertNoStaleParentPointers", () => {
     expect(statements.slice(0, 3).flatMap(s => s.params)).toEqual(staleNames);
   });
 
+  // 🔴 A limit that is not a number at all is the dangerous case, and it is not
+  // hypothetical: an adapter double omitting the capability produced exactly
+  // this. `Math.max` propagates NaN, so a NaN stride makes the chunker emit one
+  // EMPTY batch, which compiles to `IN ()` — a scan that asks for nothing while
+  // looking like a scan that ran, on a check whose only job is to refuse.
+  it.each([
+    ["not a number", Number.NaN],
+    ["missing", undefined as unknown as number],
+    ["infinite", Number.POSITIVE_INFINITY],
+  ])(
+    "still asks every name when the limit is %s",
+    async (_label, maxParams) => {
+      const { query, statements } = recorder();
+      await assertNoStaleParentPointers({
+        query,
+        columns,
+        identifierCase: PRESERVING,
+        owned: OWNED,
+        maxParams,
+        staleNames: ["comp_outer", "comp_aside"],
+      });
+      const asked = statements.flatMap(s => s.params);
+      expect(asked).toContain("comp_outer");
+      expect(asked).toContain("comp_aside");
+      for (const statement of statements) {
+        expect(statement.params.length).toBeGreaterThan(0);
+      }
+    }
+  );
+
   // A limit below one would produce empty batches and loop forever asking
   // nothing; it is clamped rather than trusted.
   it("still asks every name when the reported limit is nonsense", async () => {

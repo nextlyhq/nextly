@@ -265,31 +265,15 @@ function renameStep(
       const dataTables = movesPointer
         ? await observer.dataTables(session, ownedDataTables)
         : [];
+      // These names were read before the transaction, so the one table this step
+      // moves has to be addressed under the name it carries afterwards. Only the
+      // base table can be among them: a companion holds no parent pointer, and
+      // nothing else this step touches is field-group storage.
+      const movedSource = sources[0];
+      const addressAfterRename = (table: string): string =>
+        movedSource !== undefined && table === movedSource ? entry.to : table;
 
       await session.inTransaction(async ctx => {
-        // Issued BEFORE the renames below, so that on MySQL the implicit commit
-        // a `RENAME TABLE` performs carries these updates with it: a table that
-        // moved then always has the pointers at it moved too. Postgres and
-        // SQLite commit the whole step atomically, where the order is immaterial.
-        //
-        // Every field-group data table is rewritten, not only the one being
-        // renamed. A child of `comp_outer` stores its pointer in the *child's*
-        // table, so the stale string lives somewhere other than the table this
-        // step moves — including in tables this plan renames nothing of, and in
-        // the moved table itself where a field group nests inside itself.
-        //
-        // Deliberately not skipped for a satisfied entry, exactly as the
-        // registry update below is not: a resume reached here because something
-        // did not land, and an update that is already correct costs a scan.
-        if (movesPointer) {
-          for (const table of dataTables) {
-            await ctx.runStatement(
-              sql`UPDATE ${sql.identifier(table)}
-                  SET ${sql.identifier(PARENT_TABLE_COLUMN)} = ${entry.to}
-                  WHERE ${sql.identifier(PARENT_TABLE_COLUMN)} = ${entry.from}`
-            );
-          }
-        }
         // Re-runnable, and decided per table rather than per entry: on a resume
         // a rename may already have committed, and issuing it again would fail
         // on a source that is no longer there. The catalog answers that for each
@@ -315,6 +299,33 @@ function renameStep(
         // stale and fail verification on every resume, forever. The update is
         // idempotent, so running it when it is already correct costs nothing.
         if (!movesPointer) return;
+
+        // 🔴 AFTER the renames, never before, and the reason is recoverability
+        // rather than atomicity. MySQL commits DDL implicitly *before* executing
+        // it, so an update issued first is already committed when the rename
+        // runs — and if that rename then fails, the pointers name a table that
+        // never moved. Nothing repairs that: a retry matches on `entry.from`,
+        // which those rows no longer carry, so the update is a no-op and the
+        // content stays unreachable.
+        //
+        // Issued after, every intermediate state converges. A rename that fails
+        // leaves the pointers untouched. A crash between the rename and this
+        // update leaves rows still carrying `entry.from`, which the retry
+        // matches and fixes. Postgres and SQLite commit the whole step
+        // atomically, where the order is immaterial.
+        //
+        // Every field-group data table is rewritten, not only the one being
+        // renamed. A child of `comp_outer` stores its pointer in the *child's*
+        // table, so the stale string lives somewhere other than the table this
+        // step moves — including in tables this plan renames nothing of, and in
+        // the moved table itself where a field group nests inside itself.
+        for (const table of dataTables) {
+          await ctx.runStatement(
+            sql`UPDATE ${sql.identifier(addressAfterRename(table))}
+                SET ${sql.identifier(PARENT_TABLE_COLUMN)} = ${entry.to}
+                WHERE ${sql.identifier(PARENT_TABLE_COLUMN)} = ${entry.from}`
+          );
+        }
         // Issued as a Drizzle statement, which quotes the identifier and binds
         // the values in whichever form the driver expects. The registry cannot
         // be reached through the typed query builder here: it resolves a table

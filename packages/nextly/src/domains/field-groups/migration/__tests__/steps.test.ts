@@ -52,6 +52,9 @@ function createWorld(initial: {
   );
   const statements: string[] = [];
   let transactions = 0;
+  // Models a server that refuses the DDL — no ALTER privilege, or a target that
+  // appeared after reconciliation. The statement throws, exactly as it would.
+  let renamesFail = false;
 
   function apply(raw: string, params: unknown[] = []): void {
     statements.push(raw);
@@ -61,6 +64,7 @@ function createWorld(initial: {
     const sql = raw.replace(/\s+/g, " ").trim();
     const rename = /^ALTER TABLE "(.+?)" RENAME TO "(.+?)"$/.exec(sql);
     if (rename?.[1] !== undefined && rename[2] !== undefined) {
+      if (renamesFail) throw new Error("permission denied for relation");
       if (!tables.has(rename[1])) {
         throw new Error(`relation "${rename[1]}" does not exist`);
       }
@@ -193,6 +197,9 @@ function createWorld(initial: {
     parentsOf: (table: string) => [...(parents.get(table) ?? [])],
     columnsOf: (table: string) => (columns.get(table) ?? []).map(c => c.name),
     dropIndexes: (table: string) => indexes.set(table, []),
+    failRenames: () => {
+      renamesFail = true;
+    },
   };
 }
 
@@ -430,11 +437,14 @@ describe("parent pointers across a rename", () => {
     expect(w.transactionCount()).toBe(1);
   });
 
-  // 🔴 Ordering, not decoration. MySQL commits DDL implicitly, so the `RENAME
-  // TABLE` commits whatever preceded it in the transaction: issuing the pointer
-  // rewrite first is what guarantees a table that moved has its children's
-  // pointers moved too. After the rename they would be a separate commit.
-  it("issues the pointer rewrite before the rename", async () => {
+  // 🔴 Ordering, and the reason is recoverability rather than atomicity. MySQL
+  // commits DDL implicitly BEFORE executing it, so a rewrite issued first is
+  // already committed when the rename runs — and a rename that then fails
+  // leaves the pointers naming a table that never moved, which no retry can
+  // repair because the rows no longer carry `entry.from`. Issued after, a
+  // failed rename leaves them untouched and a crash between the two is fixed by
+  // the retry.
+  it("issues the pointer rewrite after the rename", async () => {
     const w = nestedWorld();
     await stepsFor(w)[OUTER_STEP]?.run(w.session);
 
@@ -442,7 +452,20 @@ describe("parent pointers across a rename", () => {
     const rename = w.statements.findIndex(s => s.includes("RENAME TO"));
     expect(rewrite).toBeGreaterThanOrEqual(0);
     expect(rename).toBeGreaterThanOrEqual(0);
-    expect(rewrite).toBeLessThan(rename);
+    expect(rename).toBeLessThan(rewrite);
+  });
+
+  // The failure this ordering exists for. A rename that cannot be applied must
+  // leave no committed pointer behind, or the rows name a table that never
+  // moved and the retry's `WHERE` no longer matches them.
+  it("leaves pointers untouched when the rename fails", async () => {
+    const w = nestedWorld();
+    w.failRenames();
+    await expect(
+      stepsFor(w)[OUTER_STEP]?.run(w.session)
+    ).rejects.toThrowError();
+
+    expect(w.parentsOf("comp_inner")).toEqual(["comp_outer"]);
   });
 
   // A name a rename does not touch is left exactly as it was. Rewriting on

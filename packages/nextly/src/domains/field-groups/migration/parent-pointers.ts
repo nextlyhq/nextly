@@ -144,7 +144,7 @@ export async function assertNoStaleParentPointers(args: {
   const { query, columns, identifierCase, owned, staleNames, maxParams } = args;
   if (staleNames.length === 0) return;
 
-  const batches = chunk(staleNames, Math.max(1, Math.floor(maxParams)));
+  const batches = chunk(staleNames, boundedBatchSize(maxParams));
 
   for (const table of parentPointerTables({ columns, identifierCase, owned })) {
     for (const batch of batches) {
@@ -183,6 +183,21 @@ export async function assertNoStaleParentPointers(args: {
       });
     }
   }
+}
+
+/**
+ * A batch size that is always a usable positive integer.
+ *
+ * 🔴 `Math.max` propagates `NaN`, so clamping a missing or non-numeric limit
+ * with it yields `NaN` — and a `NaN` stride makes `chunk` emit a single EMPTY
+ * batch, which compiles to `IN ()`. That scans for nothing while looking
+ * exactly like a scan that ran, which is the worst available outcome for a
+ * check whose whole job is to refuse. Anything not finite falls back to one
+ * name per statement: slower, and correct.
+ */
+function boundedBatchSize(maxParams: number): number {
+  if (!Number.isFinite(maxParams)) return 1;
+  return Math.max(1, Math.floor(maxParams));
 }
 
 /** Split a list into runs of at most `size`. */

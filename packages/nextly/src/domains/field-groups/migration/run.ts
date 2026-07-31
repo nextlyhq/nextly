@@ -26,7 +26,11 @@ import type { Logger } from "../../../shared/types";
 import { MetaService } from "../../meta/services/meta-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
-import type { IdentifierCaseRules } from "../../schema/utils/resolve-catalog-name";
+import {
+  indexCatalog,
+  resolveCatalogName,
+  type IdentifierCaseRules,
+} from "../../schema/utils/resolve-catalog-name";
 
 import { resolveStorageVerdict } from "./guard";
 import {
@@ -120,7 +124,7 @@ export async function runFieldGroupMigration(
     { adapter, dialect, label: `field-group-migration:${direction}` },
     async session => {
       const state = await readMigrationState(meta);
-      const rows = await readRegistryRows(adapter);
+      const rows = await readRegistryRows(adapter, dialect, identifierCase);
 
       // Settled at the generation this run would produce: the work is done.
       // Confirmed against the catalog rather than taken from the marker alone,
@@ -158,6 +162,18 @@ export async function runFieldGroupMigration(
           rows,
           identifierCase,
           generation,
+          // The rows are checked as well as the structure. A marker can be
+          // current and the content still wrong — restored from a backup taken
+          // before the run, or repaired by hand — and a stale `_parent_table`
+          // is invisible to a structural check while making nested content
+          // invisible to a reader. The recorded plan is what names the storage
+          // this run's generation renamed away; without one there is nothing to
+          // scan for.
+          renamedAway: renamedAwayNames(state.appliedManifest, generation),
+          owned: ownedDataTableNames({
+            rows,
+            entries: state.appliedManifest ?? [],
+          }),
         });
         return { ran: false, reason: "already-migrated" };
       }
@@ -297,7 +313,7 @@ export async function runFieldGroupMigration(
       await assertStorageComplete({
         adapter,
         dialect,
-        rows: await readRegistryRows(adapter),
+        rows: await readRegistryRows(adapter, dialect, identifierCase),
         identifierCase,
         // Every name this run renamed away. A row still addressing one of them
         // is content the read path would return nothing for, and it is asked
@@ -365,6 +381,25 @@ async function assertStorageComplete(args: {
 }
 
 /**
+ * The names a completed run of this direction renamed away.
+ *
+ * Taken from the recorded plan rather than recomputed, for the reason a
+ * rollback needs it recorded at all: nothing in the database distinguishes an
+ * `fg_*` name this migration created from one an author chose before it
+ * existed. Going up, the legacy spellings are the ones no row may still
+ * address; going down it is the migrated ones.
+ */
+function renamedAwayNames(
+  applied: readonly ManifestEntry[] | undefined,
+  generation: StorageGeneration
+): string[] {
+  if (applied === undefined) return [];
+  return applied
+    .filter(entry => entry.kind === "table")
+    .map(entry => (generation === "field-groups-v2" ? entry.from : entry.to));
+}
+
+/**
  * The structural half on its own, for a run that executed nothing.
  *
  * A marker claiming a generation and storage actually being at one are separate
@@ -380,8 +415,18 @@ async function assertStorageAtGeneration(args: {
   rows: readonly RegistryRow[];
   identifierCase: IdentifierCaseRules;
   generation: StorageGeneration;
+  renamedAway: readonly string[];
+  owned: readonly string[];
 }): Promise<void> {
   const { tables, columns } = await readCatalog(args.adapter, args.dialect);
+  await assertNoStaleParentPointers({
+    query: statement => args.adapter.queryStatement(statement),
+    columns,
+    identifierCase: args.identifierCase,
+    owned: args.owned,
+    staleNames: args.renamedAway,
+    maxParams: args.adapter.getCapabilities().maxParamsPerQuery,
+  });
   assertProbeMatchesGeneration({
     rows: args.rows,
     tables,
@@ -461,7 +506,9 @@ function assertProbeMatchesGeneration(args: {
  * has to find them under the new one.
  */
 export async function readRegistryRows(
-  adapter: DrizzleAdapter
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect,
+  identifierCase: IdentifierCaseRules
 ): Promise<RegistryRow[]> {
   const table = (await adapter.tableExists(STORAGE_FORMAT.registryTable))
     ? STORAGE_FORMAT.registryTable
@@ -470,7 +517,7 @@ export async function readRegistryRows(
       : undefined;
   if (table === undefined) return [];
 
-  const rows = await readRegistryTable(adapter, table);
+  const rows = await readRegistryTable(adapter, dialect, identifierCase, table);
 
   const suffix = STORAGE_FORMAT.companionSuffix;
   const out: RegistryRow[] = [];
@@ -523,14 +570,22 @@ function isLocalized(value: boolean | number | null | undefined): boolean {
 }
 
 /**
- * Read the registry, tolerating a database that predates the i18n column.
+ * Read the registry, asking the catalog whether the i18n column is there.
  *
  * `localized` is added by the core-schema reconcile, so a database that has not
- * run it yet does not have the column and selecting it throws. Such a database
- * also has no companion tables at all, which is why the fallback reports every
- * row as not localized rather than as unknown: that is the true answer there,
- * not a guess. The same tolerance exists in `di/load-dynamic-tables.ts`, for the
- * same reason.
+ * run it yet does not have the column and selecting it would throw. Such a
+ * database also has no companion tables at all, which is why its absence means
+ * every row is not localized rather than unknown: that is the true answer
+ * there, not a guess.
+ *
+ * 🔴 Decided from the catalog rather than by catching the failed select and
+ * matching its message. Drizzle wraps a driver error as `Failed query: <the
+ * SQL>`, so the query's own text — which names `localized` — is inside every
+ * message it can produce. A predicate reading that would fall back on *any*
+ * failure, a permission error on that one column included, then classify every
+ * companion as absent and settle the migration with localized storage still
+ * under its legacy name. Asking what the columns are is the same question
+ * without the ambiguity.
  *
  * Issued as Drizzle statements rather than through the typed query builder: that
  * resolves a table through the schema registry, and mid-run the registry is
@@ -538,6 +593,8 @@ function isLocalized(value: boolean | number | null | undefined): boolean {
  */
 async function readRegistryTable(
   adapter: DrizzleAdapter,
+  dialect: MigrationDialect,
+  identifierCase: IdentifierCaseRules,
   table: string
 ): Promise<RegistryTableRow[]> {
   const columns = [
@@ -545,26 +602,44 @@ async function readRegistryTable(
     sql.identifier("slug"),
     sql.identifier("table_name"),
   ];
-  try {
-    return await adapter.queryStatement<RegistryTableRow>(
-      sql`SELECT ${sql.join(columns, sql`, `)}, ${sql.identifier("localized")}
-          FROM ${sql.identifier(table)}`
-    );
-  } catch (error) {
-    // Only a MISSING column may fall back. A transient, permission or
-    // missing-table failure has to propagate: converting one of those into
-    // "nothing is localized" would drop every companion from the plan and leave
-    // real storage behind under its legacy name.
-    const message = error instanceof Error ? error.message : String(error);
-    if (
-      !/localized|no such column|does not exist|unknown column/i.test(message)
-    ) {
-      throw error;
-    }
-    return adapter.queryStatement<RegistryTableRow>(
-      sql`SELECT ${sql.join(columns, sql`, `)} FROM ${sql.identifier(table)}`
-    );
+  if (await hasLocalizedColumn(adapter, dialect, identifierCase, table)) {
+    columns.push(sql.identifier("localized"));
   }
+  return adapter.queryStatement<RegistryTableRow>(
+    sql`SELECT ${sql.join(columns, sql`, `)} FROM ${sql.identifier(table)}`
+  );
+}
+
+/** Whether the registry carries the i18n flag, per the catalog. */
+async function hasLocalizedColumn(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect,
+  identifierCase: IdentifierCaseRules,
+  table: string
+): Promise<boolean> {
+  const snapshot = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+    table,
+  ]);
+  // Matched under the server's own rules, not by exact spelling: MySQL with
+  // `lower_case_table_names=1` reports a lowercased name for a table asked for
+  // under another case, and an exact comparison would discard the snapshot
+  // describing the very table requested.
+  const catalog = indexCatalog(
+    snapshot.tables.map(entry => entry.name),
+    identifierCase.tables
+  );
+  const resolved = resolveCatalogName(catalog, table);
+  const spec = snapshot.tables.find(entry => entry.name === resolved);
+  if (spec === undefined) return false;
+  return (
+    resolveCatalogName(
+      indexCatalog(
+        spec.columns.map(column => column.name),
+        identifierCase.columns
+      ),
+      "localized"
+    ) !== undefined
+  );
 }
 
 /** Every table name, and the columns of the ones the plan cares about. */

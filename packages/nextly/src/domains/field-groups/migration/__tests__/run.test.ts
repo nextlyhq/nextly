@@ -26,7 +26,11 @@ vi.mock("../../../schema/pipeline/diff/introspect-live", () => ({
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { FIELD_GROUP_MIGRATION_KEY } from "../state";
 
+import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
+
 import { readRegistryRows, runFieldGroupMigration } from "../run";
+
+const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
 
 const LEGACY_REGISTRY = "dynamic_components";
 const TARGET_REGISTRY = "dynamic_field_groups";
@@ -50,6 +54,16 @@ interface RunWorld {
   }[];
   /** Model a database predating the i18n `localized` column. */
   noLocalizedColumn?: boolean;
+  /** `_parent_table` value each data table still holds, if any. */
+  stalePointers?: Record<string, string>;
+  /**
+   * Deny only the `localized` column, as column-level privileges do.
+   *
+   * The failure is dressed exactly as Drizzle dresses one — `Failed query:`
+   * followed by the SQL — because that echo is what makes the column's name
+   * appear inside a message that has nothing to do with the column missing.
+   */
+  denyLocalizedColumn?: boolean;
 }
 
 /**
@@ -127,7 +141,21 @@ function createRunWorld(world: RunWorld) {
       if (world.noLocalizedColumn === true) {
         throw new Error('column "localized" does not exist');
       }
+      if (world.denyLocalizedColumn === true) {
+        throw new Error(`Failed query: ${text}\nparams: `);
+      }
       return world.registryRows ?? [];
+    }
+    const sweep =
+      /^SELECT "_parent_table" FROM "(.+?)" WHERE "_parent_table" IN \((.+?)\) LIMIT 1$/.exec(
+        flat
+      );
+    if (sweep?.[1] !== undefined) {
+      const held = world.stalePointers?.[sweep[1]];
+      // The WHERE is applied, not ignored: a double answering every scan with a
+      // row would pass a filter that matches nothing.
+      if (held === undefined || !params.includes(held)) return [];
+      return [{ _parent_table: held }];
     }
     const registryLegacy =
       /^SELECT "id", "slug", "table_name" FROM "(\w+)"$/.exec(flat);
@@ -145,7 +173,13 @@ function createRunWorld(world: RunWorld) {
 
   const adapter = {
     dialect: "postgresql" as const,
-    getCapabilities: () => ({ dialect: "postgresql" }),
+    // Includes the parameter limit because production reads it: a double that
+    // omitted it would hand the sweep `undefined` and certify a scan that
+    // silently asks for nothing.
+    getCapabilities: () => ({
+      dialect: "postgresql",
+      maxParamsPerQuery: 65535,
+    }),
     getDrizzle: () => ({
       select: () => ({
         from: () => ({
@@ -197,7 +231,7 @@ function createRunWorld(world: RunWorld) {
         .filter(name => world.tables.includes(name))
         .map(name => ({
           name,
-          columns: (world.columns?.[name] ?? defaultColumnsFor(name)).map(
+          columns: (world.columns?.[name] ?? columnsForTable(world, name)).map(
             column => ({ name: column, type: "text", nullable: false })
           ),
         })),
@@ -207,6 +241,13 @@ function createRunWorld(world: RunWorld) {
   return { adapter, trace };
 }
 
+/** A table's columns, honouring a world that predates the i18n column. */
+function columnsForTable(world: RunWorld, table: string): string[] {
+  const columns = defaultColumnsFor(table);
+  if (world.noLocalizedColumn !== true) return columns;
+  return columns.filter(column => column !== "localized");
+}
+
 /**
  * What a table of each kind carries when a test does not say.
  *
@@ -214,6 +255,12 @@ function createRunWorld(world: RunWorld) {
  * it unmigrated, which would make every test look like the damaged case.
  */
 function defaultColumnsFor(table: string): string[] {
+  // The registry itself, whose `localized` column the read path probes for
+  // before selecting it. A world that omitted it would exercise only the
+  // pre-i18n branch.
+  if (table === TARGET_REGISTRY || table === LEGACY_REGISTRY) {
+    return ["id", "slug", "table_name", "localized"];
+  }
   if (table.startsWith("fg_")) {
     return ["id", "_parent_id", "_parent_table", "_field_group_type"];
   }
@@ -371,7 +418,7 @@ describe("companion ownership", () => {
       ],
       ...over,
     });
-    const rows = await readRegistryRows(adapter);
+    const rows = await readRegistryRows(adapter, "postgresql", PRESERVING);
     return rows[0]?.hasCompanion;
   }
 
@@ -459,5 +506,105 @@ describe("a settled marker older than this build's work", () => {
     await expect(
       runFieldGroupMigration({ adapter, logger, direction: "down" })
     ).resolves.toEqual({ ran: false, reason: "already-migrated" });
+  });
+});
+
+describe("a settled marker over content that was restored", () => {
+  /** A completed run, with the plan it applied. */
+  const settledWithPlan = {
+    version: 3,
+    status: "settled",
+    generation: "field-groups-v2",
+    appliedManifest: [
+      { kind: "table", from: "comp_hero", to: "fg_hero" },
+      {
+        kind: "registry",
+        from: "dynamic_components",
+        to: "dynamic_field_groups",
+      },
+    ],
+  };
+
+  // 🔴 A marker can be current and the content still wrong: restored from a
+  // backup taken before the run, or repaired by hand. A stale `_parent_table`
+  // is invisible to a structural check — every table and column is exactly
+  // where it should be — while nested reads filter on `fg_hero` and find
+  // nothing. Reporting `already-migrated` there hides missing content behind a
+  // success.
+  it("refuses when a row still addresses a renamed-away table", async () => {
+    const { adapter } = createRunWorld({
+      marker: settledWithPlan,
+      tables: [TARGET_REGISTRY, "fg_hero"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: 0 },
+      ],
+      stalePointers: { fg_hero: "comp_hero" },
+    });
+
+    const error = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+    }).catch((caught: unknown) => caught);
+
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toBe(
+        "a parent pointer still names storage this run renamed away"
+      );
+    }
+  });
+
+  // A pointer at a table the run never renamed is a legitimate parent — every
+  // top-level instance holds one — so the scan must not refuse on it.
+  it("accepts a pointer at a table the run did not rename", async () => {
+    const { adapter } = createRunWorld({
+      marker: settledWithPlan,
+      tables: [TARGET_REGISTRY, "fg_hero"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: 0 },
+      ],
+      stalePointers: { fg_hero: "dc_pages" },
+    });
+
+    await expect(
+      runFieldGroupMigration({ adapter, logger, direction: "up" })
+    ).resolves.toEqual({ ran: false, reason: "already-migrated" });
+  });
+});
+
+describe("deciding whether the registry carries the i18n column", () => {
+  // 🔴 Drizzle wraps a driver error as `Failed query: <the SQL>`, so the SQL's
+  // own text — which names `localized` — is inside EVERY message that query can
+  // produce. A predicate reading the message therefore falls back on any
+  // failure at all, including a permission error on that one column: every
+  // companion is then classified as absent and the migration settles with
+  // localized storage still under its legacy name. The catalog answers the same
+  // question without the ambiguity.
+  it("propagates a failure that is not the column being absent", async () => {
+    const { adapter } = createRunWorld({
+      tables: [TARGET_REGISTRY, "fg_hero"],
+      denyLocalizedColumn: true,
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: 1 },
+      ],
+    });
+
+    await expect(
+      readRegistryRows(adapter, "postgresql", PRESERVING)
+    ).rejects.toThrowError(/Failed query/);
+  });
+
+  // The column genuinely absent is still tolerated, and still means the true
+  // thing: such a database predates i18n and has no companions at all.
+  it("reads a database that predates the column without failing", async () => {
+    const { adapter } = createRunWorld({
+      tables: [TARGET_REGISTRY, "fg_hero"],
+      noLocalizedColumn: true,
+      registryRows: [{ id: "1", slug: "hero", table_name: "fg_hero" }],
+    });
+
+    const rows = await readRegistryRows(adapter, "postgresql", PRESERVING);
+    expect(rows[0]?.hasCompanion).toBe(false);
   });
 });
