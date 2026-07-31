@@ -109,6 +109,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "Middleware (type)",
   "NavCollectionItem (type)",
   "NavFilterContext (type)",
+  "NextlyError (value)",
   "PaginatedResult (type)",
   "PermissionSlug (type)",
   "PluginActionRegistry (type)",

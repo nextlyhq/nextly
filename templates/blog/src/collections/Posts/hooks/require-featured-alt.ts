@@ -11,6 +11,7 @@
  * a permissive save than a false positive on code paths that don't
  * populate `req.nextly`. Admin-panel saves always populate it.
  */
+import { NextlyError } from "nextly";
 import type { HookHandler } from "nextly/config";
 
 export const requireFeaturedAlt: HookHandler = async ({ data, req }) => {
@@ -35,9 +36,19 @@ export const requireFeaturedAlt: HookHandler = async ({ data, req }) => {
   // Missing / empty altText blocks the save with a clear message to the
   // writer - they can fix it by editing the media entry in the admin.
   if (media && !media.altText) {
-    throw new Error(
-      "Featured image must have alt text. Edit the media entry and add a description."
-    );
+    // Typed, so the rejection reaches the writer as a validation failure
+    // against the field they can fix, rather than as a server fault whose
+    // message is replaced before they see it.
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "featuredImage",
+          code: "REQUIRED",
+          message:
+            "Featured image must have alt text. Edit the media entry and add a description.",
+        },
+      ],
+    });
   }
   return data;
 };
