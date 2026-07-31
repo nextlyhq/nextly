@@ -277,7 +277,15 @@ async function createNextlyHelper(
   logger.success("Created src/lib/nextly.ts");
 }
 
-function generateNextlyHelperTemplate(): string {
+/**
+ * The `lib/nextly.ts` a generated project gets.
+ *
+ * Exported so its output can be asserted on. It is a template literal, so
+ * nothing here is type-checked or executed by the build, and the two exported
+ * startup paths it defines have to agree about booting, about passing the
+ * config, and about when initialization is complete.
+ */
+export function generateNextlyHelperTemplate(): string {
   return `/**
  * Nextly Instance Helper
  *
@@ -315,14 +323,9 @@ export async function getNextlyInstance(): Promise<Nextly> {
   // initializeNextly() would cycle, since that function boots by calling
   // this one.
 
-  // Booting is what completes initialization, so record it here as well: a
-  // caller using this directly has initialized just as fully as one going
-  // through initializeNextly(), and isNextlyInitialized() should say so.
-  initialized = true;
-
   // Get the Nextly instance with minimal storage/image processor config
   // In a real app, you'd configure these with actual implementations
-  return getNextly({
+  const instance = await getNextly({
     // Required on every call, and the reason this module imports the config.
     config: nextlyConfig,
     storage: {
@@ -339,6 +342,12 @@ export async function getNextlyInstance(): Promise<Nextly> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Stub image processor for CLI init
     } as any,
   });
+
+  // Only once the boot has resolved. Setting it beforehand marks an app
+  // initialized when the database or config was unavailable, and the retry a
+  // caller then makes returns early without ever booting.
+  initialized = true;
+  return instance;
 }
 
 /**
