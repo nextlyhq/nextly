@@ -740,11 +740,11 @@ describe("db:sync creates localized companion tables in-process (integration)", 
   });
 
   it("repairs an install whose companion predates transition records", async () => {
-    // What `nextly migrate --supervised` exists for. These have a companion, no marker, and no way
-    // to tell whether their content was ever copied across — the one fact that cannot be
-    // re-derived is the language, which running the repair supplies from the configured default.
-    // An unattended pass must NOT read that absence as a debt, because a from-birth localized
-    // entity is untracked too and owes nothing.
+    // What `nextly migrate --repair-localization` exists for. These have a companion, no marker,
+    // and no way to tell whether their content was ever copied across — the one fact that cannot
+    // be re-derived is the language, which running the repair supplies from the configured
+    // default. Nothing infers that debt: an entity localized since birth is untracked too and
+    // owes nothing, and no physical shape separates the two.
     const localized = defineConfig({
       localization: { locales: ["en", "es"], defaultLocale: "en" },
       collections: [

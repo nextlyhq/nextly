@@ -28,6 +28,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, sql } from "drizzle-orm";
 
 import type {
   I18nTransitionKind,
@@ -41,6 +42,7 @@ import {
 
 import type { CompanionIntrospectAdapter } from "./companion-io";
 import { localizedColumnsOnBothTables } from "./companion-io";
+import { buildCompanionRuntimeTable } from "./companion-registration";
 
 /** Minimal field shape the restore needs — matches `CompanionFieldLike` in companion-io. */
 interface RestorableField {
@@ -118,21 +120,14 @@ export async function restoreDisabledCompanion(
     }
 
     if (restorable.length > 0) {
-      const { buildDefaultLocaleRestoreStatements } = await import(
-        "../migration/generate-down"
-      );
-      const statements = buildDefaultLocaleRestoreStatements(
-        {
-          dialect: args.dialect,
-          mainTable: args.tableName,
-          companionTable: companionTableName,
-          defaultLocale: restoreLocale,
-        },
-        restorable
-      );
-      for (const statement of statements) {
-        await adapter.executeQuery(statement);
-      }
+      await copyDefaultLocaleOntoMain(adapter, {
+        tableName: args.tableName,
+        companionTableName,
+        fields: args.fields,
+        dialect: args.dialect,
+        locale: restoreLocale,
+        columns: restorable,
+      });
     }
 
     // Recorded even when no column needed copying. The transition is over either way, and leaving
@@ -151,4 +146,108 @@ export async function restoreDisabledCompanion(
     onError?.(error);
     return false;
   }
+}
+
+/**
+ * The slice of Drizzle this copy drives.
+ *
+ * Declared structurally, the way the companion read helpers declare theirs, because the table
+ * objects are built per entity at runtime and their dialect-specific types differ — naming only
+ * the calls used keeps the dialect out of the port and needs no `any`.
+ */
+interface UpdatableDb {
+  update(table: unknown): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): Promise<unknown>;
+    };
+  };
+}
+
+/**
+ * Copy the default locale's companion values back onto the main row, through Drizzle.
+ *
+ * The equivalent statement is also produced as text by `buildDefaultLocaleRestoreStatements`, for
+ * the disable MIGRATION — a file has to carry SQL. This path is not a file, so it goes through the
+ * query builder: identifiers come from the generated table objects rather than hand-quoting, and
+ * the locale is bound rather than embedded.
+ *
+ * One statement covering every column. Several can land half-way, leaving main carrying a mixture
+ * of restored and pre-localization values with nothing recording that a restore was attempted —
+ * after which the app serves that mixture, accepts edits on it, and the next pass overwrites them
+ * from the now-stale companion.
+ *
+ * `WHERE EXISTS` matters as much: without it a row that has no companion row in the default locale
+ * — an entry authored only in another language — assigns SQL NULL, so restoring would blank the
+ * main column instead of leaving it alone. There is nothing to restore for such a row.
+ */
+async function copyDefaultLocaleOntoMain(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    tableName: string;
+    companionTableName: string;
+    fields: RestorableField[];
+    dialect: SupportedDialect;
+    locale: string;
+    columns: readonly string[];
+  }
+): Promise<void> {
+  const { generateRuntimeSchema } = await import(
+    "../../schema/services/runtime-schema-generator"
+  );
+  const { fieldToLocalizedColumnSpec } = await import(
+    "../migration/field-to-column-spec"
+  );
+
+  // The main table WITH its translatable columns: they are what this writes into, and the
+  // generator omits them only when told the entity is localized, which it no longer is.
+  const mainTable = generateRuntimeSchema(
+    args.tableName,
+    args.fields as Parameters<typeof generateRuntimeSchema>[1],
+    args.dialect
+  ).table;
+  // Every field is offered as translatable, because turning localization off usually clears the
+  // per-field flags and the companion's physical columns are what actually decide. The
+  // intersection was resolved before this call.
+  const companion = buildCompanionRuntimeTable({
+    slug: args.tableName,
+    tableName: args.tableName,
+    fields: args.fields.map(f => ({ ...f, localized: true })),
+    dialect: args.dialect,
+    localized: true,
+  });
+  if (!companion) return;
+
+  const main = mainTable as Record<string, unknown>;
+  const comp = companion.table as Record<string, unknown>;
+
+  // The main table object is keyed by FIELD name while the companion is keyed by physical COLUMN
+  // name, so `subTitle` and `sub_title` are the same value under two keys. Pair them through the
+  // same descriptor the columns were created from rather than guessing the conversion.
+  const wanted = new Set(args.columns);
+  const pairs = args.fields
+    .map(field => ({
+      field: field.name,
+      column: fieldToLocalizedColumnSpec(field, args.dialect)?.name,
+    }))
+    .filter(
+      (p): p is { field: string; column: string } =>
+        typeof p.column === "string" && wanted.has(p.column)
+    );
+  if (pairs.length === 0) return;
+
+  const matches = and(
+    eq(comp._parent as never, main.id as never),
+    eq(comp._locale as never, args.locale)
+  );
+  const values: Record<string, unknown> = {};
+  for (const pair of pairs) {
+    values[pair.field] =
+      sql`(select ${comp[pair.column]} from ${companion.table} where ${matches})`;
+  }
+
+  await adapter
+    .getDrizzle<UpdatableDb>()
+    .update(mainTable)
+    .set(values)
+    .where(sql`exists (select 1 from ${companion.table} where ${matches})`);
 }
