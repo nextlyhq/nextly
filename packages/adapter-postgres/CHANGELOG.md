@@ -1,5 +1,47 @@
 # @nextlyhq/adapter-postgres
 
+## 0.0.2-alpha.49
+
+### Patch Changes
+
+- [#425](https://github.com/nextlyhq/nextly/pull/425) [`50a9655`](https://github.com/nextlyhq/nextly/commit/50a96556f3bf81ae51458531002befe0ee70f9ff) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The `blocks` field type now comes from `@nextlyhq/plugin-page-builder` instead of core.
+
+  **Breaking, and it needs a one-line change.** `blocks()` and the blocks document types were exported from `nextly/config`. They now come from `@nextlyhq/plugin-page-builder`, and the field only exists when that plugin is installed:
+
+  ```diff
+  -import { blocks } from "nextly/config";
+  +import { blocks } from "@nextlyhq/plugin-page-builder";
+  ```
+
+  Nothing about a stored document changes. Existing columns, values and documents are untouched; only where the field type is declared moves.
+
+  Core shipped this field while being unable to deliver it: a JSON column and a read-only summary, with no editor unless the page-builder plugin was installed, at the cost of a hard dependency on the document engine and a branch in every switch that dispatches on field type. Declared by the plugin, the field arrives with the code that makes it work, and "Blocks" appears in the Schema Builder only when it can actually be used.
+
+  A contributed field type can now be declared from code. `defineCollection` and `defineSingle` refused any token they did not recognise, and a plugin registers its field types when the app boots — after the config bundle has already been evaluated. Every contributed type was therefore unusable code-first, which is why `blocks()` needs this to work at all. An unrecognised token is now deferred to boot, where the registry is populated and the question can actually be answered: a type no installed plugin offers on that surface is refused there instead, with the same error.
+
+  Plugin field types can now declare `emptyValue`: what a field of that type holds when nothing has been written to it. Two paths needed it and had to agree — backfilling a required column added to a table that already has rows, and seeding a required field on a record created without one. Both previously derived that from the storage primitive, so a type storing a structured document got `{}`, which satisfies the column and then fails every read expecting the structure. The value is returned rather than SQL, so core quotes it correctly for each dialect.
+
+- [#420](https://github.com/nextlyhq/nextly/pull/420) [`88d23c9`](https://github.com/nextlyhq/nextly/commit/88d23c9bc763d38be6f5d995b044737a6558ca32) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Run the hooks declared on a code-first collection. `defineCollection({ hooks })` registered nothing at boot, so a declared beforeChange, afterChange, beforeRead or afterRead never ran and the operation reported success regardless.
+
+- [#430](https://github.com/nextlyhq/nextly/pull/430) [`f2c7a5d`](https://github.com/nextlyhq/nextly/commit/f2c7a5de4b9779a1ba9842afe91a7a9473494aca) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Groundwork for the field group storage migration: it can now rewrite the vocabulary stored inside rows, not just the tables and columns those rows live in. Stored field definitions, the source path a field group records, the scope a schema event carries, and the type key inside version snapshots and event payloads all move to the field group spelling.
+
+  The two ledgers whose size follows a site history, content versions and the event outbox, are walked in bounded batches that each commit on their own and record how far they got, so an interrupted upgrade resumes near where it stopped instead of starting the table again. Every step then rescans its table rather than trusting that record, so a resume can never report a completeness it did not reach. Nothing calls the migration itself yet.
+
+- [#426](https://github.com/nextlyhq/nextly/pull/426) [`a4f7384`](https://github.com/nextlyhq/nextly/commit/a4f7384e8c8b299ffa6b2ef4f627fa43fc41aae3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Keep a hook's own error type through the hook registry. A hook rejecting input with a validation or permission error had it rebuilt as a generic one; it now passes through with its status, code and field issues intact. Direct API callers receive that error as thrown. REST callers still have some statuses reconstructed at the dispatcher boundary, which is tracked separately.
+
+- [#419](https://github.com/nextlyhq/nextly/pull/419) [`b2bfacb`](https://github.com/nextlyhq/nextly/commit/b2bfacb25df410cbdbeb2bac8d2adcdfea6c4aff) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Enabling localization on a collection, single or field group that already has content no longer hides that content. Previously the code-first path (turning `localized: true` on in `nextly.config.ts`) created an empty translations table, so every localized field read as empty even though the values were still in the database. Turning localization on through the admin Schema Builder always copied the existing values across; now both paths do.
+
+  The existing values are copied into the default language and left in place on the original table as well, so nothing is destroyed if you turn localization back off before running `nextly migrate`.
+
+- [#431](https://github.com/nextlyhq/nextly/pull/431) [`8c52566`](https://github.com/nextlyhq/nextly/commit/8c525663b2420bd0dd470fd46b031c553e179654) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Let a scaffolded app retry startup after a failed boot. The generated helper marked initialization complete before booting, so when the database or config was unavailable the retry returned early without ever booting.
+
+- [#432](https://github.com/nextlyhq/nextly/pull/432) [`d45ba2b`](https://github.com/nextlyhq/nextly/commit/d45ba2b19972a51cb522ddbb1a022952506be32c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Declare the context a related-row read carries once instead of in each layer that expands a relationship, and type the target table columns such a read uses.
+
+- [#433](https://github.com/nextlyhq/nextly/pull/433) [`d439e64`](https://github.com/nextlyhq/nextly/commit/d439e64b8559da776707e26554248160a75d3bc2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A value returned from an `afterChange` or `afterDelete` hook no longer replaces the row. These phases run after the write has committed, so a later handler and the caller now both see the row that was persisted rather than whatever an earlier handler returned. `beforeChange`, `beforeValidate` and `afterRead` still transform as before.
+
+- Updated dependencies [[`50a9655`](https://github.com/nextlyhq/nextly/commit/50a96556f3bf81ae51458531002befe0ee70f9ff), [`88d23c9`](https://github.com/nextlyhq/nextly/commit/88d23c9bc763d38be6f5d995b044737a6558ca32), [`f2c7a5d`](https://github.com/nextlyhq/nextly/commit/f2c7a5de4b9779a1ba9842afe91a7a9473494aca), [`a4f7384`](https://github.com/nextlyhq/nextly/commit/a4f7384e8c8b299ffa6b2ef4f627fa43fc41aae3), [`b2bfacb`](https://github.com/nextlyhq/nextly/commit/b2bfacb25df410cbdbeb2bac8d2adcdfea6c4aff), [`8c52566`](https://github.com/nextlyhq/nextly/commit/8c525663b2420bd0dd470fd46b031c553e179654), [`d45ba2b`](https://github.com/nextlyhq/nextly/commit/d45ba2b19972a51cb522ddbb1a022952506be32c), [`d439e64`](https://github.com/nextlyhq/nextly/commit/d439e64b8559da776707e26554248160a75d3bc2)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.49
+
 ## 0.0.2-alpha.48
 
 ### Patch Changes
