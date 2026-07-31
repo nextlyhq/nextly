@@ -193,3 +193,26 @@ describe("a code-less 400 does not put internal text on the wire", () => {
     ).toBe("REQUIRED");
   });
 });
+
+describe("a typed 409 is not flattened into a generic conflict", () => {
+  it("keeps DUPLICATE and its public fields", () => {
+    // A status-only branch that ran first rebuilt every 409 as CONFLICT, so a
+    // duplicate -- and a plugin 409 carrying its own key and data -- lost what
+    // told them apart.
+    const err = errorFromServiceEnvelope({
+      statusCode: 409,
+      code: "DUPLICATE",
+      message: "Resource already exists.",
+      messageKey: "errors.duplicate",
+    });
+
+    expect(err.code).toBe("DUPLICATE");
+    expect(err.messageKey).toBe("errors.duplicate");
+  });
+
+  it("still defaults a code-less 409 to staleness", () => {
+    // The mirror: without a code, telling the user to refresh is the safer
+    // answer than implying the write was invalid.
+    expect(errorFromServiceEnvelope({ statusCode: 409 }).code).toBe("CONFLICT");
+  });
+});

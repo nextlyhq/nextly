@@ -101,3 +101,32 @@ describe("the Single boundaries rebuild the error rather than its status", () =>
     expect(err.code).toBe("NOT_FOUND");
   });
 });
+
+describe("the Single boundaries keep an issue's code", () => {
+  it("carries it through the Direct API's normalization", async () => {
+    // `SingleResult.errors` carries the code now, but the boundary map that
+    // converts `{field}` to `{path}` was dropping it again one layer up, so the
+    // converter substituted a generic reason.
+    const { createErrorFromSingleResult } = await import(
+      "../../../direct-api/namespaces/helpers"
+    );
+    const result = buildSingleErrorResult(
+      NextlyError.validation({
+        errors: [{ path: "title", code: "REQUIRED", message: "Required." }],
+      }),
+      "Failed"
+    );
+
+    const err = createErrorFromSingleResult({
+      success: false,
+      statusCode: result.statusCode,
+      code: result.code,
+      message: result.message,
+      errors: result.errors,
+    });
+
+    expect(
+      (err.publicData as { errors: { code: string }[] }).errors[0].code
+    ).toBe("REQUIRED");
+  });
+});

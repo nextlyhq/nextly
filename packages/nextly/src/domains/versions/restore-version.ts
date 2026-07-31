@@ -566,6 +566,19 @@ function assertWriteSucceeded(
     });
   }
 
+  // A typed failure answers as itself. The 4xx branch below treats everything
+  // as a snapshot that failed today's validation rules, which is right for a
+  // stale select option and wrong for a rate limit -- that reached the client
+  // as a 400 with no retry interval.
+  if (result.code) {
+    throw errorFromServiceEnvelope(result as ServiceErrorEnvelope, {
+      reason: "restore-write-failed",
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    });
+  }
+
   // A conflict stays a conflict. Wrapping it in a validation error would answer
   // 400/VALIDATION_ERROR, and a REST client reads the outer status — so a
   // restore whose slug now collides would stop matching the contract the same
@@ -586,19 +599,6 @@ function assertWriteSucceeded(
   // since removed, a validator tightened since. Those are answers the editor can
   // act on, so the update's own message is preserved rather than flattened into
   // a server fault.
-  // A typed failure answers as itself. The 4xx branch below treats everything
-  // as a snapshot that failed today's validation rules, which is right for a
-  // stale select option and wrong for a rate limit -- that reached the client
-  // as a 400 with no retry interval.
-  if (result.code) {
-    throw errorFromServiceEnvelope(result as ServiceErrorEnvelope, {
-      reason: "restore-write-failed",
-      scopeKind: args.scopeKind,
-      scopeSlug: args.slug,
-      entryId: args.entryId,
-    });
-  }
-
   if (status >= 400 && status < 500) {
     throw NextlyError.validation({
       errors: Array.isArray(result.errors)

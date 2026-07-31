@@ -94,6 +94,9 @@ function throwFromSingleResult<T>(
       ...result,
       errors: result.errors?.map(e => ({
         path: e.field,
+        // The per-field reason travels with the issue; dropping it here would
+        // have the converter substitute a generic one.
+        code: e.code,
         message: e.message,
       })),
     },
