@@ -54,7 +54,7 @@ interface SingleEntryService {
 }
 
 /** Every dialect the harness supports, so an unreachable one is skipped visibly. */
-const ALL_DIALECTS: readonly TestDialect[] = ["sqlite", "postgres", "mysql"];
+const ALL_DIALECTS: readonly TestDialect[] = ["sqlite", "postgresql", "mysql"];
 
 /**
  * One describe per dialect, skipped rather than dropped when the server is not

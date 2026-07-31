@@ -63,7 +63,7 @@ import type {
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { pluginEmptyValue } from "../../../shared/lib/plugin-storage";
+import { pluginEmptyColumnDefault } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   DEFAULT_DECIMAL_PRECISION,
@@ -1011,16 +1011,12 @@ export class FieldGroupSchemaService {
     // expects the structure the type actually stores. Read from the field as
     // DECLARED — `type` here may already be the storage primitive, under which
     // the contributed type is not registered and states nothing.
-    const contributed = pluginEmptyValue(field ?? { type });
-    if (contributed !== undefined) {
-      // The type states a value, not SQL. A structured one is a JSON document
-      // and is quoted as such; a scalar is rendered as its own literal, since
-      // wrapping `false` as JSON text would seed a truthy string into a
-      // boolean column.
-      return typeof contributed === "object" && contributed !== null
-        ? quoteJsonSqlDefault(JSON.stringify(contributed), this.dialect)
-        : this.formatDefaultValue(contributed, type);
-    }
+    const contributed = pluginEmptyColumnDefault(field ?? { type }, type, {
+      json: serialized => quoteJsonSqlDefault(serialized, this.dialect),
+      literal: (value, storageToken) =>
+        this.formatDefaultValue(value, storageToken),
+    });
+    if (contributed !== undefined) return contributed;
 
     switch (type) {
       case "text":

@@ -34,3 +34,28 @@ export const blocks = (config: Omit<BlocksFieldConfig, "type">) =>
   // what makes a malformed built-in a compile error — and a contributed type
   // has no arm in it. The brand opens one deliberately.
   pluginField({ ...config, type: BLOCKS_TYPE });
+
+/**
+ * Narrow a field declaration to a blocks field.
+ *
+ * Lives beside the factory because the type it narrows to now does: while the
+ * field type was built in, core's guard barrel answered this, and a consumer
+ * that walked a schema looking for blocks fields had nowhere else to ask once
+ * the type moved out.
+ *
+ * Widened at the parameter rather than taking `FieldConfig`, because the caller
+ * is usually iterating a heterogeneous field list and a contributed type is not
+ * a member of the canonical union.
+ *
+ * @example
+ * ```ts
+ * if (isBlocksField(field)) {
+ *   field.blocks?.allow;
+ * }
+ * ```
+ */
+export function isBlocksField(
+  field: { type?: unknown } | null | undefined
+): field is BlocksFieldConfig {
+  return !!field && field.type === BLOCKS_TYPE;
+}
