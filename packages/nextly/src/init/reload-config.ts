@@ -1368,6 +1368,20 @@ async function applyReload(opts?: {
     });
   }
 
+  // 🔴 Checked BEFORE the empty-target branch below. `loadConfig` has already
+  // replaced the process-global field-type registry, so returning without
+  // restoring it leaves the deferred config's validators and storage mappings
+  // live against a schema this reload chose not to touch. The empty-target
+  // branch is for a config that genuinely declares nothing; a config whose
+  // entities were all SKIPPED is a different state and must unwind.
+  if (skippedComponentSlugs.size > 0 && componentTargets.length === 0) {
+    logger?.warn(
+      "[Nextly HMR] Every field group was deferred; abandoning this reload."
+    );
+    abandonReload();
+    return;
+  }
+
   if (
     targets.length === 0 &&
     singleTargets.length === 0 &&
@@ -1454,7 +1468,11 @@ async function applyReload(opts?: {
   // metadata-only sync run at all"; this answers "may THIS entity be provisioned", which is a
   // per-entity question — see `ensureLocalizedCompanionsForReload`.
   const deferredEntities = new Set<string>(
-    [...skippedComponentSlugs].map(slug => `component:${slug}`)
+    // `fieldGroup:` — the prefix every other producer and consumer of this set
+    // uses. A deferral recorded under a different key is not a deferral: the
+    // localization helper checks membership and would carry on deriving the
+    // obsolete name for an entity this reload deliberately skipped.
+    [...skippedComponentSlugs].map(slug => `fieldGroup:${slug}`)
   );
 
   const desiredCollections: Record<string, DesiredCollection> = {};
