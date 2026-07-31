@@ -75,7 +75,7 @@ import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
-import { getHookRegistry } from "../hooks/hook-registry";
+import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
@@ -344,6 +344,12 @@ const globalForReg = globalThis as unknown as {
     plugin: PluginDefinition;
     context: PluginContext;
   }>;
+  /**
+   * The registry `registerServices` actually registered into. A caller may
+   * supply its own, and clearing the process-global one would leave that
+   * instance's handlers in place for the next registration to append to.
+   */
+  __nextly_activeHookRegistry?: HookRegistry;
 };
 
 // ============================================================
@@ -465,6 +471,9 @@ export async function registerServices(
   // "executeBeforeOperation is not a function" in production. Defaulting here
   // also ensures sanitization + activity-log "*" hooks register on every boot.
   const hookRegistry = providedHookRegistry ?? getHookRegistry();
+  // Remembered so shutdown clears the registry that was written to, not
+  // whichever one happens to be global at the time.
+  globalForReg.__nextly_activeHookRegistry = hookRegistry;
 
   const resolvedLogger = logger ?? consoleLogger;
   const resolvedBasePath = basePath ?? process.cwd();
@@ -2496,6 +2505,25 @@ export function isServicesRegistered(): boolean {
  * shutting down the application to ensure proper cleanup of database
  * connections and other resources.
  */
+/**
+ * Clear the registry `registerServices` wrote to, falling back to the global
+ * one when nothing has registered yet.
+ *
+ * A caller can supply its own `hookRegistry`, and that is the instance the
+ * built-in, configured and plugin handlers went into; resetting only the
+ * process-global singleton would leave it holding a full set for the next
+ * registration to append to.
+ */
+function clearActiveHookRegistry(): void {
+  const active = globalForReg.__nextly_activeHookRegistry;
+  if (active) {
+    active.clear();
+    globalForReg.__nextly_activeHookRegistry = undefined;
+    return;
+  }
+  resetHookRegistry();
+}
+
 export async function shutdownServices(): Promise<void> {
   if (!globalForReg.__nextly_isRegistered) {
     return;
@@ -2535,6 +2563,11 @@ export async function shutdownServices(): Promise<void> {
     // process-global too, and its provider closes over this container's
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
+    // Hooks live in a registry that outlives the container. Registration runs
+    // from config on every init, so leaving it populated means a second
+    // instance in the same process appends a fresh copy of every handler and
+    // runs the dead instance's alongside the new one.
+    clearActiveHookRegistry();
     globalForReg.__nextly_isRegistered = false;
   }
 }
@@ -2552,6 +2585,9 @@ export function clearServices(): void {
   // Clear the process-global recording activation for the same reason; its
   // provider closes over this container's registry.
   resetWebhookActivation();
+  // Cleared with the container for the same reason: re-initializing would
+  // otherwise register every configured hook a second time.
+  clearActiveHookRegistry();
   globalForReg.__nextly_isRegistered = false;
 }
 
