@@ -39,6 +39,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { forgetCompanionReadiness } from "../runtime/companion-readiness";
 
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
@@ -66,6 +67,26 @@ afterEach(async () => {
 });
 
 const localization = { locales: ["en", "es"], defaultLocale: "en" };
+
+/**
+ * Drop a companion the way this file needs it gone.
+ *
+ * Dropping the table is a shortcut to the state these tests are about: a server that believes an
+ * entity is localized while no companion exists. The route users actually take there is a
+ * `db:sync` transition, which flips the registry flag from its own process and leaves the server
+ * having never seen a companion at all — so nothing is remembered about it. Forgetting the
+ * readiness verdict reproduces that, rather than the different situation of a table vanishing from
+ * under a process that had already used it.
+ */
+async function dropCompanion(
+  nextly: TestNextly,
+  table: string,
+  dialect: string
+): Promise<void> {
+  const quoted = dialect === "mysql" ? `\`${table}\`` : `"${table}"`;
+  await nextly.adapter.executeQuery(`DROP TABLE IF EXISTS ${quoted}`);
+  forgetCompanionReadiness(table);
+}
 
 /** Same collection, with localization off (columns on main) or on (companion). */
 const posts = (localized: boolean) =>
@@ -129,6 +150,7 @@ async function enterWindow(): Promise<TestNextly> {
   await handle.adapter.executeQuery(
     "DROP TABLE IF EXISTS dc_i18nwin_posts_locales"
   );
+  forgetCompanionReadiness("dc_i18nwin_posts_locales");
   return handle;
 }
 
@@ -242,9 +264,7 @@ describe.each(getConfiguredTestDialects())(
       expect(created.success).toBe(true);
       const id = (created.data as { id: string }).id;
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_posts_locales`" : '"dc_i18nwin_posts_locales"'}`
-      );
+      await dropCompanion(current, "dc_i18nwin_posts_locales", dialect);
 
       const translated = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -289,9 +309,7 @@ describe.each(getConfiguredTestDialects())(
       expect(created.success).toBe(true);
       const id = (created.data as { id: string }).id;
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_posts_locales`" : '"dc_i18nwin_posts_locales"'}`
-      );
+      await dropCompanion(current, "dc_i18nwin_posts_locales", dialect);
 
       const updated = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -339,9 +357,7 @@ describe.each(getConfiguredTestDialects())(
       expect(created.success).toBe(true);
       const id = (created.data as { id: string }).id;
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_mixed_locales`" : '"dc_i18nwin_mixed_locales"'}`
-      );
+      await dropCompanion(current, "dc_i18nwin_mixed_locales", dialect);
 
       const updated = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -412,9 +428,7 @@ describe.each(getConfiguredTestDialects())(
         localization,
       });
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`comp_znsingle_locales`" : '"comp_znsingle_locales"'}`
-      );
+      await dropCompanion(current, "comp_znsingle_locales", dialect);
 
       const created = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -469,9 +483,7 @@ describe("dynamic zone whose unused field group has no companion (integration)",
     });
 
     // Only the type this write does NOT use loses its companion.
-    await current.adapter.executeQuery(
-      "DROP TABLE IF EXISTS comp_znbroken_locales"
-    );
+    await dropCompanion(current, "comp_znbroken_locales", "sqlite");
 
     const created = await current
       .getService<CollectionsHandler>("collectionsHandler")
@@ -486,3 +498,79 @@ describe("dynamic zone whose unused field group has no companion (integration)",
     expect(created.success).toBe(true);
   });
 });
+
+/**
+ * The read side, which is where this defect actually lived.
+ *
+ * A default-locale write with the companion missing is supposed to succeed: the value stays on the
+ * main table, which still has the column. On PostgreSQL it failed anyway, with
+ * `current transaction is aborted, commands ignored until end of transaction block` — a secondary
+ * error naming a statement that had nothing to do with it.
+ *
+ * The cause was the post-write read-back that builds the response. It joins the companion, and it
+ * used to decide the companion existed by running the join and catching the failure. That check is
+ * free on SQLite and MySQL and fatal on PostgreSQL: the failed statement marks the whole
+ * transaction aborted, so the tolerated error had already poisoned the connection by the time it
+ * was tolerated, and the next statement — the events insert — died. It ran inside the caller's
+ * write transaction, so the fallback write it was meant to support is exactly what it killed.
+ *
+ * Written during PR #382 and removed again because it could not pass. It is restored here with the
+ * fix, and it now runs against a suite that can see the failure: the aborted-transaction guard
+ * records any such state and fails the run, so a future reintroduction trips on its own rather
+ * than waiting for a reviewer.
+ */
+describe.each(getConfiguredTestDialects())(
+  "default-locale field-group write with no companion on %s (integration)",
+  dialect => {
+    const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
+
+    it("completes the fallback write instead of aborting the transaction", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "znfall",
+            localized: true,
+            fields: [text({ name: "heading", localized: true })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "i18nwin_fallback",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "znfall" }),
+            ],
+          }),
+        ],
+        localization,
+      });
+
+      // The pre-migration shape: the translatable column is still on the main table, so the
+      // fallback is legitimate, and the companion is not there.
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${q("comp_znfall")} ADD COLUMN ${q("heading")} text`
+      );
+      await dropCompanion(current, "comp_znfall_locales", dialect);
+
+      const created = await current
+        .getService<CollectionsHandler>("collectionsHandler")
+        .createEntry(
+          {
+            collectionName: "i18nwin_fallback",
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "Page", hero: { heading: "Hello" } }
+        );
+
+      // Report the driver's own words. A bare `success` assertion cannot tell an aborted
+      // transaction from an ordinary refusal, and those want opposite fixes.
+      expect(
+        created.success
+          ? "ok"
+          : `failed ${created.statusCode}: ${created.message}`
+      ).toBe("ok");
+    });
+  }
+);

@@ -1,0 +1,186 @@
+/**
+ * Whether an entity's companion `_locales` table is physically ready to be read and written.
+ *
+ * One question, asked by provisioning, by every localized write, and by the read-back that
+ * populates a response. It used to be answered independently at each of those points, by querying
+ * the database — an uncached existence probe per write, plus a full introspection whenever that
+ * probe came back negative. An entry whose dynamic zone holds K distinct localized field-group
+ * types paid `1 + K` round trips before its transaction and K more inside it. Local SQLite hides
+ * that; managed PostgreSQL at a few milliseconds' latency does not, and the cost grows with the
+ * complexity of the content, which is the wrong direction for a page builder.
+ *
+ * It is also the wrong layer. Physical readiness is schema state: it changes on sync, migrate and
+ * boot, and essentially never per request.
+ *
+ * ## Three states, not a boolean
+ *
+ * A boolean would remove the existence probe and leave the introspection, which is most of the
+ * cost — because "no companion" splits into two situations that want opposite behaviour.
+ *
+ * | State | Physical shape | What callers do |
+ * |---|---|---|
+ * | `ready` | companion exists | read and write through the companion |
+ * | `pre-migration` | no companion, main still carries the translatable columns | the main-table fallback is legitimate |
+ * | `broken` | no companion and main does not carry them | refuse, with an actionable remedy |
+ *
+ * ## Only `ready` is remembered
+ *
+ * Caching every answer would trade one problem for another: `db:sync` and `nextly migrate` run in
+ * a different process from the server, so an in-memory verdict of `pre-migration` can outlive the
+ * migration that made it wrong, and the window is no longer "between the check and the write" but
+ * "until this process next reloads".
+ *
+ * So the verdict that is cached is the one that is both common and safe to be stale about.
+ * `ready` is the healthy steady state, which is where the whole per-write cost lives, and it is
+ * reached by creating a table — something no ordinary operation undoes. The abnormal states are
+ * re-resolved every time, so an entity mid-transition keeps exactly the freshness it has today.
+ * The result: zero queries on the path that matters, and no new staleness on the path that does
+ * not.
+ *
+ * A `ready` verdict that has gone stale (the companion was dropped out from under a running
+ * process) surfaces as a driver error on the next statement, not as silently misplaced content.
+ * Provisioning paths that drop or replace a companion call {@link forgetCompanionReadiness}.
+ *
+ * ## Never resolved inside a transaction
+ *
+ * Resolving issues a query, and a query against a missing relation marks the whole PostgreSQL
+ * transaction aborted — after which the real write dies with `current transaction is aborted` and
+ * the reported error names an innocent statement. Callers already inside a transaction use
+ * {@link cachedCompanionReadiness}, which cannot query. The write paths resolve before they open
+ * one, so by the time the in-transaction read-back asks, the answer is already known.
+ *
+ * @module domains/i18n/runtime/companion-readiness
+ */
+
+import type { CompanionIntrospectAdapter } from "./companion-io";
+
+export type CompanionReadiness = "ready" | "pre-migration" | "broken";
+
+/**
+ * Remembered `ready` verdicts, by companion table name.
+ *
+ * On `globalThis` for the same reason the schema-snapshot caches are: Turbopack re-executes
+ * modules on every HMR cycle, so a module-scoped map would be emptied constantly and the cache
+ * would never pay for itself.
+ */
+interface ReadinessCacheBag {
+  __nextly_companionReadiness?: Set<string>;
+}
+
+function readyTables(): Set<string> {
+  const bag = globalThis as ReadinessCacheBag;
+  bag.__nextly_companionReadiness ??= new Set<string>();
+  return bag.__nextly_companionReadiness;
+}
+
+/**
+ * The remembered verdict, or undefined when there is none. Never queries, so it is the only form
+ * safe to call from inside an open transaction.
+ *
+ * Undefined is not "not ready" — it means nothing has resolved this entity yet. A caller inside a
+ * transaction cannot find out, so it must behave as it would for a companion it cannot use: skip
+ * the join rather than attempt one. That is safe because every path that opens a write transaction
+ * resolves readiness before opening it.
+ */
+export function cachedCompanionReadiness(
+  companionTableName: string
+): CompanionReadiness | undefined {
+  return readyTables().has(companionTableName) ? "ready" : undefined;
+}
+
+/**
+ * Resolve readiness, querying only when the answer is not already known to be `ready`.
+ *
+ * MUST NOT be called inside an open transaction — see the module comment.
+ *
+ * `localizedColumns` are the physical column names the entity's translatable fields map to. They
+ * decide the difference between `pre-migration` and `broken`: the fallback can only work while the
+ * main table still has somewhere to put the values, and an entity localized from birth never had
+ * those columns, so writing to main would reach the driver and fail as an opaque 500.
+ */
+export async function resolveCompanionReadiness(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    companionTableName: string;
+    mainTableName: string;
+    localizedColumns: readonly string[];
+  }
+): Promise<CompanionReadiness> {
+  const cached = cachedCompanionReadiness(args.companionTableName);
+  if (cached) return cached;
+
+  if (await isCompanionReady(adapter, args.companionTableName)) return "ready";
+  // Deliberately not remembered. The companion may be created by another process at any moment,
+  // and remembering this would keep serving the pre-migration answer until the next reload.
+  const { mainTableHasColumns } = await import("./companion-io");
+  return (await mainTableHasColumns(
+    adapter,
+    args.mainTableName,
+    args.localizedColumns
+  ))
+    ? "pre-migration"
+    : "broken";
+}
+
+/**
+ * Whether the companion is there, for callers that do not care why it might not be.
+ *
+ * Some decisions only branch on `ready`: whether to seed a localized default into the companion,
+ * whether an entity has a per-locale publish lifecycle. Telling `pre-migration` from `broken`
+ * costs a full table introspection, and paying for an answer the caller then discards is the kind
+ * of waste this module exists to remove.
+ *
+ * Caches a positive result exactly as {@link resolveCompanionReadiness} does — it is the same
+ * observation — so a later caller that does need all three states gets `ready` for free.
+ */
+export async function isCompanionReady(
+  adapter: CompanionIntrospectAdapter,
+  companionTableName: string
+): Promise<boolean> {
+  if (cachedCompanionReadiness(companionTableName)) return true;
+  const { companionTableExists } = await import("./companion-io");
+  if (!(await companionTableExists(adapter, companionTableName))) return false;
+  readyTables().add(companionTableName);
+  return true;
+}
+
+/** The parts of a loaded companion schema that readiness is decided from. */
+export interface ReadinessSubject {
+  companionTableName: string;
+  localizedFields: readonly { column: string }[];
+}
+
+/**
+ * Readiness for an already-loaded companion schema.
+ *
+ * Every caller has one of these — it is what `loadCompanionSchema` returns — and every caller
+ * would otherwise repeat the same three lines to derive the main table's name and the column list
+ * from it. The main table is the companion's name without its `_locales` suffix, which is the
+ * naming rule the companion is built from, so deriving it here keeps that rule in one place.
+ */
+export function resolveCompanionSchemaReadiness(
+  adapter: CompanionIntrospectAdapter,
+  companion: ReadinessSubject
+): Promise<CompanionReadiness> {
+  return resolveCompanionReadiness(adapter, {
+    companionTableName: companion.companionTableName,
+    mainTableName: companion.companionTableName.replace(/_locales$/, ""),
+    localizedColumns: companion.localizedFields.map(f => f.column),
+  });
+}
+
+/**
+ * Forget a remembered verdict, or all of them when given no name.
+ *
+ * Called by anything that removes or replaces a companion — disabling localization, tearing an
+ * entity down, a migration reset. Creating one needs no call: `ready` is only ever recorded by
+ * observing the table, so an entity that has just gained a companion simply has nothing remembered
+ * and resolves on its next write.
+ */
+export function forgetCompanionReadiness(companionTableName?: string): void {
+  if (companionTableName === undefined) {
+    readyTables().clear();
+    return;
+  }
+  readyTables().delete(companionTableName);
+}

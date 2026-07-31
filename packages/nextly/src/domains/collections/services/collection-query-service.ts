@@ -92,6 +92,7 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 import type { CollectionAccessService } from "./collection-access-service";
@@ -183,6 +184,8 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,
+      // Outside any transaction, so this may resolve rather than only read what is remembered.
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
@@ -214,6 +217,7 @@ export class CollectionQueryService extends BaseService {
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
@@ -314,6 +318,7 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       localeChain,

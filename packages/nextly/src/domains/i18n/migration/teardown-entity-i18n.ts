@@ -127,6 +127,13 @@ export async function teardownEntityI18n(
         : `DROP TABLE IF EXISTS ${quoted}`;
     await adapter.executeQuery(dropSql);
     companionDropped = true;
+    // Readiness remembers only that a companion exists, and this is one of the two things that
+    // makes that false. Forgetting it here rather than at the call sites keeps the memory tied to
+    // the statement that invalidates it.
+    const { forgetCompanionReadiness } = await import(
+      "../runtime/companion-readiness"
+    );
+    forgetCompanionReadiness(companionTable);
   }
 
   // The archive table is created lazily on the first localization disable, so its absence is

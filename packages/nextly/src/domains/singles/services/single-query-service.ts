@@ -77,10 +77,13 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
-  companionTableExists,
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
+import {
+  isCompanionReady,
+  resolveCompanionSchemaReadiness,
+} from "../../i18n/runtime/companion-readiness";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
@@ -765,8 +768,7 @@ export class SingleQueryService extends BaseService {
           doc,
           options.locale,
           options.fallbackLocale,
-          statusFilterValue,
-          strict
+          statusFilterValue
         );
       } catch (error) {
         // Only strict rethrows, and the result builder puts a bare Error's own
@@ -1736,13 +1738,7 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     locale: string | undefined,
     fallbackLocale: string | false | undefined,
-    statusFilterValue: string | undefined,
-    /**
-     * Surface companion failures rather than reading through them. A swallowed
-     * error leaves the main row's value in place, which a rule cannot tell
-     * apart from a translation that says so.
-     */
-    strict = false
+    statusFilterValue: string | undefined
   ): Promise<void> {
     const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
     if (!localeChain) return;
@@ -1772,7 +1768,8 @@ export class SingleQueryService extends BaseService {
         companion.hasStatus && statusFilterValue
           ? statusFilterValue
           : undefined,
-      strict,
+      // A pooled read, so this may resolve rather than only read what is remembered.
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
     });
   }
 
@@ -1797,7 +1794,7 @@ export class SingleQueryService extends BaseService {
     strict: boolean
   ): Promise<void> {
     try {
-      await this.populateTranslationMeta(slug, singleMeta, doc, strict);
+      await this.populateTranslationMeta(slug, singleMeta, doc);
     } catch (error) {
       if (!strict) throw error;
       throw NextlyError.is(error)
@@ -1815,13 +1812,7 @@ export class SingleQueryService extends BaseService {
   private async populateTranslationMeta(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>,
-    /**
-     * Surface a failed overview read instead of leaving the field off. A rule
-     * deciding on `_translations` cannot tell an untranslated Single from one
-     * whose overview could not be loaded.
-     */
-    strict = false
+    doc: Record<string, unknown>
   ): Promise<void> {
     // Gate on THIS single's flag, not just app-level localization — a non-localized single has
     // no companion, so there is no per-locale translation status to attach.
@@ -1844,7 +1835,7 @@ export class SingleQueryService extends BaseService {
       hasStatus: companion.hasStatus,
       // The Single's own row id keys the companion `_parent`, same as the collection path.
       idKey: "id",
-      strict,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
     });
   }
 
@@ -2173,7 +2164,9 @@ export class SingleQueryService extends BaseService {
       localizedDefaults
     );
     if (!companion) return false;
-    return companionTableExists(this.adapter, companion.companionTableName);
+    // Only `ready` matters here — a seed either goes into the companion or does not — so this
+    // takes the cheap form rather than paying an introspection to learn why it might not be.
+    return isCompanionReady(this.adapter, companion.companionTableName);
   }
 
   /**

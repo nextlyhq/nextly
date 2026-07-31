@@ -80,12 +80,14 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
-  companionTableExists,
-  mainTableHasColumns,
   splitLocalizedWrite,
   upsertCompanionRow,
   type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
+import {
+  cachedCompanionReadiness,
+  resolveCompanionReadiness,
+} from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   resolveComponentFieldMap,
@@ -250,10 +252,12 @@ export class SingleMutationService extends BaseService {
       localizedFields: companion.localizedFields,
       rows: [localeRow],
       localeChain: [locale],
-      // This read feeds a durable webhook payload and the caller has already
-      // confirmed the companion table exists, so a real read failure must abort
-      // the write rather than silently ship nulled default-view translations.
-      strict: true,
+      // Inside the caller's transaction, so the remembered verdict is read rather than resolved:
+      // resolving would query, and a query against a missing relation aborts the whole transaction
+      // on PostgreSQL. Every other failure now propagates unconditionally, which is what this read
+      // needs — it feeds a durable webhook payload, and shipping nulled translations because a
+      // transient error was swallowed would corrupt it.
+      readiness: cachedCompanionReadiness(companion.companionTableName),
     });
     const values: Record<string, unknown> = {};
     for (const f of companion.localizedFields) {
@@ -859,13 +863,15 @@ export class SingleMutationService extends BaseService {
       // and probing on the transaction connection would abort the whole
       // transaction on Postgres when the not-yet-migrated table is absent. The
       // in-transaction companion reads are skipped when this is false.
-      const companionPhysicallyExists =
+      const companionReadiness =
         companion && writeLocale !== undefined
-          ? await companionTableExists(
-              this.adapter,
-              companion.companionTableName
-            )
-          : false;
+          ? await resolveCompanionReadiness(this.adapter, {
+              companionTableName: companion.companionTableName,
+              mainTableName: singleMeta.tableName,
+              localizedColumns: companion.localizedFields.map(f => f.column),
+            })
+          : undefined;
+      const companionPhysicallyExists = companionReadiness === "ready";
       // A localized single whose companion table does not exist yet has nowhere to put
       // a NON-default locale's values: the split below moves them out of the main
       // payload and the companion upsert is then skipped, so the translation is
@@ -905,12 +911,10 @@ export class SingleMutationService extends BaseService {
         if (writeLocale !== undefined && writeLocale !== defaultLocale) {
           refuse();
         }
-        const fallbackPossible = await mainTableHasColumns(
-          this.adapter,
-          singleMeta.tableName,
-          companion.localizedFields.map(f => f.column)
-        );
-        if (!fallbackPossible) refuse();
+        // `broken` is the state where the fallback has nowhere to land. Resolved above, on the
+        // pooled connection and before the transaction, for the reasons this block already gives.
+        // `undefined` means no write locale was named, which never reaches the fallback.
+        if (companionReadiness === "broken") refuse();
       }
 
       // Same pre-transaction, pooled probe for the auto-create default seed: it
@@ -930,12 +934,11 @@ export class SingleMutationService extends BaseService {
       // keeps the refusal exactly as raised: errors leaving a transaction callback
       // pass through the adapter's error classification, which rewraps anything that
       // is not already a `DatabaseError`.
-      const fieldGroupPresence =
-        (await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-          fields: fieldConfigs,
-          data: componentFieldData,
-          locale: options.locale,
-        })) ?? new Map<string, boolean>();
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: fieldConfigs,
+        data: componentFieldData,
+        locale: options.locale,
+      });
 
       try {
         // Retry the whole update+capture transaction on a version_no allocation
@@ -1226,11 +1229,13 @@ export class SingleMutationService extends BaseService {
                 localizedFields: companion.localizedFields,
                 rows: [preLocaleRow],
                 localeChain: [writeLocale],
-                // This pre-image read feeds the durable webhook `previous`
-                // payload and the table is already known to exist, so a real
-                // read failure must abort the write rather than silently ship a
-                // nulled `previous` (which would corrupt `changedFields`).
-                strict: true,
+                // Read, not resolved: this runs on the write transaction's connection. A real
+                // failure now propagates unconditionally, which this pre-image read needs — it
+                // feeds the durable webhook `previous` payload, and a silently nulled `previous`
+                // would corrupt `changedFields`.
+                readiness: cachedCompanionReadiness(
+                  companion.companionTableName
+                ),
               });
               for (const f of companion.localizedFields) {
                 if (preLocaleRow[f.name] !== undefined) {
@@ -1250,7 +1255,8 @@ export class SingleMutationService extends BaseService {
                   >(),
                   companion.table,
                   existingDoc.id,
-                  writeLocale
+                  writeLocale,
+                  cachedCompanionReadiness(companion.companionTableName)
                 );
                 // A status-bearing companion row always carries a non-null
                 // `_status`, so its presence already answers row existence — no
@@ -1265,7 +1271,8 @@ export class SingleMutationService extends BaseService {
                   tx.getDrizzle<Parameters<typeof companionRowExists>[0]>(),
                   companion.table,
                   existingDoc.id,
-                  writeLocale
+                  writeLocale,
+                  cachedCompanionReadiness(companion.companionTableName)
                 );
               }
             }
@@ -1570,8 +1577,7 @@ export class SingleMutationService extends BaseService {
                   fields: fieldConfigs,
                   data: attemptComponentData,
                   locale: options.locale,
-                },
-                fieldGroupPresence
+                }
               );
             }
 

@@ -13,7 +13,6 @@ import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type { TargetReadPolicy } from "../../collections/services/collection-relationship-service";
 import {
-  isMissingCompanionTableError,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
@@ -24,6 +23,11 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
+import {
+  cachedCompanionReadiness,
+  resolveCompanionSchemaReadiness,
+  type CompanionReadiness,
+} from "../../i18n/runtime/companion-readiness";
 
 import {
   DEFAULT_COMPONENT_DEPTH,
@@ -191,7 +195,48 @@ function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return field.type === STORAGE_FORMAT.fieldType;
 }
 
+/**
+ * Whether an error is the component's own `comp_*` table simply not existing yet.
+ *
+ * The companion `_locales` reads no longer decide existence this way — they are told, because
+ * catching a failed query is a valid existence check on SQLite and MySQL and aborts the whole
+ * transaction on PostgreSQL. This one is about a DIFFERENT table: the field group's main table,
+ * before its own migration has run. It is the same shape and the same hazard, and closing it needs
+ * readiness for the main table rather than the companion, which is a separate piece of work.
+ */
+function isMissingComponentTableError(err: unknown): boolean {
+  const message = [
+    err instanceof Error ? err.message : String(err),
+    err instanceof Error && err.cause instanceof Error ? err.cause.message : "",
+  ].join(" ");
+  return (
+    message.includes("no such table") ||
+    message.includes("doesn't exist") ||
+    (message.includes("relation") && message.includes("does not exist"))
+  );
+}
+
 export class FieldGroupQueryService extends BaseService {
+  /**
+   * A field group's companion readiness, resolved only where it is safe to.
+   *
+   * `executor` is present when this read runs on a caller's transaction connection. Resolving
+   * there would issue a query, and a query against a missing relation aborts the whole transaction
+   * on PostgreSQL — so that path reads the remembered verdict instead. The write paths resolve
+   * before they open a transaction, so by then the answer is already known.
+   */
+  private companionReadiness(
+    companion: {
+      companionTableName: string;
+      localizedFields: { column: string }[];
+    },
+    executor: unknown
+  ): Promise<CompanionReadiness | undefined> | CompanionReadiness | undefined {
+    return executor === undefined
+      ? resolveCompanionSchemaReadiness(this.adapter, companion)
+      : cachedCompanionReadiness(companion.companionTableName);
+  }
+
   private readonly registryService: FieldGroupRegistryService;
   private relationshipService?: CollectionRelationshipService;
 
@@ -225,10 +270,7 @@ export class FieldGroupQueryService extends BaseService {
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: string | false,
-    executor?: unknown,
-    // Propagate a real companion read failure (durable webhook/version reads)
-    // instead of swallowing it and leaving translatable fields unresolved.
-    strict = false
+    executor?: unknown
   ): Promise<void> {
     if (
       !this.localization ||
@@ -260,6 +302,7 @@ export class FieldGroupQueryService extends BaseService {
         rows: dataArray,
         locales: this.localization.locales.map(l => l.code),
         idKey: "id",
+        readiness: await this.companionReadiness(companion, executor),
       });
       this.decodeJsonLocalizedValues(
         meta,
@@ -287,7 +330,7 @@ export class FieldGroupQueryService extends BaseService {
       rows: dataArray,
       localeChain,
       idKey: "id",
-      strict,
+      readiness: await this.companionReadiness(companion, executor),
     });
     this.decodeJsonLocalizedValues(
       meta,
@@ -612,8 +655,7 @@ export class FieldGroupQueryService extends BaseService {
       [data],
       locale,
       fallbackLocale,
-      executor,
-      strict
+      executor
     );
     data = await this.expandComponentRelationships(
       data,
@@ -664,8 +706,7 @@ export class FieldGroupQueryService extends BaseService {
       dataArray,
       locale,
       fallbackLocale,
-      executor,
-      strict
+      executor
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -743,8 +784,7 @@ export class FieldGroupQueryService extends BaseService {
         [data],
         locale,
         fallbackLocale,
-        executor,
-        strict
+        executor
       );
       data = await this.expandComponentRelationships(
         data,
@@ -986,7 +1026,7 @@ export class FieldGroupQueryService extends BaseService {
       // The comp_* table may not exist yet (a component before its migration
       // runs) — tolerate that and read as empty. In strict mode a real failure
       // (transient/permission/schema) instead propagates.
-      if (strict && !isMissingCompanionTableError(error)) {
+      if (strict && !isMissingComponentTableError(error)) {
         throw error;
       }
       this.logger.debug("Could not query component table", {
