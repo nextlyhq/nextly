@@ -52,19 +52,26 @@ export interface BlockRegistrationService {
 }
 
 /**
- * Build the service the page builder contributes.
+ * Empty the block registry for a fresh boot.
  *
- * The registry is pinned to `globalThis` and survives a config reload, while
- * every plugin's `init` runs again on that reload — so without a reset the
- * second boot re-registers definitions that are already there and the engine
- * refuses them as collisions. Cleared here rather than in the page builder's own
- * `init` because init order is not fixed: a contributor whose init ran first
- * would have its blocks wiped by a later clear. This factory is memoized per
- * boot, so the reset happens exactly once and always before the first
- * registration that goes through it.
+ * The registry is pinned to `globalThis` and outlives a config reload, so
+ * without this the second boot re-registers definitions that are already there
+ * and the engine refuses them as collisions — and definitions from a plugin
+ * that has since been removed would linger indefinitely.
+ *
+ * Called from the page builder's `setup`, which runs before any plugin's `init`
+ * and runs whether or not anything contributes. Resetting inside the service
+ * factory instead would miss the case that matters most: when the last
+ * contributor is removed, nothing resolves the service, so a lazy reset never
+ * happens and exactly the stale definitions that should disappear are the ones
+ * that survive.
  */
-export function createBlockRegistrationService(): BlockRegistrationService {
+export function resetBlockRegistry(): void {
   clearBlocks();
+}
+
+/** Build the service the page builder contributes. */
+export function createBlockRegistrationService(): BlockRegistrationService {
   return {
     register(definitions, source) {
       const list = Array.isArray(definitions) ? definitions : [definitions];

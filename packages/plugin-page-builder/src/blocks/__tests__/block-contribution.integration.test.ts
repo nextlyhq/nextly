@@ -122,4 +122,19 @@ describe("the registry survives a second boot", () => {
 
     expect(getBlock("acme/pricing-table")).toBeDefined();
   });
+
+  it("drops a removed contributor's blocks on the next boot", async () => {
+    // The case a lazy reset cannot cover: with the contributor gone, nothing
+    // resolves the registration service, so a reset that lived in that factory
+    // would never run and the departed plugin's blocks would linger.
+    current = await createTestNextly({
+      plugins: [pageBuilder(), contributor()],
+    });
+    expect(getBlock("acme/pricing-table")).toBeDefined();
+    await current.cleanup?.();
+
+    current = await createTestNextly({ plugins: [pageBuilder()] });
+
+    expect(getBlock("acme/pricing-table")).toBeUndefined();
+  });
 });

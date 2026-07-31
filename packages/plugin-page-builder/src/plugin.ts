@@ -1,12 +1,24 @@
+import { createRequire } from "node:module";
+
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
+  resetBlockRegistry,
 } from "./blocks/registration-service";
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
+
+// Read from package.json so it can never drift from the published package. A
+// hardcoded literal had fallen eight releases behind, and `validatePluginVersions`
+// checks a contributor's `dependsOn` range against THIS value — so a plugin
+// requiring a version that shipped weeks ago was refused at boot as
+// incompatible. Node/config-side only; this module is not in the admin bundle.
+const { version: PLUGIN_VERSION } = createRequire(import.meta.url)(
+  "../package.json"
+) as { version: string };
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
@@ -20,7 +32,15 @@ export interface PageBuilderOptions {
 export const pageBuilder = (opts: PageBuilderOptions = {}) =>
   definePlugin({
     name: "@nextlyhq/plugin-page-builder",
-    version: "0.0.2-alpha.29",
+    // Runs before any plugin's `init`, and runs whether or not anything
+    // contributes — so the registry starts every boot empty even when the last
+    // contributing plugin has just been removed. The config is returned
+    // untouched; this hook is used only for the reset.
+    setup: config => {
+      resetBlockRegistry();
+      return config;
+    },
+    version: PLUGIN_VERSION,
     // `blocks()` builds its field with `pluginField`, which core first exports
     // in alpha.49. Against an earlier core that import resolves to `undefined`
     // and every `blocks()` call throws while the config is evaluated, so the

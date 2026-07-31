@@ -67,8 +67,13 @@ export {
   PAGE_BUILDER_PLUGIN,
 } from "./blocks/registration-service";
 export type { BlockRegistrationService } from "./blocks/registration-service";
-export { defineBlock } from "@nextlyhq/blocks-engine";
-export type {
-  AnyBlockDefinition,
-  BlockDefinition,
-} from "@nextlyhq/blocks-engine";
+// `defineBlock` and `BlockDefinition` are NOT re-exported here. The package
+// root already exports both from `./core`, where `defineBlock` registers into
+// `defaultBlockRegistry` and `BlockDefinition` is the PoC's own shape. An
+// explicit re-export would shadow the star export, so a consumer importing
+// `defineBlock` from the root would silently get the engine's helper — which
+// only returns its argument — and stop registering its blocks.
+//
+// Block authors take `defineBlock` from `@nextlyhq/blocks-engine` directly
+// until the PoC registry is removed and the name is free.
+export type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
