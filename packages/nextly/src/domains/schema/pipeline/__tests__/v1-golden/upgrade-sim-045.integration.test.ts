@@ -135,6 +135,14 @@ const isPost045TableStatement = (stmt: string): boolean =>
 // the post-0.45 allowlist, so it is accepted here explicitly rather than being
 // mistaken for a phantom diff. Tolerant of pg ("created_by") and MySQL
 // (`created_by`) quoting and the optional COLUMN keyword.
+// `plugin_options` is the same shape as `created_by`: a nullable column with no
+// default, added to a system table that predates this fixture. A contributed
+// field type's own options have no column of their own, so the row carries them
+// whole; an install upgrading across this change legitimately gains the column,
+// and the pass-2 assertion is what proves it then round-trips to silence.
+const addsPluginOptionsColumn = (stmt: string): boolean =>
+  /^ALTER TABLE .+ ADD (COLUMN )?[`"]?plugin_options[`"]?\b/i.test(stmt.trim());
+
 const addsOwnerColumn = (stmt: string): boolean =>
   /^ALTER TABLE .+ ADD (COLUMN )?[`"]?created_by[`"]?\b/i.test(stmt.trim());
 
@@ -276,6 +284,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           expect(
             isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
+              addsPluginOptionsColumn(s) ||
               addsVersionsColumn(s) ||
               addsRevalidateColumn(s) ||
               addsWebhooksColumn(s),
@@ -351,6 +360,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
             isDefaultReconcile ||
               isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
+              addsPluginOptionsColumn(s) ||
               addsVersionsColumn(s) ||
               addsRevalidateColumn(s) ||
               addsWebhooksColumn(s),
