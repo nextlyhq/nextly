@@ -388,10 +388,13 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(author.passwordHash).toBeUndefined();
   });
 
-  it("does not run a target's hooks for a relationship the caller excluded", async () => {
-    // Top-level field hooks run after selection and skip absent fields. A
-    // nested target's hooks running for an excluded relationship would fire
-    // side effects for a field that is not in the response at all.
+  it("runs a target's hooks even for a relationship the projection drops", async () => {
+    // Skipping those rows would leave them on the document unmasked while the
+    // source collection's own hooks run, which is the leak the placement above
+    // exists to close. It could not be skipped coherently in any case: batch
+    // expansion shares one row object between parents, so a row reachable
+    // through both a kept and a dropped relationship would come out masked or
+    // not depending on which reference the traversal met first.
     const t = await boot();
     await seed(t);
 
@@ -403,7 +406,34 @@ describe("a target's field hooks apply to rows reached through a relationship", 
       select: { title: true },
     });
 
-    expect(tokenHookRuns).toBe(0);
+    expect(tokenHookRuns).toBeGreaterThan(0);
+  });
+
+  it("masks a dropped relationship before a source hook can copy out of it", async () => {
+    // The projection removes `author` from the response, but the row is still
+    // on the document while the source collection's hooks run. One of them can
+    // read the target's raw value and write it to a field that IS projected,
+    // which no later masking looks at.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      entry.summary = author?.token;
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      overrideAccess: true,
+      depth: 2,
+      select: { summary: true },
+    });
+
+    expect(expanded.data!.author).toBeUndefined();
+    expect(expanded.data!.summary).toBe("HIDDEN");
   });
 
   it("judges a masking rule on the whole target row, not the projected slice", async () => {

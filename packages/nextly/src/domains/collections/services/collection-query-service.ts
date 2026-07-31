@@ -116,24 +116,6 @@ import {
   decodeJsonFieldValues,
 } from "./collection-utils";
 
-/**
- * The root-level field names a `select` projection keeps.
- *
- * A selected path is rooted at a field name -- `author.name` keeps `author` --
- * so the first segment is what decides whether a relationship survives into the
- * response. Returns undefined when nothing was selected, which the nested walk
- * reads as "no projection, walk everything".
- */
-function selectedRootFieldNames(
-  select: Record<string, boolean> | undefined
-): ReadonlySet<string> | undefined {
-  if (!select) return undefined;
-  const names = Object.entries(select)
-    .filter(([, include]) => include)
-    .map(([path]) => path.split(".")[0]);
-  return names.length > 0 ? new Set(names) : undefined;
-}
-
 export class CollectionQueryService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -1456,21 +1438,25 @@ export class CollectionQueryService extends BaseService {
       // object holding only the projected paths, so a hook masking on a sibling
       // -- `select: { "author.secret": true }` while the rule reads
       // `organization.classification` -- would be handed a row with its evidence
-      // missing and fall open. Selection is told which relationships survive so
-      // an excluded one still runs nothing.
+      // missing and fall open.
       //
-      // One state for the whole listing: batch expansion hands the same row
-      // object to every parent that references it, so a per-entry pass would run
-      // that row's hooks once per reference.
+      // Every populated related row is walked, including one under a
+      // relationship the projection drops. Skipping those would leave them on
+      // the document unmasked for the hooks below to read and copy elsewhere,
+      // and the skip could not be honoured coherently in any case: batch
+      // expansion shares one row object between parents, so a row reachable
+      // through both a kept and a dropped relationship would end up masked or
+      // not depending on which reference the traversal happened to meet first.
+      //
+      // One state for the whole listing, for that same sharing: a per-entry pass
+      // would run a shared row's hooks once per reference.
       const nestedHookState = this.relationshipService.createNestedHookState();
-      const selectedRootFields = selectedRootFieldNames(params.select);
       for (const entry of expandedEntries) {
         await this.relationshipService.applyNestedFieldHooks(
           entry,
           params.collectionName,
           { enforceFieldAccess: true, user: params.user },
-          nestedHookState,
-          selectedRootFields
+          nestedHookState
         );
       }
 
@@ -1508,19 +1494,6 @@ export class CollectionQueryService extends BaseService {
         );
       let finalData = (storedAfterResult.data ??
         dataAfterCodeHooks) as unknown[];
-
-      // A second pass over the same state, for relationships the collection's
-      // own hooks introduced. Rows are claimed by object identity, so every row
-      // the pass above already handled is skipped rather than transformed twice.
-      for (const entry of finalData as Record<string, unknown>[]) {
-        await this.relationshipService.applyNestedFieldHooks(
-          entry,
-          params.collectionName,
-          { enforceFieldAccess: true, user: params.user },
-          nestedHookState,
-          selectedRootFields
-        );
-      }
 
       // Apply field selection if select parameter is provided
       // This filters the response to only include requested fields
@@ -2653,15 +2626,12 @@ export class CollectionQueryService extends BaseService {
       // Same placement as the list path: a related row's own field hooks run
       // before this collection's afterRead hooks can copy an unmasked value onto
       // a root property, and before selection rebuilds the row without the
-      // siblings a masking rule judges on.
-      const nestedHookState = this.relationshipService.createNestedHookState();
-      const selectedRootFields = selectedRootFieldNames(params.select);
+      // siblings a masking rule judges on. Every populated related row is
+      // walked, including one the projection drops.
       await this.relationshipService.applyNestedFieldHooks(
         expandedEntry,
         params.collectionName,
-        { enforceFieldAccess: true, user: params.user },
-        nestedHookState,
-        selectedRootFields
+        { enforceFieldAccess: true, user: params.user }
       );
 
       // Execute afterRead hooks (code-registered)
@@ -2699,16 +2669,6 @@ export class CollectionQueryService extends BaseService {
         string,
         unknown
       >;
-
-      // Second pass, for relationships the collection's own hooks introduced;
-      // rows already claimed above are skipped by identity.
-      await this.relationshipService.applyNestedFieldHooks(
-        finalData,
-        params.collectionName,
-        { enforceFieldAccess: true, user: params.user },
-        nestedHookState,
-        selectedRootFields
-      );
 
       // Apply field selection if select parameter is provided
       // This filters the response to only include requested fields

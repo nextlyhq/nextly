@@ -2928,21 +2928,13 @@ export class CollectionRelationshipService extends BaseService {
     entry: Record<string, unknown>,
     collectionName: string,
     access: RelatedRowAccess,
-    state: NestedHookState = createNestedHookState(),
-    includeTopLevel?: ReadonlySet<string>
+    state: NestedHookState = createNestedHookState()
   ): Promise<void> {
     // Only a real read applies these. A caller clearing the flag is assembling
     // the evidence a document-dependent rule is judged on and wants the row
     // unredacted -- the same reason the access pass is gated on it.
     if (!access.enforceFieldAccess) return;
-    await this.walkNestedRows(
-      entry,
-      collectionName,
-      access,
-      state,
-      0,
-      includeTopLevel
-    );
+    await this.walkNestedRows(entry, collectionName, access, state, 0);
   }
 
   /**
@@ -3006,28 +2998,18 @@ export class CollectionRelationshipService extends BaseService {
    * Rows are claimed in {@link walkFieldValue} rather than here, so the claim
    * covers running a row's hooks as well as descending into it. The depth cap
    * mirrors the expansion's own maximum.
-   *
-   * `includeTopLevel` narrows the ROOT level to the fields a projection keeps.
-   * It applies at depth 0 only: a relationship the caller left out entirely is
-   * absent from the response, so its target's hooks -- which may have side
-   * effects -- have no business running, while a relationship that IS returned
-   * must be judged on its whole row rather than on the projected slice of it.
    */
   private async walkNestedRows(
     entry: Record<string, unknown>,
     collectionName: string,
     access: RelatedRowAccess,
     state: NestedHookState,
-    depth: number,
-    includeTopLevel?: ReadonlySet<string>
+    depth: number
   ): Promise<void> {
     if (depth > MAX_RELATIONSHIP_DEPTH) return;
 
     const fields = await this.fieldsForNestedWalk(collectionName, state);
     for (const field of fields) {
-      if (depth === 0 && includeTopLevel && !includeTopLevel.has(field.name)) {
-        continue;
-      }
       await this.walkFieldValue(entry[field.name], field, access, state, depth);
     }
   }
