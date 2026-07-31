@@ -2884,16 +2884,16 @@ export class CollectionRelationshipService extends BaseService {
   /**
    * The collection's fields, read once per collection per read.
    *
-   * Fails OPEN, deliberately: a target whose schema will not load runs no hooks
-   * and the read continues. That is weaker than these protections deserve, and
-   * it is the only correct answer available today -- the registry reports "not
-   * a registered collection" and "the lookup failed" identically, so refusing
-   * on it broke every read carrying an upload or an author relationship. The
-   * failure is logged rather than swallowed.
+   * A target whose schema will not load runs no hooks, and the read continues.
    *
-   * Fail-closed becomes possible once the registry can answer "is this a
-   * collection" separately from "give me its fields"; see the gap I notes in
-   * `094-collection-hook-lifecycle-spec`.
+   * That is weaker than a read protection deserves, and it is the only answer
+   * the registry supports: it reports "this is not a registered collection" and
+   * "the lookup failed" the same way, so a relationship pointing at a built-in
+   * entity is indistinguishable from a real failure. Refusing on it would deny
+   * ordinary reads. The failure is logged rather than swallowed.
+   *
+   * Refusing becomes correct once the registry can answer whether a slug IS a
+   * collection separately from what its fields are.
    */
   private async fieldsForNestedWalk(
     collectionName: string,
@@ -2921,19 +2921,11 @@ export class CollectionRelationshipService extends BaseService {
         )?.fields ?? (collection as Record<string, unknown>).fields;
       fields = Array.isArray(raw) ? (raw as FieldDefinition[]) : [];
     } catch (error: unknown) {
-      // A target whose schema will not load runs no hooks here, and the read
-      // continues.
-      //
-      // Failing the read instead was tried and reverted: a relationship can
-      // point at something that is not a registered collection at all -- `media`
-      // behind an upload field, `users` behind an author -- and the lookup
-      // reports that the same way it reports a genuine failure, as an untyped
-      // "not found". Refusing on it broke ordinary reads carrying an upload,
-      // which is a far larger hole than the one it closed.
-      //
-      // Telling the two apart needs the registry to answer "is this a
-      // collection" separately from "give me its fields"; until it can, this
-      // logs rather than guesses.
+      // A relationship can point at something that is not a registered
+      // collection -- `users` behind an author field -- and the lookup reports
+      // that as an untyped "not found", the same shape a genuine failure takes.
+      // Since the two cannot be told apart here, refusing would deny ordinary
+      // reads, so this logs and leaves the target's hooks unrun.
       console.error(
         `Nested field hooks skipped for "${collectionName}": its schema could not be read.`,
         error
