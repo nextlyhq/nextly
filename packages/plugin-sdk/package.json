@@ -57,18 +57,17 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "dependencies": {
+    "@nextlyhq/blocks-engine": "workspace:*"
+  },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "@nextlyhq/blocks-engine": "workspace:*",
     "nextly": "workspace:*",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
     "@nextlyhq/admin": {
-      "optional": true
-    },
-    "@nextlyhq/blocks-engine": {
       "optional": true
     },
     "react": {

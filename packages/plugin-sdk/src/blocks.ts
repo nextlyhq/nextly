@@ -7,6 +7,13 @@
  * remains the single stable import surface a plugin author is offered; this
  * simply keeps a page-builder-specific vocabulary out of everyone else's way.
  *
+ * The engine is a real dependency of this package rather than an optional peer,
+ * because this module re-exports a VALUE from it: the import has to resolve for
+ * an author who installed only the SDK, and under a strict `node_modules`
+ * layout the page builder's own copy is not reachable from their package. The
+ * engine's registry is pinned to `globalThis`, so even a duplicated install
+ * still reads and writes the one registry the page builder consumes.
+ *
  * The registration side is not here. Contributing a block means calling the
  * page builder's own service — it is that plugin's registry, not core's — so
  * `blockRegistry` comes from `@nextlyhq/plugin-page-builder/blocks`, which is
