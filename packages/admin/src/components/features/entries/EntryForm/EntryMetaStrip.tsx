@@ -7,6 +7,8 @@ import { useFormContext } from "react-hook-form";
 import { Pencil } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
+
 // Why: thin metadata strip below the system header. Carries the slug (with
 // inline pencil-to-edit) and, when the rail is collapsed, the Draft/Published
 // status pill. When the rail is expanded the status pill renders inside the
@@ -27,6 +29,10 @@ export interface EntryMetaStripProps {
    *  as read-only text with no inline-edit affordance. Defaults to false so
    *  collection entry forms keep the editable slug. */
   lockSlug?: boolean;
+  /** Whether this entry's slug is already a public address, so editing it retires a live URL.
+   *  Resolved by the form via `useHasPublicAddress`, which knows about per-locale publishing and
+   *  collections that have no draft lifecycle at all. */
+  hasPublicAddress?: boolean;
 }
 
 export function EntryMetaStrip({
@@ -35,6 +41,7 @@ export function EntryMetaStrip({
   status,
   isRailCollapsed,
   lockSlug = false,
+  hasPublicAddress = false,
 }: EntryMetaStripProps) {
   const showStatusPill = hasStatus && isRailCollapsed && !!status;
   const showSlug = !!slugField;
@@ -48,8 +55,7 @@ export function EntryMetaStrip({
         <SlugInlineEditor
           slugField={slugField}
           readOnly={lockSlug}
-          // Only a published entry has a URL anyone could already be holding.
-          warnOnChange={hasStatus === true && status === "published"}
+          warnOnChange={hasPublicAddress}
         />
       )}
     </div>
@@ -82,30 +88,12 @@ function SlugInlineEditor({
 }: {
   slugField: FieldConfig;
   readOnly?: boolean;
-  /**
-   * Say so when this edit will change a live public address.
-   *
-   * Changing a published entry's slug is legitimate and stays available — but it retires the URL
-   * that is already in links, feeds, sitemaps and search results, and nothing in the editor
-   * otherwise distinguishes that from renaming a draft. Most CMSs say nothing here; the cost of
-   * silence is an author discovering it from a 404 someone else hit.
-   */
+  /** Whether this entry's slug is a live public address, so an edit here retires a URL. */
   warnOnChange?: boolean;
 }) {
   const form = useFormContext();
   const slugName = "name" in slugField ? (slugField.name as string) : "slug";
   const liveValue = form?.watch(slugName) as string | undefined;
-  // The value the entry was loaded with, so the notice tracks "differs from what is published"
-  // rather than "was touched" — typing a change and undoing it should clear it again.
-  const publishedValue = useRef<string | undefined>(undefined);
-  if (publishedValue.current === undefined && typeof liveValue === "string") {
-    publishedValue.current = liveValue;
-  }
-  const urlWillChange =
-    warnOnChange &&
-    typeof liveValue === "string" &&
-    publishedValue.current !== undefined &&
-    liveValue !== publishedValue.current;
   const errorMsg = (
     form?.formState.errors[slugName] as { message?: string } | undefined
   )?.message;
@@ -191,10 +179,12 @@ function SlugInlineEditor({
           {errorMsg}
         </span>
       )}
-      {!errorMsg && urlWillChange && (
-        <span className="text-xs text-muted-foreground shrink-0" role="status">
-          Changes the public URL — the old one will stop working
-        </span>
+      {!errorMsg && (
+        <PublicUrlChangeNotice
+          slugName={slugName}
+          active={warnOnChange}
+          className="shrink-0"
+        />
       )}
     </div>
   );
