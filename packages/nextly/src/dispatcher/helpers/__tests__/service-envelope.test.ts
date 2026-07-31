@@ -84,3 +84,77 @@ describe("unwrapServiceResult 409 disambiguation", () => {
     });
   });
 });
+
+describe("unwrapServiceResult rebuilds from the canonical code", () => {
+  // Status alone cannot identify these: three codes share 401, and 429/503
+  // have no status branch at all, so every one of them reached the caller as a
+  // generic 500 -- a rate limit indistinguishable from a crash.
+  it.each([
+    ["AUTH_REQUIRED", 401],
+    ["AUTH_INVALID_CREDENTIALS", 401],
+    ["TOKEN_EXPIRED", 401],
+    ["RATE_LIMITED", 429],
+    ["SERVICE_UNAVAILABLE", 503],
+  ])("keeps %s and its status instead of collapsing to 500", (code, status) => {
+    const err = unwrapError({
+      success: false,
+      statusCode: status,
+      code,
+      message: "service said no",
+    });
+
+    expect(err.code).toBe(code);
+    expect(err.statusCode).toBe(status);
+  });
+
+  it("keeps a non-validation code carried on a 400", () => {
+    // Every 400 was rebuilt as VALIDATION_ERROR whatever code it carried, so a
+    // caller was told its data failed validation when it had not been
+    // validated at all.
+    const err = unwrapError({
+      success: false,
+      statusCode: 400,
+      code: "INVALID_INPUT",
+      message: "Depth must be between 0 and 5.",
+    });
+
+    expect(err.code).toBe("INVALID_INPUT");
+    // The message round-trips, where the generic validation text replaced it.
+    expect(err.publicMessage).toBe("Depth must be between 0 and 5.");
+  });
+
+  it("still gives the admin the per-field shape for a validation failure", () => {
+    // The mirror. The admin maps `data.errors` onto form fields, so rebuilding
+    // a validation failure through any other path silently breaks form errors.
+    const err = unwrapError({
+      success: false,
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      message: "Validation failed.",
+      errors: [{ field: "title", message: "Title is required." }],
+    });
+
+    expect(err.code).toBe("VALIDATION_ERROR");
+    expect((err.publicData as { errors: unknown[] }).errors).toEqual([
+      { path: "title", code: "INVALID", message: "Title is required." },
+    ]);
+  });
+
+  it("falls back to the status when the envelope carries no code", () => {
+    // Envelopes are still built by hand in places, and those must behave
+    // exactly as they did before.
+    const err = unwrapError({ success: false, statusCode: 404 });
+    expect(err.code).toBe("NOT_FOUND");
+  });
+
+  it("falls back to the status for a code it does not recognize", () => {
+    // An unknown code must not throw its way out of the boundary; the status
+    // is still a usable answer.
+    const err = unwrapError({
+      success: false,
+      statusCode: 403,
+      code: "SOMETHING_NEW",
+    });
+    expect(err.code).toBe("FORBIDDEN");
+  });
+});

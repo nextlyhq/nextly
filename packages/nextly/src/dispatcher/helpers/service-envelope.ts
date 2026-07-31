@@ -128,7 +128,10 @@ export function offsetPaginationToMeta(args: {
  * sees only the canonical NextlyError publicMessage (per spec §13.8:
  * no driver text, no identifier echo, no value leaking).
  *
- * Status-to-NextlyError mapping:
+ * Reconstruction is keyed on the envelope's canonical `code` when it carries
+ * one, because that identifies the error exactly; see {@link ERROR_BY_CODE}.
+ * The status mapping below is the fallback for envelopes built by hand that
+ * carry no code:
  *   400: NextlyError.validation (with publicData.errors[])
  *   403: NextlyError.forbidden
  *   404: NextlyError.notFound
@@ -146,6 +149,74 @@ export function offsetPaginationToMeta(args: {
  * entry, and singles services never return null on success), so the
  * cast is safe.
  */
+/**
+ * Build the validation error from an envelope's per-field issues.
+ *
+ * Per-field issues survive into the wire envelope so the admin can map them
+ * onto form fields; the generic single-issue shape is only the fallback for
+ * detail-less 400s. Shared by the code-keyed and status-keyed paths so the two
+ * cannot drift into producing different shapes for the same failure.
+ */
+function validationFromEnvelope(
+  errors:
+    | Array<{ path?: string; field?: string; code?: string; message: string }>
+    | undefined,
+  logContext: Record<string, unknown>
+): NextlyError {
+  return NextlyError.validation({
+    errors: errors?.length
+      ? errors.map(e => ({
+          path: e.path ?? e.field ?? "",
+          code: e.code ?? "INVALID",
+          message: e.message,
+        }))
+      : [
+          {
+            path: "request",
+            code: "INVALID",
+            message: "The submitted data is invalid.",
+          },
+        ],
+    logContext,
+  });
+}
+
+/**
+ * Rebuild a NextlyError from its canonical code.
+ *
+ * The code is the only key that identifies an error exactly. Status cannot:
+ * three codes share 401, two share 409, two share 500, and most statuses have
+ * no branch at all, so dispatching on status alone sends `rateLimited` (429),
+ * `serviceUnavailable` (503) and every 401 to the caller as a generic 500.
+ *
+ * A new code round-trips by adding a row here rather than by editing control
+ * flow, and one that is missing falls through to the status mapping instead of
+ * failing — so an envelope built by hand, carrying no code, behaves exactly as
+ * it did before.
+ *
+ * `VALIDATION_ERROR` and `INVALID_INPUT` are absent on purpose: they carry more
+ * than a log context (per-field issues and a public message respectively) and
+ * are rebuilt explicitly below.
+ */
+const ERROR_BY_CODE: Record<
+  string,
+  (logContext: Record<string, unknown>) => NextlyError
+> = {
+  AUTH_INVALID_CREDENTIALS: logContext =>
+    NextlyError.invalidCredentials({ logContext }),
+  AUTH_REQUIRED: logContext => NextlyError.authRequired({ logContext }),
+  TOKEN_EXPIRED: logContext => NextlyError.tokenExpired({ logContext }),
+  NOT_FOUND: logContext => NextlyError.notFound({ logContext }),
+  FORBIDDEN: logContext => NextlyError.forbidden({ logContext }),
+  CONFLICT: logContext => NextlyError.conflict({ logContext }),
+  DUPLICATE: logContext => NextlyError.duplicate({ logContext }),
+  RATE_LIMITED: logContext => NextlyError.rateLimited({ logContext }),
+  SERVICE_UNAVAILABLE: logContext =>
+    NextlyError.serviceUnavailable({ logContext }),
+  DATABASE_ERROR: logContext => NextlyError.internal({ logContext }),
+  INTERNAL_ERROR: logContext => NextlyError.internal({ logContext }),
+};
+
 export function unwrapServiceResult<T>(
   result: {
     success: boolean;
@@ -171,6 +242,25 @@ export function unwrapServiceResult<T>(
   }
   const status = result.statusCode ?? 500;
   const ctx = { legacyMessage: result.message, ...logContext };
+
+  // `invalidInput`'s message IS its public message, so it round-trips from the
+  // envelope rather than being replaced by the generic validation text.
+  if (result.code === "INVALID_INPUT" && result.message) {
+    throw NextlyError.invalidInput({
+      message: result.message,
+      logContext: ctx,
+    });
+  }
+  // Rebuilt from the code wherever the code says so, not only where the status
+  // happens to agree.
+  if (result.code === "VALIDATION_ERROR") {
+    throw validationFromEnvelope(result.errors, ctx);
+  }
+  if (result.code) {
+    const rebuild = ERROR_BY_CODE[result.code];
+    if (rebuild) throw rebuild(ctx);
+  }
+
   if (status === 404) throw NextlyError.notFound({ logContext: ctx });
   if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
   if (status === 409) {
@@ -185,25 +275,7 @@ export function unwrapServiceResult<T>(
     throw NextlyError.conflict({ logContext: ctx });
   }
   if (status === 400) {
-    // Per-field issues from the service survive into the wire envelope so
-    // the admin can map them onto form fields; the generic single-issue
-    // shape is only the fallback for detail-less 400s.
-    throw NextlyError.validation({
-      errors: result.errors?.length
-        ? result.errors.map(e => ({
-            path: e.path ?? e.field ?? "",
-            code: e.code ?? "INVALID",
-            message: e.message,
-          }))
-        : [
-            {
-              path: "request",
-              code: "INVALID",
-              message: "The submitted data is invalid.",
-            },
-          ],
-      logContext: ctx,
-    });
+    throw validationFromEnvelope(result.errors, ctx);
   }
   throw NextlyError.internal({ logContext: ctx });
 }
