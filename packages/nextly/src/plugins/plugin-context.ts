@@ -16,7 +16,7 @@ import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
 import type { Action, Filter } from "../filters";
 import { getFilterRegistry } from "../filters";
-import type { HookHandler, HookType } from "../hooks/types";
+import type { HookContextPhase, HookHandler } from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
 import type { MediaService } from "../services/media/media-service";
@@ -100,7 +100,7 @@ export interface PluginHookRegistry {
    * ```
    */
   on<T = unknown>(
-    hookType: HookType,
+    hookType: HookContextPhase,
     collection: string,
     handler: HookHandler<T>
   ): void;
@@ -124,7 +124,7 @@ export interface PluginHookRegistry {
    * ```
    */
   off<T = unknown>(
-    hookType: HookType,
+    hookType: HookContextPhase,
     collection: string,
     handler: HookHandler<T>
   ): void;
@@ -718,12 +718,12 @@ export function createPluginContext(
                   : never,
   hookRegistry: {
     register: (
-      hookType: HookType,
+      hookType: HookContextPhase,
       collection: string,
       handler: HookHandler
     ) => void;
     unregister: (
-      hookType: HookType,
+      hookType: HookContextPhase,
       collection: string,
       handler: HookHandler
     ) => void;

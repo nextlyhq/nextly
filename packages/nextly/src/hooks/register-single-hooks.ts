@@ -17,7 +17,7 @@
 import type { SingleConfig, SingleHooks } from "../singles/config/types";
 
 import { getHookRegistry, type HookRegistry } from "./hook-registry";
-import type { HookType, HookHandler } from "./types";
+import type { HookContextPhase, HookHandler } from "./types";
 
 /** Result of registering single hooks. */
 export interface RegisterSingleHooksResult {
@@ -46,7 +46,7 @@ function singleHookNamespace(slug: string): string {
  * Map Single hook phases to HookRegistry hook types. A Single is update-only, so
  * `beforeChange`/`afterChange` register only the update variants (never create).
  */
-const HOOK_TYPE_MAPPINGS: Record<keyof SingleHooks, HookType[]> = {
+const HOOK_TYPE_MAPPINGS: Record<keyof SingleHooks, HookContextPhase[]> = {
   beforeRead: ["beforeRead"],
   afterRead: ["afterRead"],
   beforeChange: ["beforeUpdate"],

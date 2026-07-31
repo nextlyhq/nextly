@@ -31,7 +31,7 @@
  * ```
  */
 
-import type { HookHandler } from "@nextly/hooks/types";
+import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
 import type { WebhookEventType } from "../../domains/webhooks/types";
@@ -454,8 +454,12 @@ export interface CollectionHooks {
   /**
    * Runs before any operation begins.
    * Can modify operation arguments or execute side effects.
+   *
+   * Handlers receive the operation's `args` -- the data, id or where clause it
+   * is about to use -- and returning a modified set replaces them. This is the
+   * only phase shaped that way; every other one receives `data`.
    */
-  beforeOperation?: HookHandler[];
+  beforeOperation?: BeforeOperationHandler[];
 
   /**
    * Runs before validation during create/update.
@@ -1186,5 +1190,5 @@ export function defineCollection(
 // ============================================================
 
 export type { FieldConfig };
-export type { HookHandler };
+export type { BeforeOperationHandler, HookHandler };
 export type { CollectionAccessControl };

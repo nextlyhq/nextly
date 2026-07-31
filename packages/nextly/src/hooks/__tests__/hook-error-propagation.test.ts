@@ -111,7 +111,7 @@ describe("hook error propagation", () => {
     // the lifecycle rebuilding errors.
     const registry = new HookRegistry();
     const thrown = NextlyError.forbidden({});
-    registry.register("beforeOperation", "docs", () => {
+    registry.registerBeforeOperation("docs", () => {
       throw thrown;
     });
 
@@ -127,7 +127,7 @@ describe("hook error propagation", () => {
   it("wraps an untyped beforeOperation error as internal", async () => {
     const registry = new HookRegistry();
     const original = new Error("boom");
-    registry.register("beforeOperation", "docs", () => {
+    registry.registerBeforeOperation("docs", () => {
       throw original;
     });
 

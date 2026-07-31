@@ -8,12 +8,15 @@
  * @since 1.0.0
  */
 
+import { NextlyError } from "../errors/nextly-error";
+
 import { normalizeHookError } from "./normalize-hook-error";
 import type {
   BeforeOperationArgs,
   BeforeOperationContext,
   BeforeOperationHandler,
   HookContext,
+  HookContextPhase,
   HookHandler,
   HookType,
 } from "./types";
@@ -98,6 +101,44 @@ export class HookRegistry {
   private hooks: Map<string, HookHandler[]> = new Map();
 
   /**
+   * `beforeOperation` handlers, kept apart from the rest.
+   *
+   * Every other phase receives a `HookContext` and reshapes `data`;
+   * `beforeOperation` receives a `BeforeOperationContext` and reshapes `args`.
+   * Those are different function types, so storing them together would mean
+   * recovering the real one with a cast on the way out -- and a cast is exactly
+   * what let a handler be declared against the wrong context in the first place.
+   */
+  private beforeOperationHooks: Map<string, BeforeOperationHandler[]> =
+    new Map();
+
+  /** Append to a handler list, creating it on first use. */
+  private pushHandler<H>(store: Map<string, H[]>, key: string, handler: H) {
+    const existing = store.get(key);
+    if (existing) {
+      existing.push(handler);
+      return;
+    }
+    store.set(key, [handler]);
+  }
+
+  /** Remove one handler by identity, dropping the list once it is empty. */
+  private removeHandler<H>(store: Map<string, H[]>, key: string, handler: H) {
+    const handlers = store.get(key);
+    if (!handlers) return;
+
+    const index = handlers.indexOf(handler);
+    if (index > -1) {
+      handlers.splice(index, 1);
+    }
+
+    // Clean up empty arrays to avoid memory leaks
+    if (handlers.length === 0) {
+      store.delete(key);
+    }
+  }
+
+  /**
    * Register a hook for a specific collection and hook type
    *
    * Hooks are executed in the order they are registered (FIFO).
@@ -123,14 +164,57 @@ export class HookRegistry {
    * });
    * ```
    */
-  register(hookType: HookType, collection: string, handler: HookHandler): void {
-    const key = this.makeKey(hookType, collection);
+  register(
+    hookType: HookContextPhase,
+    collection: string,
+    handler: HookHandler
+  ): void {
+    // The type already excludes `beforeOperation`, but JavaScript callers and
+    // untypechecked code do not see that. Storing it here would put the handler
+    // where `executeBeforeOperation` never looks, so it would simply never run
+    // -- a silent no-op is worse than a loud refusal.
+    this.rejectBeforeOperation(hookType, "register", "registerBeforeOperation");
+    this.pushHandler(this.hooks, this.makeKey(hookType, collection), handler);
+  }
 
-    if (!this.hooks.has(key)) {
-      this.hooks.set(key, []);
-    }
+  /**
+   * Refuse `beforeOperation` on a method that cannot honour it, naming the one
+   * that can.
+   */
+  private rejectBeforeOperation(
+    hookType: HookType,
+    method: string,
+    replacement: string
+  ): void {
+    if (hookType !== "beforeOperation") return;
 
-    this.hooks.get(key)!.push(handler);
+    throw NextlyError.invalidInput({
+      message: `Use ${replacement}() for a beforeOperation hook: its handler receives the operation's args rather than a document, so it is stored and executed separately from the other phases. "beforeOperation" cannot be passed to ${method}().`,
+      logContext: { hookType, method, replacement },
+    });
+  }
+
+  /**
+   * Register a `beforeOperation` hook.
+   *
+   * Separate from {@link register} because the handler signature is different:
+   * it is handed the operation's `args` -- the data, id or where clause the
+   * operation is about to use -- and returning a modified set replaces them.
+   * Handlers for every other phase receive `data` instead, and the two are not
+   * interchangeable.
+   *
+   * @param collection - Collection name or '*' for global hooks
+   * @param handler - Hook function to execute
+   */
+  registerBeforeOperation(
+    collection: string,
+    handler: BeforeOperationHandler
+  ): void {
+    this.pushHandler(
+      this.beforeOperationHooks,
+      this.makeKey("beforeOperation", collection),
+      handler
+    );
   }
 
   /**
@@ -153,24 +237,34 @@ export class HookRegistry {
    * ```
    */
   unregister(
-    hookType: HookType,
+    hookType: HookContextPhase,
     collection: string,
     handler: HookHandler
   ): void {
-    const key = this.makeKey(hookType, collection);
-    const handlers = this.hooks.get(key);
+    this.rejectBeforeOperation(
+      hookType,
+      "unregister",
+      "unregisterBeforeOperation"
+    );
+    this.removeHandler(this.hooks, this.makeKey(hookType, collection), handler);
+  }
 
-    if (handlers) {
-      const index = handlers.indexOf(handler);
-      if (index > -1) {
-        handlers.splice(index, 1);
-      }
-
-      // Clean up empty arrays to avoid memory leaks
-      if (handlers.length === 0) {
-        this.hooks.delete(key);
-      }
-    }
+  /**
+   * Unregister a specific `beforeOperation` hook, the counterpart to
+   * {@link registerBeforeOperation}.
+   *
+   * @param collection - Collection name or '*'
+   * @param handler - The exact handler function to remove
+   */
+  unregisterBeforeOperation(
+    collection: string,
+    handler: BeforeOperationHandler
+  ): void {
+    this.removeHandler(
+      this.beforeOperationHooks,
+      this.makeKey("beforeOperation", collection),
+      handler
+    );
   }
 
   /**
@@ -207,6 +301,12 @@ export class HookRegistry {
       const key = this.makeKey(hookType, collection);
       this.hooks.delete(key);
     }
+
+    // `beforeOperation` lives in its own store, so clearing a collection has to
+    // reach both or a cleared collection keeps running its operation hooks.
+    this.beforeOperationHooks.delete(
+      this.makeKey("beforeOperation", collection)
+    );
   }
 
   /**
@@ -225,6 +325,7 @@ export class HookRegistry {
    */
   clear(): void {
     this.hooks.clear();
+    this.beforeOperationHooks.clear();
   }
 
   /**
@@ -372,14 +473,14 @@ export class HookRegistry {
     const specificKey = this.makeKey("beforeOperation", context.collection);
     const globalKey = this.makeKey("beforeOperation", "*");
 
-    const globalHandlers = this.hooks.get(globalKey) || [];
-    const specificHandlers = this.hooks.get(specificKey) || [];
+    const globalHandlers = this.beforeOperationHooks.get(globalKey) || [];
+    const specificHandlers = this.beforeOperationHooks.get(specificKey) || [];
 
     // Global hooks run first, then collection-specific hooks
-    const allHandlers = [
+    const allHandlers: BeforeOperationHandler<T>[] = [
       ...globalHandlers,
       ...specificHandlers,
-    ] as BeforeOperationHandler<T>[];
+    ];
 
     // If no hooks registered, return early (optimization)
     if (allHandlers.length === 0) {
@@ -425,13 +526,24 @@ export class HookRegistry {
    * ```
    */
   hasHooks(hookType: HookType, collection: string): boolean {
-    const specificKey = this.makeKey(hookType, collection);
-    const globalKey = this.makeKey(hookType, "*");
+    return (
+      this.countAt(hookType, collection) > 0 || this.countAt(hookType, "*") > 0
+    );
+  }
 
-    const specificCount = this.hooks.get(specificKey)?.length ?? 0;
-    const globalCount = this.hooks.get(globalKey)?.length ?? 0;
-
-    return specificCount > 0 || globalCount > 0;
+  /**
+   * How many handlers one key holds, in whichever store owns that phase.
+   *
+   * Introspection stays whole-registry -- a caller asking whether a phase has
+   * hooks means every phase, including `beforeOperation` -- so the split in
+   * storage must not become a split in what can be counted.
+   */
+  private countAt(hookType: HookType, collection: string): number {
+    const key = this.makeKey(hookType, collection);
+    if (hookType === "beforeOperation") {
+      return this.beforeOperationHooks.get(key)?.length ?? 0;
+    }
+    return this.hooks.get(key)?.length ?? 0;
   }
 
   /**
@@ -450,8 +562,7 @@ export class HookRegistry {
    * ```
    */
   getHookCount(hookType: HookType, collection: string): number {
-    const key = this.makeKey(hookType, collection);
-    return this.hooks.get(key)?.length ?? 0;
+    return this.countAt(hookType, collection);
   }
 
   /**
@@ -460,12 +571,26 @@ export class HookRegistry {
    * Returns a snapshot of all registered hooks.
    * Useful for debugging and testing.
    *
+   * Excludes `beforeOperation`, whose handlers take a different context and are
+   * stored separately -- see {@link getAllBeforeOperation}.
+   *
    * @returns Map of hook keys to handler arrays
    * @internal
    */
   getAll(): Map<string, HookHandler[]> {
     // Return a copy to prevent external mutation
     return new Map(this.hooks);
+  }
+
+  /**
+   * Snapshot of the registered `beforeOperation` hooks, the counterpart to
+   * {@link getAll}.
+   *
+   * @returns Map of hook keys to handler arrays
+   * @internal
+   */
+  getAllBeforeOperation(): Map<string, BeforeOperationHandler[]> {
+    return new Map(this.beforeOperationHooks);
   }
 
   /**

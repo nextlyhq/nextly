@@ -27,7 +27,7 @@ import type {
 } from "../collections/config/define-collection";
 
 import { getHookRegistry, type HookRegistry } from "./hook-registry";
-import type { HookType } from "./types";
+import type { HookContextPhase } from "./types";
 
 /**
  * Result of registering collection hooks
@@ -62,8 +62,7 @@ export interface RegisterCollectionHooksResult {
  * (beforeChange/afterChange) which needs to be mapped to the
  * HookRegistry types (beforeCreate/beforeUpdate, etc.)
  */
-const HOOK_TYPE_MAPPINGS: Record<keyof CollectionHooks, HookType[]> = {
-  beforeOperation: ["beforeOperation"],
+const HOOK_TYPE_MAPPINGS: Record<DataPhaseKey, HookContextPhase[]> = {
   beforeValidate: ["beforeCreate", "beforeUpdate"], // Validate runs before create/update
   beforeChange: ["beforeCreate", "beforeUpdate"],
   afterChange: ["afterCreate", "afterUpdate"],
@@ -72,6 +71,13 @@ const HOOK_TYPE_MAPPINGS: Record<keyof CollectionHooks, HookType[]> = {
   beforeDelete: ["beforeDelete"],
   afterDelete: ["afterDelete"],
 };
+
+/**
+ * The declaration keys whose handlers take a document. `beforeOperation` is
+ * excluded because it takes the operation's args instead, which is why it is
+ * registered through its own method rather than through this mapping.
+ */
+type DataPhaseKey = Exclude<keyof CollectionHooks, "beforeOperation">;
 
 /**
  * Register hooks from collection configurations with the global HookRegistry.
@@ -155,9 +161,23 @@ export function registerCollectionHooks(
     // transformation after the write hook that expects it. The mapping is
     // declared in the documented execution order, so following it keeps the
     // two in step.
-    for (const hookKey of Object.keys(
-      HOOK_TYPE_MAPPINGS
-    ) as (keyof CollectionHooks)[]) {
+    // `beforeOperation` runs first, and registers through its own method: its
+    // handlers take the operation's args rather than a document, so they are
+    // not interchangeable with the phases below.
+    const beforeOperationHandlers = collection.hooks.beforeOperation;
+    if (beforeOperationHandlers?.length) {
+      for (const handler of beforeOperationHandlers) {
+        registry.registerBeforeOperation(collection.slug, handler);
+        collectionHookCount++;
+      }
+
+      collectionDetails.hooks.push({
+        type: "beforeOperation",
+        count: beforeOperationHandlers.length,
+      });
+    }
+
+    for (const hookKey of Object.keys(HOOK_TYPE_MAPPINGS) as DataPhaseKey[]) {
       const handlers = collection.hooks[hookKey];
       if (!handlers || !Array.isArray(handlers) || handlers.length === 0) {
         continue;
