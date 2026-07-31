@@ -43,8 +43,50 @@ export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
  * renames. The recorded entries are unchanged — those steps are derived rather
  * than persisted — so nothing in a version 2 marker's bytes reveals that
  * position N now addresses different work. This constant is what does.
+ *
+ * Bumping this does **not** invalidate a settled marker's recorded plan; see
+ * `MIN_READABLE_MANIFEST_VERSION`, which tracks the entry format separately.
  */
 export const MIGRATION_MARKER_VERSION = 3;
+
+/**
+ * Oldest marker version whose recorded plan this build can still execute.
+ *
+ * Separate from `MIGRATION_MARKER_VERSION` because the two answer different
+ * questions, and answering both with one number throws away the record a
+ * rollback depends on. The marker version says how a recorded *step* is to be
+ * read, and moves whenever the entries-to-steps mapping changes — even when the
+ * entries themselves do not. This says which recorded *entries* are in a shape
+ * this build understands, and moves only when that shape changes.
+ *
+ * A settled marker holds no step, but it does hold the plan a rollback
+ * reverses, and nothing else can supply it: no property of the database
+ * distinguishes an `fg_*` name this migration created from one an author chose
+ * before it existed. Gating that plan on the marker version means every
+ * step-list bump silently strips it from every already-migrated installation,
+ * and the next `down` refuses for lack of a record it was handed.
+ *
+ * Version 2 introduced the current entry format, in which a localization
+ * companion travels on its owner's entry rather than occupying one of its own.
+ * Version 3 changed only the step list. **Raise this only when the persisted
+ * entry shape itself changes** — never merely because the marker version moved.
+ */
+export const MIN_READABLE_MANIFEST_VERSION = 2;
+
+/**
+ * Whether a marker's recorded plan is in a format this build can execute.
+ *
+ * Bounded above as well as below: a marker from a newer build may record an
+ * entry shape this one has never seen, and reading it optimistically would put
+ * a plan this build cannot honour in front of a rollback.
+ */
+function manifestIsReadable(version: number): boolean {
+  return (
+    Number.isInteger(version) &&
+    version >= MIN_READABLE_MANIFEST_VERSION &&
+    version <= MIGRATION_MARKER_VERSION
+  );
+}
 
 /**
  * Highest step the marker will hold, one below the safe-integer ceiling.
@@ -238,12 +280,15 @@ export async function readMigrationState(
       status: "settled",
       generation: marker.generation,
       recorded: true,
-      // The recorded plan is the one part that *is* version-bound: its entry
-      // format is what the version tracks, so a plan from another build cannot
-      // be executed. Omitted rather than parsed, which leaves a rollback to
-      // refuse on a plan it does not have instead of every read refusing on a
-      // plan it cannot parse.
-      ...(marker.appliedManifest === undefined || !writtenByThisBuild
+      // Kept for every build that can still read the entry shape, which is not
+      // the same question as whether this build wrote the marker: a step-list
+      // bump leaves the recorded entries untouched, and discarding them there
+      // would strip the rollback plan from installations that already migrated
+      // successfully. Where the shape genuinely is unreadable the plan is
+      // omitted rather than parsed, which leaves a rollback to refuse on a plan
+      // it does not have instead of every read refusing on one it cannot parse.
+      ...(marker.appliedManifest === undefined ||
+      !manifestIsReadable(marker.version)
         ? {}
         : { appliedManifest: parseAppliedManifest(marker.appliedManifest) }),
     };

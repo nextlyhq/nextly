@@ -14,6 +14,7 @@ import {
   beginMigration,
   FIELD_GROUP_MIGRATION_KEY,
   MIGRATION_MARKER_VERSION,
+  MIN_READABLE_MANIFEST_VERSION,
   readMigrationState,
   settleMigration,
 } from "../state";
@@ -630,18 +631,57 @@ describe("field-group migration marker", () => {
     });
   });
 
-  // The plan is the version-bound part: its entry format is what the version
-  // tracks. Dropping it leaves a rollback to refuse on a plan it does not have,
-  // rather than every read refusing on a plan it cannot parse.
-  it("drops a recorded plan it cannot interpret rather than refusing the read", async () => {
+  // 🔴 The two versions answer different questions. The marker version says how
+  // a recorded *step* is read and moves whenever the entries-to-steps mapping
+  // changes; the entry shape moves only when the persisted entries themselves
+  // do. Answering both with one number silently strips the rollback plan from
+  // every installation that already migrated, the moment a step-list bump
+  // ships — and nothing else can supply that plan, because no property of the
+  // database says which `fg_*` names this migration created.
+  it("keeps a settled plan whose entry shape this build still reads", async () => {
     const { meta } = createMeta({
-      version: MIGRATION_MARKER_VERSION - 1,
+      version: MIN_READABLE_MANIFEST_VERSION,
       status: "settled",
       generation: "field-groups-v2",
-      // The previous build's shape, which this one no longer accepts.
+      appliedManifest: PLAN_ENTRIES,
+    });
+    await expect(readMigrationState(meta)).resolves.toEqual({
+      status: "settled",
+      generation: "field-groups-v2",
+      recorded: true,
+      appliedManifest: PLAN_ENTRIES,
+    });
+  });
+
+  // Below the floor the entry shape genuinely differs, so the plan is dropped
+  // rather than parsed: a rollback then refuses on a plan it does not have,
+  // instead of every read refusing on one it cannot parse.
+  it("drops a recorded plan older than the readable entry shape", async () => {
+    const { meta } = createMeta({
+      version: MIN_READABLE_MANIFEST_VERSION - 1,
+      status: "settled",
+      generation: "field-groups-v2",
+      // The shape that predates the floor, which this build no longer accepts.
       appliedManifest: [
         { kind: "companion", from: "comp_hero_locales", to: "fg_hero_locales" },
       ],
+    });
+    const state = await readMigrationState(meta);
+    expect(state.status).toBe("settled");
+    expect(
+      (state as { appliedManifest?: unknown }).appliedManifest
+    ).toBeUndefined();
+  });
+
+  // Bounded above as well: a marker from a newer build may record an entry
+  // shape this one has never seen, and reading it optimistically would hand a
+  // rollback a plan this build cannot honour.
+  it("drops a recorded plan written by a newer build", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION + 1,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: PLAN_ENTRIES,
     });
     const state = await readMigrationState(meta);
     expect(state.status).toBe("settled");

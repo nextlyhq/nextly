@@ -55,6 +55,7 @@ import {
   readMigrationState,
   settleMigration,
   type MigrationDirection,
+  type StorageGeneration,
 } from "./state";
 
 /**
@@ -96,42 +97,59 @@ export async function runFieldGroupMigration(
   // missing or two distinct tables look like one.
   const identifierCase = await readIdentifierCaseRules(adapter);
   const meta = new MetaService(adapter, logger);
+  const generation = direction === "up" ? "field-groups-v2" : "legacy";
 
-  const state = await readMigrationState(meta);
-
-  // Settled at the target generation and going up: the work is done. Asked
-  // before anything else so the ordinary case costs one read.
-  if (
-    state.status === "settled" &&
-    ((direction === "up" && state.generation === "field-groups-v2") ||
-      (direction === "down" && state.generation === "legacy"))
-  ) {
-    return { ran: false, reason: "already-migrated" };
-  }
-
-  // A rollback needs the plan that was applied; nothing else can supply it,
-  // because the database cannot say which names this migration created.
-  if (direction === "down" && state.status === "settled") {
-    if (state.appliedManifest === undefined) {
-      throw NextlyError.serviceUnavailable({
-        logMessage:
-          "field-group migration cannot roll back: no record of what was applied",
-        logContext: {
-          phase: FIELD_GROUP_MIGRATION_PHASE,
-          reason: "rollback has no recorded plan",
-        },
-      });
-    }
-  }
-
-  // Everything the plan is derived from is read INSIDE the lock. Reading the
-  // registry, the catalog and the marker first and contending afterwards leaves
-  // a window in which a `db:sync` holding this same lock finishes a schema
-  // change, and the run then executes a plan describing a world that has moved.
+  // 🔴 Everything this run decides is read INSIDE the lock, the marker
+  // included. Reading it first and contending afterwards leaves a window in
+  // which another invocation completes the whole migration and releases the
+  // lock: this one would then acquire it holding a marker that says legacy,
+  // rebuild an upward plan against already-migrated storage, and overwrite a
+  // settled marker with a fresh in-flight one. The same window lets a `db:sync`
+  // holding this lock finish a schema change the plan was not built against.
+  //
+  // The cost is that even an already-migrated database claims the lock to find
+  // that out. That is the correct trade here, where being wrong rewrites
+  // customer data — but it makes "who calls this, and how often" a decision the
+  // entry point owns: this lock refuses rather than waits, so a fleet whose
+  // instances all invoke it at boot would have every instance but one refuse.
   return withMigrationSession(
     { adapter, dialect, label: `field-group-migration:${direction}` },
     async session => {
+      const state = await readMigrationState(meta);
       const rows = await readRegistryRows(adapter);
+
+      // Settled at the generation this run would produce: the work is done.
+      // Confirmed against the catalog rather than taken from the marker alone,
+      // because the two can disagree — storage restored from a backup taken
+      // before the run, or a table dropped since — and a marker believed on its
+      // own would report success over storage the read path cannot serve.
+      if (state.status === "settled" && state.generation === generation) {
+        await assertStorageAtGeneration({
+          adapter,
+          dialect,
+          rows,
+          identifierCase,
+          generation,
+        });
+        return { ran: false, reason: "already-migrated" };
+      }
+
+      // A rollback needs the plan that was applied; nothing else can supply it,
+      // because the database cannot say which names this migration created.
+      if (
+        direction === "down" &&
+        state.status === "settled" &&
+        state.appliedManifest === undefined
+      ) {
+        throw NextlyError.serviceUnavailable({
+          logMessage:
+            "field-group migration cannot roll back: no record of what was applied",
+          logContext: {
+            phase: FIELD_GROUP_MIGRATION_PHASE,
+            reason: "rollback has no recorded plan",
+          },
+        });
+      }
 
       // Derived from the rows so a resume that has to rebuild it - a crash
       // before the marker's first write - produces the same value rather than a
@@ -241,7 +259,6 @@ export async function runFieldGroupMigration(
       // A step reports its own postcondition; this asks whether the storage as
       // a whole is now what the generation claims, which is the question a
       // settled marker will be believed on afterwards.
-      const generation = direction === "up" ? "field-groups-v2" : "legacy";
       await assertStorageComplete({
         adapter,
         dialect,
@@ -276,12 +293,9 @@ export async function runFieldGroupMigration(
  * Verification, run before the marker is allowed to settle.
  *
  * Two questions, because storage can be structurally complete and still unable
- * to serve what it holds. The first reuses the read-path's own verdict rather
- * than asking a second, similar question: whatever would refuse to *serve* this
- * storage must also refuse to declare the migration finished, or the two would
- * disagree and the marker would be the more trusted of the pair. The second asks
- * the rows, because the verdict is a judgement about tables and columns and says
- * nothing about what the rows inside them address.
+ * to serve what it holds: the structural one below, and whether any row still
+ * addresses a table this run renamed away. The verdict is a judgement about
+ * tables and columns and says nothing about what the rows inside them point at.
  */
 async function assertStorageComplete(args: {
   adapter: DrizzleAdapter;
@@ -289,7 +303,7 @@ async function assertStorageComplete(args: {
   rows: readonly RegistryRow[];
   identifierCase: IdentifierCaseRules;
   renamedAway: readonly string[];
-  generation: "legacy" | "field-groups-v2";
+  generation: StorageGeneration;
 }): Promise<void> {
   const { tables, columns } = await readCatalog(args.adapter, args.dialect);
   await assertNoStaleParentPointers({
@@ -298,18 +312,72 @@ async function assertStorageComplete(args: {
     identifierCase: args.identifierCase,
     staleNames: args.renamedAway,
   });
-  const probe = probeStorage({
+  assertProbeMatchesGeneration({
     rows: args.rows,
     tables,
     columns,
+    identifierCase: args.identifierCase,
+    generation: args.generation,
+    reason: "structural verification failed after the steps ran",
+  });
+}
+
+/**
+ * The structural half on its own, for a run that executed nothing.
+ *
+ * A marker claiming a generation and storage actually being at one are separate
+ * facts, and they come apart in ways no run causes: a restore from a backup
+ * taken before the migration, a table dropped by hand, a partial recovery. The
+ * marker is the faster answer and the less trustworthy one, so reporting
+ * `already-migrated` on its word alone would turn every later invocation into a
+ * report of success over storage the read path cannot serve.
+ */
+async function assertStorageAtGeneration(args: {
+  adapter: DrizzleAdapter;
+  dialect: MigrationDialect;
+  rows: readonly RegistryRow[];
+  identifierCase: IdentifierCaseRules;
+  generation: StorageGeneration;
+}): Promise<void> {
+  const { tables, columns } = await readCatalog(args.adapter, args.dialect);
+  assertProbeMatchesGeneration({
+    rows: args.rows,
+    tables,
+    columns,
+    identifierCase: args.identifierCase,
+    generation: args.generation,
+    reason: "a settled marker does not match the storage it describes",
+  });
+}
+
+/**
+ * Refuse unless the catalog says what the generation claims.
+ *
+ * Reuses the read path's own verdict rather than asking a second, similar
+ * question: whatever would refuse to *serve* this storage must also refuse to
+ * call it migrated, or the two would disagree and the marker would be the more
+ * trusted of the pair.
+ */
+function assertProbeMatchesGeneration(args: {
+  rows: readonly RegistryRow[];
+  tables: string[];
+  columns: TableColumns[];
+  identifierCase: IdentifierCaseRules;
+  generation: StorageGeneration;
+  reason: string;
+}): void {
+  const probe = probeStorage({
+    rows: args.rows,
+    tables: args.tables,
+    columns: args.columns,
     identifierCase: args.identifierCase,
     generation: args.generation,
   });
 
   // `resolveStorageVerdict` throws on anything it cannot explain, so reaching a
   // verdict at all is most of the check. What remains is that the verdict names
-  // the generation this run claims to have produced: an `up` run that leaves
-  // storage the read path would still serve as legacy has not finished.
+  // the generation being claimed: an `up` run that leaves storage the read path
+  // would still serve as legacy has not finished.
   const expected =
     args.generation === "field-groups-v2"
       ? "use-field-groups-v2"
@@ -327,10 +395,10 @@ async function assertStorageComplete(args: {
 
   throw NextlyError.serviceUnavailable({
     logMessage:
-      "field-group migration will not settle: storage is not in the state the run claims",
+      "field-group migration will not report success: storage is not in the state the marker claims",
     logContext: {
       phase: FIELD_GROUP_MIGRATION_PHASE,
-      reason: "structural verification failed after the steps ran",
+      reason: args.reason,
       generation: args.generation,
       expected,
       actual: verdict.action,

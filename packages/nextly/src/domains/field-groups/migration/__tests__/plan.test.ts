@@ -142,12 +142,12 @@ describe("assembling the steps one run executes", () => {
     ]);
   });
 
-  // 🔴 A position inside the data steps is reported as UNRECORDED, not as
-  // recorded-at-zero. Reconciliation treats `step + 1` as the supported
-  // commit-before-marker window, so a zeroed position would still vouch for
-  // rename position 1 - and an unrelated object carrying a target name could be
-  // adopted as this plan's completed work.
-  it.each([1, 2, 3, 4])(
+  // 🔴 A position strictly INSIDE the data steps is reported as unrecorded.
+  // Reconciliation treats `step + 1` as the supported commit-before-marker
+  // window, so any reported progress here would vouch for rename position 1 -
+  // and an unrelated object carrying a target name could be adopted as this
+  // plan's completed work while no rename had been attempted at all.
+  it.each([1, 2, 3])(
     "reports no rename progress for whole-plan step %i",
     step => {
       expect(
@@ -160,6 +160,36 @@ describe("assembling the steps one run executes", () => {
       ).toEqual({ recorded: false });
     }
   );
+
+  // 🔴 The boundary belongs on the other side. Every data step is recorded and
+  // the first rename is the next thing the runner does, so this is exactly the
+  // commit-before-marker window the resume contract promises to survive: the
+  // rename commits in its own transaction and the marker write follows.
+  // Reporting it as unrecorded strands that run - reconciliation refuses the
+  // target the torn step produced as unaccounted-for.
+  it("recognises a torn first rename at the data boundary", () => {
+    expect(
+      renameRunRecord({
+        status: "migrating",
+        direction: "up",
+        step: 4,
+        offset: 4,
+      })
+    ).toEqual({ recorded: true, direction: "up", step: 0 });
+  });
+
+  // The same boundary going down, where the renames come first and the offset
+  // is zero: a fresh in-flight marker records step 0 before the first rename.
+  it("recognises a torn first rename in a rollback", () => {
+    expect(
+      renameRunRecord({
+        status: "migrating",
+        direction: "down",
+        step: 0,
+        offset: 0,
+      })
+    ).toEqual({ recorded: true, direction: "down", step: 0 });
+  });
 
   it("reports rename progress once the renames have begun", () => {
     expect(
