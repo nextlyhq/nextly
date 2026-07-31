@@ -108,9 +108,9 @@ export function registerHook<T = any>(
  * });
  * ```
  */
-export function registerBeforeOperationHook(
+export function registerBeforeOperationHook<T = unknown>(
   collection: string,
-  handler: BeforeOperationHandler
+  handler: BeforeOperationHandler<T>
 ): void {
   const registry = getHookRegistry();
   registry.registerBeforeOperation(collection, handler);
@@ -154,9 +154,9 @@ export function unregisterHook(
  * @param collection - Collection name or '*'
  * @param handler - The exact handler function to remove
  */
-export function unregisterBeforeOperationHook(
+export function unregisterBeforeOperationHook<T = unknown>(
   collection: string,
-  handler: BeforeOperationHandler
+  handler: BeforeOperationHandler<T>
 ): void {
   const registry = getHookRegistry();
   registry.unregisterBeforeOperation(collection, handler);

@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { HookRegistry } from "../hook-registry";
+import { createPluginContext } from "../../plugins/plugin-context";
 import { registerCollectionHooks } from "../register-collection-hooks";
 import type { BeforeOperationArgs, BeforeOperationContext } from "../types";
 
@@ -212,5 +213,90 @@ describe("beforeOperation context shape", () => {
       expect(registry.getHookCount("beforeCreate", "posts")).toBe(1);
       expect(registry.getHookCount("afterRead", "posts")).toBe(1);
     });
+  });
+});
+
+describe("the plugin surface can register beforeOperation", () => {
+  // `PluginHookRegistry` is re-exported through `@nextlyhq/plugin-sdk`, so a
+  // plugin that used `ctx.hooks.on("beforeOperation", ...)` needs a supported
+  // replacement rather than a phase it can no longer reach.
+  // The context factory proxies whatever the service getter returns, so it has
+  // to hand back an object for every name.
+  const stubServices = (() => ({})) as Parameters<
+    typeof createPluginContext
+  >[0];
+
+  function bridgeFor(registry: HookRegistry) {
+    return {
+      register: registry.register.bind(registry),
+      unregister: registry.unregister.bind(registry),
+      registerBeforeOperation: registry.registerBeforeOperation.bind(registry),
+      unregisterBeforeOperation:
+        registry.unregisterBeforeOperation.bind(registry),
+    };
+  }
+
+  it("routes onBeforeOperation through to the registry", async () => {
+    const registry = new HookRegistry();
+    const ctx = createPluginContext(stubServices, bridgeFor(registry));
+
+    ctx.hooks.onBeforeOperation("posts", context => ({
+      ...(context.args as Args),
+      scoped: true,
+    }));
+
+    const result = await registry.executeBeforeOperation({
+      collection: "posts",
+      operation: "read",
+      args: {},
+    } as BeforeOperationContext);
+
+    expect(result).toEqual({ scoped: true });
+  });
+
+  it("offBeforeOperation removes it again", async () => {
+    const registry = new HookRegistry();
+    const ctx = createPluginContext(stubServices, bridgeFor(registry));
+    const handler = (context: BeforeOperationContext) => ({
+      ...(context.args as Args),
+      scoped: true,
+    });
+
+    ctx.hooks.onBeforeOperation("posts", handler);
+    // Asserted before removing, so an `on` that registered nothing cannot make
+    // this pass by leaving nothing to remove.
+    expect(registry.getHookCount("beforeOperation", "posts")).toBe(1);
+
+    ctx.hooks.offBeforeOperation("posts", handler);
+    expect(registry.getHookCount("beforeOperation", "posts")).toBe(0);
+
+    const result = await registry.executeBeforeOperation({
+      collection: "posts",
+      operation: "read",
+      args: {},
+    } as BeforeOperationContext);
+
+    expect(result).toEqual({});
+  });
+});
+
+describe("published examples do not instruct a call that now throws", () => {
+  // A doc example is copied verbatim far more often than it is read carefully,
+  // and after the split these two would either fail typecheck or throw at
+  // runtime.
+  it("no source file tells a consumer to pass beforeOperation to register()", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const files = [
+      new URL("../types.ts", import.meta.url),
+      new URL("../hook-registry.ts", import.meta.url),
+      new URL("../../hooks.ts", import.meta.url),
+    ];
+
+    for (const file of files) {
+      const source = await readFile(file, "utf8");
+      expect(source).not.toMatch(
+        /\b(?:registerHook|registry\.register|hooks\.on)\(\s*['"]beforeOperation['"]/
+      );
+    }
   });
 });

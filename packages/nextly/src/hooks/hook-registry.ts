@@ -206,9 +206,9 @@ export class HookRegistry {
    * @param collection - Collection name or '*' for global hooks
    * @param handler - Hook function to execute
    */
-  registerBeforeOperation(
+  registerBeforeOperation<T = unknown>(
     collection: string,
-    handler: BeforeOperationHandler
+    handler: BeforeOperationHandler<T>
   ): void {
     this.pushHandler(
       this.beforeOperationHooks,
@@ -256,9 +256,9 @@ export class HookRegistry {
    * @param collection - Collection name or '*'
    * @param handler - The exact handler function to remove
    */
-  unregisterBeforeOperation(
+  unregisterBeforeOperation<T = unknown>(
     collection: string,
-    handler: BeforeOperationHandler
+    handler: BeforeOperationHandler<T>
   ): void {
     this.removeHandler(
       this.beforeOperationHooks,
@@ -451,7 +451,7 @@ export class HookRegistry {
    * @example
    * ```typescript
    * // Global logging for all operations
-   * registry.register('beforeOperation', '*', async (context) => {
+   * registry.registerBeforeOperation('*', async (context) => {
    *   console.log(`[${context.operation}] ${context.collection}`, context.args);
    * });
    *

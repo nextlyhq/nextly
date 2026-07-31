@@ -16,7 +16,11 @@ import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
 import type { Action, Filter } from "../filters";
 import { getFilterRegistry } from "../filters";
-import type { HookContextPhase, HookHandler } from "../hooks/types";
+import type {
+  BeforeOperationHandler,
+  HookContextPhase,
+  HookHandler,
+} from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
 import type { MediaService } from "../services/media/media-service";
@@ -127,6 +131,42 @@ export interface PluginHookRegistry {
     hookType: HookContextPhase,
     collection: string,
     handler: HookHandler<T>
+  ): void;
+
+  /**
+   * Register a `beforeOperation` hook.
+   *
+   * Separate from {@link on} because the handler is shaped differently: it
+   * receives the operation's `args` -- the data, id or where clause about to be
+   * used -- rather than a document, and returning a modified set replaces them.
+   *
+   * @param collection - Collection name or '*' for all collections
+   * @param handler - Hook function to execute
+   *
+   * @example
+   * ```typescript
+   * nextly.hooks.onBeforeOperation('posts', (context) => {
+   *   if (context.operation === 'read') {
+   *     return { ...context.args, where: { ...context.args.where, archived: false } };
+   *   }
+   * });
+   * ```
+   */
+  onBeforeOperation<T = unknown>(
+    collection: string,
+    handler: BeforeOperationHandler<T>
+  ): void;
+
+  /**
+   * Unregister a `beforeOperation` hook, the counterpart to
+   * {@link onBeforeOperation}.
+   *
+   * @param collection - Collection name or '*'
+   * @param handler - The exact handler function to remove
+   */
+  offBeforeOperation<T = unknown>(
+    collection: string,
+    handler: BeforeOperationHandler<T>
   ): void;
 }
 
@@ -727,6 +767,14 @@ export function createPluginContext(
       collection: string,
       handler: HookHandler
     ) => void;
+    registerBeforeOperation: (
+      collection: string,
+      handler: BeforeOperationHandler
+    ) => void;
+    unregisterBeforeOperation: (
+      collection: string,
+      handler: BeforeOperationHandler
+    ) => void;
   },
   /**
    * The plugin this context is built for — used to resolve `ctx.self`.
@@ -750,6 +798,17 @@ export function createPluginContext(
     },
     off: (hookType, collection, handler) => {
       hookRegistry.unregister(hookType, collection, handler as HookHandler);
+    },
+    onBeforeOperation: (collection, handler) => {
+      hookRegistry.registerBeforeOperation(collection, handler);
+      if (pluginName) {
+        recordPluginSubscription(pluginName, () =>
+          hookRegistry.unregisterBeforeOperation(collection, handler)
+        );
+      }
+    },
+    offBeforeOperation: (collection, handler) => {
+      hookRegistry.unregisterBeforeOperation(collection, handler);
     },
   };
 

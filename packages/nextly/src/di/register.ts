@@ -2344,6 +2344,22 @@ async function initializePlugins(
     ) => {
       pluginHookRegistry.unregister(hookType, collection, handler);
     },
+    // `beforeOperation` handlers take the operation's args rather than a
+    // document, so they bridge through their own pair rather than the one above.
+    registerBeforeOperation: (
+      collection: string,
+      handler: Parameters<typeof pluginHookRegistry.registerBeforeOperation>[1]
+    ) => {
+      pluginHookRegistry.registerBeforeOperation(collection, handler);
+    },
+    unregisterBeforeOperation: (
+      collection: string,
+      handler: Parameters<
+        typeof pluginHookRegistry.unregisterBeforeOperation
+      >[1]
+    ) => {
+      pluginHookRegistry.unregisterBeforeOperation(collection, handler);
+    },
   };
 
   // HMR/re-registration safety (B2): drop every plugin's prior event/hook

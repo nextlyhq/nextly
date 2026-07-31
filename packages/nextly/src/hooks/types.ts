@@ -409,15 +409,15 @@ export interface BeforeOperationArgs<T = any> {
  *
  * @example
  * ```typescript
- * import { registerHook } from 'nextly';
+ * import { registerBeforeOperationHook } from 'nextly';
  *
  * // Global logging for all operations
- * registerHook('beforeOperation', '*', async (context) => {
+ * registerBeforeOperationHook('*', async (context) => {
  *   console.log(`[${context.operation}] ${context.collection}`, context.args);
  * });
  *
  * // Modify operation arguments
- * registerHook('beforeOperation', 'posts', async (context) => {
+ * registerBeforeOperationHook('posts', async (context) => {
  *   if (context.operation === 'create' && context.args.data) {
  *     return {
  *       ...context.args,
