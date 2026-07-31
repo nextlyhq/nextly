@@ -1138,6 +1138,58 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect((read.data as { title?: string }).title).toBe("edited");
   });
 
+  it("keeps a live single component's other sub-fields on a first partial draft save", async () => {
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "seo",
+          fields: [text({ name: "metaTitle" }), text({ name: "metaDesc" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "seo", component: "seo" }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      seo: { metaTitle: "live-title", metaDesc: "live-desc" },
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // The FIRST status-less save changes only seo.metaTitle. With no sidecar yet,
+    // the draft must still keep the live seo.metaDesc rather than dropping it.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { metaTitle: "draft-title" } }
+    );
+
+    const draftRead = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    const seo = (
+      draftRead.data as { seo?: { metaTitle?: string; metaDesc?: string } }
+    ).seo;
+    expect(seo?.metaTitle).toBe("draft-title");
+    expect(seo?.metaDesc).toBe("live-desc");
+  });
+
   it("deletes the working-draft sidecar when the entry is deleted", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };

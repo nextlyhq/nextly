@@ -5542,36 +5542,51 @@ export class CollectionMutationService extends BaseService {
                   draftRef,
                   null
                 );
-                let draftDocument = patchedDocument;
-                if (existingDraft) {
-                  const existingSnapshot = existingDraft.snapshot as Record<
-                    string,
-                    unknown
-                  >;
-                  const touched = new Set<string>([
-                    ...Object.keys(updatePayload),
-                    ...Object.keys(componentFieldData),
-                    ...Object.keys(manyToManyData),
-                  ]);
-                  const patchFields = Object.fromEntries(
-                    Object.entries(patchedDocument).filter(([key]) =>
-                      touched.has(key)
-                    )
-                  );
-                  // A single (non-repeatable) component holds an object of
-                  // sub-fields, and a patch-shaped save carries only the ones it
-                  // changed. Recursively merge this patch's component objects onto
-                  // the existing draft's (descending into nested single components)
-                  // rather than overwriting them, so disjoint sub-field edits from
-                  // separate saves coalesce at any depth. A dynamic zone, a
-                  // repeatable component, and a scalar are replaced whole.
-                  draftDocument = this.mergeSingleComponentPatches(
-                    existingSnapshot,
-                    patchFields,
-                    fields as unknown as FieldConfig[],
-                    splitComponentSchemas
-                  );
-                }
+                // The fields this save actually touched, at the assembled read
+                // shape. `patchedDocument` overlaid the current patch onto the live
+                // relations and REPLACED a single component whole, so a partial
+                // patch is captured here (touched keys only) and merged onto the
+                // base below rather than replacing it.
+                const touched = new Set<string>([
+                  ...Object.keys(updatePayload),
+                  ...Object.keys(componentFieldData),
+                  ...Object.keys(manyToManyData),
+                ]);
+                const patchFields = Object.fromEntries(
+                  Object.entries(patchedDocument).filter(([key]) =>
+                    touched.has(key)
+                  )
+                );
+                // Accumulate onto the existing working draft, or onto the live
+                // document on the first save. The live base is assembled through
+                // the same snapshot shaping so its components carry the type markers
+                // promotion needs, and merging (not replacing) keeps a live single
+                // component's other sub-fields when the patch only changed some.
+                const draftBase = existingDraft
+                  ? (existingDraft.snapshot as Record<string, unknown>)
+                  : assembleDocument(
+                      await this.snapshotPartsFor(
+                        {
+                          parentRow,
+                          components: snapshotComponents ?? {},
+                          manyToMany: snapshotM2M ?? {},
+                        },
+                        fields,
+                        tx
+                      )
+                    );
+                // A single (non-repeatable) component holds an object of sub-fields,
+                // and a patch-shaped save carries only the ones it changed. Merge
+                // the patch's component objects onto the base recursively (into
+                // nested single components) rather than overwriting them, so
+                // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
+                // repeatable component, and a scalar are replaced whole.
+                const draftDocument = this.mergeSingleComponentPatches(
+                  draftBase,
+                  patchFields,
+                  fields as unknown as FieldConfig[],
+                  splitComponentSchemas
+                );
                 // The response and hooks see the draft as an ordinary read, so
                 // shape the accumulated snapshot through the current schema the
                 // same way the read overlay does: a field a later schema change
