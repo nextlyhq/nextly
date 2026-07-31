@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { HookRegistry, resetHookRegistry } from "../hook-registry";
 import type { HookContext, HookHandler, HookType } from "../types";
+import { NextlyError } from "../../errors/nextly-error";
 
 describe("HookRegistry", () => {
   let registry: HookRegistry;
@@ -563,8 +564,20 @@ describe("HookRegistry", () => {
         context: {},
       };
 
-      await expect(registry.execute("beforeCreate", context)).rejects.toThrow(
-        "Hook execution failed for beforeCreate on posts: Hook validation failed"
+      // An untyped error is genuinely unexpected, so it surfaces as an internal
+      // error rather than as the hook's own words: the message a caller sees no
+      // longer carries the hook type, the collection, or the underlying text.
+      // Those identify internals and now travel in log context instead.
+      const error = await registry
+        .execute("beforeCreate", context)
+        .catch((e: unknown) => e);
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).code).toBe("INTERNAL_ERROR");
+      // The original is kept rather than flattened into a message, so nothing
+      // is lost for debugging.
+      expect((error as { cause?: unknown }).cause).toBeInstanceOf(Error);
+      expect(((error as { cause?: Error }).cause as Error).message).toBe(
+        "Hook validation failed"
       );
     });
 
@@ -591,7 +604,7 @@ describe("HookRegistry", () => {
       expect(handler2).not.toHaveBeenCalled();
     });
 
-    it("should include hook type and collection in error message", async () => {
+    it("records the hook type and collection in log context", async () => {
       const handler = vi.fn(async () => {
         throw new Error("Custom error");
       });
@@ -605,9 +618,15 @@ describe("HookRegistry", () => {
         context: {},
       };
 
-      await expect(registry.execute("afterUpdate", context)).rejects.toThrow(
-        "Hook execution failed for afterUpdate on users: Custom error"
-      );
+      // The hook type and collection are still recorded, in log context where
+      // operators see them, rather than in a message returned to the caller.
+      const error = await registry
+        .execute("afterUpdate", context)
+        .catch((e: unknown) => e);
+      expect(NextlyError.is(error)).toBe(true);
+      expect(
+        (error as { logContext?: Record<string, unknown> }).logContext
+      ).toMatchObject({ hookType: "afterUpdate", collection: "users" });
     });
   });
 

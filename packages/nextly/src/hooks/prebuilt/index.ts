@@ -21,6 +21,7 @@
 
 import { z } from "zod";
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { HookContext, HookType } from "../types";
 
 // ============================================================
@@ -492,7 +493,14 @@ export const uniqueValidation: PrebuiltHookConfig<UniqueValidationConfig> = {
     });
 
     if (isDuplicate) {
-      throw new Error(errorMessage);
+      // Typed, so the duplicate reaches the caller as a validation failure
+      // against the offending field rather than as a server fault whose
+      // message is replaced before anyone sees it.
+      throw NextlyError.validation({
+        errors: [
+          { path: String(field), code: "DUPLICATE", message: errorMessage },
+        ],
+      });
     }
 
     return data;

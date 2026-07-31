@@ -92,6 +92,22 @@ export type {
 } from "nextly";
 
 /**
+ * The canonical error type, so a hook or route a plugin contributes can reject
+ * input the way core does.
+ *
+ * A hook that throws a plain `Error` is indistinguishable from one that
+ * crashed, so its message is treated as a server fault and replaced before it
+ * reaches the caller. `NextlyError.validation()` and its siblings carry the
+ * status, code and field issues that say the rejection was deliberate.
+ *
+ * A Direct API caller receives that error as thrown. Over REST the dispatcher
+ * currently reconstructs a subset of statuses and maps the rest to 500, so do
+ * not build client behaviour on a status reaching REST until that is closed.
+ * @public
+ */
+export { NextlyError } from "nextly";
+
+/**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich
  * queries (filters/sort/pagination/relations via QueryOptions), `count`, and
  * `createMany`. Aggregations beyond `count` use the raw `ctx.db` escape hatch

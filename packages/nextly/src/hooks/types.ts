@@ -285,10 +285,16 @@ export interface HookContext<T = any> {
  *   // No return value needed for after hooks
  * };
  *
- * // Error handling (beforeCreate)
+ * // Rejecting input (beforeCreate). Throw a NextlyError, not a plain Error:
+ * // a plain one is indistinguishable from a crash, so its message is replaced
+ * // with a generic server-fault message before the caller sees it.
  * const validatePrice: HookHandler<Product> = (context) => {
  *   if (context.data.price < 0) {
- *     throw new Error('Price cannot be negative');
+ *     throw NextlyError.validation({
+ *       errors: [
+ *         { path: 'price', code: 'INVALID', message: 'Price cannot be negative.' },
+ *       ],
+ *     });
  *   }
  *   return context.data;
  * };
@@ -508,10 +514,12 @@ export interface BeforeOperationContext<T = any> {
  *   return context.args;
  * };
  *
- * // Abort operation (throw error)
+ * // Abort the operation. A NextlyError, not a plain one: a plain Error is
+ * // indistinguishable from a crash, so its message and status are replaced
+ * // with a generic server fault before the caller sees them.
  * const rateLimit: BeforeOperationHandler = async (context) => {
  *   if (await isRateLimited(context.user?.id)) {
- *     throw new Error('Rate limit exceeded');
+ *     throw NextlyError.rateLimited({});
  *   }
  * };
  * ```

@@ -25,6 +25,7 @@
 
 import type { StoredHookConfig } from "@nextly/schemas/dynamic-collections/types";
 
+import { normalizeHookError } from "./normalize-hook-error";
 import type { PrebuiltHookContext } from "./prebuilt";
 import { getPrebuiltHook, mapHookType } from "./prebuilt";
 import type { HookType } from "./types";
@@ -214,11 +215,12 @@ export class StoredHookExecutor {
           );
         }
       } catch (error: unknown) {
-        // Re-throw with hook ID for debugging
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Stored hook "${storedHook.hookId}" failed for ${hookType} on ${context.collection}: ${message}`
-        );
+        // Same classification the runtime registry applies: a stored hook that
+        // rejects input is making a decision, and rebuilding it as a generic
+        // error turns that decision into a server fault.
+        throw normalizeHookError(error, hookType, context.collection, {
+          storedHookId: storedHook.hookId,
+        });
       }
     }
 

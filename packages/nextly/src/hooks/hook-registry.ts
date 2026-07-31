@@ -8,6 +8,7 @@
  * @since 1.0.0
  */
 
+import { normalizeHookError } from "./normalize-hook-error";
 import type {
   BeforeOperationArgs,
   BeforeOperationContext,
@@ -52,6 +53,20 @@ import type {
  * ```
  *
  * @class HookRegistry
+ */
+/**
+ * Turn whatever a hook threw into the error the boundary should see.
+ *
+ * A hook that rejects its input does so deliberately, and says how: a
+ * validation error carries field issues, a forbidden one carries a status.
+ * Rebuilding it as a generic error throws all of that away and the boundary
+ * answers 500, so a hook enforcing a rule reports a server fault instead of
+ * the rule.
+ *
+ * Anything else really is unexpected. The original is kept as `cause` rather
+ * than flattened into a message, so its stack survives, and the hook and
+ * collection travel in log context where they are useful without being
+ * disclosed to the caller.
  */
 export class HookRegistry {
   /**
@@ -273,10 +288,7 @@ export class HookRegistry {
           data = result;
         }
       } catch (error: unknown) {
-        // Re-throw with additional context for debugging
-        throw new Error(
-          `Hook execution failed for ${hookType} on ${context.collection}: ${error instanceof Error ? error.message : String(error)}`
-        );
+        throw normalizeHookError(error, hookType, context.collection);
       }
     }
 
@@ -363,11 +375,7 @@ export class HookRegistry {
           args = result;
         }
       } catch (error: unknown) {
-        // Re-throw with additional context for debugging
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Hook execution failed for beforeOperation on ${context.collection}: ${message}`
-        );
+        throw normalizeHookError(error, "beforeOperation", context.collection);
       }
     }
 
