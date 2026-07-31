@@ -56,10 +56,11 @@ export type {
 } from "./collections/pageBuilderEntry";
 
 /**
- * Contributing blocks. `defineBlock` is re-exported here rather than reached
- * through the core SDK: a block is a page-builder concept, and routing it
- * through core's public surface would put the engine's types back into an API
- * that deliberately no longer references them.
+ * Contributing blocks: the registry a plugin hands its blocks to.
+ *
+ * Only the registration side is here, because that is what belongs to this
+ * plugin. The contracts for authoring a block come from
+ * `@nextlyhq/plugin-sdk/blocks`, the stable surface a plugin author is offered.
  */
 export {
   blockRegistry,
@@ -74,6 +75,6 @@ export type { BlockRegistrationService } from "./blocks/registration-service";
 // `defineBlock` from the root would silently get the engine's helper — which
 // only returns its argument — and stop registering its blocks.
 //
-// Block authors take `defineBlock` from `@nextlyhq/blocks-engine` directly
-// until the PoC registry is removed and the name is free.
+// Block authors take both from `@nextlyhq/plugin-sdk/blocks`, where the name
+// is unclaimed and the export is covered by the SDK's stability ledger.
 export type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
