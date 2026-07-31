@@ -77,6 +77,55 @@ describe("assertValidPluginDefault", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("refuses a default that contradicts the type's storage primitive", async () => {
+    // A type that declares no `validate` of its own still states what its
+    // column holds. Without the primitive check this reaches the auto-create
+    // insert and fails at the database on a strict dialect, or stores the
+    // wrong representation on SQLite.
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "@acme/ratings/admin#Input",
+    });
+
+    await expect(
+      assertValidPluginDefault(
+        { name: "score", type: "rating" },
+        "not-a-number",
+        "homepage"
+      )
+    ).rejects.toBeInstanceOf(NextlyError);
+  });
+
+  it("accepts a default its storage primitive allows", async () => {
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "@acme/ratings/admin#Input",
+    });
+
+    await expect(
+      assertValidPluginDefault({ name: "score", type: "rating" }, 4, "homepage")
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not enforce required, which a default cannot violate", async () => {
+    // The default IS the value, so absence is not a violation here; enforcing
+    // it would refuse configs that boot today.
+    registerDoc();
+
+    await expect(
+      assertValidPluginDefault(
+        { name: "content", type: "doc", required: true } as {
+          name?: string;
+          type?: string;
+        },
+        { kind: "page" },
+        "homepage"
+      )
+    ).resolves.toBeUndefined();
+  });
+
   it("leaves a built-in type alone", async () => {
     // Only a contributed type's own rules run here. The built-in checks and the
     // field's own `validate` belong to the write path, and running them would

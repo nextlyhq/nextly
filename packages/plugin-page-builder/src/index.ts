@@ -33,7 +33,7 @@ export type {
   BlocksFieldValue,
   BlocksFieldConfig,
 } from "./fields/blocks-options";
-export { blocks } from "./fields/blocksHelper";
+export { blocks, isBlocksField } from "./fields/blocksHelper";
 export type { PageBuilderOptions } from "./plugin";
 export { pagesCollection, EDIT_VIEW_PATH } from "./collections/pages";
 export {

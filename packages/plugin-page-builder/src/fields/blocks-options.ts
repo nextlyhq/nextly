@@ -17,8 +17,11 @@
  */
 
 import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
-import type { FieldConfig } from "@nextlyhq/plugin-sdk";
-import type { FieldAdminOptions, RequestContext } from "nextly";
+import type {
+  FieldAdminOptions,
+  FieldConfig,
+  RequestContext,
+} from "@nextlyhq/plugin-sdk";
 
 import type { BLOCKS_TYPE } from "./blocksField";
 

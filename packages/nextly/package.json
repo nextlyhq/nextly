@@ -180,7 +180,7 @@
     "dev": "tsup --watch",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "clean": "rimraf dist",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",

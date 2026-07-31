@@ -75,6 +75,10 @@ import {
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+import {
+  assertPluginFieldDeclarations,
+  describeDeclarationFailure,
+} from "../../shared/lib/assert-plugin-field-declarations";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -139,6 +143,26 @@ export async function runMigrateCheck(
     process.exit(1);
   }
 
+  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
+  // first moment an unknown field type can be told apart from one a plugin had
+  // not contributed yet: the `define*` validators defer that question because
+  // the config bundle is evaluated before any plugin registers. Asked here, a
+  // misspelled or wrong-surface token fails the command instead of silently
+  // generating primitive fallback types and a snapshot that production boot
+  // then refuses.
+  try {
+    assertPluginFieldDeclarations({
+      collections: configResult.config.collections,
+      singles: configResult.config.singles,
+      fieldGroups: configResult.config.fieldGroups,
+    });
+  } catch (error) {
+    // Reported and exited rather than thrown, so an invalid declaration reads
+    // like every other check failure instead of an unhandled crash.
+    logger.error(describeDeclarationFailure(error));
+    process.exit(1);
+  }
+
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
@@ -160,6 +184,36 @@ export async function runMigrateCheck(
     manifest,
     configResult.deferredExtends ?? []
   );
+
+  // The manifest gets the same check the code-first config got above, once its
+  // deferred extends are materialized: a Builder-owned entity can carry a
+  // plugin field too, and a plugin extending one contributes its fields here
+  // rather than in the config. Only entities a code-first entity does not
+  // shadow are checked, because a shadowed one never reaches the snapshot.
+  const surviving = <T extends { slug: string }>(
+    list: readonly T[] | undefined,
+    codeFirst: ReadonlyArray<{ slug: string }> | undefined
+  ): T[] => {
+    const shadowed = new Set((codeFirst ?? []).map(e => e.slug));
+    return (list ?? []).filter(e => !shadowed.has(e.slug));
+  };
+
+  try {
+    assertPluginFieldDeclarations({
+      collections: surviving(
+        manifest.collections,
+        configResult.config.collections
+      ),
+      singles: surviving(manifest.singles, configResult.config.singles),
+      fieldGroups: surviving(
+        manifest.components,
+        configResult.config.fieldGroups
+      ),
+    });
+  } catch (error) {
+    logger.error(describeDeclarationFailure(error));
+    process.exit(1);
+  }
 
   // Cross-file checks (slug collision, relation targets).
   const crossIssues = validateCrossFile({

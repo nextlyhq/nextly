@@ -19,6 +19,7 @@ import {
   RESERVED_PLUGIN_OPTION_KEYS,
 } from "../../plugins/plugin-options";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { pluginStorageFieldType } from "../../shared/lib/plugin-storage";
 
 /**
  * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
@@ -365,16 +366,29 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["name"],
         });
       }
-      // Only a built-in's default is shape-checked here. A contributed type
-      // stores whatever its own type says it stores — a document, a record —
-      // and core cannot know that shape; enumerating the built-ins would reject
-      // every valid contributed default. Its own `validateOptions` is the
-      // authority, and it already runs on this write.
-      if (f.defaultValue !== undefined && BUILT_IN_UI_FIELD_TYPES.has(f.type)) {
+      // A default is shape-checked against the token that describes the column
+      // it lands in: its own, for a built-in, and the STORAGE PRIMITIVE for a
+      // contributed type. A contributed type's own structure — which kinds a
+      // document accepts, what a record must contain — is its business and is
+      // judged by its `validate`, which is async and cannot run inside this
+      // synchronous gate. `validateOptions`, which does run here, checks the
+      // field's options and never looks at `defaultValue`, so without this a
+      // number-backed type accepted the string "five".
+      //
+      // An unregistered token resolves to nothing and is skipped: it is refused
+      // by the boot gate, and guessing a shape for it here would reject the
+      // contributed defaults this manifest exists to carry.
+      const shapeToken = BUILT_IN_UI_FIELD_TYPES.has(f.type)
+        ? f.type
+        : pluginStorageFieldType({ type: f.type });
+      if (f.defaultValue !== undefined && shapeToken !== undefined) {
         const dv = f.defaultValue;
         const okType =
-          (f.type === "number" && typeof dv === "number") ||
-          (f.type === "checkbox" && typeof dv === "boolean") ||
+          // Anything a manifest can carry is already JSON, so json storage
+          // states no shape beyond what parsing established.
+          shapeToken === "json" ||
+          (shapeToken === "number" && typeof dv === "number") ||
+          (shapeToken === "checkbox" && typeof dv === "boolean") ||
           ([
             "text",
             "textarea",
@@ -385,7 +399,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             "date",
             "select",
             "radio",
-          ].includes(f.type) &&
+          ].includes(shapeToken) &&
             typeof dv === "string");
         if (!okType) {
           ctx.addIssue({

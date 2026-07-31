@@ -75,6 +75,16 @@ export type {
 } from "nextly";
 
 /**
+ * The shapes a contributed field type's own config extends: the presentation
+ * options every field carries, and the request context its callbacks are
+ * handed. A plugin declaring a field type has to name both to type its own
+ * config interface, so leaving them off this surface forced it to import them
+ * from the core entry instead.
+ * @public Exercised by `plugin-page-builder` (its `BlocksFieldConfig`).
+ */
+export type { FieldAdminOptions, RequestContext } from "nextly";
+
+/**
  * Validating values against field declarations. A plugin storing structured
  * content of its own — block props, form submissions — applies the same rules a
  * write does instead of reimplementing `required`, the per-type checks and

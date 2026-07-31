@@ -25,8 +25,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types/index";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
+import type { SupportedDialect } from "../../../types/database";
+import { getColumnDescriptor } from "../services/field-column-descriptor";
 import { pluginStorageFieldType } from "../services/plugin-codegen";
 
 // Convert camelCase / PascalCase identifiers to snake_case column names.
@@ -36,6 +39,62 @@ function toSnakeCase(name: string): string {
     .replace(/([A-Z])/g, "_$1")
     .toLowerCase()
     .replace(/^_/, "");
+}
+
+/**
+ * The DDL type for a field, taken from the descriptor the ORM binds.
+ *
+ * `getColumnDescriptor` is the single statement of what a column holds — the
+ * runtime schema generator dispatches on its `kind` — so a path that names its
+ * own types can disagree with the columns the app actually reads and writes.
+ * Only the kinds this file needs are mapped; an unmapped kind returns nothing
+ * so the caller keeps the type it already emitted.
+ */
+function ddlTypeForKind(
+  field: FieldConfig,
+  dialect: string
+): string | undefined {
+  const descriptor = getColumnDescriptor(
+    field as unknown as FieldDefinition,
+    dialect as SupportedDialect
+  );
+  if (!descriptor) return undefined;
+
+  switch (descriptor.kind) {
+    case "integer":
+      return "INTEGER";
+    case "double":
+      return dialect === "postgresql"
+        ? "DOUBLE PRECISION"
+        : dialect === "mysql"
+          ? "DOUBLE"
+          : "REAL";
+    case "decimal": {
+      // The dimensions come from the descriptor too. Stated here, a field
+      // declaring NUMERIC(18,6) got NUMERIC(10,2) when added to an existing
+      // table — rounding what it stored and refusing what it used to accept —
+      // while a fresh table and the runtime binding both honoured it.
+      const { precision, scale } = descriptor;
+      const dimensions =
+        precision !== undefined && scale !== undefined
+          ? `(${precision},${scale})`
+          : "";
+      return dialect === "mysql"
+        ? `DECIMAL${dimensions}`
+        : `NUMERIC${dimensions}`;
+    }
+    case "timestamp":
+      // Only SQLite routes here; it stores a timestamp as an integer.
+      return dialect === "sqlite" ? "INTEGER" : undefined;
+    case "json":
+      return dialect === "postgresql"
+        ? "JSONB"
+        : dialect === "mysql"
+          ? "JSON"
+          : "TEXT";
+    default:
+      return undefined;
+  }
 }
 
 // Render a FieldConfig into the column part of an ALTER TABLE statement,
@@ -81,12 +140,15 @@ export function fieldToColumnDef(
       break;
 
     case "number":
-      columnType =
-        dialect === "postgresql"
-          ? "NUMERIC"
-          : dialect === "mysql"
-            ? "DECIMAL(10,2)"
-            : "REAL";
+      // Derived from the descriptor rather than stated here, because the
+      // descriptor is what the ORM binds and what a freshly created table
+      // gets. Stated independently, this branch emitted NUMERIC/DECIMAL/REAL
+      // while the binder read an integer, so the same field had one storage
+      // class when the table was created and another when it was added later.
+      // The descriptor also honours the two ways a field asks for fractions —
+      // `dbType: "decimal"` and `options.format: "float"` — which a fixed
+      // string here silently overrode in both directions.
+      columnType = ddlTypeForKind(field, dialect) ?? "INTEGER";
       break;
 
     case "checkbox": {
@@ -103,12 +165,16 @@ export function fieldToColumnDef(
     }
 
     case "date":
+      // SQLite binds a timestamp as an integer, so the TEXT this branch used
+      // to emit could not be read back by the binder that wrote it. Postgres
+      // and MySQL keep the types they already had; only the storage class the
+      // ORM disagreed with changes.
       columnType =
         dialect === "postgresql"
           ? "TIMESTAMP WITH TIME ZONE"
           : dialect === "mysql"
             ? "DATETIME"
-            : "TEXT";
+            : (ddlTypeForKind(field, dialect) ?? "INTEGER");
       break;
 
     case "select":

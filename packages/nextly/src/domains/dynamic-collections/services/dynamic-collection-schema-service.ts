@@ -25,7 +25,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
 import {
-  pluginEmptyValue,
+  pluginEmptyColumnDefault,
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -1079,20 +1079,12 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     // expects the structure the type actually stores. Read from the field as
     // DECLARED — `type` here may already be the storage primitive, under which
     // the contributed type is not registered and states nothing.
-    const contributed = pluginEmptyValue(field ?? { type });
-    if (contributed !== undefined) {
-      // The type states a value, not SQL. Which renderer applies is decided by
-      // the type's DECLARED STORAGE, never by the shape of the value it
-      // returned: a `Date` is an object too, so reading the shape would quote a
-      // timestamp-backed type's empty as JSON and write quote characters into a
-      // timestamp column. Only `json` storage is serialized; everything else is
-      // rendered as the literal its own primitive expects, which is also why
-      // `false` cannot become the truthy string `"false"` in a boolean column.
-      const storageToken = storageTypeToken(field ?? { type }) ?? type;
-      return storageToken === "json"
-        ? quoteJsonSqlDefault(JSON.stringify(contributed), this.dialect)
-        : this.formatDefaultValue(contributed, storageToken);
-    }
+    const contributed = pluginEmptyColumnDefault(field ?? { type }, type, {
+      json: serialized => quoteJsonSqlDefault(serialized, this.dialect),
+      literal: (value, storageToken) =>
+        this.formatDefaultValue(value, storageToken),
+    });
+    if (contributed !== undefined) return contributed;
 
     switch (type) {
       case "text":
