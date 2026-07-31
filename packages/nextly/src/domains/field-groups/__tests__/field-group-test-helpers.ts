@@ -48,17 +48,7 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     insert: vi.fn().mockResolvedValue({ id: "new-id" }),
     update: vi.fn().mockResolvedValue([{ id: "updated-id" }]),
     delete: vi.fn().mockResolvedValue(undefined),
-    // Every table exists EXCEPT the migration's own lock table. That table is
-    // created by the migration, so its absence is precisely how a database on
-    // which no storage migration has ever run presents itself - which is what
-    // every test in this directory describes. The registry writes hold an
-    // exclusion that short-circuits on exactly that, so modelling it here is
-    // what lets those writes run at all.
-    tableExists: vi
-      .fn()
-      .mockImplementation(
-        async (name: string) => name !== "nextly_field_group_lock"
-      ),
+    tableExists: vi.fn().mockResolvedValue(true),
     executeQuery: vi.fn().mockResolvedValue(undefined),
     getDialect: vi.fn().mockReturnValue("postgresql"),
     // Empty catalog by default, so the embedded-component sweep on entity delete finds
@@ -70,19 +60,6 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     getDrizzle: vi.fn().mockReturnValue({
       delete: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue({ rowCount: 0 }),
-      }),
-      // The registry writes read the storage-migration marker out of
-      // `nextly_meta` before changing anything, so this models that table
-      // holding no marker -- a database on which no migration has ever run,
-      // which is the state every one of these tests describes. Returning no
-      // rows lets the real check run rather than short-circuiting it, so these
-      // tests exercise the guard instead of stepping around it.
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
-          }),
-        }),
       }),
     }),
     ...overrides,

@@ -43,7 +43,6 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
-import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
 import {
@@ -1827,23 +1826,8 @@ async function syncCodeFirstComponents(
       localized: (comp as { localized?: boolean }).localized === true,
     }));
 
-  // Held for the whole sync, which is the granularity that matters: the sync
-  // reads the world, decides what changed, and writes it back, so an exclusion
-  // covering only the writes would let a storage migration start against the
-  // world this sync had already decided from. `syncCodeFirstComponents`
-  // therefore uses unguarded writes and relies on this.
-  //
-  // The lock is never created from here. It belongs to the migration, so its
-  // absence means no run has ever happened on this database, and boot must not
-  // issue DDL to discover that.
-  const componentSyncResult = await withMigrationExcluded(
-    {
-      adapter,
-      logger,
-      label: "code-first field group sync",
-      mayCreateLock: false,
-    },
-    () => componentRegistry.syncCodeFirstComponents(codeFirstComponentConfigs)
+  const componentSyncResult = await componentRegistry.syncCodeFirstComponents(
+    codeFirstComponentConfigs
   );
 
   logger.info?.(

@@ -27,7 +27,6 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
-import { withMigrationExcluded } from "../migration/sync-guard";
 
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
@@ -113,43 +112,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     return ["slug", "label"];
   }
 
-  /**
-   * Run a registry mutation with a storage migration excluded for its duration.
-   *
-   * The migration renames a field group's table and moves the registry row
-   * pointing at it as one step. An author changing `dbName` in that window
-   * produces a database state byte-identical to the migration's own committed
-   * step, so a resume cannot tell the two apart: it either adopts the author's
-   * table as its own work, or renames it away. Nothing observable distinguishes
-   * them afterwards, which is why this prevents rather than detects.
-   *
-   * Creating and deleting matter for a different reason: a run's identity
-   * covers which field groups existed when it was planned, so either one makes
-   * a resume refuse the plan it is resuming.
-   *
-   * 🔴 The exclusion is **held**, not sampled. Reading the marker and then
-   * proceeding answers only whether a migration had started by the instant of
-   * the read; a mutation takes longer than that, and a run beginning immediately
-   * afterwards would plan against a registry this write is still changing — so
-   * the new row is absent from the manifest, or the update races the rename.
-   * This is the same reason `db:sync` holds the lock rather than checking it.
-   *
-   * `mayCreateLock` is false: the lock table is created by the migration, so its
-   * absence means no run has ever happened here and there is nothing to be
-   * excluded from. A write path must not issue DDL to find that out.
-   */
-  private async excludingMigration<T>(work: () => Promise<T>): Promise<T> {
-    return withMigrationExcluded(
-      {
-        adapter: this.adapter,
-        logger: this.logger,
-        label: "field group change",
-        mayCreateLock: false,
-      },
-      work
-    );
-  }
-
   async getComponentBySlug(
     slug: string,
     executor?: unknown
@@ -206,12 +168,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
   async registerComponent(
-    data: DynamicFieldGroupInsert
-  ): Promise<DynamicFieldGroupRecord> {
-    return this.excludingMigration(() => this.registerComponentUnguarded(data));
-  }
-
-  private async registerComponentUnguarded(
     data: DynamicFieldGroupInsert
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Registering Component", { slug: data.slug });
@@ -339,16 +295,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     data: Partial<DynamicFieldGroupInsert>,
     options?: UpdateComponentOptions
   ): Promise<DynamicFieldGroupRecord> {
-    return this.excludingMigration(() =>
-      this.updateComponentUnguarded(slug, data, options)
-    );
-  }
-
-  private async updateComponentUnguarded(
-    slug: string,
-    data: Partial<DynamicFieldGroupInsert>,
-    options?: UpdateComponentOptions
-  ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
 
     const existing = await this.getComponent(slug);
@@ -442,10 +388,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Delete a Component from the registry.
    */
   async deleteComponent(slug: string): Promise<void> {
-    return this.excludingMigration(() => this.deleteComponentUnguarded(slug));
-  }
-
-  private async deleteComponentUnguarded(slug: string): Promise<void> {
     this.logger.debug("Deleting Component", { slug });
 
     const existing = await this.getComponent(slug);
@@ -534,21 +476,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   /**
    * Sync code-first Components with the registry.
    */
-  /**
-   * Reconcile code-declared field groups into the registry.
-   *
-   * 🔴 **Callers must already hold the storage-migration exclusion.** The writes
-   * below therefore use the unguarded bodies: taking the exclusion per write
-   * would contend with the caller that is already holding it, and the lock
-   * refuses any occupied owner — including one that looks like our own, since
-   * claims are unique per invocation. Nested acquisition would mean no
-   * code-first field group could ever synchronize.
-   *
-   * Held by the caller rather than here because the caller's scope is the right
-   * granularity: a sync reads the world, decides what changed, and writes it
-   * back, and an exclusion that covered only the writes would let a migration
-   * start against the world this sync had already decided from.
-   */
   async syncCodeFirstComponents(
     configs: CodeFirstComponentConfig[]
   ): Promise<SyncComponentResult> {
@@ -622,7 +549,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           }
         }
         if (!existing) {
-          await this.registerComponentUnguarded({
+          await this.registerComponent({
             slug: config.slug,
             label: config.label,
             tableName: desiredTableName,
@@ -641,7 +568,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
           (config.localized === true) !== (existing.localized === true)
         ) {
-          await this.updateComponentUnguarded(
+          await this.updateComponent(
             config.slug,
             {
               label: config.label,
@@ -658,7 +585,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           );
           result.updated.push(config.slug);
         } else if (this.adminConfigChanged(config.admin, existing.admin)) {
-          await this.updateComponentUnguarded(
+          await this.updateComponent(
             config.slug,
             {
               admin: config.admin,
