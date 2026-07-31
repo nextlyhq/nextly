@@ -9,7 +9,11 @@
 import { describe, expect, it } from "vitest";
 
 import { clearServices } from "../register";
-import { getHookRegistry, resetHookRegistry } from "../../hooks/hook-registry";
+import {
+  getHookRegistry,
+  HookRegistry,
+  resetHookRegistry,
+} from "../../hooks/hook-registry";
 import type { HookHandler } from "../../hooks/types";
 
 const SLUG = "shutdown_registry_posts";
@@ -53,5 +57,31 @@ describe("clearing services clears the hook registry", () => {
 
     expect(runs).toBe(1);
     resetHookRegistry();
+  });
+
+  it("clears the registry that was registered into, not just the global one", async () => {
+    // A caller may supply its own registry through `NextlyServiceConfig`, and
+    // that is the instance the built-in, configured and plugin handlers go
+    // into. Resetting only the process-global singleton would leave it holding
+    // a full set for the next registration to append to.
+    //
+    // The marker is set here rather than by booting services, so this covers
+    // the clearing branch; `registerServices` setting it is covered by types.
+    resetHookRegistry();
+    const custom = new HookRegistry();
+    const handler: HookHandler = ctx => ctx.data;
+    custom.register("beforeCreate", SLUG, handler);
+
+    const marker = globalThis as unknown as {
+      __nextly_activeHookRegistry?: HookRegistry;
+    };
+    marker.__nextly_activeHookRegistry = custom;
+
+    expect(custom.hasHooks("beforeCreate", SLUG)).toBe(true);
+
+    clearServices();
+
+    expect(custom.hasHooks("beforeCreate", SLUG)).toBe(false);
+    marker.__nextly_activeHookRegistry = undefined;
   });
 });
