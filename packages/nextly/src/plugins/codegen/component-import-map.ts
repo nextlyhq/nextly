@@ -20,7 +20,10 @@
 
 import { dirname, join } from "node:path";
 
+import { collectDeclarations } from "../declarations";
 import type { PluginDefinition } from "../plugin-context";
+
+import { PAGE_BUILDER_PLUGIN } from "./block-manifest";
 
 /** Filename of the generated admin component import map. */
 export const COMPONENT_IMPORT_MAP_FILENAME =
@@ -59,6 +62,47 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
   return paths;
 }
 
+/**
+ * Every editor component a declared block names.
+ *
+ * A block may supply its own inspector or canvas component through
+ * `editor.component`, which is a `ComponentPath` like any admin contribution —
+ * so the editor bundle can load it the same way, with no hand-written import.
+ *
+ * Read from declarations rather than from the block registry, for the reason
+ * declarations exist: the registry is populated by `init`, and generation runs
+ * no plugin. A block registered imperatively contributes no path here, exactly
+ * as it contributes no manifest entry.
+ *
+ * Malformed declarations are skipped rather than refused. The manifest emitter
+ * already validates them and fails generation loudly; repeating the check here
+ * would report the same defect twice, and an import map is not the place a
+ * schema error should surface.
+ */
+export function collectBlockEditorComponentPaths(
+  plugins: readonly PluginDefinition[]
+): string[] {
+  const paths: string[] = [];
+  for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
+    const value = declaration.value;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      continue;
+    }
+    const blocks = (value as { blocks?: unknown }).blocks;
+    if (!Array.isArray(blocks)) continue;
+    for (const block of blocks) {
+      if (typeof block !== "object" || block === null) continue;
+      const editor = (block as { editor?: unknown }).editor;
+      if (typeof editor !== "object" || editor === null) continue;
+      const component = (editor as { component?: unknown }).component;
+      if (typeof component === "string" && component.length > 0) {
+        paths.push(component);
+      }
+    }
+  }
+  return paths;
+}
+
 interface ParsedPath {
   /** The full component path string (the registry key). */
   path: string;
@@ -86,6 +130,12 @@ export function buildComponentImportMap(plugins: PluginDefinition[]): string {
     for (const path of collectAdminComponentPaths(plugin)) {
       if (!byPath.has(path)) byPath.set(path, parsePath(path));
     }
+  }
+  // Block editor components register through the same map, so the editor
+  // bundle loads a contributed block's inspector without a hand-written
+  // import -- the same guarantee admin contributions already have.
+  for (const path of collectBlockEditorComponentPaths(plugins)) {
+    if (!byPath.has(path)) byPath.set(path, parsePath(path));
   }
 
   if (byPath.size === 0) {
@@ -125,10 +175,10 @@ export function buildImportMapArtifact(
   plugins: PluginDefinition[],
   typesOutputPath: string
 ): { path: string; code: string } | null {
-  const hasAdminComponents = plugins.some(
-    p => collectAdminComponentPaths(p).length > 0
-  );
-  if (!hasAdminComponents) return null;
+  const hasComponents =
+    plugins.some(p => collectAdminComponentPaths(p).length > 0) ||
+    collectBlockEditorComponentPaths(plugins).length > 0;
+  if (!hasComponents) return null;
 
   return {
     path: join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME),

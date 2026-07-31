@@ -5,6 +5,7 @@ import {
   buildComponentImportMap,
   buildImportMapArtifact,
   collectAdminComponentPaths,
+  collectBlockEditorComponentPaths,
 } from "./component-import-map";
 
 function plugin(admin: unknown, enabled?: boolean): PluginDefinition {
@@ -92,5 +93,99 @@ describe("buildImportMapArtifact", () => {
     const p = plugin({ menu: [{ label: "X", to: "/x" }] }); // menu has no component
     expect(buildImportMapArtifact([p], "./types.ts")).toBeNull();
     expect(buildImportMapArtifact([], "./types.ts")).toBeNull();
+  });
+});
+
+/** A plugin declaring blocks for the page builder. */
+function declaringBlocks(
+  blocks: unknown[],
+  enabled?: boolean
+): PluginDefinition {
+  return {
+    name: "@acme/blocks",
+    version: "1.0.0",
+    nextly: "*",
+    enabled,
+    contributes: {
+      declarations: { "@nextlyhq/plugin-page-builder": { blocks } },
+    },
+  } as unknown as PluginDefinition;
+}
+
+describe("block editor components", () => {
+  it("collects the editor component a declared block names", () => {
+    const paths = collectBlockEditorComponentPaths([
+      declaringBlocks([
+        { name: "acme/hero", editor: { component: "@acme/blocks/admin#Hero" } },
+      ]),
+    ]);
+
+    expect(paths).toEqual(["@acme/blocks/admin#Hero"]);
+  });
+
+  it("registers them in the import map alongside admin components", () => {
+    // The point of the seam: the editor bundle loads a contributed block's
+    // inspector with no hand-written import, exactly as admin pages already do.
+    const code = buildComponentImportMap([
+      declaringBlocks([
+        { name: "acme/hero", editor: { component: "@acme/blocks/admin#Hero" } },
+      ]),
+    ]);
+
+    expect(code).toContain('"@acme/blocks/admin#Hero"');
+    expect(code).toContain('import * as _p0 from "@acme/blocks/admin";');
+  });
+
+  it("emits a map for block components even with no admin contributions", () => {
+    // Blocks alone are enough to need the file; returning null here would leave
+    // a contributed inspector unloadable.
+    const artifact = buildImportMapArtifact(
+      [
+        declaringBlocks([
+          {
+            name: "acme/hero",
+            editor: { component: "@acme/blocks/admin#Hero" },
+          },
+        ]),
+      ],
+      "/app/src/nextly-types.ts"
+    );
+
+    expect(artifact).not.toBeNull();
+  });
+
+  it("skips a disabled plugin's blocks", () => {
+    expect(
+      collectBlockEditorComponentPaths([
+        declaringBlocks(
+          [
+            {
+              name: "acme/hero",
+              editor: { component: "@acme/blocks/admin#Hero" },
+            },
+          ],
+          false
+        ),
+      ])
+    ).toEqual([]);
+  });
+
+  it("ignores a block that names no editor component", () => {
+    // Most blocks render from their prop schema and need no custom component.
+    expect(
+      collectBlockEditorComponentPaths([
+        declaringBlocks([{ name: "acme/plain", version: 1 }]),
+      ])
+    ).toEqual([]);
+  });
+
+  it("skips a malformed declaration rather than failing generation", () => {
+    // The manifest emitter already refuses these loudly; an import map is not
+    // where a schema error should surface, and reporting it twice helps nobody.
+    expect(
+      collectBlockEditorComponentPaths([
+        declaringBlocks("nope" as unknown as unknown[]),
+      ])
+    ).toEqual([]);
   });
 });
