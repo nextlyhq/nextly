@@ -109,6 +109,37 @@ describe("assertValidPluginDefault", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("refuses an empty default the storage primitive cannot hold", async () => {
+    // An empty submission means "not provided" and only `required` applies to
+    // it. An empty DEFAULT is what the column will hold, so judging it as an
+    // omission let a number-backed `() => ""` reach the insert unchecked.
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "@acme/ratings/admin#Input",
+    });
+
+    await expect(
+      assertValidPluginDefault(
+        { name: "score", type: "rating" },
+        "",
+        "homepage"
+      )
+    ).rejects.toBeInstanceOf(NextlyError);
+  });
+
+  it("still accepts an empty default the primitive can hold", async () => {
+    registerFieldType({
+      type: "note",
+      storage: "text",
+      component: "@acme/notes/admin#Input",
+    });
+
+    await expect(
+      assertValidPluginDefault({ name: "body", type: "note" }, "", "homepage")
+    ).resolves.toBeUndefined();
+  });
+
   it("does not enforce required, which a default cannot violate", async () => {
     // The default IS the value, so absence is not a violation here; enforcing
     // it would refuse configs that boot today.

@@ -89,6 +89,21 @@ export interface ValidateEntryOptions {
    * required LOCALIZED field pass because it falls back to the default language.
    */
   enforceLocalizedRequired?: boolean;
+  /**
+   * Whether an empty value is the value being judged rather than an omission.
+   *
+   * A submission that arrives empty means "not provided", so only `required`
+   * has anything to say about it. A resolved DEFAULT that is empty is different:
+   * it is what the config states the column will hold, so it still has to
+   * satisfy that column. Without this an empty default reaches the insert with
+   * neither the storage-primitive check nor the type's own `validate` having
+   * run — a number-backed `defaultValue: () => ""` fails at the database, or
+   * stores the wrong representation on SQLite.
+   *
+   * `null` and `undefined` are unaffected: they mean no value under either
+   * reading, and the callers that seed defaults filter them out first.
+   */
+  emptyIsAValue?: boolean;
 }
 
 /** Flat-or-nested rule lookup (builder writes `validation.*`, code-first is flat). */
@@ -246,7 +261,14 @@ async function validateFieldValue(
     Array.isArray(value) &&
     !field.hasMany &&
     (field.type === "select" || field.type === "radio");
-  if (isEmpty(value) && !isProvidedEmptyList && !isScalarChoiceArray) {
+  const emptyIsOmission =
+    !options.emptyIsAValue || value === null || value === undefined;
+  if (
+    isEmpty(value) &&
+    emptyIsOmission &&
+    !isProvidedEmptyList &&
+    !isScalarChoiceArray
+  ) {
     if (isRequired(field) && requiredIsEnforced(field, path, options)) {
       issues.push({
         path,
