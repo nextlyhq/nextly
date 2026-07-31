@@ -6,9 +6,9 @@
 // of every configured handler, running alongside the dead instance's own -- the
 // same hazard the webhook recording policy and activation are cleared for.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { clearServices } from "../register";
+import { clearServices, shutdownServices } from "../register";
 import {
   getHookRegistry,
   HookRegistry,
@@ -17,6 +17,16 @@ import {
 import type { HookHandler } from "../../hooks/types";
 
 const SLUG = "shutdown_registry_posts";
+
+type ActiveRegistryMarker = { __nextly_activeHookRegistry?: HookRegistry };
+const marker = globalThis as unknown as ActiveRegistryMarker;
+
+// Both the registry and the active-registry marker are process-global, so a
+// failed assertion would otherwise leak them into whatever runs next.
+afterEach(() => {
+  marker.__nextly_activeHookRegistry = undefined;
+  resetHookRegistry();
+});
 
 describe("clearing services clears the hook registry", () => {
   it("a hook registered before the clear is gone after it", () => {
@@ -56,7 +66,6 @@ describe("clearing services clears the hook registry", () => {
     });
 
     expect(runs).toBe(1);
-    resetHookRegistry();
   });
 
   it("clears the registry that was registered into, not just the global one", async () => {
@@ -72,9 +81,6 @@ describe("clearing services clears the hook registry", () => {
     const handler: HookHandler = ctx => ctx.data;
     custom.register("beforeCreate", SLUG, handler);
 
-    const marker = globalThis as unknown as {
-      __nextly_activeHookRegistry?: HookRegistry;
-    };
     marker.__nextly_activeHookRegistry = custom;
 
     expect(custom.hasHooks("beforeCreate", SLUG)).toBe(true);
@@ -82,6 +88,40 @@ describe("clearing services clears the hook registry", () => {
     clearServices();
 
     expect(custom.hasHooks("beforeCreate", SLUG)).toBe(false);
+  });
+
+  it("clears a registry left behind by a registration that never finished", async () => {
+    // Handlers reach the registry well before registration sets its completed
+    // flag, so a failure in between leaves them there. Shutting down has to
+    // clear them, or the retry appends to a registry that is already populated.
+    resetHookRegistry();
+    const custom = new HookRegistry();
+    const handler: HookHandler = ctx => ctx.data;
+    custom.register("beforeCreate", SLUG, handler);
+    marker.__nextly_activeHookRegistry = custom;
+
+    // The state a half-finished registration leaves: a registry recorded and
+    // written to, with the completed flag never set.
+    const flag = globalThis as unknown as { __nextly_isRegistered?: boolean };
+    flag.__nextly_isRegistered = false;
+
+    await shutdownServices();
+
+    expect(custom.hasHooks("beforeCreate", SLUG)).toBe(false);
+  });
+
+  it("leaves the global registry alone when nothing was recorded", async () => {
+    // Nothing registered, so there is nothing of this module's to clear, and
+    // wiping the global registry would drop handlers it never owned.
+    resetHookRegistry();
+    const handler: HookHandler = ctx => ctx.data;
+    getHookRegistry().register("beforeCreate", SLUG, handler);
     marker.__nextly_activeHookRegistry = undefined;
+    const flag = globalThis as unknown as { __nextly_isRegistered?: boolean };
+    flag.__nextly_isRegistered = false;
+
+    await shutdownServices();
+
+    expect(getHookRegistry().hasHooks("beforeCreate", SLUG)).toBe(true);
   });
 });

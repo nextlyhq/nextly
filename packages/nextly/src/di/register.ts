@@ -2526,6 +2526,15 @@ function clearActiveHookRegistry(): void {
 
 export async function shutdownServices(): Promise<void> {
   if (!globalForReg.__nextly_isRegistered) {
+    // Registration writes handlers into the registry long before it sets the
+    // flag, so a failure between the two leaves them there and this guard would
+    // otherwise skip the cleanup entirely -- a retry then appends to them.
+    // Only a registry this recorded is cleared: with nothing recorded, nothing
+    // here registered anything, and resetting the global one would drop
+    // handlers it never owned.
+    if (globalForReg.__nextly_activeHookRegistry) {
+      clearActiveHookRegistry();
+    }
     return;
   }
 
