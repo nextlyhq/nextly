@@ -77,6 +77,30 @@ describe("rewriting the wire type key inside stored content", () => {
     expect(up(document)).toEqual({ _fieldGroupType: "current" });
   });
 
+  // 🔴 `JSON.parse` creates `__proto__` as an ordinary own property, and every
+  // column this walks is parsed JSON - so an author's document really can carry
+  // one. Plain assignment would run the inherited prototype setter instead of
+  // creating the property, and the key would vanish from the rewritten document
+  // that the migration then persists.
+  it("keeps an own __proto__ key instead of losing it to the setter", () => {
+    const authored: unknown = JSON.parse(
+      '{"__proto__":{"tainted":true},"_componentType":"hero"}'
+    );
+    const rewritten = up(authored) as Record<string, unknown>;
+
+    expect(Object.prototype.hasOwnProperty.call(rewritten, "__proto__")).toBe(
+      true
+    );
+    // Built through JSON too: an object literal's `__proto__` sets the
+    // prototype rather than an own key, so a hand-written expectation here
+    // would assert the very thing this guards against.
+    expect(JSON.parse(JSON.stringify(rewritten))).toEqual(
+      JSON.parse('{"__proto__":{"tainted":true},"_fieldGroupType":"hero"}')
+    );
+    // The key stayed data: it did not become this object's prototype.
+    expect(Object.getPrototypeOf(rewritten)).toBe(Object.prototype);
+  });
+
   it("is idempotent", () => {
     const once = up({ _componentType: "hero" });
     expect(up(once)).toEqual(once);

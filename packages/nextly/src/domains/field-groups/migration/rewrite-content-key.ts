@@ -23,6 +23,8 @@
  * @module domains/field-groups/migration/rewrite-content-key
  */
 
+import { setOwnProperty } from "./set-own-property";
+
 /**
  * Rename one key throughout a JSON document.
  *
@@ -52,7 +54,7 @@ export function rewriteContentKey(
     // than being overwritten by a stale one. Nothing writes both today; this
     // decides the collision rather than leaving it to key order.
     if (name === to && key !== to && to in document) continue;
-    rewritten[name] = rewriteContentKey(value, from, to);
+    setOwnProperty(rewritten, name, rewriteContentKey(value, from, to));
   }
   return rewritten;
 }

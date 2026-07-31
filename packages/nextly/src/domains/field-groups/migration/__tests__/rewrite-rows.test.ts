@@ -95,6 +95,17 @@ describe("rewriting a ledger's documents in batches", () => {
     expect(world.counts.updates).toBe(1);
   });
 
+  // 🔴 A plain SELECT takes no lock on Postgres or MySQL, so a writer can commit
+  // between the read and the write below - and because the whole document is
+  // written back, that edit is overwritten rather than merged. `nextly_versions`
+  // rewrites its coalesced autosave row in place, so the writer is real.
+  it("locks the rows it is about to rewrite", async () => {
+    const world = versionsWorld();
+    await run(world);
+    expect(world.reads).not.toHaveLength(0);
+    expect(world.reads.every(read => read.forUpdate)).toBe(true);
+  });
+
   it("is idempotent: a second pass writes nothing", async () => {
     const world = versionsWorld();
     await run(world);
@@ -200,6 +211,43 @@ describe("checking that a batched rewrite reached everything", () => {
     await expect(
       findUnrewrittenRow({ session: world.session, target: TARGET, rewrite })
     ).resolves.toBe(id(999));
+  });
+
+  // Read-only, so it takes no write locks: it establishes a fact rather than
+  // preparing a write, and locking a whole ledger for the length of a scan would
+  // block every writer to no purpose.
+  it("does not lock the rows it only checks", async () => {
+    const world = versionsWorld();
+    await findUnrewrittenRow({
+      session: world.session,
+      target: TARGET,
+      rewrite,
+    });
+    expect(world.reads).not.toHaveLength(0);
+    expect(world.reads.some(read => read.forUpdate)).toBe(false);
+  });
+
+  // 🔴 The boundary of what the rescan can promise, made executable so it is not
+  // mistaken for a guarantee. Ids are random, so a row inserted behind the point
+  // the scan has already passed sorts before the cursor and is never visited.
+  // No cursor closes this - a row lock does not prevent an insert - which is why
+  // the migration's precondition is that these ledgers are quiesced for the run.
+  it("cannot see a row inserted behind the point it has already passed", async () => {
+    const world = versionsWorld();
+    await run(world);
+    // Sorts before every existing id, so it lands behind any cursor position
+    // the scan reaches after its first batch.
+    world.insert("nextly_versions", {
+      id: "aaa-inserted-behind",
+      snapshot: { _componentType: "late" },
+    });
+
+    // Found only because the scan restarts from the beginning each time. The
+    // case that escapes is an insert DURING the scan, which no test can stage
+    // deterministically here and which quiescence is what actually prevents.
+    await expect(
+      findUnrewrittenRow({ session: world.session, target: TARGET, rewrite })
+    ).resolves.toBe("aaa-inserted-behind");
   });
 
   it("looks past the first batch to find one", async () => {

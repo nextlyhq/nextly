@@ -19,6 +19,8 @@
  * @module domains/field-groups/migration/rewrite-field-definitions
  */
 
+import { setOwnProperty } from "./set-own-property";
+
 /**
  * The field types whose definitions nest further field definitions.
  *
@@ -88,15 +90,15 @@ function rewriteField(
   // be a large, meaningless change on top of a small meaningful one.
   for (const [key, value] of Object.entries(field)) {
     if (isFieldGroup && key === "type") {
-      rewritten[key] = to.fieldType;
+      setOwnProperty(rewritten, key, to.fieldType);
       continue;
     }
     if (isFieldGroup && key === from.refKeys.single) {
-      rewritten[to.refKeys.single] = value;
+      setOwnProperty(rewritten, to.refKeys.single, value);
       continue;
     }
     if (isFieldGroup && key === from.refKeys.many) {
-      rewritten[to.refKeys.many] = value;
+      setOwnProperty(rewritten, to.refKeys.many, value);
       continue;
     }
     if (
@@ -108,15 +110,15 @@ function rewriteField(
       // keeps the canonical value: the legacy one predates it, so the newer
       // spelling is the one that was written deliberately.
       if (!(from.refKeys.single in field)) {
-        rewritten[to.refKeys.single] = value;
+        setOwnProperty(rewritten, to.refKeys.single, value);
       }
       continue;
     }
     if (key === "fields" && isContainer(field.type)) {
-      rewritten[key] = rewriteFieldDefinitions(value, from, to);
+      setOwnProperty(rewritten, key, rewriteFieldDefinitions(value, from, to));
       continue;
     }
-    rewritten[key] = value;
+    setOwnProperty(rewritten, key, value);
   }
 
   return rewritten;

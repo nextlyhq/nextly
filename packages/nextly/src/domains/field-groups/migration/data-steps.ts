@@ -45,10 +45,11 @@ import {
 import {
   documentDiffers,
   findUnrewrittenRow,
-  requireProperty,
-  requireRowId,
+  readProperty,
+  readRowId,
   rewriteRowsInBatches,
   whereRowId,
+  type Narrowed,
   type RowRewriteTarget,
 } from "./rewrite-rows";
 import type { MigrationStep } from "./runner";
@@ -182,29 +183,37 @@ function registryDefinitionsStep(
   return {
     id: "data:registry-definitions",
     async run(session) {
-      await session.inTransaction(async ctx => {
+      const outcome = await session.inTransaction(async ctx => {
         for (const table of DEFINITION_TABLES) {
           for (const row of await readRegistryRows(ctx, table)) {
             const patch = registryPatch(row, table, from, to);
-            if (patch === null) continue;
-            await ctx.update(
-              table,
-              patch,
-              whereRowId(requireRowId(row, table))
-            );
+            if (!patch.ok) return patch;
+            if (patch.value === null) continue;
+            const id = readRowId(row, table);
+            if (!id.ok) return id;
+            await ctx.update(table, patch.value, whereRowId(id.value));
           }
         }
+        return { ok: true as const };
       });
+      // Raised outside the transaction, because an error escaping a callback is
+      // reclassified by the adapter into an unknown database error and loses the
+      // context naming what could not be read.
+      if (!outcome.ok) throw outcome.refusal;
     },
     async verify(session) {
-      return session.inTransaction(async ctx => {
+      const outcome = await session.inTransaction(async ctx => {
         for (const table of DEFINITION_TABLES) {
           for (const row of await readRegistryRows(ctx, table)) {
-            if (registryPatch(row, table, from, to) !== null) return false;
+            const patch = registryPatch(row, table, from, to);
+            if (!patch.ok) return patch;
+            if (patch.value !== null) return { ok: true as const, done: false };
           }
         }
-        return true;
+        return { ok: true as const, done: true };
       });
+      if (!outcome.ok) throw outcome.refusal;
+      return outcome.done;
     },
   };
 }
@@ -239,16 +248,17 @@ function registryPatch(
   table: string,
   from: FieldGroupStorageVocabulary,
   to: FieldGroupStorageVocabulary
-): Record<string, unknown> | null {
+): Narrowed<Record<string, unknown> | null> {
   const patch: Record<string, unknown> = {};
 
-  const fields = requireProperty(row, { table, property: FIELDS_PROPERTY });
+  const fields = readProperty(row, { table, property: FIELDS_PROPERTY });
+  if (!fields.ok) return fields;
   const rewrittenFields = rewriteFieldDefinitions(
-    fields,
+    fields.value,
     from.fields,
     to.fields
   );
-  if (documentDiffers(fields, rewrittenFields)) {
+  if (documentDiffers(fields.value, rewrittenFields)) {
     patch[FIELDS_PROPERTY] = rewrittenFields;
   }
 
@@ -256,21 +266,22 @@ function registryPatch(
   // A collection's `config_path` names `collections/`, and rewriting it would be
   // renaming a directory this migration has nothing to do with.
   if (table === STORAGE_FORMAT.registryTable) {
-    const configPath = requireProperty(row, {
+    const configPath = readProperty(row, {
       table,
       property: CONFIG_PATH_PROPERTY,
     });
+    if (!configPath.ok) return configPath;
     const rewrittenPath = rewriteConfigPath(
-      configPath,
+      configPath.value,
       from.configPathDir,
       to.configPathDir
     );
-    if (documentDiffers(configPath, rewrittenPath)) {
+    if (documentDiffers(configPath.value, rewrittenPath)) {
       patch[CONFIG_PATH_PROPERTY] = rewrittenPath;
     }
   }
 
-  return Object.keys(patch).length === 0 ? null : patch;
+  return { ok: true, value: Object.keys(patch).length === 0 ? null : patch };
 }
 
 /**

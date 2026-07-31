@@ -172,3 +172,30 @@ describe("rewriting field-group vocabulary in stored definitions", () => {
     expect(up([null, 3, "x"])).toEqual([null, 3, "x"]);
   });
 });
+
+describe("rebuilding a definition without letting a key decide how", () => {
+  // Same hazard as the content walk: a stored definition is parsed JSON, so an
+  // own `__proto__` reaches this rebuild, and plain assignment would drop it.
+  it("keeps an own __proto__ key on a field definition", () => {
+    const stored: unknown = JSON.parse(
+      '[{"name":"hero","type":"component","component":"hero","__proto__":{"tainted":true}}]'
+    );
+    const rewritten = rewriteFieldDefinitions(
+      stored,
+      LEGACY,
+      MIGRATED
+    ) as Record<string, unknown>[];
+    const field = rewritten[0];
+    if (field === undefined) throw new Error("fixture produced no field");
+
+    expect(Object.prototype.hasOwnProperty.call(field, "__proto__")).toBe(true);
+    // Built through JSON for the same reason: a literal's `__proto__` sets the
+    // prototype instead of an own key.
+    expect(JSON.parse(JSON.stringify(field))).toEqual(
+      JSON.parse(
+        '{"name":"hero","type":"fieldGroup","fieldGroup":"hero","__proto__":{"tainted":true}}'
+      )
+    );
+    expect(Object.getPrototypeOf(field)).toBe(Object.prototype);
+  });
+});

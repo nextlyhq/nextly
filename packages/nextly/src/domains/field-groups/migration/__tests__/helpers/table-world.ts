@@ -11,12 +11,21 @@
  * It also rolls a transaction back on failure, because the batched walk's whole
  * safety argument is that a cursor is written only after its batch committed,
  * and a double that kept a failed batch's writes could not tell the two apart.
+ *
+ * And it reclassifies whatever escapes a transaction callback, exactly as every
+ * real adapter does: `classifyError` short-circuits only on an existing
+ * `DatabaseError`, so a `NextlyError` thrown inside a transaction reaches the
+ * caller rewrapped as an unknown database error with its `logContext` gone. A
+ * double that let one through unchanged would certify refusal messages that no
+ * operator ever sees.
  */
-import type {
-  SelectOptions,
-  TransactionContext,
-  WhereClause,
-  WhereCondition,
+import {
+  createDatabaseError,
+  isDatabaseError,
+  type SelectOptions,
+  type TransactionContext,
+  type WhereClause,
+  type WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
 import { vi } from "vitest";
 
@@ -46,6 +55,8 @@ export interface TableWorld {
   metaValue(key: string): unknown;
   /** Insert a row after the world was built, to model a concurrent write. */
   insert(table: string, row: Record<string, unknown>): void;
+  /** Every `select` this world served, so a test can assert how it was asked. */
+  reads: { table: string; forUpdate: boolean }[];
   counts: { transactions: number; selects: number; updates: number };
 }
 
@@ -60,6 +71,7 @@ export function createTableWorld(
     ])
   );
   const meta = new Map<string, unknown>();
+  const reads: { table: string; forUpdate: boolean }[] = [];
   const counts = { transactions: 0, selects: 0, updates: 0 };
 
   function tableOf(name: string): TableFixture {
@@ -108,6 +120,7 @@ export function createTableWorld(
     selectOptions?: SelectOptions
   ): Record<string, unknown>[] {
     counts.selects += 1;
+    reads.push({ table, forUpdate: selectOptions?.forUpdate === true });
     const fixture = tableOf(table);
     let rows = fixture.rows.filter(row =>
       matches(fixture, row, selectOptions?.where)
@@ -190,7 +203,14 @@ export function createTableWorld(
           const fixture = tables.get(name);
           if (fixture !== undefined) fixture.rows = rows;
         }
-        throw error;
+        // Mirrors every adapter's transaction boundary: anything that is not
+        // already a DatabaseError is rewrapped as an unknown one, losing
+        // whatever structured context it carried.
+        if (isDatabaseError(error)) throw error;
+        throw createDatabaseError({
+          kind: "unknown",
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
     },
   };
@@ -213,6 +233,7 @@ export function createTableWorld(
     insert: (name, row) => {
       tableOf(name).rows.push(structuredClone(row));
     },
+    reads,
     counts,
   };
 }

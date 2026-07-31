@@ -104,12 +104,18 @@ export async function rewriteRowsInBatches(args: {
 
   for (;;) {
     const from = after;
-    // Read and written inside one transaction so no row is rewritten against a
-    // value another writer replaced between the read and the write.
-    const reached = await session.inTransaction(async ctx => {
-      const rows = await readBatch(ctx, target, from);
+    const outcome = await session.inTransaction(async ctx => {
+      // Locked, not merely read inside a transaction. A plain `SELECT` takes no
+      // lock on Postgres or MySQL, so a concurrent writer could commit between
+      // the read and the write below — and because the rewrite writes the whole
+      // document back, that edit would be overwritten by this stale copy rather
+      // than merged. `nextly_versions` coalesces an autosave row in place, so
+      // that write really exists.
+      const read = await readBatch(ctx, target, from, { lock: true });
+      if (!read.ok) return read;
+
       let last: string | null = null;
-      for (const row of rows) {
+      for (const row of read.rows) {
         last = row.id;
         const rewritten = rewrite(row.document);
         // Rows already carrying the target vocabulary are skipped rather than
@@ -122,16 +128,26 @@ export async function rewriteRowsInBatches(args: {
           whereRowId(row.id)
         );
       }
-      return last;
+      return { ok: true as const, reached: last };
     });
 
-    if (reached === null) break;
-    after = reached;
+    // Raised out here rather than thrown inside, because the adapters route
+    // every error escaping a transaction callback through `classifyError`, which
+    // rewraps anything that is not already a `DatabaseError` as an unknown one
+    // and discards the context explaining what the migration refused.
+    if (!outcome.ok) throw outcome.refusal;
+
+    if (outcome.reached === null) break;
+    after = outcome.reached;
     // Recorded only now, with the batch committed. A cursor written inside the
     // transaction would be rolled back with it and stay honest, but one written
     // before the commit could outlive a batch that failed and step the next run
     // past rows nothing rewrote.
-    await writeBatchCursor(meta, { migrationId, stepId, after: reached });
+    await writeBatchCursor(meta, {
+      migrationId,
+      stepId,
+      after: outcome.reached,
+    });
   }
 
   await clearBatchCursor(meta, { stepId });
@@ -141,9 +157,18 @@ export async function rewriteRowsInBatches(args: {
  * The id of the first row the rewrite would still change, or `undefined`.
  *
  * The postcondition check for a batched rewrite, and the reason the cursor is
- * allowed to be an optimisation: this walks the whole table regardless of where
- * any run stopped, so the worst a wrong cursor can do is fail the step rather
- * than pass one that skipped rows.
+ * allowed to be an optimisation: this walks the table from the beginning
+ * regardless of where any run stopped, so a cursor that skipped rows fails the
+ * step rather than passing it.
+ *
+ * 🔴 **It is not proof against a writer running alongside it.** The walk is a
+ * cursor over the primary key, and ids are random, so a row inserted behind the
+ * point already passed sorts before the cursor and is never visited — the scan
+ * would report success it did not establish. No cursor can close that: it is the
+ * phantom-read problem, and a row lock does not prevent an insert. What closes it
+ * is quiescing the ledgers for the run, which is the migration's precondition
+ * rather than something this check can enforce. Stated here so the guarantee is
+ * not read as stronger than it is.
  *
  * Returns the offending id rather than a boolean so a refusal can name it.
  */
@@ -158,29 +183,47 @@ export async function findUnrewrittenRow(args: {
   for (;;) {
     const from = after;
     const outcome = await session.inTransaction(async ctx => {
-      const rows = await readBatch(ctx, target, from);
+      // Read without locking: this establishes a fact rather than preparing a
+      // write, and taking write locks across a whole ledger would block every
+      // writer for the length of the scan to no purpose.
+      const read = await readBatch(ctx, target, from, { lock: false });
+      if (!read.ok) return read;
+
       let last: string | null = null;
-      for (const row of rows) {
+      for (const row of read.rows) {
         last = row.id;
         if (documentDiffers(row.document, rewrite(row.document))) {
-          return { found: row.id, last };
+          return { ok: true as const, found: row.id, last };
         }
       }
-      return { found: undefined, last };
+      return { ok: true as const, found: undefined, last };
     });
 
+    if (!outcome.ok) throw outcome.refusal;
     if (outcome.found !== undefined) return outcome.found;
     if (outcome.last === null) return undefined;
     after = outcome.last;
   }
 }
 
+/**
+ * A batch, or the reason this target cannot be read honestly.
+ *
+ * A refusal is carried out as a value rather than thrown, because an error
+ * leaving a transaction callback is reclassified by the adapter into an unknown
+ * `DatabaseError` and loses the context that explains it.
+ */
+type BatchRead =
+  | { ok: true; rows: DocumentRow[] }
+  | { ok: false; refusal: NextlyError };
+
 /** One page of rows, ordered by primary key, after `from`. */
 async function readBatch(
   ctx: TransactionContext,
   target: RowRewriteTarget,
-  from: string | null
-): Promise<DocumentRow[]> {
+  from: string | null,
+  options: { lock: boolean }
+): Promise<BatchRead> {
   const rows = await ctx.select<Record<string, unknown>>(target.table, {
     columns: [ID_PROPERTY, target.documentProperty],
     ...(from === null
@@ -188,9 +231,36 @@ async function readBatch(
       : { where: { and: [{ column: ID_PROPERTY, op: ">", value: from }] } }),
     orderBy: [{ column: ID_PROPERTY, direction: "asc" }],
     limit: BATCH_SIZE,
+    // No-ops on SQLite, which needs none: its transactions open with
+    // `BEGIN IMMEDIATE`, so writers are already serialized.
+    ...(options.lock ? { forUpdate: true } : {}),
   });
-  return rows.map(row => toDocumentRow(row, target));
+
+  const narrowed: DocumentRow[] = [];
+  for (const row of rows) {
+    const document = readProperty(row, {
+      table: target.table,
+      property: target.documentProperty,
+    });
+    if (!document.ok) return document;
+    const id = readRowId(row, target.table);
+    if (!id.ok) return id;
+    narrowed.push({ id: id.value, document: document.value });
+  }
+  return { ok: true, rows: narrowed };
 }
+
+/**
+ * A value, or the reason this migration will not act on the row it came from.
+ *
+ * Returned rather than thrown so a caller inside a transaction can carry the
+ * refusal out and raise it at the boundary: an error escaping a transaction
+ * callback is reclassified by the adapter into an unknown `DatabaseError`, which
+ * discards the context that says which table and property were wrong.
+ */
+export type Narrowed<T> =
+  | { ok: true; value: T }
+  | { ok: false; refusal: NextlyError };
 
 /**
  * Read a projected property, refusing when the row does not carry it.
@@ -205,20 +275,23 @@ async function readBatch(
  * every read-modify-write in this migration fails the same way on a name that
  * does not resolve.
  */
-export function requireProperty(
+export function readProperty(
   row: Record<string, unknown>,
   args: { table: string; property: string }
-): unknown {
+): Narrowed<unknown> {
   if (!(args.property in row)) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "row rewrite target names a property the table does not have",
-        table: args.table,
-        property: args.property,
-      },
-    });
+    return {
+      ok: false,
+      refusal: NextlyError.internal({
+        logContext: {
+          reason: "row rewrite target names a property the table does not have",
+          table: args.table,
+          property: args.property,
+        },
+      }),
+    };
   }
-  return row[args.property];
+  return { ok: true, value: row[args.property] };
 }
 
 /**
@@ -228,37 +301,28 @@ export function requireProperty(
  * cursor, and every write-back names it, so an id that is not a non-empty string
  * is something this module cannot order, resume from, or target.
  */
-export function requireRowId(
+export function readRowId(
   row: Record<string, unknown>,
   table: string
-): string {
+): Narrowed<string> {
   const id = row[ID_PROPERTY];
   if (typeof id !== "string" || id.length === 0) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "row rewrite requires a non-empty string primary key",
-        table,
-      },
-    });
+    return {
+      ok: false,
+      refusal: NextlyError.internal({
+        logContext: {
+          reason: "row rewrite requires a non-empty string primary key",
+          table,
+        },
+      }),
+    };
   }
-  return id;
+  return { ok: true, value: id };
 }
 
 /** Address one row by its primary key. */
 export function whereRowId(id: string): WhereClause {
   return { and: [{ column: ID_PROPERTY, op: "=", value: id }] };
-}
-
-/** Narrow a projected row to the id and document a batched rewrite works on. */
-function toDocumentRow(
-  row: Record<string, unknown>,
-  target: RowRewriteTarget
-): DocumentRow {
-  const document = requireProperty(row, {
-    table: target.table,
-    property: target.documentProperty,
-  });
-  return { id: requireRowId(row, target.table), document };
 }
 
 /**
