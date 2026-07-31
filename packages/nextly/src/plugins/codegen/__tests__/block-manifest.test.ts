@@ -213,6 +213,22 @@ describe("buildBlockManifest rejects what boot would reject", () => {
     expect(message).toContain("no description");
   });
 
+  it("refuses a block with no example", () => {
+    // The block API requires a worked instance, so a declaration without one
+    // describes a block that could not have been built with defineBlock. It is
+    // also what a preview renders and what a generator few-shots from.
+    const message = issueOf(() =>
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/a", [
+          { name: "acme/x", version: 1, description: "No example." },
+        ]),
+      ])
+    );
+
+    expect(message).toContain("no example");
+  });
+
   it("refuses the same block name from two plugins, naming both", () => {
     // The engine throws NEXTLY_BLOCK_COLLISION for the second registration, so
     // emitting both would hand tooling an ambiguous manifest for a config that
