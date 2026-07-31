@@ -2117,6 +2117,12 @@ export class CollectionQueryService extends BaseService {
       const suppressDraftStatusFilter =
         params.includeWorkingDraft === true &&
         statusFilter?.value === "draft" &&
+        // Only in the split's own domain: a non-localized status collection with
+        // drafts on. Outside it (a localized collection, or one with no status
+        // column) the normal draft predicate must stand, so a draft-status read
+        // still filters correctly and the no-draft 404 below does not apply.
+        (collectionForStatus as { status?: boolean }).status === true &&
+        (collectionForStatus as { localized?: boolean }).localized !== true &&
         (
           collectionForStatus as {
             versions?: { drafts?: { enabled?: boolean } };
@@ -2304,6 +2310,10 @@ export class CollectionQueryService extends BaseService {
       // update rule (which the coarse check passes pending a row-level predicate)
       // does not treat a non-owner reader as an editor.
       let draftView = false;
+      // Set once a working draft is actually surfaced. When the draft predicate
+      // was suppressed but nothing is overlaid, the loaded row is the published
+      // one, which an explicit draft filter must not return (see the 404 below).
+      let draftOverlaid = false;
       if (draftEligible) {
         if (params.overrideAccess === true) {
           draftView = true;
@@ -2465,7 +2475,23 @@ export class CollectionQueryService extends BaseService {
             draftComponentSchemas
           );
           expandedEntry = draftEntry;
+          draftOverlaid = true;
         }
+      }
+
+      // An explicit `status: "draft"` read that opted into the working draft
+      // dropped the draft predicate above so the published main row could be
+      // loaded for the overlay. When no draft was actually surfaced (none exists,
+      // it turned ineligible, or the caller is not trusted to edit), the loaded
+      // row is the published one, which the draft filter would never have matched.
+      // Return 404 rather than hand back content the caller did not ask for.
+      if (suppressDraftStatusFilter && !draftOverlaid) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
       }
 
       // Redact password hashes BEFORE any afterRead hook runs (a hook could

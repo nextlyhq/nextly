@@ -1190,6 +1190,38 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(seo?.metaDesc).toBe("live-desc");
   });
 
+  it("404s a status=draft read when no working draft exists", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // No draft was ever saved. A status=draft read that opts into the working
+    // draft must not fall back to the published row; it 404s like the filter would.
+    const res = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      status: "draft",
+      includeWorkingDraft: true,
+    });
+    expect(res.success).toBe(false);
+    expect(res.statusCode).toBe(404);
+  });
+
   it("deletes the working-draft sidecar when the entry is deleted", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
