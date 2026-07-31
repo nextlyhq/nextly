@@ -1,6 +1,12 @@
-import { createRequire } from "node:module";
-
 import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+// Imported rather than read at runtime so it can never drift from the published
+// package: a hardcoded literal had fallen eight releases behind, and
+// `validatePluginVersions` checks a contributor's `dependsOn` range against THIS
+// value. A static JSON import is inlined by the bundler, so unlike a
+// `createRequire` lookup it adds no Node builtin to this entry — which is
+// isomorphic and reachable from a browser bundle.
+import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   BLOCK_SERVICE,
@@ -10,15 +16,6 @@ import {
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
-
-// Read from package.json so it can never drift from the published package. A
-// hardcoded literal had fallen eight releases behind, and `validatePluginVersions`
-// checks a contributor's `dependsOn` range against THIS value — so a plugin
-// requiring a version that shipped weeks ago was refused at boot as
-// incompatible. Node/config-side only; this module is not in the admin bundle.
-const { version: PLUGIN_VERSION } = createRequire(import.meta.url)(
-  "../package.json"
-) as { version: string };
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
