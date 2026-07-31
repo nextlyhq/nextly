@@ -418,6 +418,7 @@ export function EntryForm({
                   mode={mode}
                   titleField={titleField}
                   hasStatus={hasStatus}
+                  draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
                   entry={entry}
@@ -441,6 +442,9 @@ export function EntryForm({
                   }}
                   onSaveChanges={() => {
                     void handleSubmit(undefined, "save-changes");
+                  }}
+                  onSaveWorkingDraft={() => {
+                    void handleSubmit(undefined, "save-working-draft");
                   }}
                   onUnpublish={() => {
                     void handleSubmit(undefined, "unpublish");

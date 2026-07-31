@@ -55,6 +55,11 @@ export interface EntrySystemHeaderProps {
   /** Whether the collection has the Draft/Published feature enabled.
    *  Splits the primary submit into Save Draft + Publish/Update. */
   hasStatus: boolean;
+  /** Whether the working-draft split is enabled (drafts on a versioned
+   *  collection). When `true`, editing a PUBLISHED entry saves a pending
+   *  working draft (live row untouched) instead of re-publishing, and a
+   *  separate Publish promotes it. */
+  draftsEnabled?: boolean;
   /** Whether the form is currently submitting. Disables buttons + spinner. */
   isSubmitting?: boolean;
   /** Whether the form has validation errors. Disables submit. */
@@ -84,9 +89,14 @@ export interface EntrySystemHeaderProps {
    *  Used in create mode and when promoting a draft to published. */
   onPublish?: () => void;
   /** Save changes handler — routed through useEntryForm.handleSubmit('save-changes').
-   *  Used when editing a published entry; submits dirty fields with
-   *  status="published" so the lifecycle stays the same. */
+   *  Used when editing a published entry on a NON-drafts collection; submits
+   *  dirty fields with status="published" so the lifecycle stays the same. */
   onSaveChanges?: () => void;
+  /** Save working draft handler — routed through
+   *  useEntryForm.handleSubmit('save-working-draft'). Used when editing a
+   *  published entry on a drafts-enabled collection: stores a pending working
+   *  draft (status-less) instead of writing the live row. */
+  onSaveWorkingDraft?: () => void;
   /** Unpublish handler — routed through useEntryForm.handleSubmit('unpublish').
    *  Fires only after the user confirms the modal. Sends `{ status: "draft" }`
    *  with no other field changes (matches Payload's Unpublish pattern). */
@@ -157,6 +167,7 @@ export function EntrySystemHeader({
   mode,
   titleField,
   hasStatus,
+  draftsEnabled = false,
   isSubmitting = false,
   isInvalid = false,
   isDirty = false,
@@ -168,6 +179,7 @@ export function EntrySystemHeader({
   onSaveDraft,
   onPublish,
   onSaveChanges,
+  onSaveWorkingDraft,
   onUnpublish,
   onCancel,
   onDelete,
@@ -257,6 +269,13 @@ export function EntrySystemHeader({
   // which ask the same question and must not answer it differently.
   const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
   const isPublishedEdit = mode === "edit" && effectiveStatus === "published";
+  // A drafts-enabled published entry that has a pending working draft: the
+  // server flags the overlay read with `_isWorkingDraft`. This is Payload's
+  // "Changed" state — Publish promotes it and the status pill reflects it.
+  const hasWorkingDraft =
+    draftsEnabled &&
+    (entry as { _isWorkingDraft?: boolean } | null | undefined)
+      ?._isWorkingDraft === true;
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -318,15 +337,41 @@ export function EntrySystemHeader({
               variant="outline"
               size="sm"
               disabled={isSubmitting || isInvalid || !isDirty}
-              onClick={onSaveChanges}
-              data-status="save-changes"
+              // On a drafts-enabled collection a save on a published entry
+              // stores a working draft (live untouched); otherwise it re-asserts
+              // published, keeping the lifecycle unchanged.
+              onClick={draftsEnabled ? onSaveWorkingDraft : onSaveChanges}
+              data-status={
+                draftsEnabled ? "save-working-draft" : "save-changes"
+              }
             >
               {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Save changes
+              {draftsEnabled ? "Save" : "Save changes"}
             </Button>
+            {/* Promote the pending working draft to live. Shown only when one
+                exists — a fully-published entry has nothing to promote. */}
+            {hasWorkingDraft && canPublishDocument && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSubmitting || isInvalid}
+                onClick={onPublish}
+                data-status="published"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Globe className="h-3.5 w-3.5" />
+                )}
+                Publish
+              </Button>
+            )}
             {canUnpublishDocument && (
               <Button
                 type="button"
+                // Keep Publish the sole primary action when a draft is pending;
+                // otherwise Unpublish stays the primary (published-only) action.
+                variant={hasWorkingDraft ? "outline" : "default"}
                 size="sm"
                 disabled={isSubmitting}
                 onClick={() => setUnpublishOpen(true)}
