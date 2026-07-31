@@ -405,4 +405,53 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     expect(tokenHookRuns).toBe(0);
   });
+
+  it("judges a masking rule on the whole target row, not the projected slice", async () => {
+    // Field selection rebuilds each related row as a fresh object holding only
+    // the projected paths. A rule masking on a sibling -- here the author's
+    // organization -- handed that slice reads `undefined` for its evidence and
+    // returns the value unmasked, so asking for exactly the protected field is
+    // what gets it.
+    const t = await boot();
+    const postId = await seed(t);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      overrideAccess: true,
+      depth: 2,
+      select: { "author.secret": true },
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    expect(author.secret).toBe("REDACTED");
+  });
+
+  it("masks a related row before the source collection's own hooks see it", async () => {
+    // A source hook can copy a related row's value onto a root property of its
+    // own. The traversal masks the nested field it walked, never the copy, so a
+    // source hook handed an unmasked target publishes it under a key nothing
+    // downstream sanitizes.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      entry.leaked = author?.token;
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      overrideAccess: true,
+      depth: 2,
+    });
+
+    // The masked value, not the stored "RAW_TOKEN": the hook was handed a row
+    // the target's own protections had already run on.
+    expect(expanded.data!.leaked).toBe("HIDDEN");
+  });
 });

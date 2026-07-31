@@ -116,6 +116,24 @@ import {
   decodeJsonFieldValues,
 } from "./collection-utils";
 
+/**
+ * The root-level field names a `select` projection keeps.
+ *
+ * A selected path is rooted at a field name -- `author.name` keeps `author` --
+ * so the first segment is what decides whether a relationship survives into the
+ * response. Returns undefined when nothing was selected, which the nested walk
+ * reads as "no projection, walk everything".
+ */
+function selectedRootFieldNames(
+  select: Record<string, boolean> | undefined
+): ReadonlySet<string> | undefined {
+  if (!select) return undefined;
+  const names = Object.entries(select)
+    .filter(([, include]) => include)
+    .map(([path]) => path.split(".")[0]);
+  return names.length > 0 ? new Set(names) : undefined;
+}
+
 export class CollectionQueryService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -1425,6 +1443,37 @@ export class CollectionQueryService extends BaseService {
       // after the hooks handed every one of them the storage encoding instead.
       decodeJsonFieldValues(expandedEntries, fields, params.locale);
 
+      // A related row's own field hooks run BEFORE this collection's afterRead
+      // hooks can observe it, and before field selection narrows it.
+      //
+      // Before the collection's hooks, because one of them can copy a related
+      // row's value onto a root property of its own; the traversal masks the
+      // nested field it walked, never the copy, so a hook handed an unmasked
+      // target could publish it under a key nothing sanitizes. That is the same
+      // reason password hashes are stripped above rather than after.
+      //
+      // Before selection, because selection rebuilds each related row as a fresh
+      // object holding only the projected paths, so a hook masking on a sibling
+      // -- `select: { "author.secret": true }` while the rule reads
+      // `organization.classification` -- would be handed a row with its evidence
+      // missing and fall open. Selection is told which relationships survive so
+      // an excluded one still runs nothing.
+      //
+      // One state for the whole listing: batch expansion hands the same row
+      // object to every parent that references it, so a per-entry pass would run
+      // that row's hooks once per reference.
+      const nestedHookState = this.relationshipService.createNestedHookState();
+      const selectedRootFields = selectedRootFieldNames(params.select);
+      for (const entry of expandedEntries) {
+        await this.relationshipService.applyNestedFieldHooks(
+          entry,
+          params.collectionName,
+          { enforceFieldAccess: true, user: params.user },
+          nestedHookState,
+          selectedRootFields
+        );
+      }
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -1460,33 +1509,25 @@ export class CollectionQueryService extends BaseService {
       let finalData = (storedAfterResult.data ??
         dataAfterCodeHooks) as unknown[];
 
+      // A second pass over the same state, for relationships the collection's
+      // own hooks introduced. Rows are claimed by object identity, so every row
+      // the pass above already handled is skipped rather than transformed twice.
+      for (const entry of finalData as Record<string, unknown>[]) {
+        await this.relationshipService.applyNestedFieldHooks(
+          entry,
+          params.collectionName,
+          { enforceFieldAccess: true, user: params.user },
+          nestedHookState,
+          selectedRootFields
+        );
+      }
+
       // Apply field selection if select parameter is provided
       // This filters the response to only include requested fields
       if (params.select && Object.keys(params.select).length > 0) {
         finalData = this.applyFieldSelectionToArray(
           finalData as Record<string, unknown>[],
           params.select
-        );
-      }
-
-      // Run once the document is assembled AND field selection has been
-      // applied. Assembled, because a related row is fetched before the
-      // recursion that expands ITS relationships, so a hook run earlier reads
-      // those as raw ids. After selection, because a relationship the caller
-      // excluded is not in the response and its target's hooks -- which may
-      // have side effects -- have no business running for it. Deferred to here because a related row is fetched before
-      // the recursion that expands ITS relationships: a hook run at fetch time
-      // would read those as raw ids and mask on a value that is not there yet.
-      // One state for the whole listing: batch expansion hands the same row
-      // object to every parent that references it, so a per-entry pass would
-      // run that row's hooks once per reference.
-      const nestedHookState = this.relationshipService.createNestedHookState();
-      for (const entry of finalData as Record<string, unknown>[]) {
-        await this.relationshipService.applyNestedFieldHooks(
-          entry,
-          params.collectionName,
-          { enforceFieldAccess: true, user: params.user },
-          nestedHookState
         );
       }
 
@@ -2609,6 +2650,20 @@ export class CollectionQueryService extends BaseService {
       // storage encoding SQLite hands back.
       decodeJsonFieldValues([expandedEntry], fields, params.locale);
 
+      // Same placement as the list path: a related row's own field hooks run
+      // before this collection's afterRead hooks can copy an unmasked value onto
+      // a root property, and before selection rebuilds the row without the
+      // siblings a masking rule judges on.
+      const nestedHookState = this.relationshipService.createNestedHookState();
+      const selectedRootFields = selectedRootFieldNames(params.select);
+      await this.relationshipService.applyNestedFieldHooks(
+        expandedEntry,
+        params.collectionName,
+        { enforceFieldAccess: true, user: params.user },
+        nestedHookState,
+        selectedRootFields
+      );
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -2645,18 +2700,21 @@ export class CollectionQueryService extends BaseService {
         unknown
       >;
 
+      // Second pass, for relationships the collection's own hooks introduced;
+      // rows already claimed above are skipped by identity.
+      await this.relationshipService.applyNestedFieldHooks(
+        finalData,
+        params.collectionName,
+        { enforceFieldAccess: true, user: params.user },
+        nestedHookState,
+        selectedRootFields
+      );
+
       // Apply field selection if select parameter is provided
       // This filters the response to only include requested fields
       if (params.select && Object.keys(params.select).length > 0) {
         finalData = this.applyFieldSelection(finalData, params.select);
       }
-
-      // Same pass as the list path: after assembly, and after selection.
-      await this.relationshipService.applyNestedFieldHooks(
-        finalData,
-        params.collectionName,
-        { enforceFieldAccess: true, user: params.user }
-      );
 
       // Convert snake_case timestamp columns to their camelCase API form.
       finalData = convertTimestampsToCamelCase(finalData);
