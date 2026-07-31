@@ -19,6 +19,8 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
+import type { ComponentSchemas } from "./restore-snapshot";
+
 /**
  * Looks up a component's own fields by slug.
  *
@@ -441,4 +443,62 @@ export async function resolveComponentFieldMap(
   }
 
   return resolved;
+}
+
+/**
+ * Rehydrate JSON date strings in a working-draft snapshot to Date objects,
+ * in place.
+ *
+ * A working-draft snapshot is stored as JSON, so a `date` field — at the top
+ * level or nested in a single or dynamic-zone component — comes back as an ISO
+ * string, while a live read hands the hooks a Drizzle-decoded Date. Walking
+ * `addressableFields` flattens unnamed presentational groups (matching the type
+ * tagger), so a date or component declared inside one is still reached. A
+ * dynamic-zone instance carries its own `_componentType`; a single component
+ * takes the field's declared slug.
+ */
+export function rehydrateSnapshotDates(
+  value: Record<string, unknown>,
+  fields: FieldConfig[],
+  componentSchemas: ComponentSchemas | null
+): void {
+  for (const field of addressableFields(fields)) {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name !== "string" || !(name in value)) continue;
+
+    if (field.type === "date") {
+      const raw = value[name];
+      if (typeof raw === "string") {
+        const parsed = new Date(raw);
+        if (!Number.isNaN(parsed.getTime())) value[name] = parsed;
+      }
+      continue;
+    }
+
+    const single = (field as { component?: unknown }).component;
+    const many = (field as { components?: unknown }).components;
+    if (typeof single !== "string" && !Array.isArray(many)) continue;
+
+    const compValue = value[name];
+    const instances = Array.isArray(compValue)
+      ? compValue
+      : compValue != null
+        ? [compValue]
+        : [];
+    for (const instance of instances) {
+      if (instance === null || typeof instance !== "object") continue;
+      const rec = instance as Record<string, unknown>;
+      const tagged = rec[STORAGE_FORMAT.wireTypeKey];
+      const slug =
+        typeof tagged === "string"
+          ? tagged
+          : typeof single === "string"
+            ? single
+            : undefined;
+      const compFields = slug ? componentSchemas?.get(slug)?.fields : undefined;
+      if (compFields) {
+        rehydrateSnapshotDates(rec, compFields, componentSchemas);
+      }
+    }
+  }
 }

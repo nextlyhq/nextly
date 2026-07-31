@@ -101,7 +101,7 @@ import {
   type ComponentSchemas,
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
-import { addressableFields } from "../../versions/tag-component-types";
+import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 
 import type { CollectionAccessService } from "./collection-access-service";
@@ -2459,7 +2459,7 @@ export class CollectionQueryService extends BaseService {
               if (!Number.isNaN(parsed.getTime())) draftEntry[key] = parsed;
             }
           }
-          this.rehydrateComponentDates(
+          rehydrateSnapshotDates(
             draftEntry,
             declaredFields,
             draftComponentSchemas
@@ -2679,64 +2679,6 @@ export class CollectionQueryService extends BaseService {
       options
     );
     return expanded;
-  }
-
-  /**
-   * Convert serialized ISO date strings back to Date in place, descending into
-   * component values against their resolved schemas.
-   *
-   * The working-draft snapshot is JSON, so a `date` field — at the top level or
-   * nested in a single or dynamic-zone component — comes back as a string, while
-   * a live read hands the afterRead hooks a Drizzle-decoded Date. Unnamed
-   * presentational groups are flattened (matching the type tagger) so a date or
-   * component declared inside one is still reached.
-   */
-  private rehydrateComponentDates(
-    value: Record<string, unknown>,
-    fields: FieldConfig[],
-    componentSchemas: ComponentSchemas | null
-  ): void {
-    for (const field of addressableFields(fields)) {
-      const name = (field as { name?: unknown }).name;
-      if (typeof name !== "string" || !(name in value)) continue;
-
-      if (field.type === "date") {
-        const raw = value[name];
-        if (typeof raw === "string") {
-          const parsed = new Date(raw);
-          if (!Number.isNaN(parsed.getTime())) value[name] = parsed;
-        }
-        continue;
-      }
-
-      const single = (field as { component?: unknown }).component;
-      const many = (field as { components?: unknown }).components;
-      if (typeof single !== "string" && !Array.isArray(many)) continue;
-
-      const compValue = value[name];
-      const instances = Array.isArray(compValue)
-        ? compValue
-        : compValue != null
-          ? [compValue]
-          : [];
-      for (const instance of instances) {
-        if (instance === null || typeof instance !== "object") continue;
-        const rec = instance as Record<string, unknown>;
-        const tagged = rec._componentType;
-        const slug =
-          typeof tagged === "string"
-            ? tagged
-            : typeof single === "string"
-              ? single
-              : undefined;
-        const compFields = slug
-          ? componentSchemas?.get(slug)?.fields
-          : undefined;
-        if (compFields) {
-          this.rehydrateComponentDates(rec, compFields, componentSchemas);
-        }
-      }
-    }
   }
 
   /**

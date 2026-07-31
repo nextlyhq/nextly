@@ -105,8 +105,8 @@ import {
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   addressableFields,
+  rehydrateSnapshotDates,
   resolveComponentFieldMap,
-  stripSingleComponentTags,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -5497,16 +5497,66 @@ export class CollectionMutationService extends BaseService {
                   );
                 }
                 // The response and hooks see the draft as an ordinary read, so
-                // the single-component type markers the persisted snapshot needs
-                // for promotion are stripped from that copy (a dynamic zone's own
-                // row type stays, as a read carries it). The read overlay does the
-                // same via the schema-aware prune; the persisted `draftDocument`
-                // below keeps its markers.
-                workingDraftDocument = stripSingleComponentTags(
+                // shape the accumulated snapshot through the current schema the
+                // same way the read overlay does: a field a later schema change
+                // removed or renamed (which the persisted snapshot still carries)
+                // is pruned, single-component type markers are dropped (a dynamic
+                // zone keeps its own row type, as a read carries it), and JSON
+                // date strings become Date at every depth. Without this the hooks
+                // and the mutation result would see an obsolete field or an ISO
+                // string where an ordinary update supplies a Date. The persisted
+                // `draftDocument` below keeps its markers for promotion.
+                const responseDeclaredFields =
+                  fields as unknown as FieldConfig[];
+                const draftIsPluginCollection =
+                  (collection as { admin?: { isPlugin?: boolean } }).admin
+                    ?.isPlugin === true;
+                const { payload: shapedDraftDocument } = buildRestorePayload(
                   draftDocument,
-                  fields as unknown as FieldConfig[],
-                  slug => splitComponentSchemas?.get(slug)?.fields
+                  responseDeclaredFields,
+                  {
+                    hasStatus: collectionHasStatus,
+                    hasSlug:
+                      !draftIsPluginCollection ||
+                      responseDeclaredFields.some(f => f.name === "slug"),
+                    hasTitle:
+                      !draftIsPluginCollection ||
+                      responseDeclaredFields.some(f => f.name === "title"),
+                    componentSchemas: splitComponentSchemas ?? undefined,
+                    documentLocalized: false,
+                    localeUnknown: false,
+                  }
                 );
+                // buildRestorePayload drops immutable system columns, but a
+                // mutation response and its hooks still expect the id and
+                // timestamps the snapshot carries, so copy them back and
+                // rehydrate the two system timestamps, mirroring the read overlay.
+                for (const key of [
+                  "id",
+                  "createdAt",
+                  "created_at",
+                  "updatedAt",
+                  "updated_at",
+                ]) {
+                  if (key in draftDocument) {
+                    shapedDraftDocument[key] = draftDocument[key];
+                  }
+                }
+                for (const key of ["createdAt", "updatedAt"]) {
+                  const value = shapedDraftDocument[key];
+                  if (typeof value === "string") {
+                    const parsed = new Date(value);
+                    if (!Number.isNaN(parsed.getTime())) {
+                      shapedDraftDocument[key] = parsed;
+                    }
+                  }
+                }
+                rehydrateSnapshotDates(
+                  shapedDraftDocument,
+                  responseDeclaredFields,
+                  splitComponentSchemas ?? null
+                );
+                workingDraftDocument = shapedDraftDocument;
                 await draftRepo.upsertWorkingDraft({
                   ref: draftRef,
                   // The split is non-localized only, so the working draft is one

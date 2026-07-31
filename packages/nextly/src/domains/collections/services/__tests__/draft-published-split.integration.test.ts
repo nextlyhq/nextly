@@ -1201,6 +1201,45 @@ describe("draft/published split — promote on publish (integration)", () => {
       .event?.startsAt;
     expect(startsAt instanceof Date).toBe(true);
   });
+
+  it("returns dates as Date objects when a reused draft leaves them untouched", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), date({ name: "publishAt" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, {
+      title: "live",
+      publishAt: new Date("2026-01-01T00:00:00.000Z"),
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // The first status-less save stores the working draft (the date becomes JSON).
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft one" });
+    // The second save reuses that draft. `publishAt` is untouched, so it is read
+    // back from the JSON snapshot as a string; the response and the afterUpdate
+    // hooks must still see a Date, matching an ordinary update.
+    const res = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft two" }
+    );
+
+    const publishAt = (res.data as { publishAt?: unknown }).publishAt;
+    expect(publishAt instanceof Date).toBe(true);
+    expect((publishAt as Date).toISOString()).toBe("2026-01-01T00:00:00.000Z");
+  });
 });
 
 // The split coalesces a working draft under one unlocalized slot and promotes it
@@ -1341,6 +1380,54 @@ describe("draft/published split — schema and component eligibility (integratio
     // The draft is still surfaced...
     expect(data.title).toBe("draft-title");
     // ...but the field the schema no longer declares does not leak through.
+    expect("subtitle" in data).toBe(false);
+  });
+
+  it("drops a field the schema removed from a reused draft's write and response", async () => {
+    const entries = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), text({ name: "subtitle" })],
+        }),
+      ],
+    });
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // The first status-less save writes `subtitle` into the working-draft snapshot.
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-one", subtitle: "pending" }
+    );
+    await handle!.destroy();
+    handle = undefined;
+
+    // Reboot without `subtitle`; the sidecar JSON still carries it.
+    const reopened = await bootFile({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    // A second status-less save reuses the stale snapshot. The removed field must
+    // not reach the response or the afterUpdate hooks, matching the read overlay.
+    const res = await reopened.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-two" }
+    );
+    const data = res.data as Record<string, unknown>;
+    expect(data.title).toBe("draft-two");
     expect("subtitle" in data).toBe(false);
   });
 
