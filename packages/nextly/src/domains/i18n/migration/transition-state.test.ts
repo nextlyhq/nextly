@@ -184,7 +184,10 @@ describe("beginI18nTransition", () => {
     };
 
     await beginI18nTransition(store, args);
-    await expect(beginI18nTransition(store, args)).resolves.toBeUndefined();
+    // The token identifies the claim, so a retry that takes the transition over gets its own.
+    await expect(beginI18nTransition(store, args)).resolves.toEqual(
+      expect.any(String)
+    );
   });
 
   it("refuses a retry that names a different source locale", async () => {
@@ -206,12 +209,16 @@ describe("beginI18nTransition", () => {
 
   it("refuses to re-owe a copy that already finished", async () => {
     const store = fakeStore();
-    await beginI18nTransition(store, {
+    const token = await beginI18nTransition(store, {
       kind: "collection",
       slug: "posts",
       sourceLocale: "en",
     });
-    await settleI18nTransition(store, { kind: "collection", slug: "posts" });
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token,
+    });
 
     await expect(
       beginI18nTransition(store, {
@@ -252,7 +259,7 @@ describe("beginI18nTransition", () => {
       sourceLocale: "en",
     });
 
-    await expect(winner).resolves.toBeUndefined();
+    await expect(winner).resolves.toEqual(expect.any(String));
     await expect(loser).rejects.toThrow(NextlyError);
     // The claim stands, so the copy and the record agree on one language.
     await expect(
@@ -296,12 +303,16 @@ describe("beginI18nTransition", () => {
     // re-enable. An unconditional write would let each proceed under its own locale, labelling one
     // main table's content as two languages while the marker records whichever landed last.
     const store = fakeStore();
-    await beginI18nTransition(store, {
+    const token = await beginI18nTransition(store, {
       kind: "collection",
       slug: "posts",
       sourceLocale: "en",
     });
-    await settleI18nTransition(store, { kind: "collection", slug: "posts" });
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token,
+    });
     await recordI18nRestore(store, {
       kind: "collection",
       slug: "posts",
@@ -320,7 +331,7 @@ describe("beginI18nTransition", () => {
       sourceLocale: "fr",
     });
 
-    await expect(winner).resolves.toBeUndefined();
+    await expect(winner).resolves.toEqual(expect.any(String));
     await expect(loser).rejects.toThrow(NextlyError);
     await expect(
       readI18nTransitionState(store, "collection", "posts")
@@ -333,12 +344,16 @@ describe("beginI18nTransition", () => {
     // the locale, which is all the loser used to check. It would then run the overwrite a second
     // time, after the winner had settled and a translator had edited what it seeded.
     const store = fakeStore();
-    await beginI18nTransition(store, {
+    const token = await beginI18nTransition(store, {
       kind: "collection",
       slug: "posts",
       sourceLocale: "en",
     });
-    await settleI18nTransition(store, { kind: "collection", slug: "posts" });
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token,
+    });
     await recordI18nRestore(store, {
       kind: "collection",
       slug: "posts",
@@ -408,38 +423,96 @@ describe("settleI18nTransition", () => {
     // Settling must not re-derive the locale: the copy labelled rows with what
     // `begin` recorded, and the record has to keep describing what happened.
     const store = fakeStore();
-    await beginI18nTransition(store, {
+    const token = await beginI18nTransition(store, {
       kind: "single",
       slug: "homepage",
       sourceLocale: "de",
     });
 
-    await settleI18nTransition(store, { kind: "single", slug: "homepage" });
+    await settleI18nTransition(store, {
+      kind: "single",
+      slug: "homepage",
+      token,
+    });
 
     await expect(
       readI18nTransitionState(store, "single", "homepage")
     ).resolves.toMatchObject({ status: "seeded", sourceLocale: "de" });
   });
 
+  it("ignores a settlement from a claim that was taken over", async () => {
+    // Taking an `enabling` transition over is how a crashed run gets finished, and nothing in the
+    // row can tell an abandoned claim from an active one. What makes that safe is this: the holder
+    // that was displaced finishes its own copy and tries to settle, and its settlement names a
+    // claim that no longer exists. Honouring it would tell the next enable that a copy nobody
+    // supervised had completed, and the taker's own work would never be recorded.
+    const store = fakeStore();
+    const displaced = await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    const holder = await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      sourceLocale: "en",
+    });
+    expect(holder).not.toEqual(displaced);
+
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token: displaced,
+    });
+
+    // Still owed, and still the taker's.
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toMatchObject({ status: "enabling", owner: holder });
+
+    // And the holder can still settle its own.
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token: holder,
+    });
+    await expect(
+      readI18nTransitionState(store, "collection", "posts")
+    ).resolves.toMatchObject({ status: "seeded" });
+  });
+
   it("refuses to settle a transition that never began", async () => {
     const store = fakeStore();
 
     await expect(
-      settleI18nTransition(store, { kind: "collection", slug: "posts" })
+      settleI18nTransition(store, {
+        kind: "collection",
+        slug: "posts",
+        // No claim to name, because nothing ever began one.
+        token: undefined,
+      })
     ).rejects.toThrow(NextlyError);
   });
 
   it("is idempotent", async () => {
     const store = fakeStore();
-    await beginI18nTransition(store, {
+    const token = await beginI18nTransition(store, {
       kind: "collection",
       slug: "posts",
       sourceLocale: "en",
     });
 
-    await settleI18nTransition(store, { kind: "collection", slug: "posts" });
+    await settleI18nTransition(store, {
+      kind: "collection",
+      slug: "posts",
+      token,
+    });
     await expect(
-      settleI18nTransition(store, { kind: "collection", slug: "posts" })
+      settleI18nTransition(store, {
+        kind: "collection",
+        slug: "posts",
+        token,
+      })
     ).resolves.toBeUndefined();
   });
 });
@@ -464,7 +537,7 @@ describe("forgetI18nTransition", () => {
         slug: "posts",
         sourceLocale: "fr",
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(expect.any(String));
     await expect(
       readI18nTransitionState(store, "collection", "posts")
     ).resolves.toMatchObject({ status: "enabling", sourceLocale: "fr" });
@@ -474,12 +547,16 @@ describe("forgetI18nTransition", () => {
     // After a disable there is no companion and the values are back on main. The transition the
     // record describes no longer exists, and keeping it blocks the next legitimate one.
     const store = fakeStore();
-    await beginI18nTransition(store, {
+    const token = await beginI18nTransition(store, {
       kind: "single",
       slug: "homepage",
       sourceLocale: "en",
     });
-    await settleI18nTransition(store, { kind: "single", slug: "homepage" });
+    await settleI18nTransition(store, {
+      kind: "single",
+      slug: "homepage",
+      token,
+    });
 
     await forgetI18nTransition(store, "single", "homepage");
 

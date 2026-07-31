@@ -857,6 +857,67 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     ).resolves.toEqual({ status: "untracked" });
   });
 
+  it("restores a companion that has no transition record when localization is turned off", async () => {
+    // The mirror of the test above, and it resolves the opposite way — deliberately.
+    //
+    // On the ENABLE side, absence of a record is genuinely ambiguous: it can mean a legacy
+    // transition or a from-birth entity, and only the first owes a copy. On the DISABLE side the
+    // ambiguity does not matter. Both kinds have their content in the companion, because every
+    // write since went there, so both owe the copy back. What separates them from an entity that
+    // was never localized is that the never-localized one has no companion at all.
+    //
+    // Returning early on `untracked` therefore stranded exactly the installs that predate
+    // transition records: the push recreates the main-table columns, reads switch back to them,
+    // and the content sits in a table nothing reads any more.
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_legacyoff",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(localized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_legacyoff" ("id", "slug") VALUES ('row1', 'r1')`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_legacyoff_locales" ("_parent", "_locale", "title") VALUES ('row1', 'en', 'Written while localized')`
+    );
+
+    // A legacy install: the companion predates transition records, so there is no marker.
+    await forgetI18nTransition(
+      await transitionStore(),
+      "collection",
+      "dbsync_legacyoff"
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_legacyoff",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_legacyoff" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Written while localized" }]);
+    // And the transition it established is recorded as finished, so nothing repeats the copy over
+    // edits main is authoritative for from now on.
+    await expect(
+      readTransition("collection", "dbsync_legacyoff")
+    ).resolves.toMatchObject({ status: "restored", sourceLocale: "en" });
+  });
+
   it("carries a status changed while localization was off back onto the companion", async () => {
     // Publishing state moves while localization is off too, and the companion row that survives
     // the disable keeps whatever `_status` it held when it was last the authority. The guarded
@@ -1221,6 +1282,68 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       { id: "new", title: "English only" },
       { id: "old", title: "Nur Deutsch" },
     ]);
+  });
+
+  it("restores every field of an entry from one companion row", async () => {
+    // A parent that has rows in BOTH candidate locales, with one field left untranslated in the
+    // preferred one. Asking each column for its own first non-null value across the candidates
+    // would take that field from the other language and its neighbours from the preferred row —
+    // a mixed-language document written to the table that is authoritative from then on, with the
+    // record marking the restore terminally finished.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_onerow",
+          fields: [text({ name: "title" }), text({ name: "summary" })],
+        }),
+      ],
+    });
+
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_onerow" ("id", "slug", "title", "summary") VALUES ('row1', 'r1', 'Vor', 'Zusammenfassung')`
+    );
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "de" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_onerow",
+            localized: true,
+            fields: [
+              text({ name: "title", localized: true }),
+              text({ name: "summary", localized: true }),
+            ],
+          }),
+        ],
+      })
+    );
+
+    // The English translation exists but its summary was never written. English becomes the
+    // default, so it is the preferred candidate and German is the fallback.
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_onerow_locales" ("_parent", "_locale", "title", "summary") VALUES ('row1', 'en', 'English title', NULL)`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_onerow",
+            fields: [text({ name: "title" }), text({ name: "summary" })],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{
+      title: string;
+      summary: string | null;
+    }>(`SELECT "title", "summary" FROM "dc_dbsync_onerow" WHERE "id" = 'row1'`);
+    // Both from the English row. Its untranslated summary comes back as null, which is what that
+    // row actually says — not the German summary sitting beside it.
+    expect(main).toEqual([{ title: "English title", summary: null }]);
   });
 
   it("leaves an entity that was never localized alone", async () => {

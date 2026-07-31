@@ -270,10 +270,14 @@ export async function readI18nTransitionState(
  * Record that a transition is starting. Must be called before the first
  * statement that changes the database.
  *
- * Writing `enabling` for an entity already recorded as `seeded` would re-owe a
- * copy that has run, so that is refused. Re-writing `enabling` over `enabling`
- * is allowed and idempotent: a retry after a failed transition is expected, and
- * the recorded source locale does not change between attempts.
+ * Returns the claim token, which the settlement has to name. Holding the transition and finishing
+ * it are the same claim, and a settlement that did not have to prove which one it was could close
+ * somebody else's.
+ *
+ * Writing `enabling` for an entity already recorded as `seeded` would re-owe a copy that has run,
+ * so that is refused. Taking over an `enabling` marker is allowed, and is how a transition
+ * abandoned by a crashed run gets finished; what makes it safe is that the settlement names the
+ * claim, so the displaced holder cannot close the new one.
  *
  * `restored` is a legal predecessor, and unlike `enabling` it may name a
  * different source locale. Localization was off in between, so the main table
@@ -288,7 +292,7 @@ export async function beginI18nTransition(
     slug: string;
     sourceLocale: string;
   }
-): Promise<void> {
+): Promise<string> {
   // The writer holds itself to the reader's rules. Persisting a marker the next
   // read would reject leaves the entity unusable with no way forward, and an
   // empty locale is the easiest way to do that by accident.
@@ -321,9 +325,15 @@ export async function beginI18nTransition(
     });
   }
 
-  // Fresh on every attempt, including a retry of one this same process abandoned. The token
-  // identifies the CLAIM, not the process: a previous attempt that crashed mid-transition left its
-  // token in the row, and taking over from it is exactly what the conditional writes below do.
+  // Fresh on every attempt, including one that takes an `enabling` transition over from a holder
+  // that never finished.
+  //
+  // Taking over is how recovery works, and nothing in the row can tell an abandoned claim from an
+  // active one — a wall-clock lease cannot either, since a copy over a large table can outlast any
+  // timeout and leave the "expired" holder still running. So the answer is not to refuse the
+  // takeover but to make it harmless: the token identifies the CLAIM, and the settlement has to
+  // name the one it closes, so a displaced holder finishing later cannot declare the copy done on
+  // behalf of the claim that displaced it.
   const owner = randomUUID();
   const marker = storedMarker({
     status: "enabling",
@@ -333,11 +343,10 @@ export async function beginI18nTransition(
 
   // Taking over an existing record is a claim too, not a write.
   //
-  // `enabling` over `enabling` is a retry with the locale the read above already checked, so the
-  // write is idempotent and needs nothing further. `restored` is where it matters: two processes
-  // re-enabling the same entity during a default-locale rollout both read `restored`, and an
-  // unconditional write would let each proceed under its own locale — labelling one main table's
-  // content as two languages, with the marker recording whichever landed last.
+  // `restored` is where it matters most: two processes re-enabling the same entity during a
+  // default-locale rollout both read `restored`, and an unconditional write would let each proceed
+  // under its own locale — labelling one main table's content as two languages, with the marker
+  // recording whichever landed last.
   //
   // A conditional move settles it in the database. Losing means the row has gone somewhere else,
   // so the loser re-reads and validates below rather than assuming.
@@ -347,9 +356,8 @@ export async function beginI18nTransition(
       storedMarker(current),
       marker
     );
-    if (claimed) return;
-    await confirmClaim(store, args, key, owner);
-    return;
+    if (!claimed) await confirmClaim(store, args, key, owner);
+    return owner;
   }
 
   // Recording the FIRST transition is a claim, not a write. Two processes provisioning the same
@@ -359,6 +367,7 @@ export async function beginI18nTransition(
   // exists to keep.
   await store.insertIfAbsent(key, marker);
   await confirmClaim(store, args, key, owner);
+  return owner;
 }
 
 /**
@@ -418,7 +427,22 @@ async function confirmClaim(
  */
 export async function settleI18nTransition(
   store: TransitionStateStore,
-  args: { kind: I18nTransitionKind; slug: string }
+  args: {
+    kind: I18nTransitionKind;
+    slug: string;
+    /**
+     * The token {@link beginI18nTransition} returned for the claim this settles.
+     *
+     * Required, so a caller cannot settle by simply being the one that got here. Whoever holds the
+     * transition is the only one who can say its copy finished, and a settlement that closed the
+     * marker it happened to find would close a claim taken over in the meantime — telling the next
+     * enable that a copy it never saw had completed.
+     *
+     * Undefined only for a claim taken over from a marker that predates tokens, where there is
+     * nothing to prove.
+     */
+    token: string | undefined;
+  }
 ): Promise<void> {
   const key = markerKey(args.kind, args.slug);
   const current = await readI18nTransitionState(store, args.kind, args.slug);
@@ -444,6 +468,9 @@ export async function settleI18nTransition(
   // not this caller's to correct. The conditional write covers the same race happening between
   // this read and the write.
   if (current.status !== "enabling") return;
+  // Not ours. Someone took the transition over while this copy ran, and their claim is the one
+  // that gets to say when it finished.
+  if (current.owner !== args.token) return;
 
   // The token travels with the settlement, so the record keeps saying which claim produced it.
   await store.compareAndSet(

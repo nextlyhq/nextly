@@ -1008,8 +1008,15 @@ export async function ensureLocalizedCompanions(
                 })
             : undefined,
           settleTransition: transitions
-            ? () =>
-                settleI18nTransition(transitions, { kind, slug: entity.slug! })
+            ? token =>
+                settleI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  // The claim this settles, handed back by whichever of the two callbacks above
+                  // made it. A settlement that did not name one would close whatever claim it
+                  // found, including one taken over while this copy ran.
+                  token,
+                })
             : undefined,
         },
         error => {

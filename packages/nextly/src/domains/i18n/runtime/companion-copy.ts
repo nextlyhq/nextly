@@ -166,44 +166,48 @@ export async function copyDefaultLocaleOntoMain(
     args.fallbackLocale && args.fallbackLocale !== args.locale
       ? [args.locale, args.fallbackLocale]
       : [args.locale];
-  const rowFor = (locale: string) =>
-    and(
-      eq(shape.companion._parent as never, shape.main.id as never),
-      eq(shape.companion._locale as never, locale)
-    );
-  // The same per-parent choice for every column: first locale that has a row for this parent
-  // wins. Written once so a column and the status beside it cannot come from different rows.
-  const fromFirstMatchingRow = (companionColumn: unknown) =>
+
+  // ONE row per parent, chosen by rank rather than per column.
+  //
+  // Ranking is what makes the choice shared. Asking each column for its own first non-null value
+  // across the candidate locales looks equivalent and is not: a parent that has rows in BOTH, with
+  // one column left untranslated in the preferred row, takes that column from the other language
+  // while its neighbours and its publishing status come from the preferred one. The result is a
+  // mixed-language document written to the table that is authoritative from then on, with the
+  // record marking the restore terminally finished.
+  //
+  // Expressed as an ordering rather than a CASE so every bound locale appears in a comparison
+  // against `_locale`, where all three dialects can infer its type.
+  const candidateRow = and(
+    eq(shape.companion._parent as never, shape.main.id as never),
     locales
-      .map(
-        locale =>
-          sql`(select ${companionColumn} from ${shape.companionTable} where ${rowFor(locale)})`
-      )
-      .reduce((first, next) => sql`coalesce(${first}, ${next})`);
+      .map(locale => sql`${shape.companion._locale} = ${locale}`)
+      .reduce((first, next) => sql`${first} or ${next}`)
+  );
+  const byPreference = locales
+    .map(locale => sql`(${shape.companion._locale} = ${locale}) desc`)
+    .reduce((first, next) => sql`${first}, ${next}`);
+  const fromChosenRow = (companionColumn: unknown) =>
+    sql`(select ${companionColumn} from ${shape.companionTable} where ${candidateRow} order by ${byPreference} limit 1)`;
 
   const values: Record<string, unknown> = {};
   for (const pair of shape.pairs) {
-    values[pair.field] = fromFirstMatchingRow(shape.companion[pair.column]);
+    values[pair.field] = fromChosenRow(shape.companion[pair.column]);
   }
   if (args.status === true) {
-    values.status = fromFirstMatchingRow(shape.companion._status);
+    values.status = fromChosenRow(shape.companion._status);
   }
 
-  // Guarded on ANY of them existing: a parent with a row in neither locale — an entry authored in
-  // some third language only — would otherwise be assigned SQL NULL, blanking the main column
-  // instead of leaving it alone.
-  const anyRow = locales
-    .map(
-      locale =>
-        sql`exists (select 1 from ${shape.companionTable} where ${rowFor(locale)})`
-    )
-    .reduce((first, next) => sql`${first} or ${next}`);
-
+  // Guarded on a candidate row existing at all: a parent with a row in no candidate locale — an
+  // entry authored in some third language only — would otherwise be assigned SQL NULL, blanking
+  // the main column instead of leaving it alone.
   await adapter
     .getDrizzle<UpdatableDb>()
     .update(shape.mainTable)
     .set(values)
-    .where(anyRow);
+    .where(
+      sql`exists (select 1 from ${shape.companionTable} where ${candidateRow})`
+    );
 }
 
 /**

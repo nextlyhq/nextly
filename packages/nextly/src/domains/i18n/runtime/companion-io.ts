@@ -641,7 +641,7 @@ export interface CompanionSeedDebt {
    * still the module's rule — the record goes in before the statements, since MySQL commits DDL
    * implicitly — because building the plan only reads.
    */
-  claim?: () => Promise<void>;
+  claim?: () => Promise<string>;
 }
 
 /**
@@ -682,10 +682,24 @@ export async function resolveCompanionSeedDebt(
   );
   const recorded = await readI18nTransitionState(store, kind, slug);
 
+  const claimIn = (sourceLocale: string): Promise<string> =>
+    beginI18nTransition(store, { kind, slug, sourceLocale });
+  const claim = (): Promise<string> => claimIn(options.defaultLocale);
+
   // A copy already recorded and unfinished. Continue it in the language it recorded — a default
   // locale that changed since must not relabel values written under the old one.
+  //
+  // Claimed, even though the record already exists. Resuming is doing the work, and the settlement
+  // that follows has to name the claim it closes: without taking the transition over, this run
+  // would finish the copy and then be unable to record that it had, leaving the marker `enabling`
+  // for every later pass to re-run. Claiming also serialises two runs resuming at once — the one
+  // that loses the conditional move stops rather than copying alongside the winner.
   if (recorded.status === "enabling") {
-    return { sourceLocale: recorded.sourceLocale, overwriteExisting: false };
+    return {
+      sourceLocale: recorded.sourceLocale,
+      overwriteExisting: false,
+      claim: () => claimIn(recorded.sourceLocale),
+    };
   }
 
   // The two cases below are NEW transitions, not continuations, so each records one before any
@@ -693,12 +707,6 @@ export async function resolveCompanionSeedDebt(
   // it has no `enabling` record to settle — leaving the marker untouched and the same failure
   // waiting on every retry. It is also the module's own ordering rule: the record goes in before
   // the statements, because MySQL commits DDL implicitly.
-  const claim = (): Promise<void> =>
-    beginI18nTransition(store, {
-      kind,
-      slug,
-      sourceLocale: options.defaultLocale,
-    });
 
   // The companion outlived a disable. Main has been authoritative ever since and carries no
   // language of its own, so enabling now declares its content to be in TODAY's default — exactly
@@ -755,8 +763,8 @@ async function resumeInterruptedSeed(
     sourceLocale?: string;
     overwriteExisting?: boolean;
     requireColumnsOnMain?: boolean;
-    claim?: () => Promise<void>;
-    settleTransition?: () => Promise<void>;
+    claim?: () => Promise<string>;
+    settleTransition?: (token: string | undefined) => Promise<void>;
   },
   newLocalized: CompanionFieldLike[],
   companionTableName: string,
@@ -781,7 +789,7 @@ async function resumeInterruptedSeed(
   try {
     // The plan is real, so the transition is recorded — before the first statement, and only now
     // that there is something for it to describe.
-    await args.claim?.();
+    const claimToken = await args.claim?.();
     if (args.overwriteExisting) {
       const { columns, statusOnBoth } = await localizedColumnsOnBothTables(
         adapter,
@@ -822,7 +830,7 @@ async function resumeInterruptedSeed(
       );
     }
     // The interrupted run's debt is discharged, so the record stops describing one.
-    await args.settleTransition?.();
+    await args.settleTransition?.(claimToken);
     return true;
   } catch (error) {
     onError?.(error);
@@ -976,7 +984,7 @@ export async function ensureCompanionTable(
      * companion is the state this exists to prevent, and not creating the table leaves the next
      * run free to try again from a clean position.
      */
-    recordTransition?: () => Promise<void>;
+    recordTransition?: () => Promise<string>;
     /**
      * What an existing companion still owes, or null when it owes nothing.
      *
@@ -999,7 +1007,7 @@ export async function ensureCompanionTable(
      * copy — harmless for the rows it already made, but it keeps manufacturing default-locale rows
      * for entries that were deliberately created in another locale only.
      */
-    settleTransition?: () => Promise<void>;
+    settleTransition?: (token: string | undefined) => Promise<void>;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
@@ -1074,7 +1082,7 @@ export async function ensureCompanionTable(
       return false;
     }
     // Ordered ahead of every statement below. See `recordTransition`.
-    await args.recordTransition?.();
+    const claimToken = await args.recordTransition?.();
     const statements =
       (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
       buildCompanionReconcileStatements({
@@ -1093,7 +1101,7 @@ export async function ensureCompanionTable(
     // Only once every statement landed. Settling earlier would mark a copy complete that a later
     // statement could still fail, and the record would then say the content is in the companion
     // when it is not.
-    await args.settleTransition?.();
+    await args.settleTransition?.(claimToken);
     return true;
   } catch (error) {
     // Another process may have created it between the probe and the CREATE — `db:sync` and a

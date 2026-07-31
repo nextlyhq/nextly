@@ -30,12 +30,17 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type {
+  EnablingTransition,
   I18nTransitionKind,
+  SeededTransition,
   TransitionStateStore,
+  UntrackedTransition,
 } from "../migration/transition-state";
 import {
+  beginI18nTransition,
   forgetI18nTransition,
   readI18nTransitionState,
   recordI18nRestore,
@@ -99,15 +104,24 @@ export async function restoreDisabledCompanion(
     args.kind,
     args.slug
   );
-  // `untracked` covers both an entity that was never localized and one whose transition predates
-  // this record. Neither can be restored from here: the second is missing the one fact that cannot
-  // be re-derived, which is why `nextly migrate` owns repairing it.
-  if (recorded.status === "untracked" || recorded.status === "restored") {
-    return false;
-  }
+  // Already restored. Terminal, and repeating the copy would overwrite live edits with rows main
+  // has been authoritative over ever since.
+  if (recorded.status === "restored") return false;
 
   const companionTableName = `${args.tableName}_locales`;
   try {
+    // For an entity with no record, one cheap probe decides everything: no companion means it was
+    // never localized, and there is nothing to bring back. Asked before the full introspection
+    // because this is the overwhelmingly common case — every entity the configuration does not
+    // localize reaches here on every sync and every reload, and almost none of them ever had a
+    // companion.
+    if (
+      recorded.status === "untracked" &&
+      !(await companionTableExists(adapter, companionTableName))
+    ) {
+      return false;
+    }
+
     const {
       companionExists,
       columns: present,
@@ -118,19 +132,17 @@ export async function restoreDisabledCompanion(
       companionTableName,
       restorableFields(args.fields)
     );
-    // Confirmed through the write path's own probe before anything is forgotten. The snapshot
-    // above answers from introspection, and a false negative here is not recoverable: the record
-    // it deletes carries the source locale, which is the one fact nothing else can supply.
-    if (
-      !companionExists &&
-      !(await companionTableExists(adapter, companionTableName))
-    ) {
-      // The companion is already gone — a `nextly migrate` run, or a teardown. There is nothing to
-      // copy and nothing left for the record to describe, so it stops describing it rather than
-      // leaving a restore permanently owed against a table that does not exist.
-      await forgetI18nTransition(args.store, args.kind, args.slug);
-      return false;
-    }
+    // Confirmed through the write path's own probe. The snapshot above answers from introspection,
+    // and a false negative is not recoverable: it decides both whether a record is deleted and
+    // whether an untracked entity is one that was never localized at all.
+    const companionIsThere =
+      companionExists ||
+      (await companionTableExists(adapter, companionTableName));
+
+    // The state this restore is based on. `untracked` needs establishing first; the other two
+    // already describe a transition.
+    const based = await basisForRestore(args, recorded, companionIsThere);
+    if (!based) return false;
 
     // Which locale actually holds this entity's content. The configured default is the right
     // answer whenever the companion has rows in it, and wrong when the entity was only ever
@@ -142,7 +154,7 @@ export async function restoreDisabledCompanion(
       fields: restorableFields(args.fields),
       dialect: args.dialect,
       preferred: args.defaultLocale,
-      recorded: recorded.sourceLocale,
+      recorded: based.sourceLocale,
     });
 
     if (present.length > 0 || statusOnBoth) {
@@ -155,9 +167,9 @@ export async function restoreDisabledCompanion(
         // The other candidate, so a parent without a row in the chosen locale still comes back
         // from the one it does have rather than keeping a pre-localization value.
         fallbackLocale:
-          restoreLocale === recorded.sourceLocale
+          restoreLocale === based.sourceLocale
             ? args.defaultLocale
-            : recorded.sourceLocale,
+            : based.sourceLocale,
         columns: present,
         // Decided by the physical tables, not the configuration. Publishing is per locale while
         // an entity is localized, so a row published only under a non-default locale carries that
@@ -180,11 +192,7 @@ export async function restoreDisabledCompanion(
       // its claim rather than having it overwritten by a completion it never saw. The claim token
       // travels with it: a re-enable that took the row over left its own token there, and a
       // comparison that omitted the one observed here would match no row at all.
-      expect: {
-        status: recorded.status,
-        sourceLocale: recorded.sourceLocale,
-        owner: recorded.owner,
-      },
+      expect: based,
     });
     return present.length > 0 || statusOnBoth;
   } catch (error) {
@@ -194,6 +202,82 @@ export async function restoreDisabledCompanion(
     onError?.(error);
     return false;
   }
+}
+
+/** The recorded state a restore copies from, and moves off when it finishes. */
+interface RestoreBasis {
+  status: "enabling" | "seeded";
+  sourceLocale: string;
+  owner?: string;
+}
+
+/**
+ * The transition this restore completes, establishing one first if the entity has none.
+ *
+ * An entity with no record is not necessarily one that was never localized, and the companion says
+ * which. A companion exists only because localization was on — whether that happened before
+ * transitions were recorded, or the entity was localized from birth, makes no difference in this
+ * direction. Either way every edit since went to the companion, and disabling without copying them
+ * back republishes whatever main held beforehand while the real content sits in a table nothing
+ * reads any more.
+ *
+ * That is the reverse of the enable direction, where absence of a record genuinely is ambiguous and
+ * the repair is opt-in: there the question is whether a copy is OWED, and a from-birth entity owes
+ * nothing. Here the question is only whether content exists to bring back.
+ *
+ * The transition is established through the ordinary claim, so two processes disabling the same
+ * entity cannot both copy. `enabling` is the honest state to establish: it means the companion is
+ * authoritative and main owes a copy, which is exactly true, and a crash mid-restore leaves it
+ * there for the next pass to repeat harmlessly.
+ *
+ * Null when there is nothing to do or nothing that can be decided — no companion, or no locale to
+ * name as the one main will hold.
+ */
+async function basisForRestore(
+  args: RestoreCompanionArgs,
+  recorded: EnablingTransition | SeededTransition | UntrackedTransition,
+  companionIsThere: boolean
+): Promise<RestoreBasis | null> {
+  if (recorded.status !== "untracked") {
+    if (companionIsThere) return recorded;
+    // The companion is already gone — a `nextly migrate` run, or a teardown. There is nothing to
+    // copy and nothing left for the record to describe, so it stops describing it rather than
+    // leaving a restore permanently owed against a table that does not exist.
+    await forgetI18nTransition(args.store, args.kind, args.slug);
+    return null;
+  }
+
+  // No companion and no record: never localized, nothing to bring back.
+  if (!companionIsThere) return null;
+
+  const sourceLocale = args.defaultLocale;
+  if (typeof sourceLocale !== "string" || sourceLocale.length === 0) {
+    // Nothing recorded the language, and the configuration no longer names one either. Refusing is
+    // the only honest answer: the copy has to declare what language main ends up holding, and
+    // inventing that is the guesswork the record exists to stop.
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "cannot restore an untracked companion without a configured default locale",
+        slug: args.slug,
+        kind: args.kind,
+      },
+    });
+  }
+
+  await beginI18nTransition(args.store, {
+    kind: args.kind,
+    slug: args.slug,
+    sourceLocale,
+  });
+  // Re-read rather than assume: the claim can be lost, and the copy must run against the state
+  // actually in the row.
+  const claimed = await readI18nTransitionState(
+    args.store,
+    args.kind,
+    args.slug
+  );
+  return claimed.status === "enabling" ? claimed : null;
 }
 
 /**
