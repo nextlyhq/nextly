@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { SideEffectHookFailure } from "../hook-registry";
 import { HookRegistry } from "../hook-registry";
 import type { HookContext } from "../types";
 
@@ -76,7 +77,7 @@ describe("side-effect phase return values", () => {
     expect(result).not.toHaveProperty("injected");
   });
 
-  it("still runs every side-effect handler and still propagates a throw", async () => {
+  it("still runs every side-effect handler, and reports a throw instead of raising it", async () => {
     // Ignoring the return must not turn into ignoring the handler: the phase is
     // where cache invalidation and notifications live, and a throw is how one
     // reports that it failed.
@@ -92,13 +93,29 @@ describe("side-effect phase return values", () => {
     await registry.execute("afterCreate", contextFor("docs", "create", {}));
     expect(ran).toEqual(["first", "second"]);
 
+    // A throw does not stop the phase either. The write has already committed,
+    // so raising would report a durable row as a failure, and cancelling the
+    // remaining handlers would turn one broken hook into several skipped ones.
     const throwing = new HookRegistry();
+    const reached: string[] = [];
     throwing.register("afterCreate", "docs", () => {
       throw new Error("notification failed");
     });
+    throwing.register("afterCreate", "docs", () => {
+      reached.push("after the failure");
+    });
+
+    const failures: SideEffectHookFailure[] = [];
     await expect(
-      throwing.execute("afterCreate", contextFor("docs", "create", {}))
-    ).rejects.toThrow();
+      throwing.execute("afterCreate", contextFor("docs", "create", {}), {
+        onSideEffectError: failure => failures.push(failure),
+      })
+    ).resolves.toBeDefined();
+
+    expect(reached).toEqual(["after the failure"]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].phase).toBe("afterCreate");
+    expect(failures[0].collection).toBe("docs");
   });
 
   describe("the mirror: transforming phases are unaffected", () => {
