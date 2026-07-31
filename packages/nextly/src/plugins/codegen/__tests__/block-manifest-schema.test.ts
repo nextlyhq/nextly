@@ -95,6 +95,29 @@ describe("the manifest schema", () => {
     ["a nameless block", { name: "", version: 1, description: "d" }],
     ["a block with no description", { name: "n", version: 1, description: "" }],
     ["a non-numeric version", { name: "n", version: "1", description: "d" }],
+    // The rest are what the block engine refuses at registration. Generation
+    // accepting them would report success, and delete the previous manifest,
+    // for an app that cannot start.
+    [
+      "a fractional version, which has no migration step",
+      { name: "n", version: 1.5, description: "d" },
+    ],
+    [
+      "a version below 1, with nothing to migrate from",
+      { name: "n", version: 0, description: "d" },
+    ],
+    [
+      "a description of nothing but whitespace",
+      { name: "n", version: 1, description: "   " },
+    ],
+    [
+      "an example whose props are an array, which no node can hold",
+      { name: "n", version: 1, description: "d", example: { props: [] } },
+    ],
+    [
+      "an example with no props at all",
+      { name: "n", version: 1, description: "d", example: {} },
+    ],
   ])("refuses %s", (_label, partial) => {
     const result = blockManifestSchema.safeParse({
       manifestVersion: BLOCK_MANIFEST_VERSION,
@@ -135,23 +158,67 @@ describe("the emitter's obligation to the schema", () => {
   it.each([
     ["NaN", Number.NaN],
     ["Infinity", Number.POSITIVE_INFINITY],
-  ])("refuses a version of %s, which JSON cannot carry", (_label, version) => {
-    // `typeof NaN === "number"`, so the per-declaration check reads it as a
-    // version. It survives to `JSON.stringify`, which writes it as `null` — a
-    // manifest that parses as JSON and is wrong. The schema is what catches the
-    // gap between "is a number" and "is a number a reader can be handed".
+    ["a fraction", 1.5],
+    ["zero", 0],
+    ["a negative", -1],
+  ])(
+    "refuses a version of %s, which the per-declaration check reads as a number",
+    (_label, version) => {
+      // `typeof NaN === "number"`, and so is 1.5 and -1, so the declaration
+      // check lets all of them through. NaN even survives to `JSON.stringify`,
+      // which writes it as `null` — a manifest that parses as JSON and is
+      // wrong. The schema is the gap between "is a number" and "is a version".
+      expect(
+        issueOf(() =>
+          buildBlockManifest([
+            consumer(),
+            declaring("@acme/pricing", [block("acme/hero", { version })]),
+          ])
+        )
+        // Not the message: its tail is zod's wording, which a zod upgrade may
+        // reword without anything about this refusal having changed.
+      ).toMatchObject({
+        code: "MANIFEST_SCHEMA_MISMATCH",
+        path: "blocks.manifest.json.blocks.0.version",
+      });
+    }
+  );
+
+  it("refuses a description of nothing but whitespace", () => {
+    // The per-declaration check measures length, so spaces pass it; the engine
+    // trims before checking, and a blank description renders as an empty
+    // palette entry — the thing requiring one exists to prevent.
     expect(
       issueOf(() =>
         buildBlockManifest([
           consumer(),
-          declaring("@acme/pricing", [block("acme/hero", { version })]),
+          declaring("@acme/pricing", [
+            block("acme/hero", { description: "   " }),
+          ]),
         ])
       )
-      // Not the message: its tail is zod's wording, which a zod upgrade may
-      // reword without anything about this refusal having changed.
     ).toMatchObject({
       code: "MANIFEST_SCHEMA_MISMATCH",
-      path: "blocks.manifest.json.blocks.0.version",
+      path: "blocks.manifest.json.blocks.0.description",
+    });
+  });
+
+  it("refuses an example whose props are not a key/value map", () => {
+    // The per-declaration check requires the example to be an object and says
+    // nothing about its props. A stored node's props are a map, so an
+    // array-shaped example describes a node that could never be valid.
+    expect(
+      issueOf(() =>
+        buildBlockManifest([
+          consumer(),
+          declaring("@acme/pricing", [
+            block("acme/hero", { example: { props: [] } }),
+          ]),
+        ])
+      )
+    ).toMatchObject({
+      code: "MANIFEST_SCHEMA_MISMATCH",
+      path: "blocks.manifest.json.blocks.0.example.props",
     });
   });
 });
@@ -171,10 +238,25 @@ describe("the published JSON Schema", () => {
               "additionalProperties": false,
               "properties": {
                 "description": {
-                  "minLength": 1,
+                  "pattern": "\\S",
                   "type": "string",
                 },
-                "example": {},
+                "example": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "props": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string",
+                      },
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "props",
+                  ],
+                  "type": "object",
+                },
                 "name": {
                   "minLength": 1,
                   "type": "string",
@@ -205,7 +287,9 @@ describe("the published JSON Schema", () => {
                   "type": "object",
                 },
                 "version": {
-                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer",
                 },
               },
               "required": [

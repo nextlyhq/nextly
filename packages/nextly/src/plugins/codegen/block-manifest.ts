@@ -60,17 +60,47 @@ export const BLOCK_MANIFEST_VERSION = 1;
  * `props`, `supports` and `slots` stay open, because their contents belong to
  * the block rather than to the manifest: core has no vocabulary for them and
  * would only be guessing at what a plugin may put there.
+ *
+ * The per-field rules mirror what the block engine enforces at registration,
+ * because a manifest generated for a configuration that cannot boot is worse
+ * than no manifest — generation DELETES the previous file, so it would trade a
+ * good artifact for a description of an app that does not start.
+ *
+ * Mirrored only where the rule is a shape rather than a value. The engine's
+ * upper version bound and its block-name pattern are values it may move, and a
+ * copy of them here that fell BEHIND would refuse a block the engine accepts,
+ * blocking generation for a valid app. Those two stay the engine's to enforce.
  */
 export const blockManifestEntrySchema = z
   .object({
     name: z.string().min(1),
-    /** The block's own schema version, stamped onto every node of its type. */
-    version: z.number(),
-    description: z.string().min(1),
+    /**
+     * The block's own schema version, stamped onto every node of its type.
+     *
+     * A whole number from 1: the engine counts migration steps between
+     * versions, so a fraction has no step to chain and a value below 1 has
+     * nothing to migrate from. `.int()` also excludes `NaN` and `Infinity`,
+     * which `typeof` reads as numbers and `JSON.stringify` writes as `null` —
+     * a manifest that parses as JSON and is wrong.
+     */
+    version: z.number().int().positive(),
+    /**
+     * Required to be non-blank rather than merely non-empty: the engine trims
+     * before checking, and a description of spaces renders as an empty palette
+     * entry, which is the thing requiring one was meant to prevent.
+     */
+    description: z.string().regex(/\S/),
     /** The plugin that declared it, so a reader knows what to install. */
     source: z.string().min(1),
-    /** A worked instance, for previews and few-shot prompting. */
-    example: z.unknown().optional(),
+    /**
+     * A worked instance, for previews and few-shot prompting. Its `props` are a
+     * key/value map because that is what a stored node's props are; an
+     * array-shaped example could never become a valid node.
+     */
+    example: z
+      .object({ props: z.record(z.string(), z.unknown()) })
+      .loose()
+      .optional(),
     /** Prop schemas keyed by prop name. */
     props: z.record(z.string(), z.unknown()).optional(),
     /** Style capabilities the block opts into. */
@@ -111,6 +141,20 @@ export function blockManifestJsonSchema(): Record<string, unknown> {
 }
 
 /**
+ * A block as the emitter assembles it, before the schema judges it.
+ *
+ * Only `name` is narrowed, because sorting and the duplicate check read it and
+ * the per-declaration pass has already established it is a non-empty string.
+ * Everything else stays exactly as declared: coercing it here would mean
+ * deciding what is acceptable in two places, and the schema is the one whose
+ * answer is published.
+ */
+interface BlockManifestDraft {
+  name: string;
+  [key: string]: unknown;
+}
+
+/**
  * Build the manifest from what plugins declared.
  *
  * Blocks are sorted by name so the emitted file is stable: an artifact that
@@ -121,13 +165,13 @@ export function blockManifestJsonSchema(): Record<string, unknown> {
 export function buildBlockManifest(
   plugins: readonly PluginDefinition[]
 ): BlockManifest {
-  const blocks: BlockManifestEntry[] = [];
+  const blocks: BlockManifestDraft[] = [];
   // Nothing can register when the consumer is absent or disabled: a disabled
   // plugin runs no `init` and contributes no services, so the registry these
   // declarations would fill never exists. Listing them anyway would tell
   // tooling the app has blocks it cannot render.
   if (!isConsumerActive(plugins, PAGE_BUILDER_PLUGIN)) {
-    return { manifestVersion: BLOCK_MANIFEST_VERSION, blocks };
+    return { manifestVersion: BLOCK_MANIFEST_VERSION, blocks: [] };
   }
   // Where each name came from, so a collision names both plugins rather than
   // just the one that lost.
@@ -272,10 +316,13 @@ function isConsumerActive(
  * A declaration carrying no `blocks` key at all is not an error: another
  * version of the page builder may read keys this one does not.
  */
-function declaredBlocks(
-  value: unknown,
-  source: string
-): Record<string, unknown>[] {
+interface DeclaredBlock {
+  /** Checked here, so the caller need not re-establish it to sort or dedupe. */
+  name: string;
+  [key: string]: unknown;
+}
+
+function declaredBlocks(value: unknown, source: string): DeclaredBlock[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return [];
   }
@@ -327,7 +374,10 @@ function declaredBlocks(
         `Block "${definition.name}" from "${source}" has no example. Every block needs a worked instance, for previews and for generating content.`
       );
     }
-    return definition;
+    // Rebuilt with the name spelled out so the checked type carries what was
+    // just proved about it; returning `definition` would hand the caller a
+    // record whose `name` is `unknown` again, and it sorts and dedupes on it.
+    return { ...definition, name: definition.name };
   });
 }
 
@@ -340,14 +390,11 @@ function declaredBlocks(
  * holds, copied rather than reshaped, so the file and the definition cannot
  * drift into different vocabularies.
  */
-function toEntry(
-  block: Record<string, unknown>,
-  source: string
-): BlockManifestEntry {
-  const entry: BlockManifestEntry = {
-    name: typeof block.name === "string" ? block.name : "",
-    version: typeof block.version === "number" ? block.version : 0,
-    description: typeof block.description === "string" ? block.description : "",
+function toEntry(block: DeclaredBlock, source: string): BlockManifestDraft {
+  const entry: BlockManifestDraft = {
+    name: block.name,
+    version: block.version,
+    description: block.description,
     source,
   };
   if (block.example !== undefined) entry.example = block.example;
