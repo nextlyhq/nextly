@@ -127,12 +127,12 @@ function systemTablesFor(dialect: SupportedDialect): Record<string, unknown> {
           };
   return {
     // 🔴 `users` is here for a foreign key, not because the migration reads it:
-    // all three dynamic registries carry `created_by → users.id`. MySQL enforces
-    // that at CREATE time and refuses the constraint outright when the parent is
-    // absent. This suite passed for a while only because a leftover `users` from
-    // another suite happened to be sitting in the container — a fixture whose
-    // correctness depends on what ran before it is not a fixture, and it would
-    // have failed on CI's clean database.
+    // all three dynamic registries carry `created_by → users.id`, and MySQL
+    // enforces that at CREATE time, refusing the constraint outright when the
+    // parent table is absent. It is declared here rather than assumed because
+    // the container is shared: a `users` left behind by another suite would
+    // satisfy the constraint on a developer machine and be absent on a clean
+    // one, so the fixture creates every table it depends on.
     ...userTables(dialect),
     ...registries,
     ...nextlyMetaTables(dialect),
