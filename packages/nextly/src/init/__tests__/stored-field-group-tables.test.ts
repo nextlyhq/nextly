@@ -13,12 +13,33 @@
  * registry that is present but unreadable need different answers, and only the
  * first may be guessed past.
  */
+import type { SQL } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/manifest";
 import { forgetFieldGroupStorageNames } from "../../domains/field-groups/storage/resolve-storage-names";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { readStoredFieldGroupTables } from "../reload-config";
+
+/**
+ * The identifiers a Drizzle statement addresses.
+ *
+ * `sql.identifier(name)` compiles to a `Name` chunk carrying the raw name, so
+ * this reads what the statement actually targets without rendering it to a
+ * dialect-specific string.
+ */
+function identifiersIn(statement: SQL): string[] {
+  const chunks = (statement as unknown as { queryChunks?: unknown[] })
+    .queryChunks;
+  if (!Array.isArray(chunks)) return [];
+  return chunks
+    .map(chunk =>
+      chunk !== null && typeof chunk === "object" && "value" in chunk
+        ? (chunk as { value: unknown }).value
+        : undefined
+    )
+    .filter((value): value is string => typeof value === "string");
+}
 
 /**
  * A SQLite adapter double.
@@ -40,8 +61,20 @@ function adapterDouble(opts: {
       if (opts.catalogFails) throw new Error("catalog unavailable");
       return opts.catalog ?? [];
     }),
-    queryStatement: vi.fn(async () => {
+    // 🔴 The double REFUSES a table it does not hold, which is what makes the
+    // assertions below about *which* registry was addressed real rather than
+    // decorative. A permissive double would answer the same rows whatever name
+    // the code asked for, so a regression that queried the legacy or derived
+    // name would pass unnoticed — the exact shape of hollow test this suite
+    // exists to prevent.
+    queryStatement: vi.fn(async (statement: SQL) => {
       if (opts.readFails) throw new Error("registry read failed");
+      const addressed = identifiersIn(statement);
+      const held = opts.catalog ?? [];
+      const target = addressed.find(name => name.startsWith("dynamic_"));
+      if (target !== undefined && !held.includes(target)) {
+        throw new Error(`no such table: ${target}`);
+      }
       return opts.rows ?? [];
     }),
   };
@@ -61,20 +94,39 @@ describe("readStoredFieldGroupTables", () => {
     expect(stored.tables.get("hero")).toBe("fg_hero");
   });
 
-  it("reads the migrated registry when that is the one present", async () => {
+  it("addresses the migrated registry when that is the one present", async () => {
     forgetFieldGroupStorageNames();
     const adapter = adapterDouble({
       catalog: [MIGRATION_TARGET.registryTable],
       rows: [{ slug: "hero", table_name: "fg_hero" }],
     });
 
-    await readStoredFieldGroupTables(adapter as never);
+    const stored = await readStoredFieldGroupTables(adapter as never);
 
-    // One statement, against the registry the catalog reported. The name is not
-    // asserted from the SQL text: the statement is a Drizzle object, and the
-    // resolution it used is what the previous test already pins.
-    expect(adapter.queryStatement).toHaveBeenCalledTimes(1);
-    expect(adapter.listTables).toHaveBeenCalled();
+    // The identifier the statement targets, not merely that a statement ran.
+    const addressed = identifiersIn(
+      adapter.queryStatement.mock.calls[0]?.[0] as SQL
+    );
+    expect(addressed).toContain(MIGRATION_TARGET.registryTable);
+    expect(addressed).not.toContain(STORAGE_FORMAT.registryTable);
+    expect(stored.usable).toBe(true);
+  });
+
+  it("addresses the legacy registry when that is the one present", async () => {
+    forgetFieldGroupStorageNames();
+    const adapter = adapterDouble({
+      catalog: [STORAGE_FORMAT.registryTable],
+      rows: [{ slug: "hero", table_name: "comp_hero" }],
+    });
+
+    const stored = await readStoredFieldGroupTables(adapter as never);
+
+    const addressed = identifiersIn(
+      adapter.queryStatement.mock.calls[0]?.[0] as SQL
+    );
+    expect(addressed).toContain(STORAGE_FORMAT.registryTable);
+    expect(addressed).not.toContain(MIGRATION_TARGET.registryTable);
+    expect(stored.tables.get("hero")).toBe("comp_hero");
   });
 
   // A fresh database. Deriving `comp_*` names is correct here, so the caller is
@@ -102,6 +154,10 @@ describe("readStoredFieldGroupTables", () => {
     const stored = await readStoredFieldGroupTables(adapter as never);
 
     expect(stored.usable).toBe(false);
+    // The cause travels with the verdict, so the caller's log can name it. A
+    // deferral whose reason is lost tells an operator only that something went
+    // wrong, on the one path that skips an entire reload.
+    expect(stored.reason).toContain("registry read failed");
   });
 
   // Not even the catalog could answer, so absence was never established. The

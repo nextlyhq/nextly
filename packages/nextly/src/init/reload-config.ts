@@ -1022,6 +1022,13 @@ export interface StoredFieldGroupTables {
    * may guess.
    */
   usable: boolean;
+  /**
+   * Why the read failed, when it did.
+   *
+   * Present only on the failure path, and carried so the caller's log can name
+   * the cause rather than only the symptom.
+   */
+  reason?: string;
 }
 
 /**
@@ -1054,8 +1061,17 @@ export async function readStoredFieldGroupTables(
       }
     }
     return { tables, usable: true };
-  } catch {
-    return { tables, usable: (await registryIsAbsent(adapter)) === true };
+  } catch (error) {
+    // The reason travels with the verdict. Without it the caller can only say
+    // "could not read stored field-group table names", which tells an operator
+    // nothing about whether they are looking at a permission problem, a dropped
+    // connection, or a malformed row — and this is the failure that defers a
+    // whole reload, so it is the one worth diagnosing.
+    return {
+      tables,
+      usable: (await registryIsAbsent(adapter)) === true,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -1343,8 +1359,9 @@ async function applyReload(opts?: {
   const skippedComponentSlugs = new Set<string>();
   if (!storedNamesUsable) {
     logger?.warn(
-      "[Nextly HMR] Could not read stored field-group table names; " +
-        "deferring the field-group apply to the next reload."
+      "[Nextly HMR] Could not read stored field-group table names" +
+        (stored.reason ? `: ${stored.reason}` : "") +
+        ". Deferring the field-group apply to the next reload."
     );
   }
 
