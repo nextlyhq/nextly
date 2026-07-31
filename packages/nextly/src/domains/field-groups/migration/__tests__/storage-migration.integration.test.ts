@@ -45,6 +45,7 @@ import { dynamicSinglesMysql } from "../../../../schemas/dynamic-singles/mysql";
 import { dynamicSinglesPg } from "../../../../schemas/dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "../../../../schemas/dynamic-singles/sqlite";
 import { nextlyMetaTables } from "../../../../schemas/nextly-meta";
+import { userTables } from "../../../../schemas/users";
 import { schemaEventsTables } from "../../../../schemas/schema-events";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { versionsTables } from "../../../../schemas/versions";
@@ -120,6 +121,14 @@ function systemTablesFor(dialect: SupportedDialect): Record<string, unknown> {
             fieldGroups: dynamicFieldGroupsSqlite,
           };
   return {
+    // 🔴 `users` is here for a foreign key, not because the migration reads it:
+    // all three dynamic registries carry `created_by → users.id`. MySQL enforces
+    // that at CREATE time and refuses the constraint outright when the parent is
+    // absent. This suite passed for a while only because a leftover `users` from
+    // another suite happened to be sitting in the container — a fixture whose
+    // correctness depends on what ran before it is not a fixture, and it would
+    // have failed on CI's clean database.
+    ...userTables(dialect),
     ...registries,
     ...nextlyMetaTables(dialect),
     ...schemaEventsTables(dialect),
@@ -166,19 +175,38 @@ for (const entry of DIALECTS) {
     ];
 
     async function drop(...tables: string[]): Promise<void> {
-      // CASCADE on Postgres because several of these carry foreign keys to one
-      // another; two passes because SQLite has no CASCADE, so a table whose
-      // dependent goes in the first pass only becomes droppable in the second.
+      // Foreign keys make teardown order-dependent, and each dialect needs a
+      // different answer:
+      //
+      // - Postgres takes CASCADE, which settles it in one pass.
+      // - MySQL has no CASCADE and refuses to drop a parent while ANY child
+      //   references it — including a table this suite did not create. Ordering
+      //   cannot fix that, because the blocking child may not be ours to drop,
+      //   so foreign-key enforcement is suspended for the teardown instead.
+      //   This is a throwaway container by contract (`pnpm docker:test`).
+      // - SQLite needs neither, but takes a second pass for the same reason
+      //   Postgres takes CASCADE.
       const cascade = entry.dialect === "postgresql" ? " CASCADE" : "";
-      for (let pass = 0; pass < 2; pass += 1) {
-        for (const table of tables) {
-          try {
-            await adapter.executeQuery(
-              `DROP TABLE IF EXISTS ${q(table)}${cascade}`
-            );
-          } catch {
-            // Best-effort: a leftover from a failed run must not block the next.
+      if (entry.dialect === "mysql") {
+        await adapter.executeQuery("SET FOREIGN_KEY_CHECKS = 0");
+      }
+      try {
+        for (let pass = 0; pass < 2; pass += 1) {
+          for (const table of tables) {
+            try {
+              await adapter.executeQuery(
+                `DROP TABLE IF EXISTS ${q(table)}${cascade}`
+              );
+            } catch {
+              // Best-effort: a leftover from a failed run must not block the next.
+            }
           }
+        }
+      } finally {
+        // Restored even when a drop threw: leaving enforcement off would let a
+        // later suite in the same container write rows no constraint checks.
+        if (entry.dialect === "mysql") {
+          await adapter.executeQuery("SET FOREIGN_KEY_CHECKS = 1");
         }
       }
     }
