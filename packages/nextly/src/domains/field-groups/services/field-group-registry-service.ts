@@ -27,7 +27,7 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
-import { assertNoMigrationInFlight } from "../migration/sync-guard";
+import { withMigrationExcluded } from "../migration/sync-guard";
 
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
@@ -114,7 +114,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Refuse to change the registry while a storage migration is in flight.
+   * Run a registry mutation with a storage migration excluded for its duration.
    *
    * The migration renames a field group's table and moves the registry row
    * pointing at it as one step. An author changing `dbName` in that window
@@ -127,16 +127,27 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * covers which field groups existed when it was planned, so either one makes
    * a resume refuse the plan it is resuming.
    *
-   * Called before opening any transaction. The check reads through the adapter,
-   * which takes its own connection, so asking from inside one would wait for a
-   * second checkout and hang a pool sized to one.
+   * 🔴 The exclusion is **held**, not sampled. Reading the marker and then
+   * proceeding answers only whether a migration had started by the instant of
+   * the read; a mutation takes longer than that, and a run beginning immediately
+   * afterwards would plan against a registry this write is still changing — so
+   * the new row is absent from the manifest, or the update races the rename.
+   * This is the same reason `db:sync` holds the lock rather than checking it.
+   *
+   * `mayCreateLock` is false: the lock table is created by the migration, so its
+   * absence means no run has ever happened here and there is nothing to be
+   * excluded from. A write path must not issue DDL to find that out.
    */
-  private async assertMigrationNotInFlight(): Promise<void> {
-    await assertNoMigrationInFlight({
-      action: "field group change",
-      adapter: this.adapter,
-      logger: this.logger,
-    });
+  private async excludingMigration<T>(work: () => Promise<T>): Promise<T> {
+    return withMigrationExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: "field group change",
+        mayCreateLock: false,
+      },
+      work
+    );
   }
 
   async getComponentBySlug(
@@ -197,8 +208,13 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   async registerComponent(
     data: DynamicFieldGroupInsert
   ): Promise<DynamicFieldGroupRecord> {
+    return this.excludingMigration(() => this.registerComponentUnguarded(data));
+  }
+
+  private async registerComponentUnguarded(
+    data: DynamicFieldGroupInsert
+  ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Registering Component", { slug: data.slug });
-    await this.assertMigrationNotInFlight();
 
     const existing = await this.getComponentBySlug(data.slug);
     if (existing) {
@@ -323,8 +339,17 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     data: Partial<DynamicFieldGroupInsert>,
     options?: UpdateComponentOptions
   ): Promise<DynamicFieldGroupRecord> {
+    return this.excludingMigration(() =>
+      this.updateComponentUnguarded(slug, data, options)
+    );
+  }
+
+  private async updateComponentUnguarded(
+    slug: string,
+    data: Partial<DynamicFieldGroupInsert>,
+    options?: UpdateComponentOptions
+  ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
-    await this.assertMigrationNotInFlight();
 
     const existing = await this.getComponent(slug);
 
@@ -417,8 +442,11 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Delete a Component from the registry.
    */
   async deleteComponent(slug: string): Promise<void> {
+    return this.excludingMigration(() => this.deleteComponentUnguarded(slug));
+  }
+
+  private async deleteComponentUnguarded(slug: string): Promise<void> {
     this.logger.debug("Deleting Component", { slug });
-    await this.assertMigrationNotInFlight();
 
     const existing = await this.getComponent(slug);
 
