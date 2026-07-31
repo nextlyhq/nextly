@@ -55,6 +55,15 @@ import {
   type MigrationDirection,
 } from "./state";
 
+/**
+ * Stamped into every refusal this phase raises.
+ *
+ * Callers that treat a failed file migration as survivable have to tell the two
+ * apart, and matching on message text would let a reworded message quietly turn
+ * a fatal failure back into a tolerated one.
+ */
+export const FIELD_GROUP_MIGRATION_PHASE = "field-group-storage-migration";
+
 /** What a run did, for the caller to report. */
 export type MigrationOutcome =
   | { ran: false; reason: "already-migrated" | "nothing-to-migrate" }
@@ -105,7 +114,10 @@ export async function runFieldGroupMigration(
       throw NextlyError.serviceUnavailable({
         logMessage:
           "field-group migration cannot roll back: no record of what was applied",
-        logContext: { reason: "rollback has no recorded plan" },
+        logContext: {
+          phase: FIELD_GROUP_MIGRATION_PHASE,
+          reason: "rollback has no recorded plan",
+        },
       });
     }
   }
@@ -144,6 +156,7 @@ export async function runFieldGroupMigration(
             logMessage:
               "field-group migration cannot resume: the set of field groups changed since the interrupted run",
             logContext: {
+              phase: FIELD_GROUP_MIGRATION_PHASE,
               reason:
                 "the set of field groups changed since the interrupted run",
               recorded: state.plan.registryHash,
@@ -155,6 +168,7 @@ export async function runFieldGroupMigration(
           throw NextlyError.serviceUnavailable({
             logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
             logContext: {
+              phase: FIELD_GROUP_MIGRATION_PHASE,
               reason: "a run in the other direction is in flight",
               recorded: state.direction,
               requested: direction,
@@ -298,6 +312,7 @@ async function assertStorageComplete(args: {
     logMessage:
       "field-group migration will not settle: storage is not in the state the run claims",
     logContext: {
+      phase: FIELD_GROUP_MIGRATION_PHASE,
       reason: "structural verification failed after the steps ran",
       generation: args.generation,
       expected,

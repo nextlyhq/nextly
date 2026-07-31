@@ -368,19 +368,33 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
-      // Between the two phases, and that placement is load-bearing on both
-      // sides. After the core reconcile, because the migration's own marker
-      // lives in `nextly_meta` and its lock table has to exist before it can
-      // contend for anything. Before the user's files, because a committed
-      // migration may name a field-group table and this phase changes those
-      // names — running the files first would apply them against names that
-      // are about to move.
+      deps.logger.info("Phase 2: applying user migrations...");
+      applied = await runFiles({
+        adapter: deps.adapter,
+        db: deps.db,
+        dialect: deps.dialect,
+        migrationsDir: deps.migrationsDir,
+        step: deps.step,
+        logger: deps.logger,
+      });
+
+      // Last, and after the user's files rather than before them. A migration
+      // file is authored against the naming generation current when it was
+      // created, and `migrate:create` still generates field-group table names
+      // through `resolveComponentTableName` — so every file that exists at
+      // upgrade time names the pre-migration tables. Renaming first would make
+      // `ALTER TABLE comp_hero ...` fail on SQL that was valid when committed.
+      // Files written after this phase address the new names, and by then
+      // storage has already moved.
       //
-      // The field-group lock is taken inside this one. Nothing else in the
-      // codebase holds the two together, and everything that takes the
-      // field-group lock (db:sync, the HMR reload) takes it alone, so this
-      // ordering is the only one and cannot deadlock against a reverse.
-      deps.logger.info("Phase 2: migrating field group storage format...");
+      // Still after the core reconcile, because the marker lives in
+      // `nextly_meta` and the lock table has to exist before anything can
+      // contend for it.
+      //
+      // The field-group lock is taken inside this one. Everything else that
+      // takes it (db:sync, the HMR reload) takes it alone, so this is the only
+      // nesting and there is no reverse ordering to deadlock against.
+      deps.logger.info("Phase 3: migrating field group storage format...");
       // The CLI logger carries cosmetic helpers this does not need, so only the
       // four levels are forwarded. `info` goes to debug: the phase announces
       // itself above, and a run with nothing to do should not add noise.
@@ -396,16 +410,6 @@ export async function migrateCore(
         direction: "up",
       });
       storageMigrated = storage.ran;
-
-      deps.logger.info("Phase 3: applying user migrations...");
-      applied = await runFiles({
-        adapter: deps.adapter,
-        db: deps.db,
-        dialect: deps.dialect,
-        migrationsDir: deps.migrationsDir,
-        step: deps.step,
-        logger: deps.logger,
-      });
     },
     {
       mode: deps.lockMode ?? "fail-fast",

@@ -9,6 +9,8 @@
 
 import { resolve } from "node:path";
 
+import { FIELD_GROUP_MIGRATION_PHASE } from "../domains/field-groups/migration/run";
+
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
@@ -119,10 +121,42 @@ export async function runProdMigrationsIfEnabled(
     });
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
   } catch (err) {
+    // A failed FILE migration is survivable: each file applies in its own
+    // transaction, so the database is left at a clean boundary and the app can
+    // serve while an operator investigates. That is why this path swallows.
+    //
+    // A failed STORAGE migration is not. MySQL commits DDL as it is issued and
+    // the ledger rewrites commit per batch, so a failure there can leave tables
+    // half-renamed and rows half-rewritten. Serving against that state is worse
+    // than not booting: the read path treats a missing data table as empty
+    // content rather than as an error, so the failure would surface as silently
+    // absent content rather than as a stopped deploy.
+    if (isStorageMigrationFailure(err)) {
+      logger.error(
+        `[Nextly] Boot migrations failed while migrating field group storage: ${
+          err instanceof Error ? err.message : String(err)
+        }. Refusing to start: the database may be partially migrated. Run \`nextly migrate\` to finish or roll it back.`
+      );
+      throw err;
+    }
     logger.error(
       `[Nextly] Boot migrations failed: ${
         err instanceof Error ? err.message : String(err)
       }. The app will continue; run \`nextly migrate\` to resolve.`
     );
   }
+}
+
+/**
+ * Whether a boot-migration failure came from the storage-format phase.
+ *
+ * Matched on the marker the phase stamps into every refusal it raises rather
+ * than on message text, so a reworded message cannot quietly turn a fatal
+ * failure back into a survivable one.
+ */
+function isStorageMigrationFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const context = (error as { logContext?: unknown }).logContext;
+  if (typeof context !== "object" || context === null) return false;
+  return (context as { phase?: unknown }).phase === FIELD_GROUP_MIGRATION_PHASE;
 }
