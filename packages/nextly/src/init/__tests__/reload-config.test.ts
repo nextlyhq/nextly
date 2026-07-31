@@ -92,6 +92,8 @@ describe("reloadNextlyConfig", () => {
   function buildResolver(opts?: {
     /** Catalog listing the reload probes to tell absent from unreadable. */
     catalogTables?: string[];
+    /** Rows the field-group registry returns for `slug` / `table_name`. */
+    registryRows?: Array<{ slug: string; table_name: string }>;
     withAdapter?: boolean;
     allCollections?: Array<{
       slug: string;
@@ -149,6 +151,10 @@ describe("reloadNextlyConfig", () => {
             // that is indistinguishable from a database whose registry read
             // failed, which is the state the reload now refuses to guess past.
             listTables: vi.fn().mockResolvedValue(opts?.catalogTables ?? []),
+            // The stored `slug → table_name` rows. Read through the adapter's
+            // statement path so the three driver envelopes are normalised in
+            // one place; the double answers the normalised shape.
+            queryStatement: vi.fn().mockResolvedValue(opts?.registryRows ?? []),
           })
         : undefined,
       collectionRegistryService: {
@@ -1220,4 +1226,15 @@ describe("reloadNextlyConfig", () => {
       resetWebhookRecordingPolicy();
     });
   });
+
+  /**
+   * 🔴 The reload must address a field group's STORED table name.
+   *
+   * `resolveComponentTableName` answers what this release's creator WOULD name a
+   * table; the registry records what it is actually called. They differ for an
+   * author-chosen `dbName` and, after the storage migration, for every field
+   * group. Deriving the name makes the diff miss the populated table, read the
+   * component as new, and create an empty one beside it — silently, and looking
+   * exactly like content loss.
+   */
 });

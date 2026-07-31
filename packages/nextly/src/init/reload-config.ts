@@ -116,6 +116,9 @@ interface AdapterLike {
   // storage migration renames it, so the name is read from the catalog rather
   // than spelled here.
   listTables(): Promise<string[]>;
+  // The registry read goes through the adapter's statement path so the driver
+  // envelopes are normalised in one place rather than per caller.
+  queryStatement<T = Record<string, unknown>>(statement: SQL): Promise<T[]>;
   // Needed to provision the localized companion below: creating the table and adding
   // columns to it are both DDL, and the status backfill that accompanies a new `_status`
   // column is a write.
@@ -1004,37 +1007,56 @@ async function runReload(opts?: {
   }
 }
 
+/** What a reload knows about where its field groups are physically stored. */
+export interface StoredFieldGroupTables {
+  /** `slug` → the physical table name the registry records. */
+  tables: Map<string, string>;
+  /**
+   * Whether those names can be relied on.
+   *
+   * 🔴 The distinction this type exists for: a registry that is ABSENT means a
+   * fresh database, where deriving `comp_*` names is correct. A registry that
+   * is PRESENT but unreadable means the names are UNKNOWN, and deriving them
+   * addresses storage that is not there — which is how a reload creates an
+   * empty table beside the populated one it meant to edit. Only the first case
+   * may guess.
+   */
+  usable: boolean;
+}
+
 /**
- * Read `slug` and `table_name` from the field-group registry.
+ * The physical table name each field group is stored under.
  *
- * A Drizzle statement rather than the query builder: the builder resolves a
- * table through the schema registry, and the name to address here is the one
- * the catalog reports. Same reason the migration's own registry read is written
- * this way.
+ * Read rather than derived: `resolveComponentTableName` answers what this
+ * release's creator WOULD name a table, while the registry records what it is
+ * actually called. They differ for an author-chosen `dbName`, and after the
+ * storage migration for every field group.
+ *
+ * Issued through the adapter's statement path so the three driver envelopes are
+ * normalised in one place, and so an unrecognised shape is refused rather than
+ * reported as no rows.
  */
-async function runRegistrySelect(
-  db: unknown,
-  registryTable: string
-): Promise<Array<{ slug?: unknown; table_name?: unknown }>> {
-  const executor = db as {
-    execute?: (query: SQL) => Promise<unknown>;
-    all?: (query: SQL) => Promise<unknown>;
-  };
-  const statement = sql`SELECT ${sql.identifier("slug")}, ${sql.identifier(
-    "table_name"
-  )} FROM ${sql.identifier(registryTable)}`;
-  // SQLite's driver exposes `all`; Postgres and MySQL expose `execute` and wrap
-  // rows in a driver-specific envelope.
-  const result = await (executor.all
-    ? executor.all(statement)
-    : executor.execute?.(statement));
-  if (Array.isArray(result)) {
-    return result as Array<{ slug?: unknown; table_name?: unknown }>;
+export async function readStoredFieldGroupTables(
+  adapter: AdapterLike
+): Promise<StoredFieldGroupTables> {
+  const tables = new Map<string, string>();
+  try {
+    const registryTable = await resolveFieldGroupRegistryName(adapter);
+    const rows = await adapter.queryStatement<{
+      slug?: unknown;
+      table_name?: unknown;
+    }>(
+      sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")} FROM ${sql.identifier(registryTable)}`
+    );
+    for (const row of rows) {
+      if (typeof row.slug === "string" && typeof row.table_name === "string") {
+        tables.set(row.slug, row.table_name);
+      }
+    }
+    return { tables, usable: true };
+  } catch {
+    return { tables, usable: (await registryIsAbsent(adapter)) === true };
   }
-  const rows = (result as { rows?: unknown })?.rows;
-  return Array.isArray(rows)
-    ? (rows as Array<{ slug?: unknown; table_name?: unknown }>)
-    : [];
 }
 
 /**
@@ -1314,40 +1336,16 @@ async function applyReload(opts?: {
   // Best effort by design: a registry that cannot be read leaves every name
   // derived, which is exactly the behaviour of a database that has no registry
   // yet.
-  const storedComponentTables = new Map<string, string>();
+  const stored = await readStoredFieldGroupTables(adapter);
+  const storedComponentTables = stored.tables;
+  const storedNamesUsable = stored.usable;
   /** Field groups left out of this reload because their storage is unknown. */
   const skippedComponentSlugs = new Set<string>();
-  // 🔴 A failed probe is NOT evidence of a fresh database.
-  //
-  // Deriving `comp_*` names because the lookup threw is only sound when the
-  // registry is genuinely absent. If it exists and the read merely failed —
-  // a transient error, a denied catalog query — the derived names address
-  // tables that are not there, and the reload goes on to create empty ones
-  // beside the populated tables it meant to edit. So the two cases are
-  // separated: absent means derive, unreadable means skip the component apply
-  // and let the next reload retry.
-  let storedNamesUsable = true;
-  try {
-    const registryTable = await resolveFieldGroupRegistryName(adapter);
-    // Drizzle statement rather than an interpolated string: database access in
-    // product code goes through Drizzle, and the query builder is not usable
-    // here because it resolves a table through the schema registry, which knows
-    // this table under whichever name it was registered with.
-    const db = adapter.getDrizzle<{ execute?: unknown }>();
-    const rows = await runRegistrySelect(db, registryTable);
-    for (const row of rows) {
-      if (typeof row.slug === "string" && typeof row.table_name === "string") {
-        storedComponentTables.set(row.slug, row.table_name);
-      }
-    }
-  } catch {
-    storedNamesUsable = (await registryIsAbsent(adapter)) === true;
-    if (!storedNamesUsable) {
-      logger?.warn(
-        "[Nextly HMR] Could not read stored field-group table names; " +
-          "deferring the field-group apply to the next reload."
-      );
-    }
+  if (!storedNamesUsable) {
+    logger?.warn(
+      "[Nextly HMR] Could not read stored field-group table names; " +
+        "deferring the field-group apply to the next reload."
+    );
   }
 
   for (const c of newConfig.fieldGroups ?? []) {
