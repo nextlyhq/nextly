@@ -46,6 +46,7 @@ import {
 } from "../../../services/access";
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
+import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -2449,35 +2450,7 @@ export class SingleQueryService extends BaseService {
     // collection's fields. Enforcement is opt-in because a caller that has not
     // supplied a user is indistinguishable from an anonymous one here, and
     // enforcing for the former strips protected fields from everybody.
-    access: {
-      enforceFieldAccess?: boolean;
-      /**
-       * Evaluate the target collection's own read rules even when field
-       * redaction is off, so the authorization view is not shown a row the
-       * response will withhold.
-       */
-      enforceCollectionAccess?: boolean;
-      user?: UserContext;
-      overrideAccess?: boolean;
-      /**
-       * The caller's authenticated scope. A scoped API key is judged on its
-       * own grant, so it must not inherit its owner's super-admin bypass when
-       * a related row's collection rules are evaluated.
-       */
-      authenticatedScope?: AuthenticatedScope;
-      withheldByAccess?: Set<string>;
-      /**
-       * The language this read resolved to, so a target collection's read rule
-       * can be applied when its predicate names a localized field of that
-       * collection. Absent leaves such a rule withholding its rows.
-       */
-      locale?: string;
-      /**
-       * The caller's Draft/Published intent, when they asked to see everything.
-       * Only `"all"` propagates; see the relationship service for why.
-       */
-      status?: "all";
-    } = {},
+    access: RelatedRowReadContext = {},
     /**
      * Propagate expansion failures instead of returning the document
      * unexpanded. A response is better served incomplete than not at all, but a
@@ -2528,7 +2501,7 @@ export class SingleQueryService extends BaseService {
           // rather than having them stripped as if nobody were asking.
           enforceFieldAccess: access.enforceFieldAccess,
           enforceCollectionAccess: access.enforceCollectionAccess,
-          user: access.user as Record<string, unknown> | undefined,
+          user: access.user,
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,

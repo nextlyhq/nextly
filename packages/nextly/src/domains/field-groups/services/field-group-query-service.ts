@@ -1,17 +1,15 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import type { CompanionSchema } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
+import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
-import type { TargetReadPolicy } from "../../collections/services/collection-relationship-service";
 import {
   isMissingCompanionTableError,
   populateCompanionFields,
@@ -40,59 +38,14 @@ import {
  * The caller context a component's related rows are judged against, mirroring
  * the relationship service's own options so it can be forwarded unchanged.
  */
-export interface ComponentReadAccess {
-  enforceFieldAccess?: boolean;
-  user?: Record<string, unknown>;
-  overrideAccess?: boolean;
-  /**
-   * The caller's authenticated scope, forwarded to relationship expansion.
-   *
-   * A relationship reached through a field group is populated by the same
-   * service a top-level one is, and a scoped API key must not inherit its
-   * owner's super-admin bypass there either.
-   */
-  authenticatedScope?: AuthenticatedScope;
-  /**
-   * Ids withheld because a target collection refused the caller, so a
-   * completeness check can tell a refusal from a load that failed.
-   */
-  withheldByAccess?: Set<string>;
-  /**
-   * Evaluate the target collection's own read rules even when field redaction
-   * is off, so an authorization view is not shown a row the response withholds.
-   */
-  enforceCollectionAccess?: boolean;
-  /**
-   * Target read policies resolved during this population.
-   *
-   * Component rows are expanded concurrently, and rows pointing at the same
-   * target would otherwise each resolve its policy — so one map is shared
-   * across them all rather than created per row.
-   */
-  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
-  /**
-   * Companion schemas resolved during this population, shared for the same
-   * reason the policy map is: component rows are expanded concurrently and rows
-   * pointing at the same target would otherwise each re-read its metadata.
-   */
-  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
-  /**
-   * The caller's Draft/Published intent, forwarded when they asked to see
-   * everything. Only `"all"` propagates; see the relationship service for why.
-   */
-  status?: "all";
-  /**
-   * The language the surrounding read resolved to, forwarded so a target
-   * collection's read rule can be applied when it filters on a localized field
-   * of that collection.
-   *
-   * Separate from this population's own `locale`, which decides which
-   * translation of the COMPONENT's fields to overlay. The two are the same
-   * language on every current caller, but they answer different questions and a
-   * component read that resolved no locale must not silently borrow one.
-   */
-  locale?: string;
-}
+/**
+ * The caller context a component's related rows are judged against.
+ *
+ * A relationship reached through a field group is populated by the same service
+ * a top-level one is, so it carries the same context rather than a parallel
+ * declaration of it.
+ */
+export type ComponentReadAccess = RelatedRowReadContext;
 
 export interface PopulateComponentDataParams {
   /** The entry to populate with component data */

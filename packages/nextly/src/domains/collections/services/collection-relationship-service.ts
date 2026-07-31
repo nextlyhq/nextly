@@ -16,7 +16,6 @@ import {
   AccessControlService,
   DEFAULT_OWNER_FIELD,
 } from "../../../services/access";
-import type { CollectionAccessRules } from "../../../services/access";
 import {
   describeUntranslatableConstraint,
   stripNoOpConstraintMembers,
@@ -34,6 +33,10 @@ import {
   buildWhereClause,
   type WhereFilter,
 } from "../../../services/collections/query-operators";
+import type {
+  RelatedRowReadContext,
+  TargetReadPolicy,
+} from "../../../services/collections/related-row-read-context";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
@@ -74,97 +77,14 @@ export const MAX_RELATIONSHIP_DEPTH = 5;
  * helpers need only these two of its fields, and passing the whole options bag
  * down would let a depth value leak into a redaction decision.
  */
-interface RelatedRowAccess {
-  /**
-   * Whether to evaluate the target collection's field read rules at all.
-   *
-   * Off unless a caller opts in, because "no user supplied" and "anonymous
-   * caller" are indistinguishable here and they demand opposite outcomes: an
-   * anonymous REST read must be judged (and denied), while an expansion entry
-   * point that simply has not been given the caller yet must keep behaving as
-   * it does today rather than start stripping fields from everyone. Every entry
-   * point opts in as its own caller forwarding lands.
-   */
-  enforceFieldAccess?: boolean;
-  /**
-   * Evaluate the TARGET collection's own read rules, independently of whether
-   * this caller redacts fields. A Single's authorization view wants the second
-   * without the first: its rule must read real field values, and must still not
-   * be shown a row the response will withhold.
-   */
-  enforceCollectionAccess?: boolean;
-  user?: Record<string, unknown>;
-  overrideAccess?: boolean;
-  /**
-   * The caller's authenticated scope. A scoped API key is judged on its OWN
-   * stamped grant, never on its owner's roles, so the super-admin bypass and
-   * the owner predicate both have to know about one.
-   */
-  authenticatedScope?: AuthenticatedScope;
-  /**
-   * Ids withheld because the target collection's rules refused this caller.
-   *
-   * A caller that checks its expansion for completeness cannot otherwise tell
-   * a deliberate refusal from a load that failed, and would report the first
-   * as evidence that went missing.
-   */
-  withheldByAccess?: Set<string>;
-  /**
-   * Target read policies already resolved during this expansion, so a
-   * relationship holding many references reads its collection's metadata once
-   * instead of once per value.
-   */
-  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
-  /**
-   * Companion schemas already looked up during this expansion, for the same
-   * reason {@link RelatedRowAccess.targetPolicies} exists.
-   *
-   * Loading one costs a collection-metadata read even though the built table is
-   * itself cached, and a `hasMany` relationship on the single-entry path
-   * confirms one reference at a time — so resolving per confirmation turns a
-   * relationship with hundreds of values into hundreds of metadata reads.
-   * Populated only when a rule actually needs a companion filter, so a target
-   * without one pays nothing.
-   */
-  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
-  /**
-   * The caller's Draft/Published intent, when they asked to see everything.
-   *
-   * Deliberately narrow: `"all"` is the only value that propagates into
-   * expansion. It is a statement about the caller's trust — the admin sends it
-   * on every read for exactly that reason — whereas a concrete `draft` or
-   * `published` names the lifecycle of the collection being read and says
-   * nothing about what that collection points at. Absent means a related row is
-   * filtered to the published default, which is what a direct read of it would
-   * do.
-   */
-  status?: "all";
-  /**
-   * The language the surrounding read resolved to, used when a target
-   * collection's read rule filters on a localized field.
-   *
-   * Already resolved by the caller — the requested locale, or the default when
-   * none was asked for — because resolving it needs the localization config and
-   * this service has none. Absent means no companion filter can be built, so
-   * such a rule withholds its rows.
-   *
-   * This does NOT make expansion return a related row's translated values: a
-   * related row is still read from its main table. It decides only which
-   * language a rule's predicate is evaluated against.
-   */
-  locale?: string;
-}
-
-/** A target collection's read policy, as one expansion needs it. */
-export interface TargetReadPolicy {
-  rules: CollectionAccessRules | undefined;
-  /**
-   * Whether the collection has Draft/Published, so a read of it can resolve the
-   * status its rows are filtered by. Taken from the same record the rules come
-   * from rather than looked up separately.
-   */
-  hasStatus: boolean;
-}
+/**
+ * The caller a related row is fetched, judged and redacted for.
+ *
+ * The shared shape, carried unchanged by every layer that can reach a related
+ * row. Kept as a local name because this service refers to it constantly and
+ * "access" reads better at those call sites than the full noun.
+ */
+type RelatedRowAccess = RelatedRowReadContext;
 
 /**
  * Options for relationship expansion.
@@ -1003,6 +923,20 @@ export type RelationshipDbExecutor = {
   execute?(query: unknown): Promise<unknown>;
 };
 
+// The columns a related-row read reaches for on a target's table.
+//
+// A dynamic collection's Drizzle table is built at runtime from stored field
+// metadata, so there is no compile-time type for it and the loader hands back
+// an untyped value. Naming the two columns that are actually read keeps those
+// accesses checked, and keeps the rest of the table opaque rather than
+// asserting a shape it may not have: `status` is optional because a collection
+// without Draft/Published has no such column, and `id` is `unknown` because it
+// is only ever handed to Drizzle as a column reference, never read as a value.
+type TargetTableColumns = {
+  id: unknown;
+  status?: unknown;
+};
+
 export class CollectionRelationshipService extends BaseService {
   /**
    * Decides whether a caller may read a TARGET collection at all.
@@ -1099,8 +1033,7 @@ export class CollectionRelationshipService extends BaseService {
    */
   private async resolveTargetStatusValue(
     targetCollection: string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any,
+    schema: TargetTableColumns,
     access: RelatedRowAccess
   ): Promise<string | undefined> {
     if (isSystemEntity(targetCollection)) return undefined;
@@ -1537,8 +1470,7 @@ export class CollectionRelationshipService extends BaseService {
    */
   private async buildTargetLocalizedContext(
     targetCollection: string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any,
+    schema: TargetTableColumns,
     access: RelatedRowAccess,
     constraint: Record<string, unknown>,
     /** The status a read of this target resolves to, or undefined for none. */
