@@ -333,10 +333,10 @@ for (const entry of DIALECTS) {
      * under its legacy name — `MIGRATION_TARGET.columnType` appears nowhere
      * outside the migration itself — so the typed path projects
      * `_component_type` and fails outright against storage this migration has
-     * renamed. That is a real gap between B1 and B2, recorded as such;
-     * asserting through it here would conflate "the association survived" with
-     * "the runtime can read the new column", which are two different questions
-     * with two different owners.
+     * renamed. Asserting through it would therefore fail for a reason this
+     * test is not about, conflating "the association survived the rename" with
+     * "the runtime schema addresses the migrated discriminator". Those are
+     * separate properties and this function isolates the first.
      */
     async function resolveEmbedded(args: {
       table: string;
