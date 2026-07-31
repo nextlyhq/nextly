@@ -72,6 +72,29 @@ const DEFAULT_KINDS: readonly DocumentKind[] = ["page"];
 const MAX_REPORTED_ISSUES = 20;
 
 /**
+ * Checks this validator never reports, in either mode, because it holds nothing
+ * to judge them against.
+ *
+ * Strict mode promotes five preservable-but-unknown checks to errors, and two of
+ * them compare a name against reference data supplied by the caller:
+ * `unknown-breakpoint` against the site's breakpoint set, `unknown-node-type`
+ * against the block registry. Neither is available here — the breakpoint set is
+ * site-level storage the engine deliberately never reads, and the registry holds
+ * none of the built-in blocks.
+ *
+ * Promoting a check whose reference data is absent does not enforce anything; it
+ * rejects everything. Every styled document names a breakpoint, so against an
+ * empty set every one of them is "unknown" and no styled page could be
+ * published. Dropping them here keeps the two checks that need nothing external
+ * — a duplicated HTML id and an unrecognized document kind — meaningful on
+ * publish, and leaves these to become errors when their data exists.
+ */
+const UNJUDGEABLE_WITHOUT_SITE_DATA = new Set([
+  "unknown-breakpoint",
+  "unknown-node-type",
+]);
+
+/**
  * Validate one blocks field value. Returns issues addressed to `path`, the
  * field's own location, because the admin renders a blocks field as a single
  * control — the position inside the document travels in the message.
@@ -113,7 +136,11 @@ export function validateBlocksValue(
   const documentIssues = validate(doc, {
     breakpoints: NO_BREAKPOINTS,
     mode,
-  }).filter(issue => issue.severity === "error");
+  }).filter(
+    issue =>
+      issue.severity === "error" &&
+      !UNJUDGEABLE_WITHOUT_SITE_DATA.has(issue.code)
+  );
 
   for (const issue of documentIssues) {
     issues.push({
