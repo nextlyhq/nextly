@@ -52,26 +52,30 @@ export interface BlockRegistrationService {
 }
 
 /**
- * Empty the block registry for a fresh boot.
+ * Build the service the page builder contributes.
  *
- * The registry is pinned to `globalThis` and outlives a config reload, so
- * without this the second boot re-registers definitions that are already there
- * and the engine refuses them as collisions — and definitions from a plugin
- * that has since been removed would linger indefinitely.
+ * The registry is emptied here, at the moment the first contribution of a boot
+ * is about to be made, rather than earlier. That placement is load-bearing in
+ * both directions:
  *
- * Called from the page builder's `setup`, which runs before any plugin's `init`
- * and runs whether or not anything contributes. Resetting inside the service
- * factory instead would miss the case that matters most: when the last
- * contributor is removed, nothing resolves the service, so a lazy reset never
- * happens and exactly the stale definitions that should disappear are the ones
- * that survive.
+ * - Not in the page builder's `init`, because init order is not fixed: a
+ *   contributor whose init ran first would have its blocks wiped by a later
+ *   clear.
+ * - Not in `setup`, which is the one hook a config reload DOES re-run. A reload
+ *   never goes back through `registerServices`, so no `init` runs afterwards to
+ *   repopulate — clearing there empties the registry for the rest of the
+ *   process, and contributed blocks disappear on the first unrelated save.
+ *
+ * This factory is memoized per boot, so the reset happens exactly once, in the
+ * same lifecycle as every registration that follows it.
+ *
+ * The cost is that a contributor removed mid-process leaves its blocks behind:
+ * with nothing resolving this service, nothing clears them. That is the smaller
+ * problem — the registry lives on `globalThis`, so it does not outlive the
+ * process and a restart begins empty.
  */
-export function resetBlockRegistry(): void {
-  clearBlocks();
-}
-
-/** Build the service the page builder contributes. */
 export function createBlockRegistrationService(): BlockRegistrationService {
+  clearBlocks();
   return {
     register(definitions, source) {
       const list = Array.isArray(definitions) ? definitions : [definitions];
