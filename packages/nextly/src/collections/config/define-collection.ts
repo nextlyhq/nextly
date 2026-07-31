@@ -770,14 +770,21 @@ export interface CollectionConfig {
    * written inside the same transaction as the write. Omitted = unversioned
    * (zero cost).
    *
-   * Reserved (accepted but NOT yet enforced): the `drafts`, `autosave`, and
-   * `maxPerDoc` retention settings on {@link VersionsConfig} are parsed and
-   * persisted for forward compatibility, but the draft/publish split, autosave
-   * coalescing, and retention pruning are not wired up yet, so at this stage
-   * enabling versioning is capture/history only regardless of those settings.
-   * The deprecated `status: true` alias likewise does not yet drive a version
-   * draft lifecycle; use the separate `status` option for the draft/published
-   * column.
+   * The draft/publish split is active when the collection sets `status: true`
+   * and versioning resolves `drafts.enabled` to true (`versions: true`, where
+   * drafts default on, or `versions: { drafts: true }`; `versions: { drafts:
+   * false }` and `status: true` on its own stay history-only). A status-less
+   * update to a currently published document is then stored as a single
+   * coalesced working draft in `nextly_versions` and the live row is left
+   * unchanged instead of overwriting the published content; a later publish
+   * promotes that draft onto the live row. The split additionally requires the
+   * collection to be non-localized, every reachable component schema to resolve
+   * and be non-localized, and no reachable field to be a password; otherwise a
+   * status-less write goes straight to the live row as before.
+   *
+   * Still accepted but NOT yet enforced: `autosave` coalescing and the
+   * `maxPerDoc` retention pruning on {@link VersionsConfig} are parsed and
+   * persisted for forward compatibility.
    *
    * @default undefined (unversioned)
    */

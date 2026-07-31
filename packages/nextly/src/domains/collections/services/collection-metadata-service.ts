@@ -716,7 +716,32 @@ export class CollectionMetadataService extends BaseService {
 
         if (this.isDevelopment()) {
           try {
-            await this.fileManager.runMigration(updateArtifacts.migrationSQL);
+            // The file is what a fresh database will replay; this is what THIS one needs. They
+            // differ only where unattended provisioning left the local schema in a shape no
+            // migration history produces, and running the file here would then fail on a column
+            // that is already present.
+            await this.fileManager.runMigration(
+              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
+            );
+            // The companion may have just been dropped or reshaped by that migration, and a
+            // `ready` verdict outlives the table it describes: for up to its TTL, concurrent
+            // requests on this same process would keep querying a relation that is gone instead of
+            // reading the restored main-table values. Forgotten unconditionally — the verdict is
+            // re-resolved on demand, so discarding one that was still valid costs a probe, while
+            // keeping one that is not costs correctness. The dispatcher disable paths already do
+            // this; the metadata path drops through `runMigration` and did not.
+            {
+              const existing = await this.collectionService.getCollection(
+                params.collectionName
+              );
+              const { forgetCompanionReadiness } = await import(
+                "../../i18n/runtime/companion-readiness"
+              );
+              forgetCompanionReadiness(
+                this.adapter,
+                `${existing.tableName}_locales`
+              );
+            }
             // Get collection to access table name for verification
             const existingCollection =
               await this.collectionService.getCollection(params.collectionName);

@@ -221,6 +221,12 @@ export class CollectionEntryService extends BaseService {
      * query service which maps it to a SQL predicate.
      */
     status?: "published" | "draft" | "all";
+    /**
+     * Opt in to the working-draft overlay (draft/published split): a trusted
+     * editor read returns the pending working draft in place of the live row.
+     * Forwarded to the query service, which gates it on update trust.
+     */
+    includeWorkingDraft?: boolean;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
@@ -548,6 +554,21 @@ export class CollectionEntryService extends BaseService {
     const result = await this.mutationService.deleteEntry(params);
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
+  }
+
+  /**
+   * Resolve this collection's localized companion verdicts on the pooled connection.
+   *
+   * Call it BEFORE opening a transaction whose body uses the `*InTransaction` methods below.
+   * Those cannot do it themselves: resolving issues a query, a query against a missing relation
+   * aborts the whole transaction on PostgreSQL, and a pooled probe taken while a transaction is
+   * open waits for a connection that transaction will not release.
+   *
+   * Skipping it throws nothing. The write commits and its durable version snapshot and outbound
+   * event silently omit every localized component value.
+   */
+  async warmLocalizedReadiness(collectionName: string): Promise<void> {
+    return this.mutationService.warmLocalizedReadiness(collectionName);
   }
 
   async createEntryInTransaction(

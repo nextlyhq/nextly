@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  buildDefaultLocaleRestoreStatements,
   buildLocalizationDownSql,
   buildLocalizationDownStatements,
 } from "./generate-down";
@@ -23,12 +24,52 @@ describe("buildLocalizationDownSql", () => {
     );
   });
 
-  it("restores the default-locale value back onto the main table", () => {
+  it("restores each parent from one row, preferring the default locale", () => {
+    // The default is a preference rather than a filter, because this statement runs immediately
+    // before the companion is archived and DROPPED: a parent skipped for having no default-locale
+    // row would keep its pre-localization value while its actual content left with the table.
+    // Ranked and limited to one row, so every column comes from the same translation.
     expect(buildLocalizationDownSql(spec)).toContain(
       `UPDATE "dc_pages" SET "title" = (SELECT "title" FROM "dc_pages_locales" ` +
         `WHERE "dc_pages_locales"."_parent" = "dc_pages"."id" ` +
-        `AND "dc_pages_locales"."_locale" = 'en')`
+        `ORDER BY ("dc_pages_locales"."_locale" = 'en') DESC, ` +
+        `"dc_pages_locales"."_locale" ASC LIMIT 1)`
     );
+    // Guarded on the parent having any row at all, so one that never had a translation is left
+    // alone rather than blanked.
+    expect(buildLocalizationDownSql(spec)).toContain(
+      `WHERE EXISTS (SELECT 1 FROM "dc_pages_locales" ` +
+        `WHERE "dc_pages_locales"."_parent" = "dc_pages"."id")`
+    );
+  });
+
+  it("carries the publishing state back with the values it restores", () => {
+    // Publishing is per locale while an entity is localized, so a row published only under a
+    // non-default language holds that state on its companion row alone. This migration drops the
+    // companion immediately afterwards, so a restore that moved the content without the state it
+    // was published under would put a draft in front of the public — or take live content down —
+    // with nothing left to correct it from.
+    const statements = buildLocalizationDownStatements(spec, {
+      restoreStatus: true,
+    });
+    expect(statements.join("\n")).toContain(
+      `"status" = (SELECT "_status" FROM "dc_pages_locales" ` +
+        `WHERE "dc_pages_locales"."_parent" = "dc_pages"."id" ` +
+        `ORDER BY ("dc_pages_locales"."_locale" = 'en') DESC, ` +
+        `"dc_pages_locales"."_locale" ASC LIMIT 1)`
+    );
+  });
+
+  it("does not derive the status restore from the desired shape", () => {
+    // `spec.status` is what the collection is being saved AS. A save that disables localization
+    // and turns Draft/Published on at once would otherwise read a `_status` the old companion
+    // never carried, into a `status` main has not been given yet — the disable runs the companion
+    // transition before the shared ALTER. Only the caller's physical verdict enables it.
+    const desiresStatus = { ...spec, status: true };
+    expect(buildLocalizationDownSql(desiresStatus)).not.toContain(`"_status"`);
+    expect(
+      buildLocalizationDownStatements(desiresStatus).join("\n")
+    ).not.toContain(`"_status" `);
   });
 
   it("archives non-default-locale translations before dropping", () => {
@@ -83,5 +124,43 @@ describe("buildLocalizationDownStatements when main still carries the column", (
     const statements = buildLocalizationDownStatements(spec);
 
     expect(statements.some(s => s.includes(`ADD COLUMN "title"`))).toBe(true);
+  });
+});
+
+describe("buildDefaultLocaleRestoreStatements", () => {
+  const spec = {
+    dialect: "postgresql" as const,
+    mainTable: "dc_posts",
+    companionTable: "dc_posts_locales",
+    defaultLocale: "en",
+  };
+
+  it("restores every column in one statement", () => {
+    // Several statements can land half-applied: one failing after earlier ones committed leaves
+    // main carrying a mixture of restored and pre-localization values, with no record that a
+    // restore was attempted. The app then serves that mixture and accepts edits on it, and the
+    // next pass overwrites them from the now-stale companion.
+    const statements = buildDefaultLocaleRestoreStatements(spec, [
+      "title",
+      "body",
+      "excerpt",
+    ]);
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain('"title" = (SELECT "title"');
+    expect(statements[0]).toContain('"body" = (SELECT "body"');
+    expect(statements[0]).toContain('"excerpt" = (SELECT "excerpt"');
+  });
+
+  it("guards on the default-locale row existing", () => {
+    // Without it a row authored only in another language assigns SQL NULL, so the restore blanks
+    // the main column instead of leaving it alone. There is nothing to restore for such a row.
+    const [statement] = buildDefaultLocaleRestoreStatements(spec, ["title"]);
+
+    expect(statement).toContain("WHERE EXISTS (SELECT 1 FROM");
+  });
+
+  it("emits nothing when there is nothing to restore", () => {
+    expect(buildDefaultLocaleRestoreStatements(spec, [])).toEqual([]);
   });
 });

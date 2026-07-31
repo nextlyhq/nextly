@@ -37,6 +37,7 @@ describe("populateCompanionFields (real SQLite)", () => {
     const rows: Record<string, unknown>[] = [{ id: "p1" }, { id: "p2" }];
 
     await populateCompanionFields({
+      readiness: "ready",
       db: db as never,
       companionTable,
       localizedFields: [{ name: "body", column: "body" }],
@@ -55,6 +56,7 @@ describe("populateCompanionFields (real SQLite)", () => {
     const rows: Record<string, unknown>[] = [{ id: "p2" }];
 
     await populateCompanionFields({
+      readiness: "ready",
       db: db as never,
       companionTable,
       localizedFields: [{ name: "body", column: "body" }],
@@ -88,73 +90,60 @@ describe("populateCompanionFields (real SQLite)", () => {
     };
   }
 
-  it("swallows a missing-table read error even in strict mode", async () => {
+  it("does not touch the database at all when the companion is not ready", async () => {
+    // Deciding existence by running the join and catching the failure is free on SQLite and
+    // MySQL and marks a PostgreSQL transaction aborted — and several of these reads run inside the
+    // caller's write transaction. A db that rejects every query stands in for that: if anything is
+    // issued at all, this rejects.
     const rows: Record<string, unknown>[] = [{ id: "p1" }];
     await populateCompanionFields({
-      db: rejectingDb(new Error("no such table: dc_pages_locales")) as never,
+      db: rejectingDb(new Error("should never be issued")) as never,
       companionTable,
       localizedFields: [{ name: "body", column: "body" }],
       rows,
       localeChain: ["en"],
-      strict: true,
+      readiness: "pre-migration",
     });
-    // The unmigrated-table case is tolerated: the row is left untouched so the
-    // main-table value stands.
+    // Left untouched, so the main table's value stands.
     expect(rows[0]).not.toHaveProperty("body");
   });
 
-  it("propagates a non-missing-table read error in strict mode", async () => {
-    await expect(
-      populateCompanionFields({
-        db: rejectingDb(new Error("deadlock detected")) as never,
-        companionTable,
-        localizedFields: [{ name: "body", column: "body" }],
-        rows: [{ id: "p1" }],
-        localeChain: ["en"],
-        strict: true,
-      })
-    ).rejects.toThrow("deadlock");
-  });
-
-  it("propagates a Postgres missing-COLUMN error in strict mode", async () => {
-    // A migrated-but-mismatched companion (missing column) is a real schema
-    // error strict mode must surface — not the tolerated missing-table case.
-    await expect(
-      populateCompanionFields({
-        db: rejectingDb(new Error('column "body" does not exist')) as never,
-        companionTable,
-        localizedFields: [{ name: "body", column: "body" }],
-        rows: [{ id: "p1" }],
-        localeChain: ["en"],
-        strict: true,
-      })
-    ).rejects.toThrow("does not exist");
-  });
-
-  it("tolerates a Postgres missing-RELATION error in strict mode", async () => {
+  it("does not touch the database when readiness was never resolved", async () => {
+    // Callers inside a transaction read a remembered verdict, which is undefined when nothing has
+    // resolved this entity. Unknown must mean not-usable, never provisioned: guessing provisioned
+    // is what issues the query this exists to avoid.
     const rows: Record<string, unknown>[] = [{ id: "p1" }];
     await populateCompanionFields({
-      db: rejectingDb(
-        new Error('relation "dc_pages_locales" does not exist')
-      ) as never,
+      db: rejectingDb(new Error("should never be issued")) as never,
       companionTable,
       localizedFields: [{ name: "body", column: "body" }],
       rows,
       localeChain: ["en"],
-      strict: true,
+      readiness: undefined,
     });
     expect(rows[0]).not.toHaveProperty("body");
   });
 
-  it("swallows any read error when not strict (default)", async () => {
-    await expect(
-      populateCompanionFields({
-        db: rejectingDb(new Error("deadlock detected")) as never,
-        companionTable,
-        localizedFields: [{ name: "body", column: "body" }],
-        rows: [{ id: "p1" }],
-        localeChain: ["en"],
-      })
-    ).resolves.toBeUndefined();
+  it("propagates every read failure once the companion is ready", async () => {
+    // There is no longer a tolerated class. Swallowing a failure here left the caller with the
+    // main row's value, which it could not tell apart from a translation that genuinely says so —
+    // and on a durable webhook or version payload that difference is the whole record.
+    for (const message of [
+      "deadlock detected",
+      'column "body" does not exist',
+      'relation "dc_pages_locales" does not exist',
+      "no such table: dc_pages_locales",
+    ]) {
+      await expect(
+        populateCompanionFields({
+          db: rejectingDb(new Error(message)) as never,
+          companionTable,
+          localizedFields: [{ name: "body", column: "body" }],
+          rows: [{ id: "p1" }],
+          localeChain: ["en"],
+          readiness: "ready",
+        })
+      ).rejects.toThrow(message);
+    }
   });
 });

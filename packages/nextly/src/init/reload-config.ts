@@ -631,16 +631,35 @@ async function ensureLocalizedCompanionsForReload(
    * columns a reconcile would be looking for.
    */
   phase: "beforeApply" | "afterApply" = "afterApply"
-): Promise<{ preservationFailed: string[] }> {
+): Promise<{
+  preservationFailed: string[];
+  restoreFailed: string[];
+  schemaChanged: boolean;
+}> {
   // Entities whose content could not be copied into their companion. The caller must not let the
   // apply run for these: the copy is the only thing standing between the apply's DROP and the
   // values it would take with it.
   const preservationFailed: string[] = [];
+  // Entities whose content could not be copied BACK onto main when localization was turned off.
+  // The caller must not publish the non-localized configuration for these: the app would read the
+  // stale main values, accept edits on them, and a later successful retry would copy the
+  // companion's older values over the top.
+  const restoreFailed: string[] = [];
+  // Whether this pass altered any main table. A transition can relax a retained column, and on
+  // SQLite — which cannot change nullability at all — it drops one instead. The caller cached a
+  // live snapshot before this ran, and the pipeline reuses it, so an apply working from that
+  // snapshot would re-emit a DROP for a column that is already gone.
+  let schemaChanged = false;
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
-  if (process.env.NODE_ENV === "production") return { preservationFailed };
+  if (process.env.NODE_ENV === "production")
+    return { preservationFailed, restoreFailed, schemaChanged };
 
-  const { ensureCompanionTable, reconcileCompanionColumns, mainTableExists } =
-    await import("../domains/i18n/runtime/companion-io");
+  const {
+    ensureCompanionTable,
+    reconcileCompanionColumns,
+    mainTableExists,
+    resolveCompanionSeedDebt,
+  } = await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
@@ -679,19 +698,56 @@ async function ensureLocalizedCompanionsForReload(
     ],
   ];
 
-  // Where a newly created companion's transition gets recorded. Undefined when the app
-  // names no default locale, in which case nothing below can be localized anyway.
-  const { resolveTransitionRecorder } = await import(
+  // Where transitions are recorded. Resolved whether or not the app names a default locale: an app
+  // that has just removed its `localization` block still has companions to unwind, and asking for a
+  // locale first would hide exactly those entities.
+  const { bindTransitionRecorder, resolveTransitionStore } = await import(
     "../domains/i18n/migration/transition-recorder"
   );
-  const { beginI18nTransition, readI18nTransitionState, settleI18nTransition } =
-    await import("../domains/i18n/migration/transition-state");
-  const transitions = await resolveTransitionRecorder(config, adapter);
+  const { beginI18nTransition, settleI18nTransition } = await import(
+    "../domains/i18n/migration/transition-state"
+  );
+  const transitionStore = await resolveTransitionStore(adapter);
+  // The same store, plus the locale a newly created companion gets recorded with.
+  const transitions = bindTransitionRecorder(transitionStore, config);
 
   for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {
-      if (!entity.slug || entity.localized !== true) continue;
+      if (!entity.slug) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
+      if (entity.localized !== true) {
+        // Turning localization off is a transition too. Only the Schema Builder used to perform
+        // it, so an entity localized from configuration and then un-localized kept its content in
+        // a companion nothing reads any more, and fell back to whatever the main table held before
+        // it was localized. Restoring runs after the apply, which is what puts those columns back.
+        if (phase === "afterApply") {
+          const { restoreDisabledCompanion } = await import(
+            "../domains/i18n/runtime/restore-companion"
+          );
+          await restoreDisabledCompanion(
+            adapter,
+            {
+              kind,
+              slug: entity.slug,
+              tableName: resolveTableName(entity),
+              fields: entity.fields ?? [],
+              dialect: adapter.dialect,
+              defaultLocale: transitions?.defaultLocale,
+              store: transitionStore,
+            },
+            error => {
+              restoreFailed.push(entity.slug!);
+              console.error(
+                `[nextly] Could not restore "${entity.slug}" from its translations table after ` +
+                  `localization was turned off. Its content is still in ` +
+                  `${resolveTableName(entity)}_locales: ` +
+                  `${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          );
+        }
+        continue;
+      }
       const tableName = resolveTableName(entity);
       if (
         phase === "beforeApply" &&
@@ -701,7 +757,7 @@ async function ensureLocalizedCompanionsForReload(
         // creates this entity's companion once the apply has produced its main table.
         continue;
       }
-      await ensureCompanionTable(
+      const provisioned = await ensureCompanionTable(
         adapter,
         {
           slug: entity.slug,
@@ -724,25 +780,26 @@ async function ensureLocalizedCompanionsForReload(
                   sourceLocale: transitions.defaultLocale,
                 })
             : undefined,
-          // Lets an existing companion be finished rather than skipped. A record still reading
-          // `enabling` means an earlier run created the table and did not complete the copy.
+          // Lets an existing companion be finished rather than skipped. `enabling` means an
+          // earlier run created the table and did not complete the copy; `restored` means the
+          // companion outlived a disable, so its default-locale rows describe a main table that
+          // has been authoritative ever since and must be overwritten rather than trusted.
           seedIncomplete: transitions
-            ? async () => {
-                const recorded = await readI18nTransitionState(
-                  transitions,
-                  kind,
-                  entity.slug!
-                );
-                // The locale the interrupted run recorded, so the resume labels the values with
-                // the language they were actually written in rather than today's default.
-                return recorded.status === "enabling"
-                  ? recorded.sourceLocale
-                  : null;
-              }
+            ? () =>
+                resolveCompanionSeedDebt(transitions, kind, entity.slug!, {
+                  defaultLocale: transitions.defaultLocale,
+                })
             : undefined,
           settleTransition: transitions
-            ? () =>
-                settleI18nTransition(transitions, { kind, slug: entity.slug! })
+            ? token =>
+                settleI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  // The claim this settles, handed back by whichever of the two callbacks above
+                  // made it. A settlement that did not name one would close whatever claim it
+                  // found, including one taken over while this copy ran.
+                  token,
+                })
             : undefined,
         },
         error => {
@@ -764,6 +821,10 @@ async function ensureLocalizedCompanionsForReload(
       // function has already returned: this runs only under `next dev`. The reconcile is
       // additive, so it never removes a column even when a field stops being localized.
       //
+      // A transition ran, so the main table may no longer look the way the caller's cached
+      // snapshot says. Only tracked before the apply — afterwards there is no apply left to
+      // mislead.
+      if (provisioned && phase === "beforeApply") schemaChanged = true;
       // Skipped before the apply, which is what creates the columns a reconcile would be looking
       // for. Running it early would compare the companion against a main table the apply has not
       // finished shaping.
@@ -788,7 +849,7 @@ async function ensureLocalizedCompanionsForReload(
     }
   }
 
-  return { preservationFailed };
+  return { preservationFailed, restoreFailed, schemaChanged };
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -1439,18 +1500,34 @@ async function applyReload(opts?: {
   // not surface as a schema diff — so run the idempotent metadata sync before
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
-  // Also provision on the no-DDL path. A missing `_locales` table produces no schema
-  // diff — companion tables are excluded from it — so `hasChanges` stays false and the
-  // reload would return before ever reaching the call after the apply, which is exactly
-  // the missing-companion state this repairs. Idempotent, so running it here and after
-  // a successful apply costs one existence probe per localized entity.
-  await ensureLocalizedCompanionsForReload(
-    adapter,
-    newConfig,
-    deferredEntities
-  );
-
   if (!hasChanges) {
+    // Provisioning for the path where nothing is applied. It has to be INSIDE this branch: a
+    // disable that needs DDL to put the main columns back reaches here before the apply has added
+    // them, so a restore run now would find nothing to copy, copy nothing, and still record the
+    // transition as finished — after which the post-apply pass skips it and the recreated columns
+    // stay empty while the content sits in a companion nothing reads.
+    //
+    // A missing `_locales` table produces no schema diff either, because companion tables are
+    // excluded from it, so `hasChanges` stays false and this is the only pass that repairs it.
+    const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
+      adapter,
+      newConfig,
+      deferredEntities
+    );
+
+    // The same gate the post-apply path applies. A failed restore would otherwise reach
+    // `syncCodeFirstMetadataOnly` below and publish the non-localized metadata anyway — pointing
+    // reads at main while its values are still the pre-localization ones.
+    if (noDdlProvisioning.restoreFailed.length > 0) {
+      logger?.error(
+        `[nextly] Localization stays on for ${noDdlProvisioning.restoreFailed.join(", ")}: their ` +
+          `content could not be copied back out of the translations table. Fix the error above ` +
+          `and save again — the content is intact where it is.`
+      );
+      abandonReload();
+      return;
+    }
+
     // Only sync when the schema is genuinely in step (every entity had a zero-op
     // diff). If a real schema change was deferred (unsafe/needs review) or a diff
     // threw, syncing would persist `fields` that disagree with the physical
@@ -1650,6 +1727,13 @@ async function applyReload(opts?: {
     return;
   }
 
+  // The snapshot registered above was taken before the pass ran, and the pipeline reuses it rather
+  // than introspecting again. A transition can relax a retained column — and on SQLite, which
+  // cannot change nullability, it drops one — so an apply working from that snapshot re-emits a
+  // DROP for a column that is already gone and fails. Dropping the cache costs one introspection,
+  // and only in the cycle where a transition actually happened.
+  if (preservation.schemaChanged) clearLiveSnapshots();
+
   const applyResult = await apply(desired, "code", {
     promptChannel: "terminal",
   });
@@ -1662,11 +1746,27 @@ async function applyReload(opts?: {
     // database had no such table — non-default writes were then refused until a
     // restart. Runs after the apply because the companion carries a foreign key to
     // its main table, which a brand-new entity does not have before it.
-    await ensureLocalizedCompanionsForReload(
+    const postApply = await ensureLocalizedCompanionsForReload(
       adapter,
       newConfig,
       deferredEntities
     );
+
+    // An entity whose content could not be copied back onto main is left alone, exactly as the
+    // pre-apply pass leaves an entity whose content could not be copied INTO its companion.
+    // Publishing the non-localized configuration now would point reads at main while its values
+    // are still the pre-localization ones, let editors write on top of them, and then let a later
+    // successful retry copy the companion's older values over those edits. The registry keeps
+    // describing the entity as localized until the copy succeeds, so reads keep resolving through
+    // the companion that still holds the content.
+    if (postApply.restoreFailed.length > 0) {
+      logger.error(
+        `[nextly] Localization stays on for ${postApply.restoreFailed.join(", ")}: their content ` +
+          `could not be copied back out of the translations table. Fix the error above and save ` +
+          `again — the content is intact where it is.`
+      );
+      return;
+    }
 
     // Publish each scope's recording policy only AFTER its field-tree metadata
     // sync succeeds (see the assignment after the syncs below): the DDL applied,
