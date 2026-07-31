@@ -747,6 +747,71 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(seo?.metaTitle).toBe("draft-title");
     expect(seo?.metaDesc).toBe("draft-desc");
   });
+
+  it("does not promote a draft field the publisher's field-level access denies", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({
+              name: "secret",
+              access: {
+                update: (args: { req?: { user?: { id?: string } } }) =>
+                  args.req?.user?.id === "admin",
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService<CollectionsHandler>("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    // Seed a published row with a secret, via a trusted context.
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      { title: "live", secret: "live-secret", status: "published" }
+    );
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // A trusted draft edit changes BOTH the title and the restricted secret.
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { title: "draft-title", secret: "draft-secret" }
+    );
+
+    // A non-admin editor publishes: field-level write access denies "secret".
+    const res = await entries.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        user: { id: "editor" },
+        overrideAccess: false,
+      },
+      { status: "published" }
+    );
+    expect(res.success).toBe(true);
+
+    const [live] = await handle.adapter.select<{
+      title: string;
+      secret: string;
+    }>(TABLE);
+    // The allowed field is promoted...
+    expect(live.title).toBe("draft-title");
+    // ...but the field the publisher may not write keeps its live value.
+    expect(live.secret).toBe("live-secret");
+  });
 });
 
 // The split coalesces a working draft under one unlocalized slot and promotes it

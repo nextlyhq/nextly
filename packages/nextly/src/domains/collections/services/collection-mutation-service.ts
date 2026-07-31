@@ -4572,6 +4572,10 @@ export class CollectionMutationService extends BaseService {
       // pool — and validate the SAME merged shape the in-transaction fold
       // persists (`buildRestorePayload` output with the caller's fields on top).
       // The fold below stays authoritative for the write; this only gates it.
+      // Draft fields the current field-level write access denies the publisher,
+      // computed with the caller-payload gate, so the in-transaction fold can
+      // drop them and keep the live value rather than publish a denied edit.
+      const promoteDeniedDraftFields = new Set<string>();
       if (promotePossible && promoteRestoreCtx) {
         const advisoryDraft = await new VersionsRepository(
           this.adapter
@@ -4589,13 +4593,33 @@ export class CollectionMutationService extends BaseService {
             fields as unknown as FieldConfig[],
             promoteRestoreCtx
           );
-          const mergedForValidation = { ...draftInput, ...finalData };
+          const merged = { ...draftInput, ...finalData };
+          // Field-level write access on the MERGED promoted payload. The caller
+          // gate above ran on the caller's payload only (a publish sends just the
+          // status), but promote folds the whole draft in, so a field the current
+          // policy denies THIS publisher — including a draft authored by a
+          // different user — would otherwise be published. Applied pre-tx like the
+          // caller gate so an access rule that reads the DB stays off the write
+          // connection; the denied draft fields are recorded and dropped from the
+          // in-transaction fold below, leaving the live value in place.
+          await applyFieldWriteAccess({
+            kind: "collection",
+            slug: params.collectionName,
+            data: merged,
+            operation: "update",
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+            id: params.entryId,
+          });
+          for (const key of Object.keys(draftInput)) {
+            if (!(key in merged)) promoteDeniedDraftFields.add(key);
+          }
           const localeCtx = await this.localizedRequiredContext(
             params.collectionName,
             params.locale
           );
           const promoteIssues = await validateEntryData(
-            this.validationView(mergedForValidation, fields),
+            this.validationView(merged, fields),
             attachFieldValidators("collection", params.collectionName, fields),
             {
               mode: "update",
@@ -4979,6 +5003,12 @@ export class CollectionMutationService extends BaseService {
                 fields as unknown as FieldConfig[],
                 promoteRestoreCtx
               );
+              // A draft field the current field-level write access denies the
+              // publisher (resolved pre-transaction above) is not folded into the
+              // live write: the live value is kept rather than publishing an edit
+              // the caller may not make.
+              for (const key of promoteDeniedDraftFields)
+                delete draftInput[key];
               const draftParts = this.shapeWriteParts(
                 draftInput,
                 fields,
