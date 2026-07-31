@@ -176,8 +176,10 @@ function createWorld(initial: {
     // production decides the same set from the presence of the parent-pointer
     // column, and a double that answered with a dropped table would certify an
     // update the server rejects.
-    dataTables: async () =>
-      [...parents.keys()].filter(name => tables.has(name)),
+    dataTables: async (_s, owned) =>
+      [...parents.keys()].filter(
+        name => tables.has(name) && owned.includes(name)
+      ),
     indexNames: async table => indexes.get(table),
   };
 
@@ -193,6 +195,23 @@ function createWorld(initial: {
     dropIndexes: (table: string) => indexes.set(table, []),
   };
 }
+
+/**
+ * Every physical name these plans own, under both spellings.
+ *
+ * Supplied rather than discovered, because production supplies it: Nextly runs
+ * beside tables it did not create, and a table of the host application's that
+ * happens to carry the pointer column must never be rewritten.
+ */
+const OWNED = [
+  "comp_hero",
+  "fg_hero",
+  "comp_inner",
+  "fg_inner",
+  "comp_outer",
+  "fg_outer",
+  "handwritten",
+];
 
 const LEGACY_REGISTRY = "dynamic_components";
 const TARGET_REGISTRY = "dynamic_field_groups";
@@ -244,6 +263,7 @@ describe("rename steps", () => {
       entries,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     });
   }
 
@@ -377,6 +397,7 @@ describe("parent pointers across a rename", () => {
       entries: nested,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     });
   }
 
@@ -505,6 +526,7 @@ describe("parent pointers across a rename", () => {
       entries: down,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     });
     const index = down.findIndex(
       entry => entry.kind === "table" && entry.from === "fg_outer"
@@ -551,6 +573,7 @@ describe("column steps", () => {
       entries,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     });
     const columnIndex = entries.findIndex(e => e.kind === "column");
     await steps[columnIndex]?.run(w.session);
@@ -570,6 +593,7 @@ describe("column steps", () => {
       entries,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     });
     const columnIndex = entries.findIndex(e => e.kind === "column");
     await expect(steps[columnIndex]?.run(w.session)).rejects.toThrowError();
@@ -585,6 +609,7 @@ describe("column steps", () => {
       entries,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     });
     const columnIndex = entries.findIndex(e => e.kind === "column");
     await expect(steps[columnIndex]?.run(w.session)).resolves.toBeUndefined();
@@ -601,6 +626,7 @@ describe("index survival across a rename", () => {
       entries,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     })[0];
   }
 
@@ -728,6 +754,7 @@ describe("a companion moves with its owner", () => {
       entries,
       identifierCase: PRESERVING,
       observer: w.observer,
+      ownedDataTables: OWNED,
     });
     await steps[0]?.run(w.session);
     w.dropIndexes("fg_hero_locales");

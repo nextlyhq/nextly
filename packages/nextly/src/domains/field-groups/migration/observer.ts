@@ -81,13 +81,14 @@ export function createStorageObserver(
         .filter((value): value is string => typeof value === "string");
     },
 
-    dataTables: async (): Promise<string[]> => {
+    dataTables: async (_session, owned): Promise<string[]> => {
       const names = await adapter.listTables();
-      if (names.length === 0) return [];
-      // Read through the same introspection every other observation uses, and
-      // decided on the parent-pointer column rather than on a name: which
-      // tables hold instances is a property of their shape, and the one
-      // recognisable by name is exactly the set this migration is renaming.
+      if (names.length === 0 || owned.length === 0) return [];
+      // Read through the same introspection every other observation uses. The
+      // shape narrows the supplied names rather than replacing them: it tells a
+      // field-group data table from the collection and single tables sharing
+      // the same registry vocabulary, while ownership stays a question only the
+      // caller can answer.
       const snapshot = await introspectLiveSnapshot(
         adapter.getDrizzle(),
         dialect,
@@ -99,6 +100,7 @@ export function createStorageObserver(
           columns: table.columns.map(column => column.name),
         })),
         identifierCase,
+        owned,
       });
     },
 

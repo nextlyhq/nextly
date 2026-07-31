@@ -126,6 +126,14 @@ export interface BuildPlanArgs {
   observer: StorageObserver;
   meta: MetaService;
   migrationId: string;
+  /**
+   * Physical names this migration owns, from `ownedDataTableNames`.
+   *
+   * Carried through rather than derived here: a field group whose table was
+   * named through `dbName` is renamed by nothing and appears in no entry, so
+   * the entries alone cannot name every table that holds instances.
+   */
+  ownedDataTables: readonly string[];
 }
 
 /**
@@ -136,11 +144,23 @@ export interface BuildPlanArgs {
  * same work it did on the run that recorded it.
  */
 export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
-  const { direction, entries, identifierCase, observer, meta, migrationId } =
-    args;
+  const {
+    direction,
+    entries,
+    identifierCase,
+    observer,
+    meta,
+    migrationId,
+    ownedDataTables,
+  } = args;
 
   const renameSteps = (plan: readonly ManifestEntry[]): MigrationStep[] =>
-    buildMigrationSteps({ entries: plan, identifierCase, observer });
+    buildMigrationSteps({
+      entries: plan,
+      identifierCase,
+      observer,
+      ownedDataTables,
+    });
 
   const dataSteps = (
     from: typeof LEGACY_STORAGE_VOCABULARY,

@@ -49,6 +49,7 @@ const meta = {} as unknown as MetaService;
 function plan(direction: "up" | "down"): string[] {
   return buildMigrationPlan({
     direction,
+    ownedDataTables: [],
     entries: directedRenameEntries(direction, ENTRIES),
     identifierCase: PRESERVING,
     observer,

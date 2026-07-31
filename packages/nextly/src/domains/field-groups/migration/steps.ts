@@ -68,16 +68,19 @@ export interface StorageObserver {
   /** Every `table_name` the registry currently points at. */
   pointers(session: MigrationSession, registryTable: string): Promise<string[]>;
   /**
-   * Every table storing embedded field-group instances, under its current name.
+   * Which of `owned` the catalog holds as tables storing embedded instances.
    *
-   * Separate from `tables` because the question is not "what exists" but "what
-   * holds a parent pointer", and the answer is a property of a table's columns
-   * rather than of its name: a field group whose table was named through
-   * `dbName` carries no recognisable prefix, and a table orphaned by a deleted
-   * registry row appears in no plan, yet a stale pointer in either is content
-   * that stops resolving.
+   * Separate from `tables` because the question is not "what exists" but "which
+   * of the tables Nextly owns hold parent pointers". 🔴 The candidate names are
+   * supplied rather than discovered: Nextly runs inside the user's own
+   * database, and a predicate that recognised field-group storage by shape
+   * alone would rewrite an application table that happens to carry the same
+   * column.
    */
-  dataTables(session: MigrationSession): Promise<string[]>;
+  dataTables(
+    session: MigrationSession,
+    owned: readonly string[]
+  ): Promise<string[]>;
   /**
    * A table's index names, or `undefined` when they were not tracked.
    *
@@ -129,8 +132,17 @@ export function buildMigrationSteps(args: {
   entries: readonly ManifestEntry[];
   identifierCase: IdentifierCaseRules;
   observer: StorageObserver;
+  /**
+   * Physical names this migration owns, from `ownedDataTableNames`.
+   *
+   * Threaded in rather than derived from `entries` alone: a field group whose
+   * table was named through `dbName` is renamed by nothing and so appears in no
+   * entry, yet it still holds instances that can be nested inside a group that
+   * is renamed.
+   */
+  ownedDataTables: readonly string[];
 }): MigrationStep[] {
-  const { entries, identifierCase, observer } = args;
+  const { entries, identifierCase, observer, ownedDataTables } = args;
   return entries.map((entry, index) => {
     const position = index + 1;
     // An entry reconciliation marked satisfied is already reflected in the
@@ -152,6 +164,7 @@ export function buildMigrationSteps(args: {
       registryTable: registryNameAt(entries, position),
       identifierCase,
       observer,
+      ownedDataTables,
     });
   });
 }
@@ -205,9 +218,12 @@ interface StepContext {
  */
 function renameStep(
   entry: ManifestEntry,
-  context: StepContext & { registryTable: string }
+  context: StepContext & {
+    registryTable: string;
+    ownedDataTables: readonly string[];
+  }
 ): MigrationStep {
-  const { identifierCase, observer, registryTable } = context;
+  const { identifierCase, observer, registryTable, ownedDataTables } = context;
   // Companions carry no pointer of their own: their name is derived from the
   // owner's `table_name`, so the owner's update already moves them. The registry
   // is not addressed by any row either.
@@ -246,7 +262,9 @@ function renameStep(
       // and observed fresh per step rather than once per run: earlier steps have
       // already renamed some of these tables, and the names this step must
       // address are the ones they carry now.
-      const dataTables = movesPointer ? await observer.dataTables(session) : [];
+      const dataTables = movesPointer
+        ? await observer.dataTables(session, ownedDataTables)
+        : [];
 
       await session.inTransaction(async ctx => {
         // Issued BEFORE the renames below, so that on MySQL the implicit commit

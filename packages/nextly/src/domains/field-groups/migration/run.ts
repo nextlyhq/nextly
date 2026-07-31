@@ -38,7 +38,10 @@ import {
   type RegistryRow,
 } from "./manifest";
 import { createStorageObserver } from "./observer";
-import { assertNoStaleParentPointers } from "./parent-pointers";
+import {
+  assertNoStaleParentPointers,
+  ownedDataTableNames,
+} from "./parent-pointers";
 import {
   buildMigrationPlan,
   dataStepCount,
@@ -204,6 +207,12 @@ export async function runFieldGroupMigration(
       // finds the migrated ones instead, and refuses the very run that would
       // restore them.
       const directed = directedRenameEntries(direction, entries);
+      // Enumerated from what Nextly knows it owns rather than recognised by
+      // shape. Nextly runs inside the user's own database, and a table of
+      // theirs that happens to carry the parent-pointer column would otherwise
+      // be rewritten. Both spellings of every rename are included, because a
+      // resumed run can meet either one in the catalog.
+      const owned = ownedDataTableNames({ rows, entries: directed });
       const dataSteps = dataStepCount({ meta, migrationId });
       const offset = renamePositionOffset(direction, dataSteps);
       const reconciled = reconcilePlan({
@@ -244,6 +253,7 @@ export async function runFieldGroupMigration(
         observer: createStorageObserver(adapter, identifierCase),
         meta,
         migrationId,
+        ownedDataTables: owned,
       });
 
       const fromStep = state.status === "migrating" ? state.step + 1 : 1;
@@ -271,6 +281,7 @@ export async function runFieldGroupMigration(
         renamedAway: directed
           .filter(entry => entry.kind === "table")
           .map(entry => entry.from),
+        owned,
         generation,
       });
 
@@ -303,6 +314,7 @@ async function assertStorageComplete(args: {
   rows: readonly RegistryRow[];
   identifierCase: IdentifierCaseRules;
   renamedAway: readonly string[];
+  owned: readonly string[];
   generation: StorageGeneration;
 }): Promise<void> {
   const { tables, columns } = await readCatalog(args.adapter, args.dialect);
@@ -310,7 +322,12 @@ async function assertStorageComplete(args: {
     query: statement => args.adapter.queryStatement(statement),
     columns,
     identifierCase: args.identifierCase,
+    owned: args.owned,
     staleNames: args.renamedAway,
+    // Honoured rather than assumed generous: SQLite advertises 999 where the
+    // other two advertise 65535, and this runs after every rename has
+    // committed, so an over-long statement would strand a finished migration.
+    maxParams: args.adapter.getCapabilities().maxParamsPerQuery,
   });
   assertProbeMatchesGeneration({
     rows: args.rows,
