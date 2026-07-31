@@ -11,14 +11,23 @@
  * the registered block types it permits. A document that is perfectly valid on
  * its own can still be wrong for the field it was written to.
  *
- * Block-type EXISTENCE is deliberately not checked here. That needs the boot
- * registry, which nothing populates until plugins contribute their blocks, and
- * checking against an empty registry would reject every document.
+ * Block-type EXISTENCE is deliberately not checked here, and supplying a
+ * registry lookup would be actively harmful rather than merely premature. The
+ * built-in blocks register into this package's own `core/registry`, while the
+ * engine registry this would consult is written only by contributing plugins —
+ * so it holds none of them. Checking existence against it would reject every
+ * document built from built-in blocks, and would start doing so the moment any
+ * plugin contributed its first block. It becomes correct once the built-in
+ * blocks move to the engine registry, and not before.
  *
  * @module collections/fields/validators/blocks-validator
  */
 
-import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  BreakpointSet,
+  ValidationMode,
+} from "@nextlyhq/blocks-engine";
 import { validate, walkNodes } from "@nextlyhq/blocks-engine";
 
 import type { DocumentKind } from "./blocks-options";
@@ -66,12 +75,21 @@ const MAX_REPORTED_ISSUES = 20;
  * Validate one blocks field value. Returns issues addressed to `path`, the
  * field's own location, because the admin renders a blocks field as a single
  * control — the position inside the document travels in the message.
+ *
+ * `mode` decides how much a document may get away with. `strict` promotes what
+ * the engine calls preservable-but-unknown — an unrecognized document kind, a
+ * duplicated HTML id, a reference to a breakpoint the site does not define —
+ * from warnings to errors. Content that is live should be content the renderer
+ * can fully account for; work in progress should not be held to that, so the
+ * default is the forgiving reading, and only a caller that knows the write
+ * publishes asks for the other.
  */
 export function validateBlocksValue(
   value: unknown,
   path: string,
   label: string,
-  options: BlocksValidationOptions
+  options: BlocksValidationOptions,
+  mode: ValidationMode = "forgiving"
 ): Issue[] {
   // An absent document is an empty field. Required-ness is the shared rules'
   // to enforce, exactly as for every other type.
@@ -94,7 +112,7 @@ export function validateBlocksValue(
   // slot legality, the kind enum, binding and style shapes.
   const documentIssues = validate(doc, {
     breakpoints: NO_BREAKPOINTS,
-    mode: "forgiving",
+    mode,
   }).filter(issue => issue.severity === "error");
 
   for (const issue of documentIssues) {

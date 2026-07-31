@@ -18,6 +18,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
 } from "@nextlyhq/blocks-engine";
+import type { ValidationMode } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldInstance,
   PluginFieldType,
@@ -39,6 +40,25 @@ function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
   const declared = field.blocks;
   if (typeof declared !== "object" || declared === null) return {};
   return declared;
+}
+
+/** The status core reports for content that is live. */
+const PUBLISHED = "published";
+
+/**
+ * How hard to judge a document, from the status the write will leave the row in.
+ *
+ * Core reports the status and this decides what it means, rather than core
+ * deciding: whether publishing warrants a stricter reading is a property of the
+ * content type, and another field type may reasonably answer differently.
+ *
+ * Anything other than a publish is read forgivingly, including a write that
+ * reports no status at all — a collection with no publish lifecycle has no
+ * live state to hold content to, and neither does a caller that never
+ * forwarded one.
+ */
+function modeFor(req: Record<string, unknown>): ValidationMode {
+  return req.status === PUBLISHED ? "strict" : "forgiving";
 }
 
 export const BLOCKS_FIELD_TYPE: PluginFieldType = {
@@ -64,7 +84,8 @@ export const BLOCKS_FIELD_TYPE: PluginFieldType = {
       value,
       args.path,
       typeof args.field.label === "string" ? args.field.label : args.path,
-      policyOf(args.field)
+      policyOf(args.field),
+      modeFor(args.req)
     );
     return issues.length === 0 ? true : issues;
   },

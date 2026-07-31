@@ -48,6 +48,10 @@ import {
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  effectiveStatus,
+  validationRequest,
+} from "../../../shared/lib/effective-status";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -662,7 +666,10 @@ export class SingleMutationService extends BaseService {
           attachFieldValidators("single", slug, fieldConfigs),
           {
             mode: "update",
-            req: options.user ? { user: options.user } : {},
+            req: validationRequest(
+              options.user,
+              effectiveStatus(currentData, existingDeserialized)
+            ),
             localizedFieldNames,
             enforceLocalizedRequired,
           }

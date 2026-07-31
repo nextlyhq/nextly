@@ -58,6 +58,10 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  effectiveStatus,
+  validationRequest,
+} from "../../../shared/lib/effective-status";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -2054,7 +2058,10 @@ export class CollectionMutationService extends BaseService {
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
-            req: params.user ? { user: params.user } : {},
+            req: validationRequest(
+              params.user,
+              effectiveStatus(finalData, undefined)
+            ),
             ...localeCtx,
           }
         );
@@ -3978,7 +3985,10 @@ export class CollectionMutationService extends BaseService {
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
-            req: params.user ? { user: params.user } : {},
+            req: validationRequest(
+              params.user,
+              effectiveStatus(finalData, existingEntry)
+            ),
             ...localeCtx,
           }
         );
@@ -5850,7 +5860,10 @@ export class CollectionMutationService extends BaseService {
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
-            req: params.user ? { user: params.user } : {},
+            req: validationRequest(
+              params.user,
+              effectiveStatus(finalData, undefined)
+            ),
           }
         );
         if (validationIssues.length > 0) {
@@ -6395,7 +6408,10 @@ export class CollectionMutationService extends BaseService {
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
-            req: params.user ? { user: params.user } : {},
+            req: validationRequest(
+              params.user,
+              effectiveStatus(finalData, existingEntry)
+            ),
           }
         );
         if (validationIssues.length > 0) {
@@ -7250,7 +7266,10 @@ export class CollectionMutationService extends BaseService {
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "create",
-            req: params.user ? { user: params.user } : {},
+            req: validationRequest(
+              params.user,
+              effectiveStatus(finalData, undefined)
+            ),
           }
         );
         if (validationIssues.length > 0) {
@@ -7864,7 +7883,10 @@ export class CollectionMutationService extends BaseService {
           attachFieldValidators("collection", params.collectionName, fields),
           {
             mode: "update",
-            req: params.user ? { user: params.user } : {},
+            req: validationRequest(
+              params.user,
+              effectiveStatus(finalData, existingEntry)
+            ),
           }
         );
         if (validationIssues.length > 0) {
