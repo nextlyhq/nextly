@@ -18,6 +18,10 @@ const disable = {
   dialect: "postgresql" as const,
   defaultLocale: "en",
   status: false,
+  // This entity has no Draft/Published lifecycle on either side of the save, so it carried no
+  // `status` beforehand either. The restore that `wasStatus` gates is inert here, which is what
+  // keeps these cases about the retained-column question they exist to ask.
+  wasStatus: false,
   wasLocalized: true,
   isLocalized: false,
   oldFields: [{ name: "title", type: "text", localized: true }],
