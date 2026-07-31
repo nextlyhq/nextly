@@ -24,6 +24,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   buildDynamicFieldGroupsMysql,
   buildDynamicFieldGroupsPg,
@@ -45,7 +46,12 @@ export function buildFieldGroupRegistryTable(
       return buildDynamicFieldGroupsSqlite(tableName);
     default: {
       const exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(exhaustive)}`);
+      throw NextlyError.internal({
+        logContext: {
+          reason: "cannot build the field-group registry for this dialect",
+          dialect: String(exhaustive),
+        },
+      });
     }
   }
 }

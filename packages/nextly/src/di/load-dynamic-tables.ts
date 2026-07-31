@@ -16,33 +16,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../collections/fields/types";
-import { MIGRATION_TARGET } from "../domains/field-groups/migration/manifest";
 import {
   isFieldGroupRegistry,
-  resolveRegistryTableName,
+  resolveFieldGroupRegistryName,
+  type FieldGroupRegistryName,
 } from "../domains/field-groups/storage/resolve-storage-names";
-import { STORAGE_FORMAT } from "../schemas/storage-format";
-
-/**
- * The two names the field-group registry can carry on disk.
- *
- * Named rather than inlined because three signatures below accept it, and a
- * union that lists only the legacy spelling would reject the resolved name at
- * the call site while the runtime happily addressed it.
- */
-export type FieldGroupRegistryName =
-  | typeof STORAGE_FORMAT.registryTable
-  | typeof MIGRATION_TARGET.registryTable;
-
-/** The registry this database holds, typed as the union these readers accept. */
-async function resolveFieldGroupRegistry(
-  adapter: DrizzleAdapter
-): Promise<FieldGroupRegistryName> {
-  const name = await resolveRegistryTableName(adapter);
-  return name === MIGRATION_TARGET.registryTable
-    ? MIGRATION_TARGET.registryTable
-    : STORAGE_FORMAT.registryTable;
-}
 
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
@@ -184,7 +162,7 @@ export async function loadDynamicSlugs(
   };
   await read("dynamic_collections", collections);
   await read("dynamic_singles");
-  await read(await resolveFieldGroupRegistry(adapter));
+  await read(await resolveFieldGroupRegistryName(adapter));
   return { all, collections };
 }
 
@@ -253,6 +231,6 @@ export async function loadBuilderEntities(
   return {
     collections: await read("dynamic_collections", true),
     singles: await read("dynamic_singles", true),
-    components: await read(await resolveFieldGroupRegistry(adapter), false),
+    components: await read(await resolveFieldGroupRegistryName(adapter), false),
   };
 }

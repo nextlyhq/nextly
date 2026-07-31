@@ -233,6 +233,27 @@ export async function resolveRegistryTableName(
 }
 
 /**
+ * The two names the field-group registry can carry on disk.
+ *
+ * Named because several signatures accept it, and a parameter typed as the
+ * legacy spelling alone would reject the resolved name at the call site while
+ * the runtime addressed it happily.
+ */
+export type FieldGroupRegistryName =
+  | typeof STORAGE_FORMAT.registryTable
+  | typeof MIGRATION_TARGET.registryTable;
+
+/** The resolved registry name, narrowed to the union those signatures accept. */
+export async function resolveFieldGroupRegistryName(
+  adapter: StorageNameAdapter
+): Promise<FieldGroupRegistryName> {
+  const resolved = await resolveFieldGroupRegistryTable(adapter);
+  return resolved.migrated
+    ? MIGRATION_TARGET.registryTable
+    : STORAGE_FORMAT.registryTable;
+}
+
+/**
  * Drop the memoized resolution.
  *
  * Called by the process that runs the migration, immediately after storage

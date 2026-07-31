@@ -43,7 +43,10 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
-import { resolveTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
+import {
+  resolveFieldGroupRegistryName,
+  resolveTypeColumns,
+} from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
 import {
@@ -1175,9 +1178,13 @@ async function initializeSchemaRegistry(
     // Step 4: Dynamic components (comp_* tables). Components have no status
     // column, but a localized component omits its translatable columns from the
     // main comp_ table and registers/creates its companion `comp_<slug>_locales`.
+    // 🔴 Resolved, not assumed. `loadDynamicTables` swallows a failed read as
+    // the fresh-database case, so addressing a renamed registry by its legacy
+    // name does not raise — it registers nothing, and every field-group table
+    // is unaddressable until someone notices reads returning empty.
     await loadDynamicTables(
       adapter,
-      STORAGE_FORMAT.registryTable,
+      await resolveFieldGroupRegistryName(adapter),
       async (tableName, fields, _hasStatus, localized) => {
         const { FieldGroupSchemaService } = await import(
           "../services/field-groups/field-group-schema-service"

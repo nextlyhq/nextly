@@ -26,7 +26,10 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { resolveTypeColumns } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  resolveFieldGroupRegistryName,
+  resolveTypeColumns,
+} from "../../domains/field-groups/storage/resolve-storage-names";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { localizedColumnsOnMain } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
@@ -810,7 +813,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       let versionPersisted = true;
       try {
         await adapter.update(
-          STORAGE_FORMAT.registryTable,
+          // The registry this database holds. The failure is otherwise silent
+          // in the worst way: the DDL has already committed, this write is
+          // treated as non-fatal, and the stale row rebuilds the pre-change
+          // runtime schema on the next restart.
+          await resolveFieldGroupRegistryName(adapter),
           {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
