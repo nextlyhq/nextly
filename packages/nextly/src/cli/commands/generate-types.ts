@@ -41,6 +41,7 @@ import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
+import { buildBlockManifestArtifact } from "../../plugins/codegen/block-manifest";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 // The option names the field identity would overwrite, refused here because a
@@ -100,6 +101,8 @@ interface ResolvedGenerateTypesOptions extends GenerateTypesCommandOptions {
 interface GenerationResult {
   /** Path to generated TypeScript types file */
   typesFile?: string;
+  /** Path to the generated block manifest, when plugins declare blocks. */
+  blockManifestFile?: string;
   /** Path to the generated admin component import map, when plugins contribute admin UI (D60) */
   componentImportMapFile?: string;
   /** Number of collection interfaces generated */
@@ -299,6 +302,21 @@ async function generateTypes(
     await writeFile(importMapPath, importMap.code, "utf-8");
     result.componentImportMapFile = importMapPath;
     logger.debug(`Written plugin admin import map to: ${importMapPath}`);
+  }
+
+  // What blocks this app has, as data, so an editor build or an agent can read
+  // them without booting the app. Emitted from declarations, so this stays a
+  // pure read of the config.
+  const blockManifest = buildBlockManifestArtifact(
+    config.plugins ?? [],
+    typesOutputPath
+  );
+  if (blockManifest) {
+    const manifestPath = resolve(cwd, blockManifest.path);
+    await ensureDir(dirname(manifestPath));
+    await writeFile(manifestPath, blockManifest.code, "utf-8");
+    result.blockManifestFile = manifestPath;
+    logger.debug(`Written block manifest to: ${manifestPath}`);
   }
 
   // Generate Zod schemas if enabled

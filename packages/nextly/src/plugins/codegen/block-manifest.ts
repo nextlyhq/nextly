@@ -1,0 +1,153 @@
+/**
+ * The block manifest: what blocks this app has, as data.
+ *
+ * A block's definition lives in a plugin and is registered into a per-boot
+ * registry, so the only way to ask "what blocks exist here?" has been to boot
+ * the app and inspect it. That is not available to the things that most need
+ * the answer — an editor build, a docs page, an agent writing a page document —
+ * so the manifest states it as a file instead.
+ *
+ * Emitted from what plugins DECLARED (`contributes.declarations`), never from
+ * the runtime registry, which is what lets generation stay a pure read of the
+ * config: no plugin boots, no database opens. A block registered imperatively
+ * from `init` is deliberately absent — it is not knowable without running the
+ * plugin, and a manifest that were sometimes complete would be worse than one
+ * whose rule is stated.
+ *
+ * Pure — no IO. The CLI writes the returned string.
+ *
+ * @module plugins/codegen/block-manifest
+ */
+
+import { join, dirname } from "node:path";
+
+import { collectDeclarations } from "../declarations";
+import type { PluginDefinition } from "../plugin-context";
+
+/** Filename of the generated block manifest. */
+export const BLOCK_MANIFEST_FILENAME = "blocks.manifest.json";
+
+/**
+ * The consumer key block declarations are addressed to. Stated here rather than
+ * imported so core carries no dependency on the page builder; it is the same
+ * string that plugin publishes.
+ */
+export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
+
+/**
+ * The manifest's own version, bumped when its SHAPE changes.
+ *
+ * Separate from any block's `version`, which describes one block's props. A
+ * reader checks this to know whether it understands the file at all.
+ */
+export const BLOCK_MANIFEST_VERSION = 1;
+
+/** One block, as the manifest states it. */
+export interface BlockManifestEntry {
+  name: string;
+  /** The block's own schema version, stamped onto every node of its type. */
+  version: number;
+  description: string;
+  /** The plugin that declared it, so a reader knows what to install. */
+  source: string;
+  /** A worked instance, for previews and few-shot prompting. */
+  example?: unknown;
+  /** Prop schemas keyed by prop name. */
+  props?: Record<string, unknown>;
+  /** Style capabilities the block opts into. */
+  supports?: Record<string, unknown>;
+  /** Named child regions, for container blocks. */
+  slots?: Record<string, unknown>;
+}
+
+/** The emitted document. */
+export interface BlockManifest {
+  manifestVersion: number;
+  blocks: BlockManifestEntry[];
+}
+
+/**
+ * Build the manifest from what plugins declared.
+ *
+ * Blocks are sorted by name so the emitted file is stable: an artifact that
+ * reordered itself when plugins were reordered would show a diff on every
+ * unrelated config edit, and a drift test could not tell a real change from a
+ * shuffle.
+ */
+export function buildBlockManifest(
+  plugins: readonly PluginDefinition[]
+): BlockManifest {
+  const blocks: BlockManifestEntry[] = [];
+  for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
+    for (const block of declaredBlocks(declaration.value)) {
+      blocks.push(toEntry(block, declaration.source));
+    }
+  }
+  blocks.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return { manifestVersion: BLOCK_MANIFEST_VERSION, blocks };
+}
+
+/**
+ * Decide whether to emit a manifest and where. Returns `null` when no plugin
+ * declared a block, so the caller writes no file rather than an empty one — an
+ * empty manifest and an absent one mean the same thing, and only one of them
+ * leaves a stale artifact behind when the last block plugin is removed.
+ *
+ * Placed beside the generated types so it ships with the app.
+ */
+export function buildBlockManifestArtifact(
+  plugins: readonly PluginDefinition[],
+  typesOutputPath: string
+): { path: string; code: string } | null {
+  const manifest = buildBlockManifest(plugins);
+  if (manifest.blocks.length === 0) return null;
+  return {
+    path: join(dirname(typesOutputPath), BLOCK_MANIFEST_FILENAME),
+    // Trailing newline so the file is well-formed for line-based tooling and
+    // does not show a no-newline marker in every diff.
+    code: `${JSON.stringify(manifest, null, 2)}\n`,
+  };
+}
+
+/** The block list inside one declaration, or none when it holds no usable one. */
+function declaredBlocks(value: unknown): Record<string, unknown>[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return [];
+  }
+  const blocks = (value as { blocks?: unknown }).blocks;
+  if (!Array.isArray(blocks)) return [];
+  return blocks.filter(
+    (block): block is Record<string, unknown> =>
+      typeof block === "object" && block !== null && !Array.isArray(block)
+  );
+}
+
+/**
+ * One declared block as a manifest entry.
+ *
+ * `render` and `resolve` are functions and are deliberately dropped: they
+ * cannot be serialized, and a manifest is a description of what a block accepts
+ * rather than of how it draws. Everything kept is data the declaration already
+ * holds, copied rather than reshaped, so the file and the definition cannot
+ * drift into different vocabularies.
+ */
+function toEntry(
+  block: Record<string, unknown>,
+  source: string
+): BlockManifestEntry {
+  const entry: BlockManifestEntry = {
+    name: typeof block.name === "string" ? block.name : "",
+    version: typeof block.version === "number" ? block.version : 0,
+    description: typeof block.description === "string" ? block.description : "",
+    source,
+  };
+  if (block.example !== undefined) entry.example = block.example;
+  if (isRecord(block.props)) entry.props = block.props;
+  if (isRecord(block.supports)) entry.supports = block.supports;
+  if (isRecord(block.slots)) entry.slots = block.slots;
+  return entry;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
