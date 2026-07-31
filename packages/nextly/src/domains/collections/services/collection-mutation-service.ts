@@ -104,6 +104,7 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  addressableFields,
   resolveComponentFieldMap,
   stripSingleComponentTags,
   tagComponentTypes,
@@ -1498,8 +1499,12 @@ export class CollectionMutationService extends BaseService {
     fields: FieldConfig[],
     componentSchemas: ComponentSchemas | null
   ): Record<string, unknown> {
+    // Flatten unnamed presentational groups (matching `tagComponentTypes`): a
+    // single component declared inside such a group stores its value at the
+    // enclosing level, so without flattening the lookup would miss it and treat
+    // it as a scalar, replacing rather than merging a nested component patch.
     const byName = new Map<string, FieldConfig>();
-    for (const f of fields) {
+    for (const f of addressableFields(fields)) {
       const name = (f as { name?: unknown }).name;
       if (typeof name === "string") byName.set(name, f);
     }
@@ -4626,10 +4631,6 @@ export class CollectionMutationService extends BaseService {
       // pool — and validate the SAME merged shape the in-transaction fold
       // persists (`buildRestorePayload` output with the caller's fields on top).
       // The fold below stays authoritative for the write; this only gates it.
-      // Draft fields the current field-level write access denies the publisher,
-      // computed with the caller-payload gate, so the in-transaction fold can
-      // drop them and keep the live value rather than publish a denied edit.
-      const promoteDeniedDraftFields = new Set<string>();
       if (promotePossible && promoteRestoreCtx) {
         const advisoryDraft = await new VersionsRepository(
           this.adapter
@@ -4648,14 +4649,14 @@ export class CollectionMutationService extends BaseService {
             promoteRestoreCtx
           );
           const merged = { ...draftInput, ...finalData };
-          // Field-level write access on the MERGED promoted payload. The caller
-          // gate above ran on the caller's payload only (a publish sends just the
-          // status), but promote folds the whole draft in, so a field the current
-          // policy denies THIS publisher — including a draft authored by a
-          // different user — would otherwise be published. Applied pre-tx like the
-          // caller gate so an access rule that reads the DB stays off the write
-          // connection; the denied draft fields are recorded and dropped from the
-          // in-transaction fold below, leaving the live value in place.
+          // Field-level write access on the MERGED promoted payload, so the
+          // validation below gates only the values the publisher may write: the
+          // caller gate above ran on the caller's payload only (a publish sends
+          // just the status), but promote folds the whole draft in. The
+          // authoritative filtering runs again on the locked draft inside the
+          // transaction (see the promote block), so a denied value nested in a
+          // group or repeater is dropped too, not only a fully denied top-level
+          // container.
           await applyFieldWriteAccess({
             kind: "collection",
             slug: params.collectionName,
@@ -4665,9 +4666,6 @@ export class CollectionMutationService extends BaseService {
             overrideAccess: params.overrideAccess,
             id: params.entryId,
           });
-          for (const key of Object.keys(draftInput)) {
-            if (!(key in merged)) promoteDeniedDraftFields.add(key);
-          }
           const localeCtx = await this.localizedRequiredContext(
             params.collectionName,
             params.locale
@@ -5073,12 +5071,23 @@ export class CollectionMutationService extends BaseService {
                 fields as unknown as FieldConfig[],
                 promoteRestoreCtx
               );
-              // A draft field the current field-level write access denies the
-              // publisher (resolved pre-transaction above) is not folded into the
-              // live write: the live value is kept rather than publishing an edit
-              // the caller may not make.
-              for (const key of promoteDeniedDraftFields)
-                delete draftInput[key];
+              // Re-apply the current field-level write access to the locked
+              // draft the fold actually persists, so a value the publisher may
+              // not write is not promoted — at every depth. Filtering the merged
+              // advisory copy pre-transaction only recorded whole top-level
+              // containers it removed; running the filter on this authoritative
+              // snapshot also drops a denied value nested in a group or repeater.
+              // `applyFieldWriteAccess` is already used inside the caller-owned
+              // transaction paths, so running it here is consistent.
+              await applyFieldWriteAccess({
+                kind: "collection",
+                slug: params.collectionName,
+                data: draftInput,
+                operation: "update",
+                user: params.user,
+                overrideAccess: params.overrideAccess,
+                id: params.entryId,
+              });
               const draftParts = this.shapeWriteParts(
                 draftInput,
                 fields,
@@ -6211,6 +6220,19 @@ export class CollectionMutationService extends BaseService {
         // duplicate `entry.deleted` for a row it did not remove.
         if (deletedCount === 0) return;
         deletedRow = true;
+
+        // Remove any pending working-draft sidecar for the deleted entry in the
+        // same transaction: it is keyed by entry id and excluded from history and
+        // retention queries, so after the row it belongs to is gone it would
+        // otherwise linger unreachable in nextly_versions. A no-op when none.
+        await new VersionsRepository(tx).deleteWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          },
+          null
+        );
 
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
@@ -7643,6 +7665,18 @@ export class CollectionMutationService extends BaseService {
         };
       }
       deleteNeedsRollback = true;
+
+      // Remove any pending working-draft sidecar for the deleted entry in the
+      // same transaction, so it does not linger unreachable in nextly_versions
+      // after its row is gone. A no-op when none exists.
+      await new VersionsRepository(tx).deleteWorkingDraft(
+        {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        },
+        null
+      );
 
       // Append the outbox event in the same transaction so a delete performed
       // through this helper (batch/cascade/internal) is observable too, in the
@@ -9171,6 +9205,18 @@ export class CollectionMutationService extends BaseService {
         };
       }
       deleteNeedsRollback = true;
+
+      // Remove any pending working-draft sidecar for the deleted entry in the
+      // same transaction, so a batch delete does not leave it unreachable in
+      // nextly_versions after its row is gone. A no-op when none exists.
+      await new VersionsRepository(tx).deleteWorkingDraft(
+        {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId,
+        },
+        null
+      );
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the

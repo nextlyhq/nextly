@@ -38,7 +38,7 @@ export type ComponentFieldResolver = (
  * would leave a component inside a layout group untagged, and that grouping is
  * common enough to be the usual case rather than an edge one.
  */
-function addressableFields(fields: FieldConfig[]): FieldConfig[] {
+export function addressableFields(fields: FieldConfig[]): FieldConfig[] {
   const flat: FieldConfig[] = [];
 
   for (const field of fields) {

@@ -9,6 +9,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  group,
   password,
   relationship,
   text,
@@ -812,6 +813,98 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(live.title).toBe("draft-title");
     // ...but the field the publisher may not write keeps its live value.
     expect(live.secret).toBe("live-secret");
+  });
+
+  it("does not promote a denied field nested in a group", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+          },
+          fields: [
+            text({ name: "title" }),
+            group({
+              name: "meta",
+              fields: [
+                text({ name: "note" }),
+                text({
+                  name: "secret",
+                  access: {
+                    update: (args: { req?: { user?: { id?: string } } }) =>
+                      args.req?.user?.id === "admin",
+                  },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      {
+        title: "live",
+        meta: { note: "live-note", secret: "live-secret" },
+        status: "published",
+      }
+    );
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // A trusted draft edit changes both the allowed and the restricted nested field.
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { meta: { note: "draft-note", secret: "draft-secret" } }
+    );
+
+    // A non-admin editor publishes: field access denies the NESTED meta.secret.
+    const res = await entries.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        user: { id: "editor" },
+        overrideAccess: false,
+      },
+      { status: "published" }
+    );
+    expect(res.success).toBe(true);
+
+    const [live] = await handle.adapter.select<{ meta: unknown }>(TABLE);
+    const meta = (
+      typeof live.meta === "string" ? JSON.parse(live.meta) : live.meta
+    ) as { note?: string; secret?: string };
+    // The allowed nested field is promoted...
+    expect(meta.note).toBe("draft-note");
+    // ...but the denied nested field's pending value is NOT published.
+    expect(meta.secret).not.toBe("draft-secret");
+  });
+
+  it("deletes the working-draft sidecar when the entry is deleted", async () => {
+    const entries = await boot();
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle!.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+
+    // A pending draft leaves a sidecar in nextly_versions.
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    expect(await workingDraftCount(id)).toBe(1);
+
+    // Deleting the entry must remove the sidecar too, not orphan it.
+    const deleted = await entries.deleteEntry({ ...ctx, entryId: id });
+    expect(deleted.success).toBe(true);
+    expect(await workingDraftCount(id)).toBe(0);
   });
 
   it("recursively merges nested single-component sub-field edits across draft saves", async () => {
