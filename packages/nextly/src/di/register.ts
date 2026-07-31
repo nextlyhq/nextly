@@ -843,36 +843,6 @@ export async function registerServices(
   await syncCodeFirstSingles(adapter, resolvedLogger, transformedConfig);
 
   // ----------------------------------------
-  // Layer 6b: Register code-first collection hooks
-  // ----------------------------------------
-  // Before plugins initialize, not after: a plugin's `init` is given the live
-  // managed collection services and may read, write or seed through them, and
-  // anything it writes has to pass the same declared hooks every later request
-  // does. Registering afterwards would let initialization data skip the
-  // transformations and invariants that apply to everything else.
-  if (hookRegistry) {
-    if (
-      transformedConfig.collections &&
-      transformedConfig.collections.length > 0
-    ) {
-      const disabledCollectionSlugs = collectPluginContributedSlugs(
-        resolvedPlugins.filter(plugin => plugin.enabled === false),
-        "collections"
-      );
-      const hookedCollections = transformedConfig.collections.filter(
-        collection => !disabledCollectionSlugs.has(collection.slug)
-      );
-      const collectionHooks = registerCollectionHooks(
-        hookedCollections,
-        hookRegistry
-      );
-      resolvedLogger.info?.(
-        `Registered ${collectionHooks.totalHooks} hook(s) for ${collectionHooks.collections.length} collection(s)`
-      );
-    }
-  }
-
-  // ----------------------------------------
   // Layer 7: Initialize Plugins
   // ----------------------------------------
   // Stash the resolved plugins + their contexts so shutdownServices can run
@@ -899,6 +869,32 @@ export async function registerServices(
 
     registerActivityLogHooks(hookRegistry);
     resolvedLogger.info?.("Activity log hooks registered");
+
+    // Registered after plugins initialize, not before. A hook may reach the
+    // Direct API through `req.nextly`, and that binding does not exist until
+    // service registration returns -- so registering earlier hands a hook an
+    // API that is not there yet. A plugin's `init` writing through the managed
+    // services therefore bypasses these hooks, which is recorded as its own
+    // problem rather than traded for a broken one.
+    if (
+      transformedConfig.collections &&
+      transformedConfig.collections.length > 0
+    ) {
+      const disabledCollectionSlugs = collectPluginContributedSlugs(
+        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        "collections"
+      );
+      const hookedCollections = transformedConfig.collections.filter(
+        collection => !disabledCollectionSlugs.has(collection.slug)
+      );
+      const collectionHooks = registerCollectionHooks(
+        hookedCollections,
+        hookRegistry
+      );
+      resolvedLogger.info?.(
+        `Registered ${collectionHooks.totalHooks} hook(s) for ${collectionHooks.collections.length} collection(s)`
+      );
+    }
 
     // Register hooks declared on code-first Singles so they run on the read and
     // update paths for every consumer (Direct API, REST, tests), not only apps
