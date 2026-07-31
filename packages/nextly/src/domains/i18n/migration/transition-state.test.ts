@@ -454,7 +454,9 @@ describe("beginI18nTransition", () => {
     });
     const settled = await readI18nTransitionState(store, "collection", "posts");
     expect(
-      settled.status === "untracked" ? undefined : settled.refresh
+      // `refresh` is declared only on the enabling state; on every other
+      // settled state it is absent and reads as undefined.
+      "refresh" in settled ? settled.refresh : undefined
     ).toBeUndefined();
   });
 
