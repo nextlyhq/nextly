@@ -902,6 +902,77 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(meta.secret).not.toBe("draft-secret");
   });
 
+  it("re-evaluates a draft field's access against a sibling changed by the publish patch", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "approved" }),
+            text({
+              name: "secret",
+              // Writable only while its sibling `approved` is "yes".
+              access: {
+                update: (args: { data?: { approved?: unknown } }) =>
+                  args.data?.approved === "yes",
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      {
+        title: "live",
+        approved: "no",
+        secret: "live-secret",
+        status: "published",
+      }
+    );
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // A trusted draft sets approved=yes and the (then-writable) secret.
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { approved: "yes", secret: "draft-secret" }
+    );
+
+    // A non-override editor publishes AND flips approved back to "no" in the same
+    // patch: the gated secret must be re-denied against that final value, not the
+    // draft's stale sibling.
+    const res = await entries.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        user: { id: "editor" },
+        overrideAccess: false,
+      },
+      { status: "published", approved: "no" }
+    );
+    expect(res.success).toBe(true);
+
+    const [live] = await handle.adapter.select<{
+      approved: string;
+      secret: string;
+    }>(TABLE);
+    expect(live.approved).toBe("no");
+    expect(live.secret).not.toBe("draft-secret");
+  });
+
   it("deletes the working-draft sidecar when the entry is deleted", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };

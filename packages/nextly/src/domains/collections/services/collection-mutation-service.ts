@@ -5071,30 +5071,32 @@ export class CollectionMutationService extends BaseService {
                 fields as unknown as FieldConfig[],
                 promoteRestoreCtx
               );
-              // Re-apply the current field-level write access to the locked
-              // draft the fold actually persists, so a value the publisher may
-              // not write is not promoted — at every depth. Filtering the merged
-              // advisory copy pre-transaction only recorded whole top-level
-              // containers it removed; running the filter on this authoritative
-              // snapshot also drops a denied value nested in a group or repeater.
-              // `applyFieldWriteAccess` is already used inside the caller-owned
-              // transaction paths, so running it here is consistent.
+              // Merge the locked draft with the caller's payload (caller wins)
+              // BEFORE filtering, then re-apply the current field-level write
+              // access to that authoritative merged document. A rule that depends
+              // on a sibling the publish patch supplies (e.g. a field writable
+              // only when `approved` is true, where the publish sets it false) is
+              // then judged on the real final values, and a denied value is
+              // dropped at any depth (top-level or nested in a group/repeater/
+              // component). `applyFieldWriteAccess` is already used inside the
+              // caller-owned transaction paths, so running it here is consistent.
+              const mergedPromoteData = { ...draftInput, ...finalData };
               await applyFieldWriteAccess({
                 kind: "collection",
                 slug: params.collectionName,
-                data: draftInput,
+                data: mergedPromoteData,
                 operation: "update",
                 user: params.user,
                 overrideAccess: params.overrideAccess,
                 id: params.entryId,
               });
               const draftParts = this.shapeWriteParts(
-                draftInput,
+                mergedPromoteData,
                 fields,
                 manyToManyFields,
                 collection
               );
-              finalData = { ...draftInput, ...finalData };
+              finalData = mergedPromoteData;
               // Merge a patch-shaped single-component publish (the caller may
               // send only the sub-fields it changed) onto the draft's component
               // rather than replacing it, so a pending sub-field edit is promoted
