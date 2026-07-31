@@ -623,3 +623,87 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+/**
+ * A component's translations failing to read must not take its shared values with them.
+ *
+ * The companion reads stopped swallowing failures, which is right — deciding existence by catching
+ * one is what aborted PostgreSQL transactions. But a component's overlay runs after its shared
+ * values have already been deserialized, and the component read above it catches anything the
+ * overlay throws and replaces the whole field with null. So a fault that costs the reader one
+ * translation was costing them the entire component.
+ *
+ * `ready` is established by a successful read and remembered for 30 seconds, so dropping a
+ * translatable column after it is exactly the state this is about: the companion is known good and
+ * the query fails anyway.
+ */
+describe.each(getConfiguredTestDialects())(
+  "component companion read failures on %s (integration)",
+  dialect => {
+    it("keeps the component's shared values when its translations cannot be read", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "cmpread",
+            localized: true,
+            fields: [
+              text({ name: "heading", localized: true }),
+              text({ name: "anchor", localized: false }),
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "i18nwin_cmpread",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "cmpread" }),
+            ],
+          }),
+        ],
+        localization,
+      });
+      const handler =
+        current.getService<CollectionsHandler>("collectionsHandler");
+
+      const created = await handler.createEntry(
+        {
+          collectionName: "i18nwin_cmpread",
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: "Page", hero: { heading: "Hello", anchor: "top" } }
+      );
+      expect(created.success).toBe(true);
+      const entryId = (created.data as { id: string }).id;
+
+      // Establishes the companion as `ready`, which is remembered.
+      await handler.getEntry({
+        collectionName: "i18nwin_cmpread",
+        entryId,
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      const quote = (id: string) =>
+        dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${quote("comp_cmpread_locales")} DROP COLUMN ${quote("heading")}`
+      );
+
+      const read = await handler.getEntry({
+        collectionName: "i18nwin_cmpread",
+        entryId,
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      expect(read.success).toBe(true);
+      const hero = (read.data as { hero?: { anchor?: string } }).hero;
+      // The shared value survives. Losing the overlay costs a translation; losing the component
+      // costs the record.
+      expect(hero?.anchor).toBe("top");
+    });
+  }
+);

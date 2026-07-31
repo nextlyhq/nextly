@@ -600,10 +600,18 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(await tableExists("dc_dbsync_offagain_locales")).toBe(true);
   });
 
-  it("does not overwrite a main row that has no companion row in the default locale", async () => {
-    // A correlated UPDATE with no guard assigns SQL NULL when the subquery finds nothing, so an
-    // entry authored only in another language would have its main column blanked by the restore
-    // instead of being left alone. There is nothing to restore for such a row.
+  it("restores a row that exists only in a language nobody named, and leaves one with no translation alone", async () => {
+    // Two rows, and they resolve differently on purpose.
+    //
+    // The first has a translation in a language that is neither the configured default nor the one
+    // the transition recorded. It is still the live content — every edit made while the entity was
+    // localized went to the companion — while main has held the same value since before
+    // localization. Naming candidate locales and restoring only from those strands it, and the
+    // record marks the transition finished anyway. So the named locales are a PREFERENCE and any
+    // row the parent has is better than none.
+    //
+    // The second has no companion row at all, which is what the guard is for: a correlated UPDATE
+    // with nothing to select assigns SQL NULL, blanking a main column that nothing ever translated.
     const unlocalized = defineConfig({
       collections: [
         defineCollection({
@@ -625,23 +633,24 @@ describe("db:sync creates localized companion tables in-process (integration)", 
 
     await runSync(unlocalized);
     await adapter?.executeQuery(
-      `INSERT INTO "dc_dbsync_partial" ("id", "slug", "title") VALUES ('row1', 'r1', 'Kept')`
+      `INSERT INTO "dc_dbsync_partial" ("id", "slug", "title") VALUES ('row1', 'r1', 'Kept'), ('row2', 'r2', 'Never translated')`
     );
     await runSync(localized);
-    // Only a Spanish translation exists for this row; the English companion row is gone.
-    await adapter?.executeQuery(
-      `DELETE FROM "dc_dbsync_partial_locales" WHERE "_locale" = 'en'`
-    );
+    // Only a Spanish translation exists, and only for the first row.
+    await adapter?.executeQuery(`DELETE FROM "dc_dbsync_partial_locales"`);
     await adapter?.executeQuery(
       `INSERT INTO "dc_dbsync_partial_locales" ("_parent", "_locale", "title") VALUES ('row1', 'es', 'Guardado')`
     );
 
     await runSync(unlocalized);
 
-    const main = await adapter?.executeQuery<{ title: string }>(
-      `SELECT "title" FROM "dc_dbsync_partial" WHERE "id" = 'row1'`
+    const main = await adapter?.executeQuery<{ id: string; title: string }>(
+      `SELECT "id", "title" FROM "dc_dbsync_partial" ORDER BY "id"`
     );
-    expect(main).toEqual([{ title: "Kept" }]);
+    expect(main).toEqual([
+      { id: "row1", title: "Guardado" },
+      { id: "row2", title: "Never translated" },
+    ]);
   });
 
   it("re-seeds a companion that outlived a disable instead of trusting its rows", async () => {
@@ -1219,6 +1228,76 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     );
     // `title` comes back from the companion; `sku` keeps the value main already had.
     expect(main).toEqual([{ title: "Widget", sku: "NEW-SKU" }]);
+  });
+
+  it("leaves a field made shared earlier alone even when the last flag is cleared too", async () => {
+    // The shape the per-field classifier cannot answer on its own. `sku` was made shared while the
+    // entity stayed localized, so reconciliation left its companion column behind holding a value
+    // nothing has read since. The disabling edit then clears the last remaining flag as well, so
+    // NOTHING classifies as localized — and offering every field back would let the physical
+    // intersection accept `sku` and copy its abandoned translation over the value main has been
+    // authoritative for.
+    //
+    // What the configuration still says outright is honoured in every branch: a field marked
+    // shared is never restored from, whether or not anything else is claimed.
+    const localizedBoth = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_allcleared",
+          localized: true,
+          fields: [text({ name: "title" }), text({ name: "sku" })],
+        }),
+      ],
+    });
+    const skuShared = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_allcleared",
+          localized: true,
+          fields: [
+            text({ name: "title" }),
+            text({ name: "sku", localized: false }),
+          ],
+        }),
+      ],
+    });
+
+    await runSync(localizedBoth);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_allcleared" ("id", "slug") VALUES ('row1', 'r1')`
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_allcleared_locales" ("_parent", "_locale", "title", "sku") VALUES ('row1', 'en', 'Widget', 'OLD-SKU')`
+    );
+
+    await runSync(skuShared);
+    await adapter?.executeQuery(
+      `UPDATE "dc_dbsync_allcleared" SET "sku" = 'NEW-SKU' WHERE "id" = 'row1'`
+    );
+
+    // Disabled, and the last localized field is marked shared in the same edit — so no field
+    // classifies as localized at all.
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_allcleared",
+            fields: [
+              text({ name: "title", localized: false }),
+              text({ name: "sku", localized: false }),
+            ],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ sku: string }>(
+      `SELECT "sku" FROM "dc_dbsync_allcleared" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ sku: "NEW-SKU" }]);
   });
 
   it("restores each entry from whichever locale it actually has", async () => {

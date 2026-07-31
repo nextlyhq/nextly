@@ -302,13 +302,18 @@ function restorableFields(fields: RestorableField[]): RestorableField[] {
   // Classified as if the entity were still localized: it is being turned off, and the question is
   // which columns the companion owned while it was on.
   const owned = new Set(resolveLocalizedFieldNames(fields, true));
-  // Nothing localized under those rules means every field was marked shared in the same edit that
-  // disabled the entity — flags cleared wholesale, saying nothing about what the companion held
-  // while it was on. There is no per-field split to honour, so every field is a candidate and the
-  // physical intersection decides. A genuine split, where some fields still classify as localized,
-  // is a statement about the entity's shape and is honoured as one.
-  if (owned.size === 0) return fields;
-  return fields.filter(f => owned.has(f.name));
+  // A field the configuration declares shared outright is never restored from, in any branch.
+  // Reconciliation is additive, so one made shared while its entity stayed localized keeps a
+  // companion column that the physical intersection would accept — and copying it back would
+  // overwrite the value main has been authoritative for ever since.
+  const notShared = fields.filter(f => f.localized !== false);
+  // Nothing classified as localized means the flags were cleared in the same edit that disabled
+  // the entity, which says nothing about what the companion held while it was on. There is no
+  // per-field split left to honour, so what remains after the explicit exclusions is offered and
+  // the physical intersection decides. A genuine split, where some fields still classify as
+  // localized, is a statement about the entity's shape and is honoured as one.
+  if (owned.size === 0) return notShared;
+  return notShared.filter(f => owned.has(f.name));
 }
 
 /**

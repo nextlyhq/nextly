@@ -15,7 +15,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
 
@@ -156,39 +156,44 @@ export async function copyDefaultLocaleOntoMain(
   if (!shape) return;
   if (shape.pairs.length === 0 && args.status !== true) return;
 
-  // Each parent is restored from `locale` when it has a row there and from `fallbackLocale`
-  // otherwise. One entity-wide choice is not enough: the configured default can move while an
-  // entity is localized, leaving some parents authored under the new code and others only under
-  // the one the transition recorded. Choosing per entity restores whichever group matches and
-  // leaves the rest holding pre-localization values — while the record marks the transition
-  // terminally finished, so nothing retries.
-  const locales =
-    args.fallbackLocale && args.fallbackLocale !== args.locale
-      ? [args.locale, args.fallbackLocale]
-      : [args.locale];
+  // Preference order, not a filter. `locale` is the best answer, `fallbackLocale` the next best,
+  // and any other row this parent has is still better than what main held before it was localized —
+  // that content is the only copy of every edit made while the entity was localized.
+  //
+  // Restricting to the named locales strands a parent that has neither, and the case where that
+  // bites hardest is the one where the names are weakest: removing the `localization` block
+  // outright leaves no configured default at all, so the only candidate is the locale recorded when
+  // localization was first switched on. An entry authored solely under a default adopted since then
+  // has no row there, keeps whatever main held beforehand, and is marked restored anyway.
+  const preferred = [
+    args.locale,
+    ...(args.fallbackLocale && args.fallbackLocale !== args.locale
+      ? [args.fallbackLocale]
+      : []),
+  ];
 
   // ONE row per parent, chosen by rank rather than per column.
   //
   // Ranking is what makes the choice shared. Asking each column for its own first non-null value
-  // across the candidate locales looks equivalent and is not: a parent that has rows in BOTH, with
-  // one column left untranslated in the preferred row, takes that column from the other language
-  // while its neighbours and its publishing status come from the preferred one. The result is a
+  // across the candidates looks equivalent and is not: a parent that has rows in several, with one
+  // column left untranslated in the preferred row, takes that column from another language while
+  // its neighbours and its publishing status come from the preferred one. The result is a
   // mixed-language document written to the table that is authoritative from then on, with the
   // record marking the restore terminally finished.
   //
   // Expressed as an ordering rather than a CASE so every bound locale appears in a comparison
-  // against `_locale`, where all three dialects can infer its type.
-  const candidateRow = and(
-    eq(shape.companion._parent as never, shape.main.id as never),
-    locales
-      .map(locale => sql`${shape.companion._locale} = ${locale}`)
-      .reduce((first, next) => sql`${first} or ${next}`)
+  // against `_locale`, where all three dialects can infer its type. `_locale` breaks the tie among
+  // the rest, so the row picked is the same one on every dialect and on a re-run.
+  const parentRow = eq(
+    shape.companion._parent as never,
+    shape.main.id as never
   );
-  const byPreference = locales
+  const byPreference = preferred
     .map(locale => sql`(${shape.companion._locale} = ${locale}) desc`)
     .reduce((first, next) => sql`${first}, ${next}`);
+  const ordering = sql`${byPreference}, ${shape.companion._locale} asc`;
   const fromChosenRow = (companionColumn: unknown) =>
-    sql`(select ${companionColumn} from ${shape.companionTable} where ${candidateRow} order by ${byPreference} limit 1)`;
+    sql`(select ${companionColumn} from ${shape.companionTable} where ${parentRow} order by ${ordering} limit 1)`;
 
   const values: Record<string, unknown> = {};
   for (const pair of shape.pairs) {
@@ -198,15 +203,15 @@ export async function copyDefaultLocaleOntoMain(
     values.status = fromChosenRow(shape.companion._status);
   }
 
-  // Guarded on a candidate row existing at all: a parent with a row in no candidate locale — an
-  // entry authored in some third language only — would otherwise be assigned SQL NULL, blanking
-  // the main column instead of leaving it alone.
+  // Guarded on the parent having any companion row at all. Without it a parent with none — one
+  // created after localization was switched off, say — would be assigned SQL NULL, blanking the
+  // main column instead of leaving it alone. There is nothing to restore for such a row.
   await adapter
     .getDrizzle<UpdatableDb>()
     .update(shape.mainTable)
     .set(values)
     .where(
-      sql`exists (select 1 from ${shape.companionTable} where ${candidateRow})`
+      sql`exists (select 1 from ${shape.companionTable} where ${parentRow})`
     );
 }
 

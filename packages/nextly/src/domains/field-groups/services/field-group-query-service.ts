@@ -321,17 +321,46 @@ export class FieldGroupQueryService extends BaseService {
       requested,
       fallbackLocale
     );
-    await populateCompanionFields({
-      db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-        typeof populateCompanionFields
-      >[0]["db"],
-      companionTable: companion.table,
-      localizedFields: companion.localizedFields,
-      rows: dataArray,
-      localeChain,
-      idKey: "id",
-      readiness: await this.companionReadiness(companion, executor),
-    });
+    // Resolved before the overlay runs, because inside a transaction it can only be read and the
+    // read itself must not be what fails.
+    const readiness = await this.companionReadiness(companion, executor);
+    const overlay = () =>
+      populateCompanionFields({
+        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+          typeof populateCompanionFields
+        >[0]["db"],
+        companionTable: companion.table,
+        localizedFields: companion.localizedFields,
+        rows: dataArray,
+        localeChain,
+        idKey: "id",
+        readiness,
+      });
+
+    if (executor !== undefined) {
+      // On the caller's transaction connection a failure has already aborted it, so there is
+      // nothing left to salvage: the next statement would fail anyway, blaming something
+      // unrelated. Propagating keeps the error attached to the query that caused it.
+      await overlay();
+      return;
+    }
+
+    try {
+      await overlay();
+    } catch (error) {
+      // Readiness said the companion is usable, so this is drift, a permission, or a transient
+      // fault rather than a missing table. Contained HERE rather than left to the caller: the
+      // component read above catches anything this throws and replaces the whole field with null
+      // or an empty list, which would discard the shared values it just loaded successfully along
+      // with the translation it could not. Losing the overlay costs the reader a translation;
+      // losing the component costs them the record.
+      this.logger.error(
+        `Could not read translations for component "${meta.slug}" from ` +
+          `${companion.companionTableName}. Its shared values are being returned untranslated: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
     this.decodeJsonLocalizedValues(
       meta,
       companion.localizedFields,
