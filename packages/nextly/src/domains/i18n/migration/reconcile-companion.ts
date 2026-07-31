@@ -311,6 +311,14 @@ export function buildCompanionTransitionStatements(
     return {
       statements: buildLocalizationDownStatements(spec, {
         existingMainColumns: args.existingMainColumns,
+        // The PHYSICAL shape, not the desired one. `status` describes what the collection is being
+        // saved as, and a save that disables localization and enables Draft/Published at once
+        // would have this restore read a `_status` the old companion never had — and main receive
+        // it before the shared ALTER that adds `status`, because a disable deliberately runs the
+        // companion transition first. Both columns have to be there already.
+        restoreStatus:
+          args.companionHasStatus === true &&
+          (args.existingMainColumns?.includes("status") ?? false),
       }),
       needsArchive: true,
       companionDropped: true,
@@ -342,4 +350,38 @@ export function buildCompanionTransitionStatements(
   }
 
   return none;
+}
+
+/**
+ * The transition as a replayable migration artefact, and — only when they differ — as the
+ * statements this particular database needs.
+ *
+ * A migration file is replayed against databases that have only ever run migrations, so its
+ * content must follow from history alone. `existingMainColumns` comes from introspecting the
+ * database in front of you, and unattended provisioning retains the columns it copied into a
+ * companion, so a development database can sit in a shape no sequence of migrations produces.
+ * Baking that in emits a disable which skips re-adding columns the target database dropped, and
+ * the restore then addresses columns that are not there.
+ *
+ * Both plans come from one call site so the artefact cannot accidentally be built from local
+ * introspection. `local` is omitted when the two agree — every case but a disable meeting retained
+ * columns — so a caller holding one plan cannot pick the wrong one.
+ */
+export function buildCompanionTransitionPlans(
+  args: CompanionTransitionArgs & {
+    /** What THIS database carries. Never reaches the artefact. */
+    existingMainColumns?: readonly string[];
+  }
+): { artefact: CompanionTransitionPlan; local?: CompanionTransitionPlan } {
+  const artefact = buildCompanionTransitionStatements({
+    ...args,
+    existingMainColumns: undefined,
+  });
+  if (!args.existingMainColumns?.length) return { artefact };
+
+  const local = buildCompanionTransitionStatements(args);
+  const same =
+    local.statements.length === artefact.statements.length &&
+    local.statements.every((s, i) => s === artefact.statements[i]);
+  return same ? { artefact } : { artefact, local };
 }

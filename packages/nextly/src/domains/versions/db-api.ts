@@ -16,8 +16,11 @@ export interface VersionsWhereCondition {
   // `<` powers keyset pagination (versionNo < cursor); `IN` powers the
   // retention delete, which removes several rows in one statement; `IS NULL`
   // powers the locale filter, which must also match shared (null-locale)
-  // snapshots. The adapter's WhereOperator spells the set operator uppercase.
-  op: "=" | "!=" | "<" | "IN" | "IS NULL";
+  // snapshots; `IS NOT NULL` powers the durable-version filter, which excludes
+  // the working draft (a non-autosave row with no version number) from reads
+  // that assume a non-autosave row carries a sequence number. The adapter's
+  // WhereOperator spells the set operator uppercase.
+  op: "=" | "!=" | "<" | "IN" | "IS NULL" | "IS NOT NULL";
   // Matches the adapter's WhereCondition.value so the adapter and the
   // transaction context both structurally satisfy VersionsDbApi (a looser
   // `unknown` here breaks that assignability under method-parameter variance).

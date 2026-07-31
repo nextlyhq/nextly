@@ -1,5 +1,5 @@
 import { ddlType, lit, q } from "./ddl-types";
-import type { CompanionMigrationSpec } from "./types";
+import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
 
 /** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
  *  enable UP and the create-only path so the companion shape stays identical. */
@@ -84,6 +84,24 @@ export interface LocalizationUpOptions {
    * column has to be relaxed or removed; leaving it as-is breaks writes outright.
    */
   relaxColumns?: readonly string[];
+  /**
+   * Whether the main table PHYSICALLY carries its `status` column yet.
+   *
+   * `spec.status` says the entity has Draft/Published, which decides whether the companion gets a
+   * per-locale `_status`. It does not say the main table has been reshaped to match. One
+   * configuration edit can turn on localization and Draft/Published together, and the copy runs
+   * before the schema push — so the companion is created correctly while `SELECT status FROM main`
+   * addresses a column that does not exist yet. The seed fails, and because the companion now
+   * exists every retry reaches the same statement, so that combination could never apply.
+   *
+   * Omitting a status the seed cannot read costs nothing here: the main column is created
+   * `NOT NULL DEFAULT 'draft'` and the companion's `_status` carries the same default, so rows
+   * gaining Draft/Published in this edit end up in the same state on both sides either way.
+   *
+   * Defaults to `spec.status`, which is right for a migration file and for the Builder toggle:
+   * both run against a main table that already has the column.
+   */
+  statusOnMain?: boolean;
 }
 
 /**
@@ -114,15 +132,16 @@ export function buildLocalizationUpStatements(
 
   // When the collection has Draft/Published, the seeded default-locale rows carry the existing
   // main row's `status` into the companion `_status` so enabling localization doesn't silently
-  // un-publish live content.
-  const statusInsertCol = spec.status ? `, ${q("_status", dialect)}` : "";
-  const statusSelectCol = spec.status ? `, ${q("status", dialect)}` : "";
+  // un-publish live content. Only when main actually has the column to read — see `statusOnMain`.
+  const copiesStatus = spec.status === true && options.statusOnMain !== false;
+  const statusInsertCol = copiesStatus ? `, ${q("_status", dialect)}` : "";
+  const statusSelectCol = copiesStatus ? `, ${q("status", dialect)}` : "";
 
   // Skip the seed entirely when there is nothing on main to copy — no pre-existing translatable
-  // columns and no status. An INSERT with an empty value list would be invalid SQL, and there
-  // is no existing content to preserve.
+  // columns and no status to carry across. An INSERT with an empty value list would be invalid
+  // SQL, and there is no existing content to preserve.
   const seed =
-    onMain.length > 0 || spec.status
+    onMain.length > 0 || copiesStatus
       ? [
           `INSERT INTO ${q(companionTable, dialect)} ` +
             `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
@@ -156,6 +175,65 @@ export function buildLocalizationUpStatements(
       );
 
   return [create, ...seed, ...relaxations, ...drops];
+}
+
+/**
+ * Overwrite the default locale's companion values from the main row — one correlated UPDATE
+ * covering every column in `columnNames`.
+ *
+ * The inverse of the restore in `generate-down`, and needed for the one case where the seed's
+ * usual `INSERT ... WHERE NOT EXISTS` does the wrong thing: re-enabling localization on an entity
+ * whose companion survived a previous disable. Those default-locale rows are real, so an insert
+ * guarded on their absence skips them — and they are stale, because main has been authoritative
+ * ever since the disable. Skipping them reverts every edit made while localization was off.
+ *
+ * Written as an UPDATE rather than an upsert deliberately: the three dialects spell conflict
+ * handling three different ways, while a correlated UPDATE is the same statement everywhere and is
+ * already the shape the restore uses. Rows the companion does not have yet are not this
+ * statement's job — the guarded insert that follows adds them.
+ *
+ * `refreshStatus` carries the main row's `status` into the companion's `_status` alongside the
+ * values. Publishing state moves too while localization is off, and the companion row that
+ * survives the disable keeps whatever status it had when it was last the authority — so a page
+ * published in the meantime stays hidden from locale-aware published reads, and one unpublished in
+ * the meantime keeps being served. The guarded insert cannot correct it either, because the row it
+ * would fix already exists.
+ *
+ * ONE statement covering every column, for the same reason the restore is one: a refresh that
+ * lands half-way leaves the companion holding a mixture with nothing recording that it did.
+ */
+export function buildDefaultLocaleRefreshStatements(
+  spec: CompanionCopyRef,
+  columnNames: readonly string[],
+  options: { refreshStatus?: boolean } = {}
+): string[] {
+  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const comp = q(companionTable, dialect);
+  const main = q(mainTable, dialect);
+  const correlate = `${main}.${q("id", dialect)} = ${comp}.${q("_parent", dialect)}`;
+  const copy = (target: string, source: string) =>
+    `${target} = (SELECT ${source} FROM ${main} WHERE ${correlate})`;
+
+  const assignments = columnNames.map(name =>
+    copy(q(name, dialect), q(name, dialect))
+  );
+  if (options.refreshStatus) {
+    // The companion's `_status` is NOT NULL DEFAULT 'draft' while main's `status` need not be —
+    // an older shape, or a column added nullable, can hold NULL. Assigning it straight through
+    // violates the constraint, and because the transition stays unsettled every later pass
+    // replays the same statement. Defaulted to the value the companion's own DDL uses.
+    assignments.push(
+      `${q("_status", dialect)} = COALESCE(` +
+        `(SELECT ${q("status", dialect)} FROM ${main} WHERE ${correlate}), ` +
+        `${lit(COMPANION_DEFAULT_STATUS)})`
+    );
+  }
+  if (assignments.length === 0) return [];
+
+  return [
+    `UPDATE ${comp} SET ${assignments.join(", ")} ` +
+      `WHERE ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}`,
+  ];
 }
 
 /**

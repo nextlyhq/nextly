@@ -11,7 +11,6 @@ import {
   FieldGroupMutationService,
   type SaveComponentDataParams,
   type DeleteComponentDataParams,
-  type FieldGroupCompanionPresence,
 } from "./field-group-mutation-service";
 import {
   FieldGroupQueryService,
@@ -127,31 +126,25 @@ export class FieldGroupDataService {
 
   saveComponentDataInTransaction(
     tx: TransactionContext,
-    params: SaveComponentDataParams,
-    presence: FieldGroupCompanionPresence
+    params: SaveComponentDataParams
   ): Promise<void> {
-    return this.mutationService.saveComponentDataInTransaction(
-      tx,
-      params,
-      presence
-    );
+    return this.mutationService.saveComponentDataInTransaction(tx, params);
   }
 
   /**
    * Verify every localized field group in a payload can be written, BEFORE the caller opens its
-   * transaction, and return what it found out. See
-   * {@link FieldGroupMutationService.assertLocalizedFieldGroupsWritable} — this cannot run inside
-   * the transaction without risking pool starvation, and answering it first keeps a refusal
-   * exactly as raised.
+   * transaction. See {@link FieldGroupMutationService.assertLocalizedFieldGroupsWritable} — this
+   * cannot run inside the transaction without risking pool starvation, and answering it first
+   * keeps a refusal exactly as raised.
    *
-   * The returned map is not optional bookkeeping: it must be handed to
-   * `saveComponentDataInTransaction`, because that is the only way the in-transaction write can
-   * learn whether a companion exists without probing for it, which would abort the transaction
-   * on PostgreSQL when it does not.
+   * Not optional bookkeeping: it is also what resolves each field group's readiness, which the
+   * in-transaction write then reads. Skipping it leaves the write with no way to learn whether a
+   * companion exists short of probing for one, which aborts the transaction on PostgreSQL when it
+   * does not.
    */
   assertLocalizedFieldGroupsWritable(
     params: Pick<SaveComponentDataParams, "fields" | "data" | "locale">
-  ): Promise<FieldGroupCompanionPresence> {
+  ): Promise<void> {
     return this.mutationService.assertLocalizedFieldGroupsWritable(params);
   }
 

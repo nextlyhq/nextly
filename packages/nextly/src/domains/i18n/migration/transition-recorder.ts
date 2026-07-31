@@ -1,16 +1,14 @@
 /**
  * Building the thing that records a localization transition.
  *
- * Every path that can create a companion needs the same two pieces: somewhere to
- * put the record, and the locale to put in it. Neither is interesting on its own
- * and both are easy to get subtly wrong — a store without a locale invites a
- * caller to reach for `defaultLocale` from whatever config is nearest, which is
- * how a transition ends up labelled with a locale that was never in force. So
- * they are resolved together, once, here.
+ * A path that CREATES a companion needs two pieces: somewhere to put the record,
+ * and the locale to put in it. Pairing them here is what stops a caller reaching
+ * for `defaultLocale` from whatever config is nearest, which is how a transition
+ * ends up labelled with a locale that was never in force.
  *
- * Returns undefined when the app names no default locale. An entity cannot be
- * localized without one, so there is no transition to describe, and handing back
- * nothing is more honest than a recorder that would have to invent a language.
+ * The store is available on its own, because reading, forgetting and unwinding a
+ * transition need no locale at all — and have to keep working for an app that no
+ * longer configures one, which is exactly the app that owes an unwind.
  *
  * @module domains/i18n/migration/transition-recorder
  */
@@ -54,18 +52,15 @@ const SILENT_LOGGER: Logger = {
 };
 
 /**
- * Resolve where a transition gets recorded and with which locale.
+ * Where transitions are recorded, without a locale attached.
  *
- * `logger` is optional because the provisioning paths differ in what they have:
- * the CLI carries a real logger, the dev reload path writes through `console`.
- * Neither matters to the record itself.
- */
-/**
- * The store alone, without a locale.
+ * Reading a record, forgetting one, or unwinding a transition needs somewhere to read and write and
+ * nothing else — and all three have to work for an entity whose localization is being turned off,
+ * where asking for a default locale would be asking the wrong question and would fail outright for
+ * an app that no longer configures one.
  *
- * Forgetting a transition needs somewhere to delete from and nothing else, and it has to work for
- * an entity whose localization is being turned off — where asking for a default locale would be
- * asking the wrong question, and would fail for an app that no longer configures one.
+ * `logger` is optional because the callers differ in what they have: the CLI carries a real logger,
+ * the dev reload path writes through `console`. Neither matters to the record itself.
  */
 export async function resolveTransitionStore(
   adapter: MetaCapableAdapter,
@@ -76,21 +71,32 @@ export async function resolveTransitionStore(
   return {
     getEntry: key => meta.getEntry(key),
     set: (key, value) => meta.set(key, value),
+    insertIfAbsent: (key, value) => meta.insertIfAbsent(key, value),
+    compareAndSet: (key, expected, next) =>
+      meta.compareAndSet(key, expected, next),
     delete: key => meta.delete(key),
   };
 }
 
-export async function resolveTransitionRecorder(
-  config: { localization?: { defaultLocale?: string } },
-  adapter: MetaCapableAdapter,
-  logger: Logger = SILENT_LOGGER
-): Promise<TransitionRecorder | undefined> {
+/**
+ * Attach the configured default locale to a store that has already been resolved.
+ *
+ * Split out because the two things a provisioning pass needs are not equally available. Every pass
+ * needs somewhere to read and write records; only the passes that CREATE a companion also need a
+ * locale. An app that has turned localization off entirely still has transitions to unwind, and
+ * requiring a locale to reach the record would hide exactly those entities.
+ *
+ * Undefined when no default locale is configured — an entity cannot be localized without one, so
+ * there is no transition to begin, and handing back nothing is more honest than a recorder that
+ * would have to invent a language.
+ */
+export function bindTransitionRecorder(
+  store: TransitionStateStore,
+  config: { localization?: { defaultLocale?: string } }
+): TransitionRecorder | undefined {
   const defaultLocale = config.localization?.defaultLocale;
   if (typeof defaultLocale !== "string" || defaultLocale.length === 0) {
     return undefined;
   }
-  // Imported here rather than at module scope: this module is reached from the
-  // dev reload path, and the service pulls in the dialect schema tables.
-  const store = await resolveTransitionStore(adapter, logger);
   return { defaultLocale, ...store };
 }

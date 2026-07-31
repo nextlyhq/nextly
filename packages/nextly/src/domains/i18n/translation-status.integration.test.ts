@@ -68,6 +68,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -93,6 +94,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -114,6 +116,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -131,6 +134,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -163,6 +167,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeNoStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -205,6 +210,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
     it("is a no-op for empty rows / no locales", async () => {
       const rows: Record<string, unknown>[] = [];
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,

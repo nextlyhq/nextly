@@ -39,6 +39,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { forgetCompanionReadiness } from "../runtime/companion-readiness";
 
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
@@ -66,6 +67,26 @@ afterEach(async () => {
 });
 
 const localization = { locales: ["en", "es"], defaultLocale: "en" };
+
+/**
+ * Drop a companion the way this file needs it gone.
+ *
+ * Dropping the table is a shortcut to the state these tests are about: a server that believes an
+ * entity is localized while no companion exists. The route users actually take there is a
+ * `db:sync` transition, which flips the registry flag from its own process and leaves the server
+ * having never seen a companion at all — so nothing is remembered about it. Forgetting the
+ * readiness verdict reproduces that, rather than the different situation of a table vanishing from
+ * under a process that had already used it.
+ */
+async function dropCompanion(
+  nextly: TestNextly,
+  table: string,
+  dialect: string
+): Promise<void> {
+  const quoted = dialect === "mysql" ? `\`${table}\`` : `"${table}"`;
+  await nextly.adapter.executeQuery(`DROP TABLE IF EXISTS ${quoted}`);
+  forgetCompanionReadiness(nextly.adapter, table);
+}
 
 /** Same collection, with localization off (columns on main) or on (companion). */
 const posts = (localized: boolean) =>
@@ -129,6 +150,7 @@ async function enterWindow(): Promise<TestNextly> {
   await handle.adapter.executeQuery(
     "DROP TABLE IF EXISTS dc_i18nwin_posts_locales"
   );
+  forgetCompanionReadiness(handle.adapter, "dc_i18nwin_posts_locales");
   return handle;
 }
 
@@ -242,9 +264,7 @@ describe.each(getConfiguredTestDialects())(
       expect(created.success).toBe(true);
       const id = (created.data as { id: string }).id;
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_posts_locales`" : '"dc_i18nwin_posts_locales"'}`
-      );
+      await dropCompanion(current, "dc_i18nwin_posts_locales", dialect);
 
       const translated = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -289,9 +309,7 @@ describe.each(getConfiguredTestDialects())(
       expect(created.success).toBe(true);
       const id = (created.data as { id: string }).id;
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_posts_locales`" : '"dc_i18nwin_posts_locales"'}`
-      );
+      await dropCompanion(current, "dc_i18nwin_posts_locales", dialect);
 
       const updated = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -339,9 +357,7 @@ describe.each(getConfiguredTestDialects())(
       expect(created.success).toBe(true);
       const id = (created.data as { id: string }).id;
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`dc_i18nwin_mixed_locales`" : '"dc_i18nwin_mixed_locales"'}`
-      );
+      await dropCompanion(current, "dc_i18nwin_mixed_locales", dialect);
 
       const updated = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -412,9 +428,7 @@ describe.each(getConfiguredTestDialects())(
         localization,
       });
 
-      await current.adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${dialect === "mysql" ? "`comp_znsingle_locales`" : '"comp_znsingle_locales"'}`
-      );
+      await dropCompanion(current, "comp_znsingle_locales", dialect);
 
       const created = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -469,9 +483,7 @@ describe("dynamic zone whose unused field group has no companion (integration)",
     });
 
     // Only the type this write does NOT use loses its companion.
-    await current.adapter.executeQuery(
-      "DROP TABLE IF EXISTS comp_znbroken_locales"
-    );
+    await dropCompanion(current, "comp_znbroken_locales", "sqlite");
 
     const created = await current
       .getService<CollectionsHandler>("collectionsHandler")
@@ -486,3 +498,212 @@ describe("dynamic zone whose unused field group has no companion (integration)",
     expect(created.success).toBe(true);
   });
 });
+
+describe.each(getConfiguredTestDialects())(
+  "companion read failures on a collection read on %s (integration)",
+  dialect => {
+    it("does not put the driver's own words on the wire", async () => {
+      // The companion reads no longer swallow a failure — deciding existence by catching one is
+      // what aborted PostgreSQL transactions. Propagating is right, but it made a path that
+      // previously could not throw start throwing, and `listEntries` puts a bare Error's message
+      // into its result: the failed query, with companion table and column names in it.
+      current = await createTestNextly({
+        dialect,
+        collections: [posts(true)],
+        localization,
+      });
+      const handler =
+        current.getService<CollectionsHandler>("collectionsHandler");
+
+      // An entry, so the read actually reaches the companion: the join is skipped for an empty
+      // page, which would make this pass without exercising anything.
+      await handler.createEntry(
+        { collectionName: "i18nwin_posts", overrideAccess: true, locale: "en" },
+        { title: "Original" }
+      );
+      // A successful read first, so the companion is established as present and the failure below
+      // is a genuine read fault rather than a missing table.
+      await handler.listEntries({
+        collectionName: "i18nwin_posts",
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      // Break the companion while leaving the table in place — schema drift, from the read's
+      // point of view.
+      const quote = (id: string) =>
+        dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${quote("dc_i18nwin_posts_locales")} DROP COLUMN ${quote("title")}`
+      );
+
+      const listed = await handler.listEntries({
+        collectionName: "i18nwin_posts",
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      expect(listed.success).toBe(false);
+      expect(listed.message).not.toMatch(/title|_locales|column|relation/i);
+    });
+  }
+);
+
+/**
+ * The read side, which is where this defect actually lived.
+ *
+ * A default-locale write with the companion missing is supposed to succeed: the value stays on the
+ * main table, which still has the column. On PostgreSQL it failed anyway, with
+ * `current transaction is aborted, commands ignored until end of transaction block` — a secondary
+ * error naming a statement that had nothing to do with it.
+ *
+ * The cause was the post-write read-back that builds the response. It joins the companion, and it
+ * used to decide the companion existed by running the join and catching the failure. That check is
+ * free on SQLite and MySQL and fatal on PostgreSQL: the failed statement marks the whole
+ * transaction aborted, so the tolerated error had already poisoned the connection by the time it
+ * was tolerated, and the next statement — the events insert — died. It ran inside the caller's
+ * write transaction, so the fallback write it was meant to support is exactly what it killed.
+ *
+ * The suite can see this failure now: the aborted-transaction guard records any transaction left
+ * poisoned and fails the run, so a reintroduction trips on its own rather than waiting for a
+ * reviewer to read the code.
+ */
+describe.each(getConfiguredTestDialects())(
+  "default-locale field-group write with no companion on %s (integration)",
+  dialect => {
+    const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
+
+    it("completes the fallback write instead of aborting the transaction", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "znfall",
+            localized: true,
+            fields: [text({ name: "heading", localized: true })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "i18nwin_fallback",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "znfall" }),
+            ],
+          }),
+        ],
+        localization,
+      });
+
+      // The pre-migration shape: the translatable column is still on the main table, so the
+      // fallback is legitimate, and the companion is not there.
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${q("comp_znfall")} ADD COLUMN ${q("heading")} text`
+      );
+      await dropCompanion(current, "comp_znfall_locales", dialect);
+
+      const created = await current
+        .getService<CollectionsHandler>("collectionsHandler")
+        .createEntry(
+          {
+            collectionName: "i18nwin_fallback",
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "Page", hero: { heading: "Hello" } }
+        );
+
+      // Report the driver's own words. A bare `success` assertion cannot tell an aborted
+      // transaction from an ordinary refusal, and those want opposite fixes.
+      expect(
+        created.success
+          ? "ok"
+          : `failed ${created.statusCode}: ${created.message}`
+      ).toBe("ok");
+    });
+  }
+);
+
+/**
+ * A component's translations failing to read must not take its shared values with them.
+ *
+ * The companion reads stopped swallowing failures, which is right — deciding existence by catching
+ * one is what aborted PostgreSQL transactions. But a component's overlay runs after its shared
+ * values have already been deserialized, and the component read above it catches anything the
+ * overlay throws and replaces the whole field with null. So a fault that costs the reader one
+ * translation was costing them the entire component.
+ *
+ * `ready` is established by a successful read and remembered for 30 seconds, so dropping a
+ * translatable column after it is exactly the state this is about: the companion is known good and
+ * the query fails anyway.
+ */
+describe.each(getConfiguredTestDialects())(
+  "component companion read failures on %s (integration)",
+  dialect => {
+    it("keeps the component's shared values when its translations cannot be read", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "cmpread",
+            localized: true,
+            fields: [
+              text({ name: "heading", localized: true }),
+              text({ name: "anchor", localized: false }),
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "i18nwin_cmpread",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "cmpread" }),
+            ],
+          }),
+        ],
+        localization,
+      });
+      const handler =
+        current.getService<CollectionsHandler>("collectionsHandler");
+
+      const created = await handler.createEntry(
+        {
+          collectionName: "i18nwin_cmpread",
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: "Page", hero: { heading: "Hello", anchor: "top" } }
+      );
+      expect(created.success).toBe(true);
+      const entryId = (created.data as { id: string }).id;
+
+      // Establishes the companion as `ready`, which is remembered.
+      await handler.getEntry({
+        collectionName: "i18nwin_cmpread",
+        entryId,
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      const quote = (id: string) =>
+        dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${quote("comp_cmpread_locales")} DROP COLUMN ${quote("heading")}`
+      );
+
+      const read = await handler.getEntry({
+        collectionName: "i18nwin_cmpread",
+        entryId,
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      expect(read.success).toBe(true);
+      const hero = (read.data as { hero?: { anchor?: string } }).hero;
+      // The shared value survives. Losing the overlay costs a translation; losing the component
+      // costs the record.
+      expect(hero?.anchor).toBe("top");
+    });
+  }
+);
