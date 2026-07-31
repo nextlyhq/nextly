@@ -54,6 +54,7 @@ describe("beforeOperation context shape", () => {
       collection: "posts",
       operation: "read",
       args: { where: { archived: false } },
+      context: {},
     } as BeforeOperationContext);
 
     expect(seen).toHaveLength(1);
@@ -76,6 +77,7 @@ describe("beforeOperation context shape", () => {
       collection: "posts",
       operation: "read",
       args: { where: { published: true } },
+      context: {},
     } as BeforeOperationContext);
 
     expect(result).toEqual({ where: { archived: false } });
@@ -96,6 +98,7 @@ describe("beforeOperation context shape", () => {
       collection: "posts",
       operation: "read",
       args: {},
+      context: {},
     } as BeforeOperationContext);
 
     expect(result).toEqual({ first: true, second: true });
@@ -122,7 +125,7 @@ describe("beforeOperation context shape", () => {
       // Both stores are keyed the same way, so a clear that reached only one
       // would leave a cleared collection still running its operation hooks.
       const registry = new HookRegistry();
-      registry.registerBeforeOperation("posts", () => ({ touched: true }));
+      registry.registerBeforeOperation("posts", () => undefined);
       expect(registry.hasHooks("beforeOperation", "posts")).toBe(true);
 
       registry.clearCollection("posts");
@@ -132,6 +135,7 @@ describe("beforeOperation context shape", () => {
         collection: "posts",
         operation: "read",
         args: { where: {} },
+        context: {},
       } as BeforeOperationContext);
       expect(result).toEqual({ where: {} });
     });
@@ -222,7 +226,7 @@ describe("the plugin surface can register beforeOperation", () => {
   // replacement rather than a phase it can no longer reach.
   // The context factory proxies whatever the service getter returns, so it has
   // to hand back an object for every name.
-  const stubServices = (() => ({})) as Parameters<
+  const stubServices = (() => ({})) as unknown as Parameters<
     typeof createPluginContext
   >[0];
 
@@ -249,6 +253,7 @@ describe("the plugin surface can register beforeOperation", () => {
       collection: "posts",
       operation: "read",
       args: {},
+      context: {},
     } as BeforeOperationContext);
 
     expect(result).toEqual({ scoped: true });
@@ -274,6 +279,7 @@ describe("the plugin surface can register beforeOperation", () => {
       collection: "posts",
       operation: "read",
       args: {},
+      context: {},
     } as BeforeOperationContext);
 
     expect(result).toEqual({});
@@ -336,6 +342,7 @@ describe("execute() refuses the phase it cannot run", () => {
       collection: "posts",
       operation: "read",
       args: {},
+      context: {},
     } as BeforeOperationContext);
     expect(ran).toBe(true);
   });
