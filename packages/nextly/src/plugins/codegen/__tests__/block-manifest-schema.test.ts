@@ -14,6 +14,7 @@ import {
   blockManifestJsonSchema,
   blockManifestSchema,
   buildBlockManifest,
+  buildBlockManifestArtifact,
   PAGE_BUILDER_PLUGIN,
 } from "../block-manifest";
 
@@ -118,10 +119,14 @@ describe("the manifest schema", () => {
       "an example with no props at all",
       { name: "n", version: 1, description: "d", example: {} },
     ],
+    [
+      "a block with no example, which the emitter can never produce",
+      { name: "n", version: 1, description: "d", example: undefined },
+    ],
   ])("refuses %s", (_label, partial) => {
     const result = blockManifestSchema.safeParse({
       manifestVersion: BLOCK_MANIFEST_VERSION,
-      blocks: [{ ...partial, source: "@acme/x" }],
+      blocks: [{ example: { props: {} }, ...partial, source: "@acme/x" }],
     });
 
     expect(result.success).toBe(false);
@@ -131,6 +136,18 @@ describe("the manifest schema", () => {
     expect(blockManifestSchema.safeParse({ blocks: [] }).success).toBe(false);
     expect(
       blockManifestSchema.safeParse({ manifestVersion: 0, blocks: [] }).success
+    ).toBe(false);
+  });
+
+  it("refuses a version of the document this schema was not written for", () => {
+    // The field exists so a reader can tell whether it understands the file.
+    // Accepting a version this schema does not describe answers that question
+    // wrong, and a consumer trusting it would read a future format as this one.
+    expect(
+      blockManifestSchema.safeParse({
+        manifestVersion: BLOCK_MANIFEST_VERSION + 1,
+        blocks: [],
+      }).success
     ).toBe(false);
   });
 });
@@ -223,6 +240,72 @@ describe("the emitter's obligation to the schema", () => {
   });
 });
 
+describe("rendering the manifest as a file", () => {
+  /** The first structured issue of a thrown validation error. */
+  function issueOf(run: () => unknown): { code?: string; message?: string } {
+    try {
+      run();
+    } catch (error) {
+      const issues = (
+        error as {
+          publicData?: { errors?: { code?: string; message?: string }[] };
+        }
+      )?.publicData?.errors;
+      return issues?.[0] ?? {};
+    }
+    return {};
+  }
+
+  function artifactOf(props: Record<string, unknown>) {
+    return () =>
+      buildBlockManifestArtifact(
+        [
+          consumer(),
+          declaring("@acme/pricing", [block("acme/hero", { props })]),
+        ],
+        "src/generated/nextly-types.ts"
+      );
+  }
+
+  it.each([
+    ["a bigint", { count: 10n }],
+    [
+      "a cycle",
+      (() => {
+        const cyclic: Record<string, unknown> = {};
+        cyclic.self = cyclic;
+        return { shape: cyclic };
+      })(),
+    ],
+  ])("refuses %s, which JSON cannot represent", (_label, props) => {
+    // Whatever a plugin puts in `props` reaches `JSON.stringify` untouched, and
+    // these make it throw. A raw TypeError leaving the package says nothing
+    // about which declaration to go and fix.
+    expect(issueOf(artifactOf(props))).toMatchObject({
+      code: "INVALID_BLOCK_DECLARATION",
+    });
+    expect(issueOf(artifactOf(props)).message).toMatch(/JSON cannot represent/);
+  });
+
+  it("writes a file that satisfies the schema after JSON has had its way", () => {
+    // A function and an `undefined` are dropped by serialization rather than
+    // refused, as `render` already is. What must hold is that the TEXT still
+    // satisfies the published contract, since the text is what anyone reads.
+    const artifact = artifactOf({
+      keep: 1,
+      drop: undefined,
+      alsoDrop: () => null,
+    })();
+
+    const parsed: unknown = JSON.parse(artifact?.code ?? "null");
+    expect(blockManifestSchema.safeParse(parsed).success).toBe(true);
+    expect(
+      (parsed as { blocks: { props: Record<string, unknown> }[] }).blocks[0]
+        .props
+    ).toEqual({ keep: 1 });
+  });
+});
+
 describe("the published JSON Schema", () => {
   it("describes the same document the emitter writes", () => {
     // Pinned rather than merely smoke-tested: this is the contract an outside
@@ -297,15 +380,15 @@ describe("the published JSON Schema", () => {
                 "version",
                 "description",
                 "source",
+                "example",
               ],
               "type": "object",
             },
             "type": "array",
           },
           "manifestVersion": {
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991,
-            "type": "integer",
+            "const": 1,
+            "type": "number",
           },
         },
         "required": [

@@ -39,7 +39,7 @@ import { resolve, dirname, join } from "node:path";
 
 import type { Command } from "commander";
 
-import { describeError } from "../../errors/index";
+import { describeError, NextlyError } from "../../errors/index";
 import {
   assertManifestPathIsFree,
   BLOCK_MANIFEST_FILENAME,
@@ -114,14 +114,33 @@ export function describeManifestDrift(state: BlockManifestState): string {
   return `${state.path} does not match this config.`;
 }
 
+/**
+ * The manifest on disk, or `null` only when there is genuinely no file.
+ *
+ * Absent and unreadable are NOT the same answer. Reading a permission error or
+ * a directory as "no file" makes an existing stale manifest compare equal to
+ * "there should be none", so the write command skips the removal it owes and
+ * `--check` reports the tree clean while the stale file sits there. Anything
+ * that is not a missing file is surfaced.
+ */
 async function read(path: string): Promise<string | null> {
   try {
     return await readFile(path, "utf-8");
-  } catch {
-    // Absent and unreadable are the same answer to the only question asked
-    // here: there is nothing on disk to compare against.
-    return null;
+  } catch (error) {
+    if (isMissingFile(error)) return null;
+    throw NextlyError.invalidInput({
+      message: `The block manifest at ${path} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    });
   }
+}
+
+/** A filesystem error meaning the path holds nothing, rather than something unreadable. */
+function isMissingFile(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 interface GenerateManifestOptions {

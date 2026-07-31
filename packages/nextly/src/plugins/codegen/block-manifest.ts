@@ -93,14 +93,17 @@ export const blockManifestEntrySchema = z
     /** The plugin that declared it, so a reader knows what to install. */
     source: z.string().min(1),
     /**
-     * A worked instance, for previews and few-shot prompting. Its `props` are a
-     * key/value map because that is what a stored node's props are; an
-     * array-shaped example could never become a valid node.
+     * A worked instance, for previews and few-shot prompting.
+     *
+     * Required, because both the declaration pass and the engine require one:
+     * making it optional here would accept a hand-edited or externally produced
+     * manifest the app itself would refuse, and hand every consumer an absence
+     * to handle that the emitter can never produce.
+     *
+     * Its `props` are a key/value map because that is what a stored node's
+     * props are; an array-shaped example could never become a valid node.
      */
-    example: z
-      .object({ props: z.record(z.string(), z.unknown()) })
-      .loose()
-      .optional(),
+    example: z.object({ props: z.record(z.string(), z.unknown()) }).loose(),
     /** Prop schemas keyed by prop name. */
     props: z.record(z.string(), z.unknown()).optional(),
     /** Style capabilities the block opts into. */
@@ -113,7 +116,14 @@ export const blockManifestEntrySchema = z
 /** The emitted document. */
 export const blockManifestSchema = z
   .object({
-    manifestVersion: z.number().int().positive(),
+    /**
+     * Pinned to the one version this schema describes, not to any version.
+     * The field exists so a reader can tell whether it understands the file at
+     * all; a schema accepting a version it was not written for answers that
+     * question wrong, and a consumer trusting it would process a future format
+     * as though it were this one.
+     */
+    manifestVersion: z.literal(BLOCK_MANIFEST_VERSION),
     blocks: z.array(blockManifestEntrySchema),
   })
   .strict();
@@ -270,10 +280,41 @@ export function buildBlockManifestArtifact(
   if (manifest.blocks.length === 0) return null;
   return {
     path: join(dirname(typesOutputPath), BLOCK_MANIFEST_FILENAME),
+    code: serialize(manifest),
+  };
+}
+
+/**
+ * Render the manifest as the text that will be written.
+ *
+ * `props`, `supports`, `slots` and an example's props carry whatever a plugin
+ * put there, and not every JavaScript value survives the trip into a JSON file.
+ * Two things can go wrong, and they fail differently:
+ *
+ * A `bigint` or a cycle makes `JSON.stringify` throw, and a raw `TypeError`
+ * leaving this package tells whoever ran generation nothing about which
+ * declaration to go and fix.
+ *
+ * A function, a symbol or an `undefined` is dropped instead — silently, and by
+ * design: the manifest already drops `render` and `resolve` for the same
+ * reason. What must not survive that is a FILE that no longer satisfies the
+ * schema published for it, so the rendered text is parsed back and judged
+ * again. The check is on the artifact rather than on the object it came from,
+ * because the artifact is what anyone else will read.
+ */
+function serialize(manifest: BlockManifest): string {
+  let code: string;
+  try {
     // Trailing newline so the file is well-formed for line-based tooling and
     // does not show a no-newline marker in every diff.
-    code: `${JSON.stringify(manifest, null, 2)}\n`,
-  };
+    code = `${JSON.stringify(manifest, null, 2)}\n`;
+  } catch (error) {
+    throw invalidDeclaration(
+      `A declared block holds a value JSON cannot represent, so the manifest cannot be written: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  assertMatchesSchema(JSON.parse(code));
+  return code;
 }
 
 /**
@@ -403,8 +444,11 @@ function toEntry(block: DeclaredBlock, source: string): BlockManifestDraft {
     version: block.version,
     description: block.description,
     source,
+    // Unconditional: the declaration pass has already refused a block without
+    // an example, so a guard here would be a branch that never runs and a
+    // manifest entry the schema now requires it to have.
+    example: block.example,
   };
-  if (block.example !== undefined) entry.example = block.example;
   if (isRecord(block.props)) entry.props = block.props;
   if (isRecord(block.supports)) entry.supports = block.supports;
   if (isRecord(block.slots)) entry.slots = block.slots;

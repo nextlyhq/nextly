@@ -130,6 +130,18 @@ describe("settling the manifest on disk", () => {
       readBlockManifestState(WITH_BLOCKS, "src/blocks.manifest.json", cwd)
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
+
+  it("surfaces a manifest path that exists but cannot be read", async () => {
+    // Reading unreadable as absent is what makes it dangerous: with no blocks
+    // expected, "nothing there" compares equal to "there should be nothing",
+    // so the removal is skipped and a check reports the tree clean.
+    const cwd = await workspace();
+    await mkdir(join(cwd, MANIFEST_REL), { recursive: true });
+
+    await expect(
+      readBlockManifestState([consumer()], TYPES_OUTPUT, cwd)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
 });
 
 describe("reporting drift", () => {
