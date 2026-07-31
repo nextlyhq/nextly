@@ -76,6 +76,7 @@ import type { FieldGroupConfig } from "../field-groups/config/types";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
+import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
@@ -868,6 +869,31 @@ export async function registerServices(
 
     registerActivityLogHooks(hookRegistry);
     resolvedLogger.info?.("Activity log hooks registered");
+
+    // Registered after plugins initialize, because a hook may reach the Direct
+    // API through `req.nextly` and that binding does not exist until service
+    // registration returns -- registering earlier would hand a hook an API that
+    // is not there yet. The consequence is that a plugin's `init` writing
+    // through the managed services does so before these hooks exist.
+    if (
+      transformedConfig.collections &&
+      transformedConfig.collections.length > 0
+    ) {
+      const disabledCollectionSlugs = collectPluginContributedSlugs(
+        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        "collections"
+      );
+      const hookedCollections = transformedConfig.collections.filter(
+        collection => !disabledCollectionSlugs.has(collection.slug)
+      );
+      const collectionHooks = registerCollectionHooks(
+        hookedCollections,
+        hookRegistry
+      );
+      resolvedLogger.info?.(
+        `Registered ${collectionHooks.totalHooks} hook(s) for ${collectionHooks.collections.length} collection(s)`
+      );
+    }
 
     // Register hooks declared on code-first Singles so they run on the read and
     // update paths for every consumer (Direct API, REST, tests), not only apps

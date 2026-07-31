@@ -27,7 +27,7 @@ import type {
 } from "../collections/config/define-collection";
 
 import { getHookRegistry, type HookRegistry } from "./hook-registry";
-import type { HookType, HookHandler } from "./types";
+import type { HookType } from "./types";
 
 /**
  * Result of registering collection hooks
@@ -146,21 +146,29 @@ export function registerCollectionHooks(
 
     let collectionHookCount = 0;
 
-    // Register each hook type
-    for (const [hookKey, handlers] of Object.entries(collection.hooks)) {
+    // Driven by the mapping's own order, not the config object's. Two phases
+    // can map onto the same queue -- `beforeValidate` and `beforeChange` both
+    // become `beforeCreate`/`beforeUpdate` -- so the order they are registered
+    // in IS their runtime order. Iterating the author's object would make that
+    // depend on which key they happened to type first, and a collection
+    // declaring `beforeChange` above `beforeValidate` would run its validation
+    // transformation after the write hook that expects it. The mapping is
+    // declared in the documented execution order, so following it keeps the
+    // two in step.
+    for (const hookKey of Object.keys(
+      HOOK_TYPE_MAPPINGS
+    ) as (keyof CollectionHooks)[]) {
+      const handlers = collection.hooks[hookKey];
       if (!handlers || !Array.isArray(handlers) || handlers.length === 0) {
         continue;
       }
 
-      const hookTypes = HOOK_TYPE_MAPPINGS[hookKey as keyof CollectionHooks];
-      if (!hookTypes) {
-        continue;
-      }
+      const hookTypes = HOOK_TYPE_MAPPINGS[hookKey];
 
       // Register handlers for each mapped hook type
       for (const hookType of hookTypes) {
         for (const handler of handlers) {
-          registry.register(hookType, collection.slug, handler as HookHandler);
+          registry.register(hookType, collection.slug, handler);
           collectionHookCount++;
         }
       }
