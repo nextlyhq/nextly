@@ -30,6 +30,9 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.cleanup?.();
   current = undefined;
+  // Cleared so each test starts from an empty registry. The boot path does its
+  // own reset — proven by the second-boot test below, which deliberately boots
+  // twice WITHOUT this hook running in between.
   clearBlocks();
 });
 
@@ -100,5 +103,23 @@ describe("a plugin contributes blocks through the page builder", () => {
     current = await createTestNextly({ plugins: [pageBuilder(), empty] });
 
     expect(allBlocks().some(b => b.name.startsWith("acme/"))).toBe(false);
+  });
+});
+
+describe("the registry survives a second boot", () => {
+  it("re-registers the same block without a collision", async () => {
+    // The registry is pinned to globalThis and outlives a config reload, while
+    // every plugin's init runs again — so a boot that did not reset it would
+    // refuse the second registration.
+    current = await createTestNextly({
+      plugins: [pageBuilder(), contributor()],
+    });
+    await current.cleanup?.();
+
+    current = await createTestNextly({
+      plugins: [pageBuilder(), contributor()],
+    });
+
+    expect(getBlock("acme/pricing-table")).toBeDefined();
   });
 });

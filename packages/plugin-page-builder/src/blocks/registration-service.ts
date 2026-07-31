@@ -18,6 +18,7 @@
  */
 
 import {
+  clearBlocks,
   registerBlocks,
   type AnyBlockDefinition,
 } from "@nextlyhq/blocks-engine";
@@ -50,8 +51,20 @@ export interface BlockRegistrationService {
   ): void;
 }
 
-/** Build the service the page builder contributes. */
+/**
+ * Build the service the page builder contributes.
+ *
+ * The registry is pinned to `globalThis` and survives a config reload, while
+ * every plugin's `init` runs again on that reload — so without a reset the
+ * second boot re-registers definitions that are already there and the engine
+ * refuses them as collisions. Cleared here rather than in the page builder's own
+ * `init` because init order is not fixed: a contributor whose init ran first
+ * would have its blocks wiped by a later clear. This factory is memoized per
+ * boot, so the reset happens exactly once and always before the first
+ * registration that goes through it.
+ */
 export function createBlockRegistrationService(): BlockRegistrationService {
+  clearBlocks();
   return {
     register(definitions, source) {
       const list = Array.isArray(definitions) ? definitions : [definitions];
