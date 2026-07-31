@@ -98,6 +98,10 @@ function errorToMetadataResult(
     statusCode: mapped.statusCode,
     message: mapped.publicMessage,
     data: null,
+    // The mapped error is typed too. Without its code a raw unique violation
+    // becomes a code-less 409, which a boundary reads as staleness rather than
+    // the duplicate it is, and a mapped timeout loses DATABASE_ERROR.
+    ...typedErrorEnvelopeFields(mapped),
   };
 }
 

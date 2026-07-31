@@ -108,7 +108,13 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
 export interface SingleResultLike {
   success: boolean;
   statusCode: number;
+  /** Canonical `NextlyError` code, when the envelope came from one. */
+  code?: string;
   message?: string;
+  /** Translation key for the public message. */
+  messageKey?: string;
+  /** The error's own public data -- a rate limit's retry interval, and such. */
+  publicData?: unknown;
   errors?: Array<{ field?: string; message: string }>;
 }
 
@@ -123,20 +129,20 @@ export function createErrorFromSingleResult(
     result.errors?.map(e => e.message).join(", ") ||
     "Operation failed";
 
-  if (result.statusCode === 400 && result.errors && result.errors.length > 0) {
-    return NextlyError.validation({
-      errors: result.errors.map(e => ({
-        path: e.field ?? "",
-        code: "VALIDATION_ERROR",
-        message: e.message,
-      })),
-    });
-  }
-
-  return new NextlyError({
-    code: statusCodeToErrorCode(result.statusCode),
-    publicMessage: message,
-    statusCode: result.statusCode,
+  // The shared converter, so a Single failure reaches a Direct API caller as
+  // the same error a REST caller gets. Rebuilding from status alone dropped the
+  // message key and the public data -- a rate limit's retry interval among it.
+  return errorFromServiceEnvelope({
+    ...result,
+    message,
+    // A code-less envelope keeps the status-derived guess this boundary has
+    // always made rather than falling through to a generic internal.
+    code: result.code ?? statusCodeToErrorCode(result.statusCode),
+    // Normalised to the canonical shape; SingleResult still emits `{field}`.
+    errors: result.errors?.map(e => ({
+      path: e.field,
+      message: e.message,
+    })),
   });
 }
 

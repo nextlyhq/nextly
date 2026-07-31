@@ -55,3 +55,44 @@ describe("buildSingleErrorResult records the typed fields", () => {
     expect(result.code).toBeUndefined();
   });
 });
+
+describe("the Single boundaries rebuild the error rather than its status", () => {
+  it("keeps a rate limit through the Direct API boundary", async () => {
+    // Reconstructing from status alone dropped `publicData`, so the caller got
+    // a 429 with no interval -- told to slow down without being told by how
+    // much.
+    const { createErrorFromSingleResult } = await import(
+      "../../../direct-api/namespaces/helpers"
+    );
+    const result = buildSingleErrorResult(
+      NextlyError.rateLimited({ retryAfterSeconds: 30 }),
+      "Failed"
+    );
+
+    const err = createErrorFromSingleResult({
+      success: false,
+      statusCode: result.statusCode,
+      code: result.code,
+      message: result.message,
+      publicData: result.publicData,
+    });
+
+    expect(err.code).toBe("RATE_LIMITED");
+    expect(err.statusCode).toBe(429);
+    expect(err.publicData).toEqual({ retryAfterSeconds: 30 });
+  });
+
+  it("still guesses from the status when no code was recorded", async () => {
+    // The mirror: envelopes built by hand carry no code and must keep the
+    // status-derived guess this boundary has always made.
+    const { createErrorFromSingleResult } = await import(
+      "../../../direct-api/namespaces/helpers"
+    );
+    const err = createErrorFromSingleResult({
+      success: false,
+      statusCode: 404,
+      message: "Not found.",
+    });
+    expect(err.code).toBe("NOT_FOUND");
+  });
+});

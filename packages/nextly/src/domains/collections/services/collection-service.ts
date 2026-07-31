@@ -723,13 +723,16 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -776,13 +779,16 @@ export class CollectionService extends BaseService {
     );
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -830,13 +836,16 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -986,13 +995,16 @@ export class CollectionService extends BaseService {
     this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -1060,13 +1072,16 @@ export class CollectionService extends BaseService {
     this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
