@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { MetaService } from "../../../meta/services/meta-service";
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
-import { buildMigrationPlan } from "../plan";
+import {
+  buildMigrationPlan,
+  directedRenameEntries,
+  renamePositionOffset,
+} from "../plan";
 import type { ManifestEntry } from "../manifest";
 import type { MigrationSession } from "../session";
 import type { StorageObserver } from "../steps";
@@ -35,10 +39,15 @@ const observer: StorageObserver = {
 
 const meta = {} as unknown as MetaService;
 
+/**
+ * Composed the way the orchestrator composes it: direct the entries first, then
+ * build. The builder no longer inverts internally, because the caller has to
+ * reconcile the directed entries against the catalog before executing them.
+ */
 function plan(direction: "up" | "down"): string[] {
   return buildMigrationPlan({
     direction,
-    entries: ENTRIES,
+    entries: directedRenameEntries(direction, ENTRIES),
     identifierCase: PRESERVING,
     observer,
     meta,
@@ -104,5 +113,26 @@ describe("assembling the steps one run executes", () => {
     const snapshot = structuredClone(ENTRIES);
     plan("down");
     expect(ENTRIES).toEqual(snapshot);
+  });
+
+  // 🔴 A marker counts positions across the WHOLE list, but reconciliation
+  // scores rename entries from one. Going up the data steps hold the first
+  // positions, so a recorded position has to shift down by that many; going
+  // down the renames already start at one. Untranslated, a resume marks that
+  // many renames as verified when they never ran.
+  it("offsets a recorded position into rename coordinates", () => {
+    expect(renamePositionOffset("up", 4)).toBe(4);
+    expect(renamePositionOffset("down", 4)).toBe(0);
+  });
+
+  it("directs the entries for the direction that will execute them", () => {
+    expect(directedRenameEntries("up", ENTRIES)).toEqual(ENTRIES);
+    // Reversed AND swapped, so reconciliation asks whether the MIGRATED names
+    // are present rather than the legacy ones.
+    expect(directedRenameEntries("down", ENTRIES).map(e => e.from)).toEqual([
+      "dynamic_field_groups",
+      "_field_group_type",
+      "fg_hero",
+    ]);
   });
 });

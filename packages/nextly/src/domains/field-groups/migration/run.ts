@@ -38,7 +38,12 @@ import {
   type RegistryRow,
 } from "./manifest";
 import { createStorageObserver } from "./observer";
-import { buildMigrationPlan } from "./plan";
+import {
+  buildMigrationPlan,
+  dataStepCount,
+  directedRenameEntries,
+  renamePositionOffset,
+} from "./plan";
 import { probeStorage, reconcilePlan, type TableColumns } from "./reconcile";
 import { runMigrationSteps } from "./runner";
 import { withMigrationSession, type MigrationDialect } from "./session";
@@ -105,69 +110,89 @@ export async function runFieldGroupMigration(
     }
   }
 
-  const rows = await readRegistryRows(adapter);
-  if (rows.length === 0 && state.status === "settled") {
-    return { ran: false, reason: "nothing-to-migrate" };
-  }
-
-  // The canonical plan is always legacy-to-migrated. A run in flight executes
-  // the one it recorded; a fresh run builds it from the registry.
-  const entries: readonly ManifestEntry[] =
-    state.status === "migrating"
-      ? state.appliedManifest
-      : direction === "down" && state.appliedManifest !== undefined
-        ? state.appliedManifest
-        : buildMigrationManifest(rows).entries;
-
-  const registryHash = hashRegistryIdentity(rows);
-  const manifestHash = hashManifest(entries);
-
-  // Refuses a resume whose world has moved: a field group created or deleted
-  // while a run was interrupted is storage the recorded plan never mentions.
-  if (state.status === "migrating") {
-    if (state.plan.registryHash !== registryHash) {
-      throw NextlyError.serviceUnavailable({
-        logMessage:
-          "field-group migration cannot resume: the set of field groups changed since the interrupted run",
-        logContext: {
-          reason: "the set of field groups changed since the interrupted run",
-          recorded: state.plan.registryHash,
-          current: registryHash,
-        },
-      });
-    }
-    if (state.direction !== direction) {
-      throw NextlyError.serviceUnavailable({
-        logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
-        logContext: {
-          reason: "a run in the other direction is in flight",
-          recorded: state.direction,
-          requested: direction,
-        },
-      });
-    }
-  }
-
-  const { tables, columns } = await readCatalog(adapter, dialect);
-  const reconciled = reconcilePlan({
-    entries,
-    rows,
-    tables,
-    columns,
-    run:
-      state.status === "migrating"
-        ? { recorded: true, direction: state.direction, step: state.step }
-        : { recorded: false },
-    direction,
-    identifierCase,
-  });
-
-  const migrationId =
-    state.status === "migrating" ? state.migrationId : newMigrationId(rows);
-
+  // Everything the plan is derived from is read INSIDE the lock. Reading the
+  // registry, the catalog and the marker first and contending afterwards leaves
+  // a window in which a `db:sync` holding this same lock finishes a schema
+  // change, and the run then executes a plan describing a world that has moved.
   return withMigrationSession(
     { adapter, dialect, label: `field-group-migration:${direction}` },
     async session => {
+      const rows = await readRegistryRows(adapter);
+
+      // Derived from the rows so a resume that has to rebuild it - a crash
+      // before the marker's first write - produces the same value rather than a
+      // second identity for the same work.
+      const migrationId =
+        state.status === "migrating" ? state.migrationId : newMigrationId(rows);
+
+      // The canonical plan is always legacy-to-migrated. A run in flight
+      // executes the one it recorded; a rollback reverses the recorded one; a
+      // fresh run builds it from the registry.
+      const entries: readonly ManifestEntry[] =
+        state.status === "migrating"
+          ? state.appliedManifest
+          : direction === "down" && state.appliedManifest !== undefined
+            ? state.appliedManifest
+            : buildMigrationManifest(rows).entries;
+
+      const registryHash = hashRegistryIdentity(rows);
+      const manifestHash = hashManifest(entries);
+
+      if (state.status === "migrating") {
+        if (state.plan.registryHash !== registryHash) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration cannot resume: the set of field groups changed since the interrupted run",
+            logContext: {
+              reason:
+                "the set of field groups changed since the interrupted run",
+              recorded: state.plan.registryHash,
+              current: registryHash,
+            },
+          });
+        }
+        if (state.direction !== direction) {
+          throw NextlyError.serviceUnavailable({
+            logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
+            logContext: {
+              reason: "a run in the other direction is in flight",
+              recorded: state.direction,
+              requested: direction,
+            },
+          });
+        }
+      }
+
+      const { tables, columns } = await readCatalog(adapter, dialect);
+
+      // Reconciled in the direction that will execute. A rollback scored
+      // against the canonical plan asks whether the legacy names are present,
+      // finds the migrated ones instead, and refuses the very run that would
+      // restore them.
+      const directed = directedRenameEntries(direction, entries);
+      const dataSteps = dataStepCount({ meta, migrationId });
+      const offset = renamePositionOffset(direction, dataSteps);
+      const reconciled = reconcilePlan({
+        entries: directed,
+        rows,
+        tables,
+        columns,
+        // Translated out of whole-plan coordinates. The marker counts every
+        // step, and going up the data rewrites hold the first positions, so a
+        // recorded position handed over untranslated would mark that many
+        // renames as already verified.
+        run:
+          state.status === "migrating"
+            ? {
+                recorded: true,
+                direction: state.direction,
+                step: Math.max(0, state.step - offset),
+              }
+            : { recorded: false },
+        direction,
+        identifierCase,
+      });
+
       // Written before the first statement, never after. A crash between a
       // rename and a post-hoc marker write would leave moved objects with no
       // record that a run had started.

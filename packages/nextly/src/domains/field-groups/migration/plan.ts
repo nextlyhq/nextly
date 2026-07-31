@@ -33,16 +33,49 @@ import type { MigrationStep } from "./runner";
 import type { MigrationDirection } from "./state";
 import { buildMigrationSteps, type StorageObserver } from "./steps";
 
+/**
+ * The rename entries as the given direction will execute them.
+ *
+ * Going up that is the canonical plan unchanged; going down it is the inverse,
+ * reversed. Exposed rather than kept inside the plan builder because the caller
+ * has to reconcile these against the catalog *before* executing them, and
+ * reconciling the canonical plan for a rollback asks the database the wrong
+ * question entirely: it would find every target name legitimately present and
+ * refuse a run whose whole purpose is to undo them.
+ */
+export function directedRenameEntries(
+  direction: MigrationDirection,
+  entries: readonly ManifestEntry[]
+): ManifestEntry[] {
+  return direction === "up" ? [...entries] : invertManifest(entries).entries;
+}
+
+/**
+ * How many steps precede the renames in a plan of this direction.
+ *
+ * A marker records one position against the whole executable list, but
+ * reconciliation scores rename entries numbered from one. Going up the data
+ * steps occupy the first positions, so a recorded position has to be shifted
+ * down by however many there are; going down they come last and the renames
+ * already start at one.
+ */
+export function renamePositionOffset(
+  direction: MigrationDirection,
+  dataStepCount: number
+): number {
+  return direction === "up" ? dataStepCount : 0;
+}
+
 export interface BuildPlanArgs {
   /** Which way this run travels. */
   direction: MigrationDirection;
   /**
-   * The canonical plan: the work that takes storage from legacy to migrated.
+   * The rename entries **as this direction executes them**, already reconciled.
    *
-   * Always in that direction, whichever way the run is going. A `down` run
-   * inverts it here rather than being handed something pre-inverted, so a
-   * resume cannot invert twice and migrate forward while believing it is
-   * rolling back.
+   * Directed by `directedRenameEntries` rather than inverted here, so the plan
+   * that runs is the same object the caller reconciled against the catalog. A
+   * builder that inverted internally would execute something the reconciliation
+   * never examined.
    */
   entries: readonly ManifestEntry[];
   identifierCase: IdentifierCaseRules;
@@ -78,15 +111,27 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
     ];
   }
 
-  // The exact reverse of the list above. `invertManifest` already reverses the
-  // entries and swaps each from/to, so the renames arrive in reversed order;
-  // the data steps are reversed here and travel the other way between the same
-  // two vocabularies.
+  // The exact reverse of the list above. `entries` already arrives inverted and
+  // reversed; the data steps are reversed here and travel the other way between
+  // the same two vocabularies.
   return [
-    ...renameSteps(invertManifest(entries).entries),
+    ...renameSteps(entries),
     ...dataSteps(
       FIELD_GROUP_STORAGE_VOCABULARY,
       LEGACY_STORAGE_VOCABULARY
     ).reverse(),
   ];
+}
+
+/** How many data steps a plan carries, for translating a recorded position. */
+export function dataStepCount(args: {
+  meta: MetaService;
+  migrationId: string;
+}): number {
+  return buildDataMigrationSteps({
+    meta: args.meta,
+    migrationId: args.migrationId,
+    from: LEGACY_STORAGE_VOCABULARY,
+    to: FIELD_GROUP_STORAGE_VOCABULARY,
+  }).length;
 }
