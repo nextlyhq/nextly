@@ -193,7 +193,13 @@ export interface PluginActionRegistry {
  *       // Validate that author exists
  *       const author = await users.findById(context.data.authorId, {});
  *       if (!author) {
- *         throw new Error('Author not found');
+ *         // A NextlyError, not a plain one: a plain Error reads as a crash and
+ *         // its message is replaced before the caller sees it.
+ *         throw NextlyError.validation({
+ *           errors: [
+ *             { path: 'authorId', code: 'NOT_FOUND', message: 'Author not found.' },
+ *           ],
+ *         });
  *       }
  *       return context.data;
  *     });

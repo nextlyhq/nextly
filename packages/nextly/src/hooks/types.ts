@@ -285,10 +285,16 @@ export interface HookContext<T = any> {
  *   // No return value needed for after hooks
  * };
  *
- * // Error handling (beforeCreate)
+ * // Rejecting input (beforeCreate). Throw a NextlyError, not a plain Error:
+ * // a plain one is indistinguishable from a crash, so its message is replaced
+ * // with a generic server-fault message before the caller sees it.
  * const validatePrice: HookHandler<Product> = (context) => {
  *   if (context.data.price < 0) {
- *     throw new Error('Price cannot be negative');
+ *     throw NextlyError.validation({
+ *       errors: [
+ *         { path: 'price', code: 'INVALID', message: 'Price cannot be negative.' },
+ *       ],
+ *     });
  *   }
  *   return context.data;
  * };

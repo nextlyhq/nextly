@@ -8,9 +8,9 @@
  * @since 0.1.0
  */
 
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig, FieldConfig, HookContext } from "nextly";
 import {
-  NextlyError,
   text,
   textarea,
   select,

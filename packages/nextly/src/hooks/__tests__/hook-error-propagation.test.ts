@@ -156,6 +156,25 @@ describe("hook error propagation", () => {
     expect(NextlyError.is(error)).toBe(true);
   });
 
+  it("survives a thrown value whose own inspection throws", async () => {
+    // A revoked proxy refuses every operation, including the prototype lookup
+    // `instanceof` performs and the property read that identifies a typed
+    // error. Classifying it must not raise from inside the handler that exists
+    // to report the original failure.
+    const registry = new HookRegistry();
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+    registry.register("beforeCreate", "docs", () => {
+      throw revocable.proxy as never;
+    });
+
+    const error = await registry
+      .execute("beforeCreate", contextFor("docs"))
+      .catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    expect((error as NextlyError).code).toBe("INTERNAL_ERROR");
+  });
+
   it("still runs later hooks when no one throws", async () => {
     // The mirror: error handling must not change the ordinary path.
     const registry = new HookRegistry();
