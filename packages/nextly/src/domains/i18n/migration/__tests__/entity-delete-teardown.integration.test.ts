@@ -121,6 +121,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       adapter,
       slug: "pages",
       tableName: "dc_pages",
+      kind: "collection",
     });
 
     expect(result.companionDropped).toBe(true);
@@ -146,6 +147,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
     const result = await teardownEntityI18n({
       adapter,
       slug: "plain",
+      kind: "collection",
       tableName: "dc_plain",
     });
 
@@ -162,6 +164,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       adapter,
       slug: "pages",
       tableName: "dc_pages",
+      kind: "collection",
     });
 
     expect(result).toEqual({ companionDropped: true, archiveRowsPurged: 0 });
@@ -171,7 +174,12 @@ describe("teardownEntityI18n (real SQLite)", () => {
   it("drops the companion before the main table, so the FK never blocks the main drop", async () => {
     await createLocalizedEntity("dc_pages");
 
-    await teardownEntityI18n({ adapter, slug: "pages", tableName: "dc_pages" });
+    await teardownEntityI18n({
+      adapter,
+      slug: "pages",
+      tableName: "dc_pages",
+      kind: "collection",
+    });
     await adapter.executeQuery(`DROP TABLE IF EXISTS "dc_pages"`);
 
     const tables = await tableNames();
@@ -244,5 +252,26 @@ describe("FieldGroupRegistryService.deleteComponent (real SQLite)", () => {
     expect(tables).toContain("comp_hero_locales");
 
     expect(await archiveSlugs()).toEqual(["hero"]);
+  });
+});
+
+describe("teardownEntityI18n and the transition record", () => {
+  it("still deletes the entity when the meta table was never created", async () => {
+    // A database that never completed core setup has no `nextly_meta`. Failing the teardown over a
+    // bookkeeping row would block the drop it exists to perform.
+    for (const stmt of getI18nArchiveDdl("sqlite")) {
+      await adapter.executeQuery(stmt);
+    }
+    await adapter.executeQuery('DROP TABLE IF EXISTS "nextly_meta"');
+    await createLocalizedEntity("dc_pages");
+
+    const result = await teardownEntityI18n({
+      adapter,
+      slug: "pages",
+      tableName: "dc_pages",
+      kind: "collection",
+    });
+
+    expect(result.companionDropped).toBe(true);
   });
 });

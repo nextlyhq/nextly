@@ -35,6 +35,12 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import {
+  beginI18nTransition,
+  forgetI18nTransition,
+  readI18nTransitionState,
+} from "../../../domains/i18n/migration/transition-state";
+import { MetaService } from "../../../domains/meta/services/meta-service";
 import { getDialectTables } from "../../../database/index";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { createLogger } from "../../utils/logger";
@@ -106,10 +112,44 @@ async function runSync(config: LoadConfigResult["config"]): Promise<void> {
   await ensureCoreTables(cli, options, context);
 
   const configResult = { config } as LoadConfigResult;
+  // Mirrors `runDbSync`: the transition copy runs BEFORE the pushes, while an entity gaining
+  // localization still has the translatable columns on its main table for the copy to read.
+  await ensureLocalizedCompanions(config, cli, context, "beforeApply");
   await syncCollections(configResult, cli, options, context);
   await syncSingles(configResult, cli, options, context);
   await syncComponents(configResult, cli, options, context);
   await ensureLocalizedCompanions(config, cli, context);
+}
+
+/** The production store, so tests act on the same rows the runtime does. */
+async function transitionStore(): Promise<
+  Parameters<typeof readI18nTransitionState>[0]
+> {
+  const noop = () => {};
+  const meta = new MetaService(adapter as unknown as DrizzleAdapter, {
+    info: noop,
+    warn: noop,
+    error: noop,
+    debug: noop,
+  });
+  return {
+    getEntry: key => meta.getEntry(key),
+    set: (key, v) => meta.set(key, v),
+    delete: key => meta.delete(key),
+  };
+}
+
+/**
+ * The recorded transition for an entity, read through the production reader.
+ *
+ * Reading it any other way would let the test agree with a key layout the runtime
+ * does not use.
+ */
+async function readTransition(
+  kind: Parameters<typeof readI18nTransitionState>[1],
+  slug: string
+): Promise<Awaited<ReturnType<typeof readI18nTransitionState>>> {
+  return readI18nTransitionState(await transitionStore(), kind, slug);
 }
 
 describe("db:sync creates localized companion tables in-process (integration)", () => {
@@ -178,6 +218,267 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     expect(await tableExists("dc_dbsync_notes")).toBe(true);
     expect(await tableExists("dc_dbsync_notes_locales")).toBe(true);
     expect(await tableExists("dbsync_notes_locales")).toBe(false);
+  });
+
+  it("records the language the content was written in when it creates the companion", async () => {
+    await runSync(
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale: "de" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_marked",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    // Nothing on disk can say this afterwards: the main table's values were written
+    // under whatever default was in force, and the default can change.
+    // Settled, because the copy completed in the same run. What has to survive is the language:
+    // it is the one in force at the transition, not whatever the default becomes later.
+    await expect(
+      readTransition("collection", "dbsync_marked")
+    ).resolves.toEqual({
+      status: "seeded",
+      sourceLocale: "de",
+    });
+  });
+
+  it("does not re-record a transition for a companion that already existed", async () => {
+    // The hazard this closes: recording on every sync would attach the CURRENT
+    // default to content written under an earlier one, and a confident wrong
+    // language is worse than no record at all. The second run changes the default,
+    // so a re-record would either overwrite `de` with `en` or be refused outright.
+    const config = (defaultLocale: string) =>
+      defineConfig({
+        localization: { locales: ["de", "en"], defaultLocale },
+        collections: [
+          defineCollection({
+            slug: "dbsync_once",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      });
+
+    await runSync(config("de"));
+    await runSync(config("en"));
+
+    await expect(readTransition("collection", "dbsync_once")).resolves.toEqual({
+      status: "seeded",
+      sourceLocale: "de",
+    });
+  });
+
+  it("copies content that predates localization into the companion", async () => {
+    // The defect this closes: enabling localization in `nextly.config.ts` on an entity that
+    // already has content used to CREATE an empty companion, after which every localized read
+    // resolved through it and returned null over data still sitting on the main table. The admin
+    // Builder path never had this problem — it has always seeded — so the same product hid content
+    // or preserved it depending on which way you turned localization on.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_seeded",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(unlocalized);
+
+    // Content written while the entity was NOT localized, so it lives on the main table.
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_seeded" ("id", "slug", "title") VALUES ('row1', 'r1', 'Written before')`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_seeded",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    const rows = await adapter?.executeQuery<{
+      _parent: string;
+      title: string;
+    }>(
+      `SELECT "_parent", "title" FROM "dc_dbsync_seeded_locales" WHERE "_locale" = 'en'`
+    );
+    expect(rows).toEqual([{ _parent: "row1", title: "Written before" }]);
+  });
+
+  it("leaves the main table's columns in place when it seeds", async () => {
+    // Unattended provisioning is additive-only. The Builder toggle drops the columns it copied
+    // from, which is right for an explicit transition and wrong here: a dropped column is not
+    // something the next boot can put back.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_kept",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_kept" ("id", "slug", "title") VALUES ('row1', 'r1', 'Still here')`
+    );
+
+    await runSync(
+      defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: "dbsync_kept",
+            localized: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+      })
+    );
+
+    const main = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_kept" WHERE "id" = 'row1'`
+    );
+    expect(main).toEqual([{ title: "Still here" }]);
+  });
+
+  it("refuses to create the companion when the caller cannot name the language", async () => {
+    // Boot-time provisioning has no localization config to draw a locale from. Creating the
+    // companion there would win the race against the path that does know, and because reads
+    // resolve through the companion once it exists, the existing content would be hidden by
+    // whichever caller happened to be first. So a locale-less caller defers instead.
+    const unlocalized = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_noloc",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(unlocalized);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_noloc" ("id", "slug", "title") VALUES ('row1', 'r1', 'Content')`
+    );
+
+    const { ensureCompanionTable } = await import(
+      "../../../domains/i18n/runtime/companion-io"
+    );
+    const reported: unknown[] = [];
+    const created = await ensureCompanionTable(
+      adapter as unknown as DrizzleAdapter,
+      {
+        slug: "dbsync_noloc",
+        tableName: "dc_dbsync_noloc",
+        fields: [{ name: "title", type: "text", localized: true }],
+        dialect: "sqlite",
+      },
+      error => reported.push(error)
+    );
+
+    expect(created).toBe(false);
+    expect(await tableExists("dc_dbsync_noloc_locales")).toBe(false);
+    // Silence would leave an operator with an entity marked localized and no table, and no clue
+    // why, so the refusal is reported rather than swallowed.
+    expect(reported).toHaveLength(1);
+  });
+
+  it("finishes a copy an earlier run started and abandoned", async () => {
+    // `CREATE TABLE` and the copy are separate statements, and MySQL commits DDL implicitly, so a
+    // failure between them leaves a real companion holding none of the entity's content. Without a
+    // resume every later run returns early because the table exists, and the content stays hidden
+    // permanently — the marker is written before the DDL precisely so this is recoverable.
+    const localized = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_resume",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+
+    await runSync(
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_resume",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      })
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_resume" ("id", "slug", "title") VALUES ('row1', 'r1', 'Survives')`
+    );
+    await runSync(localized);
+
+    // Reproduce the interrupted state faithfully: a run that created the companion and died before
+    // finishing the copy leaves the table present, the rows absent, and the record still owed.
+    await adapter?.executeQuery(`DELETE FROM "dc_dbsync_resume_locales"`);
+    const store = await transitionStore();
+    await forgetI18nTransition(store, "collection", "dbsync_resume");
+    await beginI18nTransition(store, {
+      kind: "collection",
+      slug: "dbsync_resume",
+      sourceLocale: "en",
+    });
+    expect(
+      await adapter?.executeQuery(`SELECT * FROM "dc_dbsync_resume_locales"`)
+    ).toEqual([]);
+
+    await runSync(localized);
+
+    const rows = await adapter?.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "dc_dbsync_resume_locales" WHERE "_locale" = 'en'`
+    );
+    expect(rows).toEqual([{ title: "Survives" }]);
+  });
+
+  it("forgets the transition when the entity is deleted", async () => {
+    // The record lives in `nextly_meta`, not in any table the teardown drops, and it is keyed by
+    // kind and slug — both of which a later entity can reuse. Left behind, it hands that entity a
+    // predecessor's source locale and refuses its real one, after its companion has already been
+    // created and seeded.
+    const config = defineConfig({
+      localization: { locales: ["de", "en"], defaultLocale: "de" },
+      collections: [
+        defineCollection({
+          slug: "dbsync_deleted",
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+    });
+    await runSync(config);
+    await expect(
+      readTransition("collection", "dbsync_deleted")
+    ).resolves.toMatchObject({ sourceLocale: "de" });
+
+    const { teardownEntityI18n } = await import(
+      "../../../domains/i18n/migration/teardown-entity-i18n"
+    );
+    await teardownEntityI18n({
+      adapter: adapter as unknown as Parameters<
+        typeof teardownEntityI18n
+      >[0]["adapter"],
+      slug: "dbsync_deleted",
+      tableName: "dc_dbsync_deleted",
+      kind: "collection",
+    });
+
+    await expect(
+      readTransition("collection", "dbsync_deleted")
+    ).resolves.toEqual({ status: "untracked" });
   });
 
   it("leaves a non-localized collection with no companion", async () => {

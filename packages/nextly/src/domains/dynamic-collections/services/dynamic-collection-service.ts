@@ -18,7 +18,10 @@ import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
-import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../i18n/runtime/companion-io";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
@@ -403,6 +406,14 @@ export class DynamicCollectionService extends BaseService {
       newFields: args.newFields,
       companionExists,
       companionHasStatus,
+      // Which translatable columns the main table still carries. A disable must not re-add one
+      // that is already there, and must still restore it: presence says the column exists, never
+      // that its value is current, because every localized write went to the companion alone.
+      existingMainColumns: await localizedColumnsOnMain(
+        this.adapter,
+        args.tableName,
+        args.oldFields
+      ).then(cols => cols.map(c => c.name)),
     });
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
     // is split on `--> statement-breakpoint` and each chunk is run as ONE statement, so a

@@ -27,6 +27,7 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { localizedColumnsOnMain } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -244,6 +245,14 @@ async function reconcileComponentCompanion(args: {
     oldFields,
     newFields,
     companionExists: await adapter.tableExists(`${tableName}_locales`),
+    // Which translatable columns the main table still carries. A disable must not re-add one that
+    // is already there, and must still restore it: presence says the column exists, never that its
+    // value is current, because every localized write went to the companion alone.
+    existingMainColumns: await localizedColumnsOnMain(
+      adapter,
+      tableName,
+      oldFields
+    ).then(cols => cols.map(c => c.name)),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
@@ -268,6 +277,23 @@ async function reconcileComponentCompanion(args: {
   }
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
+  }
+
+  // The transition record describes a companion that no longer exists, so it stops being true
+  // the moment the disable succeeds. Left behind, it would refuse the next enable's real
+  // source locale — the check that protects a live transition would block a legitimate one.
+  if (plan.companionDropped) {
+    const { resolveTransitionStore } = await import(
+      "../../domains/i18n/migration/transition-recorder"
+    );
+    const { forgetI18nTransition } = await import(
+      "../../domains/i18n/migration/transition-state"
+    );
+    await forgetI18nTransition(
+      await resolveTransitionStore(adapter),
+      "fieldGroup",
+      slug
+    );
   }
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
   // in the calling handlers, so no separate registration is needed here.

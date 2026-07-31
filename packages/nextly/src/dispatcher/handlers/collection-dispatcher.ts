@@ -32,7 +32,10 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
@@ -791,6 +794,15 @@ const COLLECTIONS_METHODS: Record<
             newFields,
             companionExists,
             companionHasStatus,
+            // Which translatable columns the main table still carries. A disable must not re-add
+            // one that is already there, and must still restore it: presence says the column
+            // exists, never that its value is current, because every localized write went to the
+            // companion alone.
+            existingMainColumns: await localizedColumnsOnMain(
+              adapter,
+              tableName,
+              oldFields
+            ).then(cols => cols.map(c => c.name)),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is
@@ -815,6 +827,23 @@ const COLLECTIONS_METHODS: Record<
           }
           for (const stmt of plan.statements) {
             await adapter.executeQuery(stmt);
+          }
+
+          // The transition record describes a companion that no longer exists, so it stops being true
+          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
+          // source locale — the check that protects a live transition would block a legitimate one.
+          if (plan.companionDropped) {
+            const { resolveTransitionStore } = await import(
+              "../../domains/i18n/migration/transition-recorder"
+            );
+            const { forgetI18nTransition } = await import(
+              "../../domains/i18n/migration/transition-state"
+            );
+            await forgetI18nTransition(
+              await resolveTransitionStore(adapter),
+              "collection",
+              String(p.collectionName)
+            );
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

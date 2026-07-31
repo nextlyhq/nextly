@@ -426,6 +426,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       });
 
       await teardownEntityI18n({
+        kind: "fieldGroup",
         adapter: this.adapter,
         slug,
         tableName: existing.tableName,

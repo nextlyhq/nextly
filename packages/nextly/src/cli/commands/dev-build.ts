@@ -14,6 +14,13 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
+import { resolveTransitionRecorder } from "../../domains/i18n/migration/transition-recorder";
+import {
+  beginI18nTransition,
+  readI18nTransitionState,
+  settleI18nTransition,
+  type I18nTransitionKind,
+} from "../../domains/i18n/migration/transition-state";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import {
@@ -690,7 +697,7 @@ async function handleRemovedSingles(
       // to `<main>.id` which blocks the drop outright on MySQL. Running before the registry
       // delete keeps the single detectable as an orphan if any of this fails.
       await teardownEntityComponentData({ adapter, parentTable: tableName });
-      await teardownEntityI18n({ adapter, slug, tableName });
+      await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
       // Delete registry entry directly
       await adapter.delete("dynamic_singles", {
@@ -747,7 +754,12 @@ async function handleRemovedComponents(
       // `<main>.id`, blocking the drop on MySQL. Both go before the registry delete so a
       // failure leaves the component detectable as an orphan.
       await teardownEntityComponentData({ adapter, parentTable: tableName });
-      await teardownEntityI18n({ adapter, slug, tableName });
+      await teardownEntityI18n({
+        adapter,
+        slug,
+        tableName,
+        kind: "fieldGroup",
+      });
 
       // Delete registry entry directly
       await adapter.delete(STORAGE_FORMAT.registryTable, {
@@ -793,7 +805,18 @@ async function handleRemovedComponents(
 export async function ensureLocalizedCompanions(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
-  context: CommandContext
+  context: CommandContext,
+  /**
+   * Which side of the schema push this pass runs on.
+   *
+   * `beforeApply` copies an entity's existing content into its companion while the main table
+   * still carries the translatable columns. Enabling localization removes those columns from the
+   * desired schema, so the push wants to drop them; running only afterwards means the copy either
+   * never happens or happens after the values are gone. Restricted to entities whose main table
+   * already exists, since only those can hold content and a companion's foreign key needs a main
+   * table the push has not yet created for anything newer.
+   */
+  phase: "beforeApply" | "afterApply" = "afterApply"
 ): Promise<void> {
   const { logger } = context;
   // Same policy `performAutoSync` applies: production never gets unattended schema
@@ -803,8 +826,15 @@ export async function ensureLocalizedCompanions(
   // write from destroying content until it runs.
   if (process.env.NODE_ENV === "production") return;
   const dialect = adapter.getCapabilities().dialect;
-  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
-    "../../domains/i18n/runtime/companion-io"
+  const { ensureCompanionTable, reconcileCompanionColumns, mainTableExists } =
+    await import("../../domains/i18n/runtime/companion-io");
+  // Where a newly created companion's transition gets recorded, and the locale it
+  // gets recorded with. Undefined when the app configures no default locale, in
+  // which case no entity can be localized and nothing reaches the write below.
+  const transitions = await resolveTransitionRecorder(
+    config,
+    adapter as unknown as DrizzleAdapter,
+    logger
   );
   // Each entity kind resolves its physical table differently, and a custom
   // `dbName` is where they diverge: collections and singles force their `dc_` /
@@ -827,16 +857,26 @@ export async function ensureLocalizedCompanions(
     fields?: { name: string; type: string; localized?: boolean }[];
   }
 
-  const groups: [LocalizableEntity[], (e: LocalizableEntity) => string][] = [
+  // The kind travels with each group because it is part of the transition record's
+  // key: a collection, a single and a field group may share one slug, and only one
+  // of them may have transitioned.
+  const groups: [
+    I18nTransitionKind,
+    LocalizableEntity[],
+    (e: LocalizableEntity) => string,
+  ][] = [
     [
+      "collection",
       (config.collections ?? []) as LocalizableEntity[],
       e => resolveCollectionTableName(e.slug!, e.dbName),
     ],
     [
+      "single",
       (config.singles ?? []) as LocalizableEntity[],
       e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
     ],
     [
+      "fieldGroup",
       (config.fieldGroups ?? []) as LocalizableEntity[],
       // Field groups derive their table from the slug alone — unlike collections
       // and singles they carry no `dbName` override.
@@ -845,10 +885,21 @@ export async function ensureLocalizedCompanions(
   ];
 
   const failures: string[] = [];
-  for (const [group, resolveTableName] of groups) {
+  for (const [kind, group, resolveTableName] of groups) {
     for (const entity of group) {
       if (!entity.slug || entity.localized !== true) continue;
       const tableName = resolveTableName(entity);
+      if (
+        phase === "beforeApply" &&
+        !(await mainTableExists(
+          adapter as unknown as DrizzleAdapter,
+          tableName
+        ))
+      ) {
+        // Nothing to preserve, and no main table to reference yet. The pass after the push
+        // creates this entity's companion once its table exists.
+        continue;
+      }
       // `ensureCompanionTable` resolves even on failure (a first boot may not have
       // the main table yet), so the reporter — not a try/catch — is what surfaces
       // a real problem.
@@ -864,6 +915,41 @@ export async function ensureLocalizedCompanions(
           fields: entity.fields ?? [],
           dialect,
           status: entity.status === true,
+          // Turns creation into a transition: content already on the main table is
+          // copied in as this locale's rows, instead of being left behind an empty
+          // companion that reads null.
+          sourceLocale: transitions?.defaultLocale,
+          // Written before the DDL rather than after a successful return: MySQL commits DDL
+          // implicitly, so a crash in between would leave a companion the next run treats as
+          // pre-existing and never records. It is also what makes a failed copy recoverable.
+          recordTransition: transitions
+            ? () =>
+                beginI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  sourceLocale: transitions.defaultLocale,
+                })
+            : undefined,
+          // Lets an existing companion be finished rather than skipped. A record still reading
+          // `enabling` means an earlier run created the table and did not complete the copy.
+          seedIncomplete: transitions
+            ? async () => {
+                const recorded = await readI18nTransitionState(
+                  transitions,
+                  kind,
+                  entity.slug!
+                );
+                // The locale the interrupted run recorded, so the resume labels the values with
+                // the language they were actually written in rather than today's default.
+                return recorded.status === "enabling"
+                  ? recorded.sourceLocale
+                  : null;
+              }
+            : undefined,
+          settleTransition: transitions
+            ? () =>
+                settleI18nTransition(transitions, { kind, slug: entity.slug! })
+            : undefined,
         },
         error => {
           logger.error(
@@ -874,6 +960,8 @@ export async function ensureLocalizedCompanions(
           failures.push(entity.slug!);
         }
       );
+      // Skipped before the push, which is what creates the columns a reconcile looks for.
+      if (phase === "beforeApply") continue;
       // Creating the companion is not enough on its own. `ensureCompanionTable` returns
       // immediately once the table is there, so marking a FURTHER field localized on an
       // entity that is already localized leaves the companion a column short — while the

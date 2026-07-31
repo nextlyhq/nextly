@@ -41,7 +41,10 @@ import { teardownEntityComponentData } from "../../domains/field-groups/services
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -281,6 +284,14 @@ async function reconcileSingleCompanion(args: {
     newFields,
     companionExists,
     companionHasStatus,
+    // Which translatable columns the main table still carries. A disable must not re-add one that
+    // is already there, and must still restore it: presence says the column exists, never that its
+    // value is current, because every localized write went to the companion alone.
+    existingMainColumns: await localizedColumnsOnMain(
+      adapter,
+      tableName,
+      oldFields
+    ).then(cols => cols.map(c => c.name)),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
@@ -305,6 +316,23 @@ async function reconcileSingleCompanion(args: {
   }
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
+  }
+
+  // The transition record describes a companion that no longer exists, so it stops being true the
+  // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale
+  // — the check that protects a live transition would block a legitimate one instead.
+  if (plan.companionDropped) {
+    const { resolveTransitionStore } = await import(
+      "../../domains/i18n/migration/transition-recorder"
+    );
+    const { forgetI18nTransition } = await import(
+      "../../domains/i18n/migration/transition-state"
+    );
+    await forgetI18nTransition(
+      await resolveTransitionStore(adapter),
+      "single",
+      slug
+    );
   }
 
   // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when
@@ -924,7 +952,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Remove the companion `_locales` table and this single's archive rows before
         // the main table. The companion holds an FK to `<main>.id`, so it must go first
         // or the main drop orphans it (Postgres) / is rejected by the FK (MySQL).
-        await teardownEntityI18n({ adapter, slug, tableName });
+        await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
         // Use dialect-appropriate quoting for the table name.
         const dialect = adapter.dialect || "postgresql";

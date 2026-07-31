@@ -25,6 +25,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
+import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -613,14 +614,33 @@ async function ensureLocalizedCompanionsForReload(
   // Deliberately per entity rather than a single "something was deferred" flag: entities whose
   // schema IS in step still need provisioning on this pass, and skipping them wholesale
   // reintroduces the missing-companion window this function exists to close.
-  deferred: ReadonlySet<string> = new Set()
-): Promise<void> {
+  deferred: ReadonlySet<string> = new Set(),
+  /**
+   * Which side of the schema apply this pass runs on.
+   *
+   * `beforeApply` exists because enabling localization removes the translatable columns from the
+   * entity's desired main table, so the apply wants to DROP them. Running only afterwards means
+   * the copy either never happens (the drop was classified destructive and the entity deferred)
+   * or happens too late (the operator confirmed, and the values are already gone). This pass
+   * therefore copies first, which makes the drop that follows harmless.
+   *
+   * It is restricted to entities whose main table already exists, because those are the only ones
+   * that can hold content worth copying — and because a companion carries a foreign key to its
+   * main table, which a brand-new entity does not have until the apply creates it. Those are left
+   * to `afterApply`, which is also where column reconciliation belongs: the apply is what adds the
+   * columns a reconcile would be looking for.
+   */
+  phase: "beforeApply" | "afterApply" = "afterApply"
+): Promise<{ preservationFailed: string[] }> {
+  // Entities whose content could not be copied into their companion. The caller must not let the
+  // apply run for these: the copy is the only thing standing between the apply's DROP and the
+  // values it would take with it.
+  const preservationFailed: string[] = [];
   // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
-  if (process.env.NODE_ENV === "production") return;
+  if (process.env.NODE_ENV === "production") return { preservationFailed };
 
-  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
-    "../domains/i18n/runtime/companion-io"
-  );
+  const { ensureCompanionTable, reconcileCompanionColumns, mainTableExists } =
+    await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
@@ -635,8 +655,13 @@ async function ensureLocalizedCompanionsForReload(
     fields?: { name: string; type: string; localized?: boolean }[];
   };
   // The kind prefixes the `deferred` keys, because a collection and a single may share a slug
-  // and only one of them may have been deferred.
-  const groups: [string, Localizable[], (e: Localizable) => string][] = [
+  // and only one of them may have been deferred. It is also part of the transition record's
+  // key, for the same reason, so it is typed rather than left an open string.
+  const groups: [
+    I18nTransitionKind,
+    Localizable[],
+    (e: Localizable) => string,
+  ][] = [
     [
       "collection",
       (config.collections ?? []) as Localizable[],
@@ -654,20 +679,74 @@ async function ensureLocalizedCompanionsForReload(
     ],
   ];
 
+  // Where a newly created companion's transition gets recorded. Undefined when the app
+  // names no default locale, in which case nothing below can be localized anyway.
+  const { resolveTransitionRecorder } = await import(
+    "../domains/i18n/migration/transition-recorder"
+  );
+  const { beginI18nTransition, readI18nTransitionState, settleI18nTransition } =
+    await import("../domains/i18n/migration/transition-state");
+  const transitions = await resolveTransitionRecorder(config, adapter);
+
   for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {
       if (!entity.slug || entity.localized !== true) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
+      const tableName = resolveTableName(entity);
+      if (
+        phase === "beforeApply" &&
+        !(await mainTableExists(adapter, tableName))
+      ) {
+        // Nothing to preserve and nothing to hang a foreign key on yet. The post-apply pass
+        // creates this entity's companion once the apply has produced its main table.
+        continue;
+      }
       await ensureCompanionTable(
         adapter,
         {
           slug: entity.slug,
-          tableName: resolveTableName(entity),
+          tableName,
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
           status: entity.status === true,
+          // Turns creation into a transition: content already on the main table is
+          // copied in as this locale's rows, instead of being left behind an empty
+          // companion that reads null.
+          sourceLocale: transitions?.defaultLocale,
+          // Written before the DDL rather than after a successful return: MySQL commits DDL
+          // implicitly, so a crash in between would leave a companion the next run treats as
+          // pre-existing and never records. It is also what makes a failed copy recoverable.
+          recordTransition: transitions
+            ? () =>
+                beginI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  sourceLocale: transitions.defaultLocale,
+                })
+            : undefined,
+          // Lets an existing companion be finished rather than skipped. A record still reading
+          // `enabling` means an earlier run created the table and did not complete the copy.
+          seedIncomplete: transitions
+            ? async () => {
+                const recorded = await readI18nTransitionState(
+                  transitions,
+                  kind,
+                  entity.slug!
+                );
+                // The locale the interrupted run recorded, so the resume labels the values with
+                // the language they were actually written in rather than today's default.
+                return recorded.status === "enabling"
+                  ? recorded.sourceLocale
+                  : null;
+              }
+            : undefined,
+          settleTransition: transitions
+            ? () =>
+                settleI18nTransition(transitions, { kind, slug: entity.slug! })
+            : undefined,
         },
         error => {
+          if (phase === "beforeApply") preservationFailed.push(entity.slug!);
           console.warn(
             `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
               `Writes in a non-default locale will be refused until it exists: ` +
@@ -684,6 +763,11 @@ async function ensureLocalizedCompanionsForReload(
       // Safe here despite issuing DDL, because the production guard at the top of this
       // function has already returned: this runs only under `next dev`. The reconcile is
       // additive, so it never removes a column even when a field stops being localized.
+      //
+      // Skipped before the apply, which is what creates the columns a reconcile would be looking
+      // for. Running it early would compare the companion against a main table the apply has not
+      // finished shaping.
+      if (phase === "beforeApply") continue;
       await reconcileCompanionColumns(
         adapter,
         {
@@ -703,6 +787,8 @@ async function ensureLocalizedCompanionsForReload(
       );
     }
   }
+
+  return { preservationFailed };
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -1537,6 +1623,32 @@ async function applyReload(opts?: {
     // Unused for HMR — we don't surface bumped versions in the log.
     readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
   });
+
+  // Before the apply, so an entity gaining localization has its existing content copied into the
+  // companion while the main table still carries it. The apply's DROP of those columns is then a
+  // cleanup rather than a loss, and it no longer matters whether the operator confirms it.
+  const preservation = await ensureLocalizedCompanionsForReload(
+    adapter,
+    newConfig,
+    deferredEntities,
+    "beforeApply"
+  );
+
+  // The apply is what removes the translatable columns from the main table. Running it after a
+  // copy that did not complete would take the only remaining copy of those values with it, and no
+  // later resume could reconstruct them — introspection would no longer find the columns to read.
+  // So the whole apply waits rather than proceeding entity by entity: the schema stays as it is,
+  // the content stays where it is, and the next save retries the copy from a position that still
+  // has everything.
+  if (preservation.preservationFailed.length > 0) {
+    const names = preservation.preservationFailed.join(", ");
+    logger.error(
+      `[nextly] Schema changes were not applied: existing content could not be copied into the ` +
+        `translations table for ${names}. Applying now would drop the columns holding that ` +
+        `content. Fix the error above and save again.`
+    );
+    return;
+  }
 
   const applyResult = await apply(desired, "code", {
     promptChannel: "terminal",

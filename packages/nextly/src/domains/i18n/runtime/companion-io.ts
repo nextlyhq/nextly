@@ -445,44 +445,397 @@ export async function companionHasStatusColumn(
  * code-first localized collection / single / component gets a working companion without a manual
  * migrate step. Best-effort: a failure (e.g. main table not yet created) is swallowed so it
  * retries on the next boot.
+ *
+ * Returns whether THIS call created the table. Only true at the one moment an entity crosses from
+ * unlocalized to localized, which is the only moment the current default locale is a safe answer
+ * to "what language is the content on the main table in". Callers that record the transition read
+ * this rather than assuming, because writing that record for a companion which already existed
+ * would attach today's default to content written under some earlier one.
  */
+/**
+ * The entity's translatable columns that the MAIN table physically carries.
+ *
+ * Two callers, one question. Creation asks "would an empty companion here hide something" —
+ * columns on main mean content may already be there, and once a companion exists every read
+ * resolves through it. Disabling asks which columns it must not re-add but must still restore.
+ * Both are the same physical fact, so they read it the same way rather than each introspecting
+ * to its own shape.
+ */
+/** One translatable column the main table carries, and whether it accepts nulls. */
+export interface MainColumnPresence {
+  name: string;
+  /**
+   * False for a column that was required before localization. Once the companion exists its value
+   * is written there instead, so the main insert omits it and the constraint fails every create.
+   */
+  nullable: boolean;
+}
+
+export async function localizedColumnsOnMain(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string,
+  localized: readonly CompanionFieldLike[]
+): Promise<MainColumnPresence[]> {
+  if (localized.length === 0) return [];
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  const present = new Map(
+    snapshot.tables
+      .find(t => t.name === tableName)
+      ?.columns.map(c => [c.name, c.nullable !== false] as const) ?? []
+  );
+  return localized
+    .map(f => toColumn(f.name))
+    .filter(column => present.has(column))
+    .map(name => ({ name, nullable: present.get(name) === true }));
+}
+
+/**
+ * Whether creating a companion here would hide anything.
+ *
+ * Content is what makes it unsafe, not shape. A table that does not exist, or exists with no rows,
+ * has nothing to mask — and that is the ordinary case for a new entity, which must be free to get
+ * its companion from any caller or its localized writes are refused forever.
+ *
+ * With rows present, either of two things is enough to defer: translatable columns on the main
+ * table hold values an empty companion would mask, and a Draft/Published entity needs a
+ * default-locale row carrying each row's status or its published rows drop out of locale-aware
+ * reads. The seeding plan treats both as work.
+ *
+ * The row probe is a raw statement, like the existence probe above it and for the same reason:
+ * there is no table object to query through here. Both go when readiness moves to load time.
+ */
+async function creatingWouldHideContent(
+  adapter: CompanionIntrospectAdapter,
+  args: { tableName: string; status?: boolean },
+  localized: readonly CompanionFieldLike[]
+): Promise<boolean> {
+  if (!(await mainTableExists(adapter, args.tableName))) return false;
+
+  const columnsAtRisk = await localizedColumnsOnMain(
+    adapter,
+    args.tableName,
+    localized
+  );
+  if (args.status !== true && columnsAtRisk.length === 0) return false;
+
+  const q = (id: string) =>
+    adapter.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+  const rows = await adapter.executeQuery(
+    `SELECT 1 FROM ${q(args.tableName)} LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Finish a copy that an earlier run started and did not complete.
+ *
+ * The companion already exists, so its CREATE is not reissued — only the copy is, and only for the
+ * rows that have no default-locale companion row yet. That `WHERE NOT EXISTS` is what makes this
+ * safe to run repeatedly: a partially seeded companion keeps the rows it already has, and a fully
+ * seeded one is a no-op. Re-copying instead would either collide on the composite primary key or
+ * overwrite translations written since the transition.
+ *
+ * Nothing is dropped from the main table here. The interrupted run may or may not have relaxed or
+ * removed its source columns, and the next schema apply reconciles that; this call is responsible
+ * for the content, not the shape.
+ */
+async function resumeInterruptedSeed(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    dialect: SupportedDialect;
+    status?: boolean;
+    sourceLocale?: string;
+    settleTransition?: () => Promise<void>;
+  },
+  newLocalized: CompanionFieldLike[],
+  companionTableName: string,
+  onError?: (error: unknown) => void
+): Promise<boolean> {
+  const plan = await buildSeedingCreateStatements(adapter, args, newLocalized);
+  if (!plan) return false;
+
+  // Everything the plan emits except the CREATE, which the interrupted run already ran.
+  const copy = plan.filter(statement => !statement.startsWith("CREATE TABLE"));
+  if (copy.length === 0) return false;
+
+  const q = (id: string) =>
+    args.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
+  const companion = q(companionTableName);
+  const main = q(args.tableName);
+  const guard =
+    ` WHERE NOT EXISTS (SELECT 1 FROM ${companion} ` +
+    `WHERE ${companion}.${q("_parent")} = ${main}.${q("id")} ` +
+    `AND ${companion}.${q("_locale")} = '${args.sourceLocale ?? ""}')`;
+
+  try {
+    for (const statement of copy) {
+      // Only the INSERT ... SELECT is row-producing and therefore needs the guard; anything else
+      // the plan carries (a nullability relax, for instance) is already idempotent.
+      await adapter.executeQuery(
+        statement.startsWith("INSERT INTO") ? `${statement}${guard}` : statement
+      );
+    }
+    // The interrupted run's debt is discharged, so the record stops describing one.
+    await args.settleTransition?.();
+    return true;
+  } catch (error) {
+    onError?.(error);
+    return false;
+  }
+}
+
+/**
+ * Whether an entity's MAIN table is physically present.
+ *
+ * Asked through the canonical introspection helper rather than by running a probe query and
+ * catching the failure: that shape is valid on SQLite and MySQL and poisons a transaction on
+ * PostgreSQL, and it is the pattern the integration harness now fails tests for.
+ *
+ * Provisioning uses it to tell an entity that may hold content from one the schema apply has not
+ * created yet — only the first can be seeded, and only the second has to wait for its main table
+ * before a companion can carry a foreign key to it.
+ */
+export async function mainTableExists(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string
+): Promise<boolean> {
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  return snapshot.tables.some(t => t.name === tableName);
+}
+
+/**
+ * The create-plus-seed plan, or null when a plain create is what this entity needs.
+ *
+ * The Schema Builder's localization toggle has always copied the main table's values into the
+ * companion as it creates it; the code-first path created an empty table and stopped, so turning
+ * localization on in `nextly.config.ts` left existing content sitting on the main table with every
+ * read resolving through an empty companion and returning null. Same product, two provisioning
+ * paths, opposite outcomes — so this routes the second one through the plan the first already uses.
+ *
+ * Only the localized columns that PHYSICALLY exist on the main table are seeded from. A field
+ * localized in the same change has no main column to copy, and a field name is not a column name
+ * (`subTitle` lives at `sub_title`), so the physical shape decides rather than the config.
+ *
+ * Returns null when there is nothing to copy — no source locale, or no localized column present on
+ * main — because then the seeding plan and a plain create produce the same table, and the simpler
+ * path is the one already covered by its own tests.
+ */
+async function buildSeedingCreateStatements(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    dialect: SupportedDialect;
+    status?: boolean;
+    sourceLocale?: string;
+  },
+  newLocalized: CompanionFieldLike[]
+): Promise<string[] | null> {
+  if (!args.sourceLocale) return null;
+
+  const onMain = await localizedColumnsOnMain(
+    adapter,
+    args.tableName,
+    newLocalized
+  );
+  const present = new Set(onMain.map(c => c.name));
+
+  const { deriveCompanionSpec } = await import(
+    "../migration/derive-companion-spec"
+  );
+  const spec = deriveCompanionSpec({
+    slug: args.slug,
+    dbName: args.tableName,
+    fields: newLocalized,
+    dialect: args.dialect,
+    defaultLocale: args.sourceLocale,
+    collectionLocalized: true,
+    status: args.status === true,
+  });
+  if (!spec) return null;
+
+  const columnsOnMain = spec.columns
+    .map(c => c.name)
+    .filter(name => present.has(name));
+  // No columns to copy is not the same as nothing to seed. A Draft/Published entity still needs a
+  // default-locale companion row carrying the main row's status, or every published row drops out
+  // of locale-aware published reads. `buildLocalizationUpStatements` handles the empty column set
+  // for exactly that case, so only bail when there is no status either.
+  if (columnsOnMain.length === 0 && !spec.status) return null;
+
+  const { buildLocalizationUpStatements } = await import(
+    "../migration/generate-up"
+  );
+  // Additive only: this runs unattended from boot and `db:sync`, where a dropped column is not
+  // something the next boot can put back. The copies left on main are inert once reads resolve
+  // through the companion, and `nextly migrate` removes them under supervision.
+  return buildLocalizationUpStatements(
+    { ...spec, columnsOnMain },
+    {
+      dropSeededColumns: false,
+      // Retained columns that were required must stop being so, or the first create after this
+      // transition fails: the value now goes to the companion, so the main insert omits it.
+      relaxColumns: onMain.filter(c => !c.nullable).map(c => c.name),
+    }
+  );
+}
+
 export async function ensureCompanionTable(
-  adapter: CompanionWriteAdapter,
+  adapter: CompanionIntrospectAdapter,
   args: {
     slug: string;
     tableName: string;
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
+    /**
+     * The language the main table's existing content is in.
+     *
+     * Supplied turns creation into a TRANSITION: the values already on the main table are copied
+     * into the companion as this locale's rows, so content written before localization was
+     * enabled stays readable. Omitted creates an empty companion, which is only correct for an
+     * entity that has never held content outside a companion.
+     */
+    sourceLocale?: string;
+    /**
+     * Durably record that this transition is starting. Called once the companion is known to be
+     * absent and BEFORE any statement runs.
+     *
+     * Before, not after, because MySQL commits DDL implicitly: a crash between creating the table
+     * and recording it would leave a companion whose next run sees the table, takes the early
+     * return, and never records or completes the transition. The same window makes a failed seed
+     * unrecoverable — with the record already written, a later pass can read `enabling` and finish
+     * the copy.
+     *
+     * A failure here abandons the creation rather than proceeding without a record. An unrecorded
+     * companion is the state this exists to prevent, and not creating the table leaves the next
+     * run free to try again from a clean position.
+     */
+    recordTransition?: () => Promise<void>;
+    /**
+     * Whether a transition was recorded for this entity but never finished.
+     *
+     * Consulted only when the companion already exists. `CREATE TABLE` and the copy that follows
+     * are separate statements, and MySQL commits DDL implicitly, so a failure between them leaves
+     * a real companion holding none of the entity's content. Every later run would take the early
+     * return and the content would stay hidden for good.
+     *
+     * Returning true makes this call finish what the interrupted one started, so a reported
+     * failure is fixed by running `db:sync` again rather than by hand-editing `nextly_meta`.
+     */
+    seedIncomplete?: () => Promise<string | null>;
+    /**
+     * Record that the copy finished, so a later pass stops treating it as owed.
+     *
+     * Without it the marker stays `enabling` forever and every `db:sync` or reload re-runs the
+     * copy — harmless for the rows it already made, but it keeps manufacturing default-locale rows
+     * for entries that were deliberately created in another locale only.
+     */
+    settleTransition?: () => Promise<void>;
   },
   /**
    * Notified when creation fails. Optional so existing callers are unchanged;
    * without it the previous swallow-and-retry-next-boot behaviour is preserved.
    */
   onError?: (error: unknown) => void
-): Promise<void> {
+): Promise<boolean> {
   const companionTableName = `${args.tableName}_locales`;
+  // Tracked because only a failure of the CREATE itself can be explained away by a concurrent
+  // winner. The plan may also carry a seed, and a seed that fails leaves a table this call made —
+  // treating that as a lost race would suppress the error and leave the content uncopied, with
+  // every later run returning early because the table now exists.
+  let created = false;
+  const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
+  const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
   try {
-    if (await companionTableExists(adapter, companionTableName)) return;
+    if (await companionTableExists(adapter, companionTableName)) {
+      // An existing companion normally means there is nothing to do. It means the opposite when a
+      // transition was recorded and never settled: the table is real and its content is not.
+      // The RECORDED locale, not the one configured now. A default locale that changed since the
+      // interrupted run must not relabel values written under the old one — that is the whole
+      // reason the transition is recorded rather than inferred.
+      const owedLocale = (await args.seedIncomplete?.()) ?? null;
+      if (owedLocale !== null) {
+        return await resumeInterruptedSeed(
+          adapter,
+          { ...args, sourceLocale: owedLocale },
+          newLocalized,
+          companionTableName,
+          onError
+        );
+      }
+      return false;
+    }
     // Lazy import avoids a cycle (reconcile-companion → migration helpers).
     const { buildCompanionReconcileStatements } = await import(
       "../migration/reconcile-companion"
     );
-    const localizedNames = new Set(
-      resolveLocalizedFieldNames(args.fields, true)
-    );
-    const statements = buildCompanionReconcileStatements({
-      slug: args.slug,
-      tableName: args.tableName,
-      oldLocalized: [],
-      newLocalized: args.fields.filter(f => localizedNames.has(f.name)),
-      dialect: args.dialect,
-      status: args.status === true,
-      companionExists: false,
-    });
+    // A caller that cannot say which language the main table's content is in must not create the
+    // companion over that content. Reads resolve through the companion once it exists, so an empty
+    // one hides everything already written — and because creation is a race, the first caller to
+    // win decides. Boot-time provisioning has no locale to offer, so it defers here and leaves the
+    // entity to the path that does; #382's write guard keeps a non-default write from doing damage
+    // in the meantime.
+    // What makes creating here unsafe is CONTENT, not shape. An entity with no rows has nothing to
+    // hide, so a locale-less caller may create its companion freely — which is the ordinary case
+    // for a new entity, and refusing it would leave every such entity without a companion and its
+    // localized writes refused.
+    //
+    // With rows present, two things are at stake and either is enough to defer: translatable
+    // columns on main hold values that an empty companion would mask, and a Draft/Published entity
+    // needs a default-locale row carrying each main row's status or its published rows drop out of
+    // locale-aware reads. The seeding plan treats both as work, so this guard has to agree.
+    if (
+      !args.sourceLocale &&
+      (await creatingWouldHideContent(adapter, args, newLocalized))
+    ) {
+      onError?.(
+        new Error(
+          `Translations table for "${args.slug}" was not created here: this caller cannot say ` +
+            `which language the existing content is in, and creating it empty would hide that ` +
+            `content. Run \`nextly db:sync\` (or \`nextly migrate\` in production).`
+        )
+      );
+      return false;
+    }
+    // Ordered ahead of every statement below. See `recordTransition`.
+    await args.recordTransition?.();
+    const statements =
+      (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
+      buildCompanionReconcileStatements({
+        slug: args.slug,
+        tableName: args.tableName,
+        oldLocalized: [],
+        newLocalized,
+        dialect: args.dialect,
+        status: args.status === true,
+        companionExists: false,
+      });
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
+      created = true;
     }
+    // Only once every statement landed. Settling earlier would mark a copy complete that a later
+    // statement could still fail, and the record would then say the content is in the companion
+    // when it is not.
+    await args.settleTransition?.();
+    return true;
   } catch (error) {
     // Another process may have created it between the probe and the CREATE — `db:sync` and a
     // dev boot/HMR reload provision the same companions, and `CREATE TABLE` is not idempotent
@@ -490,9 +843,15 @@ export async function ensureCompanionTable(
     // re-checking rather than by reading the error text, so this cannot swallow a real failure
     // that happens to mention the table.
     if (
-      await companionTableExists(adapter, companionTableName).catch(() => false)
+      !created &&
+      (await companionTableExists(adapter, companionTableName).catch(
+        () => false
+      ))
     ) {
-      return;
+      // Reported as not-created on purpose: whoever won the race owns recording why
+      // the companion exists, and a second record of the same transition could name
+      // a different source locale.
+      return false;
     }
     // Best-effort: the main table may not exist yet on a very first boot, where the
     // companion is created on the next boot (or by `nextly migrate`). That case is
@@ -503,5 +862,6 @@ export async function ensureCompanionTable(
     // function still resolves, because refusing to boot over a companion is worse
     // than booting with non-default-locale writes refused.
     onError?.(error);
+    return false;
   }
 }

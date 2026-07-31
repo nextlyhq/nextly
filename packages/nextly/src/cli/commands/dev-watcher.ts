@@ -93,6 +93,19 @@ export function createDebouncedSync(
             mayCreateLock: options.autoSync !== false,
           },
           async () => {
+            // Before the pushes, for the same reason the one-shot `db:sync` does it: a watched
+            // edit that enables localization removes the translatable columns from the desired
+            // schema, so the push wants to drop them. Copying first makes that drop a cleanup
+            // rather than a loss.
+            if (options.autoSync !== false) {
+              await ensureLocalizedCompanions(
+                configToSync.config,
+                adapter,
+                context,
+                "beforeApply"
+              );
+            }
+
             // Unconditional, so the orphan scan still runs when the config declares none of a
             // type: deleting the last entry of a kind is precisely what orphans its table, making
             // a zero count the case where the scan matters most.

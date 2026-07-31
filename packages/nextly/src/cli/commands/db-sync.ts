@@ -334,6 +334,22 @@ export async function runDbSync(
 
           assertPluginFieldDeclarations(configResult.config);
 
+          // Before the pushes, so an entity gaining localization has its existing content copied
+          // into the companion while the main table still carries it. The drop the push then
+          // applies is a cleanup rather than a loss.
+          //
+          // Inside the pinned scope for the same reason the pass after the syncs is: a companion
+          // holds the localized subset of the same fields and has to resolve plugin types against
+          // the config being materialized.
+          if (options.autoSync !== false) {
+            await ensureLocalizedCompanions(
+              configResult.config,
+              adapter,
+              context,
+              "beforeApply"
+            );
+          }
+
           await syncCollections(configResult, adapter, options, context);
           await syncSingles(configResult, adapter, options, context);
           await syncComponents(configResult, adapter, options, context);

@@ -60,13 +60,42 @@ export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
     .join("\n\n");
 }
 
+/** Options for {@link buildLocalizationUpStatements}. */
+export interface LocalizationUpOptions {
+  /**
+   * Whether to DROP the seeded columns from the main table once their values are copied.
+   *
+   * True for an explicit transition — a Builder toggle or a migration file — where relocating
+   * the data is the whole point and leaving the originals behind would give a field two homes.
+   *
+   * False for **unattended** provisioning (boot, `db:sync`, the dev reload path). Those are
+   * additive-only by policy, and a dropped column is not something the next boot can put back.
+   * The result is a companion that holds the content and a main table still carrying the
+   * originals: reads resolve through the companion, the stale copies harm nothing, and
+   * `nextly migrate` can remove them under supervision. Redundant beats unrecoverable.
+   */
+  dropSeededColumns?: boolean;
+  /**
+   * Retained columns that are NOT NULL on the main table and must stop being so.
+   *
+   * Only meaningful with `dropSeededColumns: false`. A field that was required before localization
+   * leaves a NOT NULL column behind, and once the companion exists its value is written there
+   * instead — so the main insert omits it and every subsequent create fails the constraint. The
+   * column has to be relaxed or removed; leaving it as-is breaks writes outright.
+   */
+  relaxColumns?: readonly string[];
+}
+
 /**
  * Statement-array form of {@link buildLocalizationUpSql} (no trailing `;` per element). The
  * runtime enable path (a Builder-entity localization toggle, which has no migration file) runs
  * these individually via the adapter, so it does not have to split a joined string on `;`.
+ *
+ * Drops the relocated columns by default, which is what both existing callers want.
  */
 export function buildLocalizationUpStatements(
-  spec: CompanionMigrationSpec
+  spec: CompanionMigrationSpec,
+  options: LocalizationUpOptions = {}
 ): string[] {
   const { dialect, mainTable, companionTable, defaultLocale, columns } = spec;
 
@@ -102,10 +131,48 @@ export function buildLocalizationUpStatements(
         ]
       : [];
 
-  const drops = onMain.map(
-    c =>
-      `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
-  );
+  const retaining = options.dropSeededColumns === false;
+  const mustRelax = new Set(options.relaxColumns ?? []);
+  const constrained = onMain.filter(c => mustRelax.has(c.name));
 
-  return [create, ...seed, ...drops];
+  // SQLite cannot change a column's nullability — the schema pipeline refuses `change_column_nullable`
+  // for it, and the only alternative is rebuilding the table. So a retained NOT NULL column is
+  // dropped there instead: its value has just been copied into the companion, whereas leaving it
+  // would fail every create from this point on. Retaining is a safety measure, and a column that
+  // breaks writes is not the safe option.
+  const relaxations = retaining
+    ? constrained.map(c =>
+        dialect === "sqlite"
+          ? `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
+          : relaxNotNull(mainTable, c, dialect)
+      )
+    : [];
+
+  const drops = retaining
+    ? []
+    : onMain.map(
+        c =>
+          `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
+      );
+
+  return [create, ...seed, ...relaxations, ...drops];
+}
+
+/**
+ * Make one main-table column nullable.
+ *
+ * PostgreSQL states the change directly; MySQL has no equivalent and must restate the whole
+ * column definition, which is why the type is rebuilt here rather than read back from the server.
+ * SQLite supports neither and never reaches this.
+ */
+function relaxNotNull(
+  mainTable: string,
+  col: Parameters<typeof ddlType>[0],
+  dialect: CompanionMigrationSpec["dialect"]
+): string {
+  const table = q(mainTable, dialect);
+  const name = q(col.name, dialect);
+  return dialect === "mysql"
+    ? `ALTER TABLE ${table} MODIFY COLUMN ${name} ${ddlType(col, dialect)} NULL`
+    : `ALTER TABLE ${table} ALTER COLUMN ${name} DROP NOT NULL`;
 }

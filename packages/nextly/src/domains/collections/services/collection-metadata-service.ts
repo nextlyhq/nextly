@@ -855,6 +855,7 @@ export class CollectionMetadataService extends BaseService {
       // environment, and the shared-archive purge is DML that no migration file should
       // carry (the archive table is created lazily and may not exist).
       await teardownEntityI18n({
+        kind: "collection",
         adapter: this.adapter,
         slug: params.collectionName,
         tableName: collection.tableName,
