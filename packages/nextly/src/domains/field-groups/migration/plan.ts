@@ -66,6 +66,35 @@ export function renamePositionOffset(
   return direction === "up" ? dataStepCount : 0;
 }
 
+/**
+ * How much rename progress a recorded position represents, if any.
+ *
+ * A marker counts positions across the whole executable list; reconciliation
+ * scores rename entries numbered from one. Going up the data steps hold the
+ * leading positions, so a run interrupted among them has attempted no rename at
+ * all — the first one cannot start until the whole-plan position clears them.
+ *
+ * 🔴 Reporting that as `{ recorded: true, step: 0 }` would be wrong rather than
+ * merely imprecise: reconciliation treats position `step + 1` as the supported
+ * commit-before-marker window, so a zeroed position still vouches for rename
+ * position 1 — and an unrelated object carrying a target name could be adopted
+ * as this plan's completed work. Until a rename has actually begun, the run is
+ * reported as unrecorded.
+ */
+export function renameRunRecord(args: {
+  status: "settled" | "migrating";
+  direction: MigrationDirection;
+  step: number;
+  offset: number;
+}):
+  | { recorded: false }
+  | { recorded: true; direction: MigrationDirection; step: number } {
+  if (args.status !== "migrating") return { recorded: false };
+  const progressed = args.step - args.offset;
+  if (progressed <= 0) return { recorded: false };
+  return { recorded: true, direction: args.direction, step: progressed };
+}
+
 export interface BuildPlanArgs {
   /** Which way this run travels. */
   direction: MigrationDirection;

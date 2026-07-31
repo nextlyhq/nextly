@@ -6,6 +6,7 @@ import {
   buildMigrationPlan,
   directedRenameEntries,
   renamePositionOffset,
+  renameRunRecord,
 } from "../plan";
 import type { ManifestEntry } from "../manifest";
 import type { MigrationSession } from "../session";
@@ -138,5 +139,59 @@ describe("assembling the steps one run executes", () => {
       "_field_group_type",
       "fg_hero",
     ]);
+  });
+
+  // 🔴 A position inside the data steps is reported as UNRECORDED, not as
+  // recorded-at-zero. Reconciliation treats `step + 1` as the supported
+  // commit-before-marker window, so a zeroed position would still vouch for
+  // rename position 1 - and an unrelated object carrying a target name could be
+  // adopted as this plan's completed work.
+  it.each([1, 2, 3, 4])(
+    "reports no rename progress for whole-plan step %i",
+    step => {
+      expect(
+        renameRunRecord({
+          status: "migrating",
+          direction: "up",
+          step,
+          offset: 4,
+        })
+      ).toEqual({ recorded: false });
+    }
+  );
+
+  it("reports rename progress once the renames have begun", () => {
+    expect(
+      renameRunRecord({
+        status: "migrating",
+        direction: "up",
+        step: 5,
+        offset: 4,
+      })
+    ).toEqual({ recorded: true, direction: "up", step: 1 });
+  });
+
+  // Going down the renames come first, so the offset is zero and a recorded
+  // position is already in rename coordinates.
+  it("passes a rollback's position through unshifted", () => {
+    expect(
+      renameRunRecord({
+        status: "migrating",
+        direction: "down",
+        step: 2,
+        offset: 0,
+      })
+    ).toEqual({ recorded: true, direction: "down", step: 2 });
+  });
+
+  it("reports no progress at all when nothing is in flight", () => {
+    expect(
+      renameRunRecord({
+        status: "settled",
+        direction: "up",
+        step: 9,
+        offset: 4,
+      })
+    ).toEqual({ recorded: false });
   });
 });

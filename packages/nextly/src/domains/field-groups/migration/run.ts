@@ -43,6 +43,7 @@ import {
   dataStepCount,
   directedRenameEntries,
   renamePositionOffset,
+  renameRunRecord,
 } from "./plan";
 import { probeStorage, reconcilePlan, type TableColumns } from "./reconcile";
 import { runMigrationSteps } from "./runner";
@@ -195,14 +196,12 @@ export async function runFieldGroupMigration(
         // step, and going up the data rewrites hold the first positions, so a
         // recorded position handed over untranslated would mark that many
         // renames as already verified.
-        run:
-          state.status === "migrating"
-            ? {
-                recorded: true,
-                direction: state.direction,
-                step: Math.max(0, state.step - offset),
-              }
-            : { recorded: false },
+        run: renameRunRecord({
+          status: state.status,
+          direction: state.status === "migrating" ? state.direction : direction,
+          step: state.status === "migrating" ? state.step : 0,
+          offset,
+        }),
         direction,
         identifierCase,
       });
