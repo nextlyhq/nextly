@@ -10,6 +10,7 @@
 
 import type { CollectionConfig, FieldConfig, HookContext } from "nextly";
 import {
+  NextlyError,
   text,
   textarea,
   select,
@@ -391,7 +392,18 @@ export function formsCollection(
             (data.fields === undefined ||
               (Array.isArray(data.fields) && data.fields.length === 0))
           ) {
-            throw new Error("Form must have at least one field.");
+            // Typed, so the rejection survives as a validation failure with
+            // its field issue rather than being read as a crash and replaced
+            // with a generic server-fault message.
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: "fields",
+                  code: "REQUIRED",
+                  message: "Form must have at least one field.",
+                },
+              ],
+            });
           }
 
           return data;

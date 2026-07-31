@@ -25,8 +25,14 @@ function contextFor(collection: string): HookContext {
 describe("hook error propagation", () => {
   it("preserves a validation error thrown by a hook", async () => {
     const registry = new HookRegistry();
+    // A real validation error: `validation()` takes an `errors` array and
+    // ignores anything else, so a fixture built from a message alone carries
+    // `errors: undefined` and proves nothing about the field issues this test
+    // exists to protect.
     const thrown = NextlyError.validation({
-      publicMessage: "Title is required.",
+      errors: [
+        { path: "title", code: "REQUIRED", message: "Title is required." },
+      ],
     });
     registry.register("beforeCreate", "docs", () => {
       throw thrown;
@@ -35,9 +41,21 @@ describe("hook error propagation", () => {
     // Identity, not just shape: the boundary reads status, code and field
     // issues off this object, and a copy carrying the message alone would
     // satisfy a looser assertion while still losing them.
-    await expect(
-      registry.execute("beforeCreate", contextFor("docs"))
-    ).rejects.toBe(thrown);
+    const error = await registry
+      .execute("beforeCreate", contextFor("docs"))
+      .catch((e: unknown) => e);
+
+    // Identity, not just shape: the boundary reads status, code and field
+    // issues off this object, and a copy carrying the message alone would
+    // satisfy a looser assertion while still losing them.
+    expect(error).toBe(thrown);
+    // Asserted explicitly, because identity alone would still pass for an
+    // error whose issues were never populated.
+    expect(
+      (error as { publicData?: { errors?: unknown } }).publicData?.errors
+    ).toEqual([
+      { path: "title", code: "REQUIRED", message: "Title is required." },
+    ]);
   });
 
   it("keeps the error recognisable to NextlyError.is", async () => {

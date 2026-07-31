@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Let a hook's own error reach the caller. A hook rejecting input with a validation or permission error was rebuilt as a generic one, so the client received a 500 instead of the rule the hook was enforcing.
+Keep a hook's own error type through the hook registry. A hook rejecting input with a validation or permission error had it rebuilt as a generic one; it now passes through with its status, code and field issues intact. Direct API callers receive that error as thrown. REST callers still have some statuses reconstructed at the dispatcher boundary, which is tracked separately.

@@ -69,6 +69,19 @@ export type { FieldConfig } from "nextly";
  *   are its only caller — so it has not met the graduation bar in
  *   STABILITY.md. It graduates once the page builder owns block props.
  */
+/**
+ * The canonical error type, so a hook or route a plugin contributes can reject
+ * input the way core does.
+ *
+ * A hook that throws a plain `Error` is indistinguishable from one that
+ * crashed, so its message is treated as a server fault and replaced before it
+ * reaches the caller. `NextlyError.validation()` and its siblings carry the
+ * status, code and field issues that say the rejection was deliberate, and they
+ * survive to the client intact.
+ * @public
+ */
+export { NextlyError } from "nextly";
+
 export { validateFieldValues } from "nextly";
 export type {
   ValidateFieldValuesOptions,
