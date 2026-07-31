@@ -47,7 +47,7 @@ async function boot(): Promise<CollectionEntryService> {
     ],
   });
   return handle
-    .getService<CollectionsHandler>("collectionsHandler")
+    .getService("collectionsHandler")
     .getEntryService() as CollectionEntryService;
 }
 
@@ -214,7 +214,7 @@ describe("draft/published split — updateEntry (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const trusted = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -279,7 +279,7 @@ describe("draft/published split — updateEntry (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
 
     await entries.createEntry(
@@ -448,7 +448,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         }),
       ],
     });
-    const handler = handle.getService<CollectionsHandler>("collectionsHandler");
+    const handler = handle.getService("collectionsHandler");
 
     // Publish, then stash a pending draft via a trusted status-less edit.
     const created = await handler.createEntry(
@@ -514,7 +514,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -618,7 +618,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -666,7 +666,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -713,7 +713,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -775,7 +775,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
 
     // Seed a published row with a secret, via a trusted context.
@@ -842,7 +842,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -898,7 +898,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -947,7 +947,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       ],
     });
     const entries = handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -1014,7 +1014,7 @@ describe("draft/published split — schema and component eligibility (integratio
     } as Parameters<typeof createAdapter>[0]);
     handle = await createTestNextly({ ...opts, adapter });
     return handle
-      .getService<CollectionsHandler>("collectionsHandler")
+      .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
   }
 
