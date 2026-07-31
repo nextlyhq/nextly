@@ -5,7 +5,7 @@
 // masked when the collection is read directly has to stay masked when the same
 // row arrives nested inside another document.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -319,12 +319,13 @@ describe("a target's field hooks apply to rows reached through a relationship", 
       service.applyNestedFieldHooks(doc, POSTS, { enforceFieldAccess: true })
     ).resolves.toBeUndefined();
   });
-  it("walks an upload target without failing the read", async () => {
-    // `media` is a built-in with no dynamic-collection record, so the schema
-    // lookup raises not-found. Reading that as an untrustworthy lookup refused
-    // any read carrying a populated upload -- and uploads are everywhere.
-    // Not-registered and lookup-failed are different answers.
+  it("does not look up or log an upload's built-in target", async () => {
+    // `media` is not a registered collection, so resolving it costs a metadata
+    // query per row only to fail, and logs the failure -- on reads that are
+    // otherwise fine. Uploads are close to universal, so that is a query and an
+    // error line on most reads in production.
     const t = await boot();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const service = t.getService("relationshipService") as unknown as {
       applyNestedFieldHooks: (
         entry: Record<string, unknown>,
@@ -341,5 +342,10 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     await expect(
       service.applyNestedFieldHooks(doc, POSTS, { enforceFieldAccess: true })
     ).resolves.toBeUndefined();
+    // The read succeeding is not enough: it succeeded before this too, after
+    // paying for the lookup and shouting about it.
+    expect(logged).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
   });
 });

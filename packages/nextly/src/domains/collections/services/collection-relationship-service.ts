@@ -2884,11 +2884,16 @@ export class CollectionRelationshipService extends BaseService {
   /**
    * The collection's fields, read once per collection per read.
    *
-   * Fails CLOSED. `getCollectionFields` returns an empty list when the metadata
-   * lookup fails, which here would mean "this row has no relationship fields"
-   * and silently skip every masking hook below it while the rows continue to
-   * the response. These are read protections, so a lookup that cannot be
-   * trusted refuses the read instead of quietly returning it untransformed.
+   * Fails OPEN, deliberately: a target whose schema will not load runs no hooks
+   * and the read continues. That is weaker than these protections deserve, and
+   * it is the only correct answer available today -- the registry reports "not
+   * a registered collection" and "the lookup failed" identically, so refusing
+   * on it broke every read carrying an upload or an author relationship. The
+   * failure is logged rather than swallowed.
+   *
+   * Fail-closed becomes possible once the registry can answer "is this a
+   * collection" separately from "give me its fields"; see the gap I notes in
+   * `094-collection-hook-lifecycle-spec`.
    */
   private async fieldsForNestedWalk(
     collectionName: string,
@@ -3001,6 +3006,12 @@ export class CollectionRelationshipService extends BaseService {
       }
       return;
     }
+
+    // An upload points at the built-in media entity, which is not a registered
+    // collection and registers no field hooks. Resolving it would spend a
+    // metadata query per row to be told so, and log the failure, on reads that
+    // are otherwise fine -- and uploads are close to universal.
+    if (isUploadField(field)) return;
 
     for (const row of rows) {
       // A discriminated value names its own collection, so a polymorphic
