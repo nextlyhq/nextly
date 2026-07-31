@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import type { SideEffectHookFailure } from "../hook-registry";
 import { HookRegistry, resetHookRegistry } from "../hook-registry";
+import { HOOK_TYPES } from "../types";
 import type { HookContext, HookHandler, HookType } from "../types";
 import { NextlyError } from "../../errors/nextly-error";
 
@@ -162,6 +163,34 @@ describe("HookRegistry", () => {
 
       expect(registry.getHookCount("beforeCreate", "*")).toBe(0);
       expect(registry.getHookCount("afterCreate", "*")).toBe(0);
+    });
+
+    it("clears every phase the registry accepts, not a list of them", () => {
+      // Driven by HOOK_TYPES so a phase added later cannot be left behind. A
+      // clear that misses one is not a leak but a duplication: registration
+      // appends, so the next re-registration -- hot reload, or an explicit
+      // re-register -- leaves the collection running two copies of every
+      // handler in that phase, and removing a configured hook does not stop it.
+      const handler = vi.fn();
+      for (const hookType of HOOK_TYPES) {
+        if (hookType === "beforeOperation") {
+          registry.registerBeforeOperation("posts", handler);
+          continue;
+        }
+        registry.register(hookType, "posts", handler);
+      }
+
+      // The control: every phase really was registered, so zero afterwards
+      // cannot be mistaken for a registration that never took.
+      for (const hookType of HOOK_TYPES) {
+        expect(registry.getHookCount(hookType, "posts")).toBe(1);
+      }
+
+      registry.clearCollection("posts");
+
+      for (const hookType of HOOK_TYPES) {
+        expect(registry.getHookCount(hookType, "posts")).toBe(0);
+      }
     });
   });
 

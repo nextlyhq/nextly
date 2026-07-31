@@ -164,6 +164,55 @@ describe("beforeChange runs after the validation gate", () => {
     expect(observed).toBe("GEN");
   });
 
+  it("hands an update handler the row it is changing", async () => {
+    // A handler comparing old against new is the ordinary use of the phase, and
+    // it worked while the declaration sat on the `beforeUpdate` queue, whose
+    // context carries `originalData`. Giving the phase its own execution point
+    // is where that gets dropped silently: the handler sees `undefined` and
+    // either throws or decides on nothing.
+    const seen: Phases = { beforeValidate: 0, beforeChange: 0 };
+    let observedOriginal: unknown;
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: DOCS,
+          access: { create: () => true, read: () => true, update: () => true },
+          hooks: {
+            beforeChange: [
+              ctx => {
+                seen.beforeChange++;
+                const original = (ctx as { originalData?: unknown })
+                  .originalData;
+                observedOriginal = (
+                  original as Record<string, unknown> | undefined
+                )?.code;
+                return ctx.data;
+              },
+            ],
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "code", required: true }),
+          ],
+        }),
+      ],
+    });
+
+    const created = await current.nextly.create({
+      collection: DOCS,
+      data: { title: "ok", code: "BEFORE" },
+    });
+    await current.nextly.update({
+      collection: DOCS,
+      id: String(created.item.id),
+      data: { code: "AFTER" },
+    });
+
+    // The stored value, not the patch: the handler can tell what changed.
+    expect(seen.beforeChange).toBe(2);
+    expect(observedOriginal).toBe("BEFORE");
+  });
+
   it("does not run on a single whose update fails validation", async () => {
     // Singles register through their own mapping and execute on their own
     // write path, so the collection fix does not cover them by construction.

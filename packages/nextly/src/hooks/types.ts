@@ -63,17 +63,27 @@ import type { Nextly } from "../direct-api/nextly";
  * what makes it the phase for deriving a stored value -- and also means what it
  * returns is written without being re-checked.
  */
-export type HookType =
-  | "beforeOperation"
-  | "beforeCreate"
-  | "afterCreate"
-  | "beforeUpdate"
-  | "afterUpdate"
-  | "beforeChange"
-  | "beforeDelete"
-  | "afterDelete"
-  | "beforeRead"
-  | "afterRead";
+export const HOOK_TYPES = [
+  "beforeOperation",
+  "beforeCreate",
+  "afterCreate",
+  "beforeUpdate",
+  "afterUpdate",
+  "beforeChange",
+  "beforeDelete",
+  "afterDelete",
+  "beforeRead",
+  "afterRead",
+] as const;
+
+/**
+ * Derived from {@link HOOK_TYPES} rather than declared separately, so anything
+ * that has to visit every phase -- clearing a collection's handlers, for one --
+ * can iterate the same list the type is built from. A hand-maintained array
+ * annotated `HookType[]` type-checks perfectly while missing a phase, which is
+ * how a newly added one went on being registered but never cleared.
+ */
+export type HookType = (typeof HOOK_TYPES)[number];
 
 /**
  * The phases whose handlers take a {@link HookContext}, which is every phase

@@ -172,6 +172,12 @@ export class CollectionHookService {
     queryDatabase: (params: QueryDatabaseParams) => Promise<boolean>;
     user?: UserContext;
     sharedContext?: Record<string, unknown>;
+    /**
+     * The stored row an update is changing. Carried because a handler comparing
+     * old against new is the ordinary use of the phase, and the context this
+     * builds is the only place it can come from.
+     */
+    originalData?: Record<string, unknown>;
     executor?: unknown;
   }): Promise<void> {
     const { collection, operation, data, storedHooks } = options;
@@ -183,8 +189,14 @@ export class CollectionHookService {
         collection,
         operation,
         data,
+        originalData: options.originalData,
         user: options.user,
         context: sharedContext,
+        // Forwarded to the code-hook context as well as the stored one below:
+        // a handler doing the documented transaction-bound read through
+        // `context.executor` would otherwise fall back to the pool while the
+        // caller's transaction still holds its connection.
+        executor: options.executor,
       })
     );
     applyBeforeChangeResult(data, fromCode);

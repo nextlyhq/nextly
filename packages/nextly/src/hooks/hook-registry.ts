@@ -11,6 +11,7 @@
 import { NextlyError } from "../errors/nextly-error";
 
 import { normalizeHookError } from "./normalize-hook-error";
+import { HOOK_TYPES } from "./types";
 import type {
   BeforeOperationArgs,
   BeforeOperationContext,
@@ -312,19 +313,11 @@ export class HookRegistry {
    * ```
    */
   clearCollection(collection: string): void {
-    const hookTypes: HookType[] = [
-      "beforeOperation",
-      "beforeCreate",
-      "afterCreate",
-      "beforeUpdate",
-      "afterUpdate",
-      "beforeDelete",
-      "afterDelete",
-      "beforeRead",
-      "afterRead",
-    ];
-
-    for (const hookType of hookTypes) {
+    // Iterated from the list the HookType union is built from. A local array
+    // annotated `HookType[]` type-checks while missing a phase, so a phase
+    // added later went on being registered and never cleared -- which makes
+    // re-registration append a second copy of every handler.
+    for (const hookType of HOOK_TYPES) {
       const key = this.makeKey(hookType, collection);
       this.hooks.delete(key);
     }
