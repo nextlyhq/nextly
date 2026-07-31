@@ -127,11 +127,18 @@ export type BlockManifestEntry = z.infer<typeof blockManifestEntrySchema>;
 export type BlockManifest = z.infer<typeof blockManifestSchema>;
 
 /**
- * The manifest's contract in a form that needs neither zod nor this package.
+ * The manifest's contract as plain JSON Schema, for a reader that has the
+ * package but not zod, and no interest in either.
  *
- * A manifest is read by things that never import Nextly — an editor build, a
- * docs page, an agent handed the file on its own — and until now they had only
- * a TypeScript interface, which a JSON consumer cannot check anything against.
+ * A manifest is consumed by things that are not the app — an editor build, a
+ * docs page, a generator handed the file — and a TypeScript interface gives a
+ * JSON consumer nothing to check against. This does, in a form any JSON Schema
+ * validator understands.
+ *
+ * Re-exported from the package root, because a contract reachable only through
+ * an internal module is not published: the export map admits no deep import.
+ * Something holding the file with no package installed is still unserved; that
+ * wants a hosted copy, which is a docs concern rather than an emitter one.
  *
  * Derived from the schema above, so publishing it cannot drift from what the
  * emitter actually writes.
