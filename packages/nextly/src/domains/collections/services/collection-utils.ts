@@ -365,3 +365,60 @@ export function getMinSearchLength(
       ?.search as Record<string, unknown> | undefined);
   return (searchConfig?.minSearchLength as number) ?? 2;
 }
+
+/**
+ * Turn storage-encoded JSON columns back into the values the field was
+ * configured with.
+ *
+ * SQLite has no JSON type, so richtext, blocks, array, group and json fields
+ * come back as strings. Every consumer after this point -- hooks, field-level
+ * access, the caller -- is documented against the configured value, so the
+ * decode belongs before the first of them.
+ *
+ * Runs exactly once per read. A second pass cannot tell an already-decoded
+ * string from storage encoding, so a field holding the string `"123"` would
+ * decode to the number `123` on the second visit; `"true"` and `"null"` fail
+ * the same way.
+ */
+export function decodeJsonFieldValues(
+  entries: Record<string, unknown>[],
+  fields: {
+    name: string;
+    type: string;
+    hasMany?: boolean;
+    relationTo?: unknown;
+  }[],
+  locale?: string
+): void {
+  for (const entry of entries) {
+    for (const field of fields) {
+      if (!isJsonFieldType(field.type, field)) continue;
+      const value = entry[field.name];
+      if (typeof value === "string") {
+        try {
+          entry[field.name] = JSON.parse(value);
+        } catch {
+          // Not JSON after all; the stored string is the value.
+        }
+      } else if (
+        locale === "all" &&
+        value !== null &&
+        typeof value === "object"
+      ) {
+        // `locale=all` yields a language-keyed map of raw companion values, so
+        // each locale's string is decoded to match the shape a single-locale
+        // read returns.
+        const keyed = value as Record<string, unknown>;
+        for (const code of Object.keys(keyed)) {
+          if (typeof keyed[code] === "string") {
+            try {
+              keyed[code] = JSON.parse(keyed[code]);
+            } catch {
+              // Not JSON after all; the stored string is the value.
+            }
+          }
+        }
+      }
+    }
+  }
+}

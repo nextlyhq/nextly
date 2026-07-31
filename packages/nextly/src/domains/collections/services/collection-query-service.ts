@@ -103,7 +103,7 @@ import {
   getTableName,
   getSearchableFields,
   getMinSearchLength,
-  isJsonFieldType,
+  decodeJsonFieldValues,
 } from "./collection-utils";
 
 export class CollectionQueryService extends BaseService {
@@ -461,53 +461,6 @@ export class CollectionQueryService extends BaseService {
         return beforeReadResult ?? undefined;
       }
     );
-  }
-
-  /**
-   * Turns storage-encoded JSON columns back into the values the field was
-   * configured with.
-   *
-   * SQLite has no JSON type, so richtext, blocks, array, group and json fields
-   * come back as strings. Every consumer after this point -- hooks, field-level
-   * access, the caller -- is documented against the configured value, so the
-   * decode belongs before the first of them rather than between them.
-   */
-  private decodeJsonFieldValues(
-    entries: Record<string, unknown>[],
-    fields: FieldDefinition[],
-    locale: string | undefined
-  ): void {
-    for (const entry of entries) {
-      for (const field of fields) {
-        if (!isJsonFieldType(field.type, field)) continue;
-        const value = entry[field.name];
-        if (typeof value === "string") {
-          try {
-            entry[field.name] = JSON.parse(value);
-          } catch {
-            // Not JSON after all; the stored string is the value.
-          }
-        } else if (
-          locale === "all" &&
-          value !== null &&
-          typeof value === "object"
-        ) {
-          // `locale=all` yields a language-keyed map of raw companion values, so
-          // each locale's string is decoded to match the shape a single-locale
-          // read returns.
-          const keyed = value as Record<string, unknown>;
-          for (const code of Object.keys(keyed)) {
-            if (typeof keyed[code] === "string") {
-              try {
-                keyed[code] = JSON.parse(keyed[code]);
-              } catch {
-                // Not JSON after all; the stored string is the value.
-              }
-            }
-          }
-        }
-      }
-    }
   }
 
   /**
@@ -1412,7 +1365,7 @@ export class CollectionQueryService extends BaseService {
       // Decode before any afterRead hook runs. A hook is documented against the
       // configured value, and on SQLite these columns are strings, so decoding
       // after the hooks handed every one of them the storage encoding instead.
-      this.decodeJsonFieldValues(expandedEntries, fields, params.locale);
+      decodeJsonFieldValues(expandedEntries, fields, params.locale);
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -1470,14 +1423,6 @@ export class CollectionQueryService extends BaseService {
           stripPasswordFieldValues(entry, fields);
         }
       }
-
-      // A hook may return values it built itself, so the decode runs again over
-      // what they settled on. Already-decoded values are left alone.
-      this.decodeJsonFieldValues(
-        finalData as Record<string, unknown>[],
-        fields,
-        params.locale
-      );
 
       // Field-level afterRead hooks + read access (code-first functions
       // resolved via the field-level registry): hooks may transform values;
@@ -2296,7 +2241,7 @@ export class CollectionQueryService extends BaseService {
       // Decode before any afterRead hook runs, for the same reason as the list
       // path: a hook is documented against the configured value, not the
       // storage encoding SQLite hands back.
-      this.decodeJsonFieldValues([expandedEntry], fields, params.locale);
+      decodeJsonFieldValues([expandedEntry], fields, params.locale);
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -2350,10 +2295,6 @@ export class CollectionQueryService extends BaseService {
       }
       // Same defense in depth for the owner column.
       stripSystemOwnerField(finalData);
-
-      // A hook may return values it built itself, so the decode runs again over
-      // what they settled on. Already-decoded values are left alone.
-      this.decodeJsonFieldValues([finalData], fields, params.locale);
 
       // Field-level afterRead hooks + read access — same semantics as the
       // list path above.
