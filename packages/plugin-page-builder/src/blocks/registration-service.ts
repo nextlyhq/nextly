@@ -25,6 +25,9 @@ import {
   type SupportDefinition,
 } from "@nextlyhq/blocks-engine";
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { collectDeclarations } from "nextly";
+
+import { blocksIn } from "./declared-blocks";
 
 /** The page builder's own name, as the cross-plugin namespace keys it. */
 export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
@@ -176,4 +179,33 @@ function isBlockRegistrationBackend(
     value !== null &&
     typeof (value as { register?: unknown }).register === "function"
   );
+}
+
+/**
+ * Register every block plugins declared for the page builder.
+ *
+ * Called from the page builder's own `init`, which is also what guarantees the
+ * per-boot reset runs: resolving the service is what empties the registry, and
+ * that has to happen before anything is registered into it.
+ *
+ * Each block is attributed to the plugin that DECLARED it, not to the page
+ * builder that registered it on its behalf, so a name collision still names the
+ * package a reader has to go and fix.
+ *
+ * A declaration whose `blocks` is not an array throws rather than being skipped.
+ * It was addressed to this reader by name, so the author meant it to take
+ * effect; silently ignoring it would leave a plugin looking installed while
+ * contributing nothing.
+ */
+export function registerDeclaredBlocks(ctx: PluginContext): void {
+  const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
+  if (!isBlockRegistrationBackend(service)) return;
+  for (const declaration of collectDeclarations(
+    ctx.config.plugins ?? [],
+    PAGE_BUILDER_PLUGIN
+  )) {
+    const { blocks, error } = blocksIn(declaration);
+    if (error) throw new Error(error);
+    if (blocks.length > 0) service.register(blocks, declaration.source);
+  }
 }

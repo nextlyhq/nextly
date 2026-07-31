@@ -33,11 +33,38 @@ import type {
  * `afterRead` is deliberately absent: it reshapes the response by design, and
  * the read paths consume what it returns.
  */
+/**
+ * A side-effect hook that threw after the write had already committed.
+ *
+ * Reported rather than raised: the row is durable and this phase cannot change
+ * it, so failing the operation would tell a caller its write did not happen and
+ * invite a retry that writes it twice.
+ */
+export interface SideEffectHookFailure {
+  /** The phase whose handler threw. */
+  phase: HookType;
+  /** The collection or single the operation was for. */
+  collection: string;
+  /** The normalized error, with its type and context preserved. */
+  error: NextlyError;
+}
+
 const SIDE_EFFECT_HOOK_TYPES: ReadonlySet<HookType> = new Set([
   "afterCreate",
   "afterUpdate",
   "afterDelete",
 ]);
+
+/**
+ * Whether a phase runs AFTER the write has committed.
+ *
+ * Shared by every executor so the two cannot disagree about which phases may
+ * fail an operation: a stored hook and a code-registered one in the same phase
+ * have to behave identically.
+ */
+export function isSideEffectHookType(hookType: HookType): boolean {
+  return SIDE_EFFECT_HOOK_TYPES.has(hookType);
+}
 
 /**
  * Global hook registry singleton
@@ -376,7 +403,15 @@ export class HookRegistry {
    */
   async execute<T>(
     hookType: HookContextPhase,
-    context: HookContext<T>
+    context: HookContext<T>,
+    options?: {
+      /**
+       * Called for each side-effect handler that throws, so the caller can
+       * report it alongside the successful write. Omitting it does not make
+       * the failure silent -- it is logged either way.
+       */
+      onSideEffectError?: (failure: SideEffectHookFailure) => void;
+    }
   ): Promise<T | void> {
     // `beforeOperation` handlers live in the other store and take a different
     // context, so this method cannot run them. Reaching here with that phase
@@ -420,7 +455,41 @@ export class HookRegistry {
           data = result;
         }
       } catch (error: unknown) {
-        throw normalizeHookError(error, hookType, context.collection);
+        const normalized = normalizeHookError(
+          error,
+          hookType,
+          context.collection
+        );
+        // A transforming phase runs before the write, so raising is how it
+        // refuses one -- that is the whole point of `before*`.
+        if (!isSideEffectPhase) throw normalized;
+
+        // A side-effect phase runs after the write committed. Raising here
+        // would report a durable row as a failure and invite a retry that
+        // writes it a second time, so the failure is reported instead.
+        //
+        // The remaining handlers still run: they are independent side effects,
+        // and letting the first failure cancel the rest turns one broken hook
+        // into several silently skipped ones.
+        // Logged here because nothing above this frame will: the operation
+        // reports success, so a side effect that vanished without a trace is
+        // exactly the failure this has to avoid.
+        console.error(
+          `Hook "${hookType}" failed for "${context.collection}" after the write committed:`,
+          normalized
+        );
+        // `normalizeHookError` rethrows a typed error untouched and wraps an
+        // untyped one, so this is a NextlyError in practice; the guard is what
+        // makes that a fact rather than an assumption.
+        options?.onSideEffectError?.({
+          phase: hookType,
+          collection: context.collection,
+          error: NextlyError.is(normalized)
+            ? normalized
+            : NextlyError.internal({
+                logContext: { hookType, collection: context.collection },
+              }),
+        });
       }
     }
 

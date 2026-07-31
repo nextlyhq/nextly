@@ -371,6 +371,7 @@ export {
 // Plugin System - Types and helpers for creating plugins
 export {
   AdminPlacement,
+  collectDeclarations,
   definePlugin,
   createPluginContext,
   type PluginAdminAppearance,
@@ -378,6 +379,7 @@ export {
   type PluginCategory,
   type PluginContext,
   type PluginContributions,
+  type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
   type PluginRole,

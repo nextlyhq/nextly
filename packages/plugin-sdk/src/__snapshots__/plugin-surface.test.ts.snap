@@ -126,6 +126,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginContext (type)",
   "PluginContributions (type)",
   "PluginDataFieldConfig (type)",
+  "PluginDeclaration (type)",
   "PluginDefinition (type)",
   "PluginEmailProvider (type)",
   "PluginEmailTemplate (type)",

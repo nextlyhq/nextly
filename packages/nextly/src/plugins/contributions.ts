@@ -466,6 +466,36 @@ export interface PluginContributions {
    */
   services?: Record<string, (ctx: PluginContext) => unknown>;
   /**
+   * @experimental Static data this plugin publishes for OTHER plugins, keyed by
+   * the consuming plugin's name. Core stores it and never reads inside it.
+   *
+   * The counterpart to `services`, and the reason it exists: a service is a
+   * factory, so its contents are knowable only once a plugin's `init` has run.
+   * Everything else here is plain data, which is what lets `nextly generate:types`
+   * build generated artifacts by reading the config alone — it loads no plugin
+   * runtime and opens no database. A capability offered only through `services`
+   * is therefore invisible to generation, and cannot appear in an import map, a
+   * manifest, or generated types.
+   *
+   * Declaring the data here and registering FROM it at boot keeps one source for
+   * both, so tooling and runtime cannot disagree about what a plugin provides.
+   *
+   * Keyed by consumer name rather than by capability so core stays out of it:
+   * a page builder reads `declarations["@nextlyhq/plugin-page-builder"]` and
+   * decides what its own shape means, exactly as it already does for the
+   * service it hands back.
+   *
+   * @example
+   * ```ts
+   * contributes: {
+   *   declarations: {
+   *     "@nextlyhq/plugin-page-builder": { blocks: [pricingTable] },
+   *   },
+   * }
+   * ```
+   */
+  declarations?: Record<string, unknown>;
+  /**
    * @experimental Scheduled tasks — **RESERVED, NOT EXECUTED** in this
    * release. The shape is published so authors aren't surprised by its absence,
    * but the runtime does not run these yet (a real scheduler needs durable jobs,
