@@ -424,6 +424,19 @@ export class FieldGroupMutationService extends BaseService {
       } else if (field.component) {
         slugs.add(field.component);
       }
+      // Every type this field PERMITS, not only the ones this payload writes, has its readiness
+      // resolved. A version or webhook snapshot reads every component the entity holds through the
+      // caller's transaction, where readiness can only be read and never resolved — so a component
+      // left out of this payload would have no verdict there and its localized values would be
+      // silently omitted from the durable record.
+      //
+      // Resolving is not refusing. The refusal below still walks only what the payload writes,
+      // because a permitted type whose companion is missing must not fail a save that never
+      // mentions it.
+      for (const permitted of field.components ?? [field.component]) {
+        if (typeof permitted !== "string" || slugs.has(permitted)) continue;
+        await this.resolveComponentReadiness(permitted);
+      }
       for (const slug of slugs) {
         if (resolved.has(slug)) continue;
         resolved.add(slug);
@@ -437,6 +450,31 @@ export class FieldGroupMutationService extends BaseService {
         await this.splitLocalizedComponent(meta, {}, params.locale);
       }
     }
+  }
+
+  /**
+   * Resolve one field group's companion readiness on the pooled connection, without judging it.
+   *
+   * Warming only: the caller decides what an unusable companion means, and for a type this write
+   * does not touch the answer is simply "nothing to do". What matters is that the verdict exists
+   * before a transaction opens, because inside one it can only be read.
+   */
+  private async resolveComponentReadiness(slug: string): Promise<void> {
+    const meta = await this.registryService.getComponentBySlug(slug);
+    if (!meta || meta.localized !== true) return;
+    const schema = buildCompanionSchema({
+      slug: meta.slug,
+      tableName: meta.tableName,
+      fields: meta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: false,
+    });
+    if (!schema) return;
+    await resolveCompanionReadiness(this.adapter, {
+      companionTableName: schema.companionTableName,
+      mainTableName: meta.tableName,
+      localizedColumns: schema.localizedFields.map(f => f.column),
+    });
   }
 
   async saveComponentDataInTransaction(

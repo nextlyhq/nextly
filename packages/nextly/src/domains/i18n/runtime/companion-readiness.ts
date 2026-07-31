@@ -74,8 +74,23 @@ export type CompanionReadiness = "ready" | "pre-migration" | "broken";
  * would never pay for itself — while the adapters it keys on survive that re-execution.
  */
 interface ReadinessCacheBag {
-  __nextly_companionReadiness?: WeakMap<object, Set<string>>;
+  __nextly_companionReadiness?: WeakMap<object, Map<string, number>>;
 }
+
+/**
+ * How long a positive verdict is trusted before it is checked again.
+ *
+ * A companion is dropped by a disable migration, and `nextly migrate` runs in its own process —
+ * one that cannot reach into a running server's memory. During a rolling deployment an old worker
+ * would otherwise keep a verdict that the database no longer supports for as long as it lives, and
+ * every localized read and write would fail at the driver instead of falling back to the main
+ * table. There is no invalidation channel between those processes, so the staleness is bounded by
+ * time instead.
+ *
+ * Thirty seconds costs one plan-only `SELECT` per entity per window on the paths that resolve —
+ * against one per write before any of this — and keeps a stale verdict shorter than a deployment.
+ */
+const VERDICT_TTL_MS = 30_000;
 
 /**
  * Anything that identifies one database connection. Narrower than the adapter on purpose: the
@@ -83,15 +98,23 @@ interface ReadinessCacheBag {
  */
 export type ReadinessScope = object;
 
-function readyTables(scope: ReadinessScope): Set<string> {
+function readyTables(scope: ReadinessScope): Map<string, number> {
   const bag = globalThis as ReadinessCacheBag;
-  bag.__nextly_companionReadiness ??= new WeakMap<object, Set<string>>();
+  bag.__nextly_companionReadiness ??= new WeakMap<
+    object,
+    Map<string, number>
+  >();
   let tables = bag.__nextly_companionReadiness.get(scope);
   if (!tables) {
-    tables = new Set<string>();
+    tables = new Map<string, number>();
     bag.__nextly_companionReadiness.set(scope, tables);
   }
   return tables;
+}
+
+/** Whether a verdict is recent enough to act on without checking it again. */
+function isFresh(verifiedAt: number | undefined): boolean {
+  return verifiedAt !== undefined && Date.now() - verifiedAt < VERDICT_TTL_MS;
 }
 
 /**
@@ -101,7 +124,7 @@ function readyTables(scope: ReadinessScope): Set<string> {
  * Undefined is not "not ready" — it means nothing has resolved this entity yet. A caller inside a
  * transaction cannot find out, so it must behave as it would for a companion it cannot use: skip
  * the join rather than attempt one. That is safe because every path that opens a write transaction
- * resolves readiness before opening it.
+ * resolves readiness before opening it, which is also what keeps the verdict this reads fresh.
  */
 export function cachedCompanionReadiness(
   scope: ReadinessScope,
@@ -128,9 +151,6 @@ export async function resolveCompanionReadiness(
     localizedColumns: readonly string[];
   }
 ): Promise<CompanionReadiness> {
-  const cached = cachedCompanionReadiness(adapter, args.companionTableName);
-  if (cached) return cached;
-
   if (await isCompanionReady(adapter, args.companionTableName)) return "ready";
   // Deliberately not remembered. The companion may be created by another process at any moment,
   // and remembering this would keep serving the pre-migration answer until the next reload.
@@ -159,10 +179,16 @@ export async function isCompanionReady(
   adapter: CompanionIntrospectAdapter,
   companionTableName: string
 ): Promise<boolean> {
-  if (cachedCompanionReadiness(adapter, companionTableName)) return true;
+  const tables = readyTables(adapter);
+  if (isFresh(tables.get(companionTableName))) return true;
   const { companionTableExists } = await import("./companion-io");
-  if (!(await companionTableExists(adapter, companionTableName))) return false;
-  readyTables(adapter).add(companionTableName);
+  if (!(await companionTableExists(adapter, companionTableName))) {
+    // Checked and gone. Dropping it here is what stops an expired verdict lingering as a
+    // half-truth for a caller that can only read.
+    tables.delete(companionTableName);
+    return false;
+  }
+  tables.set(companionTableName, Date.now());
   return true;
 }
 
@@ -236,4 +262,11 @@ export function forgetCompanionReadiness(
     return;
   }
   readyTables(scope).delete(companionTableName);
+}
+
+/** Test seam: drop every verdict for this connection and re-verify on the next resolve. */
+export function expireCompanionReadiness(scope: ReadinessScope): void {
+  for (const table of readyTables(scope).keys()) {
+    readyTables(scope).set(table, 0);
+  }
 }

@@ -1219,6 +1219,23 @@ export class CollectionMutationService extends BaseService {
    * id-tagged, every locale's page — still bust) and is logged rather than
    * silently dropped.
    */
+  /**
+   * Resolve a collection's companion readiness on the pooled connection.
+   *
+   * Warming only — it judges nothing. Its value is the verdict it leaves behind for the
+   * in-transaction reads that follow, which cannot resolve one themselves.
+   */
+  private async warmCompanionReadiness(collectionName: string): Promise<void> {
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return;
+    await resolveCompanionReadiness(this.adapter, {
+      companionTableName: companion.companionTableName,
+      mainTableName: companion.companionTableName.replace(/_locales$/, ""),
+      localizedColumns: companion.localizedFields.map(f => f.column),
+    });
+  }
+
   private async readCompanionSlugsAllLocales(
     db: CompanionReadDb,
     collectionName: string,
@@ -5443,6 +5460,13 @@ export class CollectionMutationService extends BaseService {
       // pool. The companion rows are still committed here; if a slug shifts
       // between this read and the delete, the always-busted id tag still covers
       // every locale's page.
+      // Resolved here, on the pool, for the same reason the slugs are read here. Everything the
+      // transaction below does with the companion — including the snapshot that builds the durable
+      // delete event — can only READ the verdict, because resolving issues a query and a query
+      // against a missing relation aborts the whole transaction on PostgreSQL. On a worker whose
+      // first act is a delete nothing has resolved this entity yet, and an unresolved verdict reads
+      // as unusable, so every localized field would be silently missing from that event.
+      await this.warmCompanionReadiness(params.collectionName);
       const deletedLocalizedSlugsForRevalidation =
         await this.readCompanionSlugsAllLocales(
           this.db,

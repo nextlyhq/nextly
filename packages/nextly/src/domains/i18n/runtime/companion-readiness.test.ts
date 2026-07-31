@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   cachedCompanionReadiness,
   companionNotReadyMessage,
+  expireCompanionReadiness,
   forgetCompanionReadiness,
   isCompanionReady,
   resolveCompanionReadiness,
@@ -19,6 +20,7 @@ function countingAdapter(present: string[]) {
   const queries: string[] = [];
   return {
     queries,
+    present,
     dialect: "postgresql" as const,
     executeQuery: (sql: string) => {
       queries.push(sql);
@@ -81,6 +83,26 @@ describe("companion readiness", () => {
     expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
 
     forgetCompanionReadiness(adapter, "dc_posts_locales");
+    expect(
+      cachedCompanionReadiness(adapter, "dc_posts_locales")
+    ).toBeUndefined();
+  });
+
+  it("re-verifies a verdict that has gone stale", async () => {
+    // A companion is dropped by a disable migration running in its own process, which cannot reach
+    // into a live server's memory. Without a bound, an old worker in a rolling deployment would
+    // keep querying a table the database no longer has for as long as it lives.
+    const adapter = countingAdapter(["dc_posts_locales"]);
+    expect(await isCompanionReady(adapter, "dc_posts_locales")).toBe(true);
+    expect(adapter.queries).toHaveLength(1);
+
+    expireCompanionReadiness(adapter);
+
+    // Verified again, and this time the table is gone.
+    adapter.present.length = 0;
+    expect(await isCompanionReady(adapter, "dc_posts_locales")).toBe(false);
+    expect(adapter.queries).toHaveLength(2);
+    // And the expired verdict is dropped, so a caller that can only read no longer sees it.
     expect(
       cachedCompanionReadiness(adapter, "dc_posts_locales")
     ).toBeUndefined();

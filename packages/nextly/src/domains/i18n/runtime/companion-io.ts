@@ -784,22 +784,22 @@ async function resumeInterruptedSeed(
         (await mainTableHasColumns(adapter, args.tableName, ["status"])) &&
         (await companionHasStatusColumn(adapter, companionTableName));
       if (columns.length > 0 || refreshStatus) {
-        const { buildDefaultLocaleRefreshStatements } = await import(
-          "../migration/generate-up"
+        // Through the query builder, not a generated statement string: this is a runtime data
+        // move, and only the migration FILE needs SQL text. The seed statements below still go
+        // through `executeQuery` because they carry DDL, which Drizzle cannot express.
+        const { refreshDefaultLocaleFromMain } = await import(
+          "./companion-copy"
         );
-        const refresh = buildDefaultLocaleRefreshStatements(
-          {
-            dialect: args.dialect,
-            mainTable: args.tableName,
-            companionTable: companionTableName,
-            defaultLocale: args.sourceLocale ?? "",
-          },
+        await refreshDefaultLocaleFromMain(adapter, {
+          tableName: args.tableName,
+          companionTableName,
+          fields: newLocalized,
+          dialect: args.dialect,
+          locale: args.sourceLocale ?? "",
           columns,
-          { refreshStatus }
-        );
-        for (const statement of refresh) {
-          await adapter.executeQuery(statement);
-        }
+          status: refreshStatus,
+          refreshStatus,
+        });
       }
     }
     for (const statement of copy) {
