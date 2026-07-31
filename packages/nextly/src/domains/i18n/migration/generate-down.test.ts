@@ -49,9 +49,10 @@ describe("buildLocalizationDownSql", () => {
     // companion immediately afterwards, so a restore that moved the content without the state it
     // was published under would put a draft in front of the public — or take live content down —
     // with nothing left to correct it from.
-    const withStatus = { ...spec, status: true };
-    const sql = buildLocalizationDownSql(withStatus);
-    expect(sql).toContain(
+    const statements = buildLocalizationDownStatements(spec, {
+      restoreStatus: true,
+    });
+    expect(statements.join("\n")).toContain(
       `"status" = (SELECT "_status" FROM "dc_pages_locales" ` +
         `WHERE "dc_pages_locales"."_parent" = "dc_pages"."id" ` +
         `ORDER BY ("dc_pages_locales"."_locale" = 'en') DESC, ` +
@@ -59,10 +60,16 @@ describe("buildLocalizationDownSql", () => {
     );
   });
 
-  it("does not touch status for an entity without Draft/Published", () => {
-    // `status` and `_status` only exist when the entity has Draft/Published. Reading either
-    // without it fails the whole migration, so the assignment is gated rather than defaulted.
-    expect(buildLocalizationDownSql(spec)).not.toContain(`"_status"`);
+  it("does not derive the status restore from the desired shape", () => {
+    // `spec.status` is what the collection is being saved AS. A save that disables localization
+    // and turns Draft/Published on at once would otherwise read a `_status` the old companion
+    // never carried, into a `status` main has not been given yet — the disable runs the companion
+    // transition before the shared ALTER. Only the caller's physical verdict enables it.
+    const desiresStatus = { ...spec, status: true };
+    expect(buildLocalizationDownSql(desiresStatus)).not.toContain(`"_status"`);
+    expect(
+      buildLocalizationDownStatements(desiresStatus).join("\n")
+    ).not.toContain(`"_status" `);
   });
 
   it("archives non-default-locale translations before dropping", () => {

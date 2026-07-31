@@ -37,6 +37,20 @@ export interface LocalizationDownOptions {
    * already-completed restore is what silently reverts content to its pre-localization state.
    */
   existingMainColumns?: readonly string[];
+  /**
+   * Whether to carry the restored row's publishing state back onto main.
+   *
+   * A verdict about the PHYSICAL tables, supplied by the caller, never derived from the spec.
+   * `spec.status` describes the shape the collection is being saved as, and a save that disables
+   * localization while turning Draft/Published on would have this read a `_status` the old
+   * companion never had — into a `status` the main table has not been given yet, because a disable
+   * deliberately runs the companion transition before the shared ALTER that adds it.
+   *
+   * When it IS there on both sides it has to travel: publishing is per locale while an entity is
+   * localized, and this path drops the companion straight after restoring, so content moved
+   * without the state it was published under cannot be corrected afterwards.
+   */
+  restoreStatus?: boolean;
 }
 
 /**
@@ -146,9 +160,12 @@ export function buildLocalizationDownStatements(
     ...buildDefaultLocaleRestoreStatements(
       spec,
       onMain.map(c => c.name),
-      // Only when the entity has Draft/Published, because that is what puts `status` on main and
-      // `_status` on the companion. Reading either without it fails the whole migration.
-      { restoreStatus: spec.status === true }
+      // Decided by the caller from the PHYSICAL tables, never from `spec.status`. That field is
+      // the desired shape, and a save that disables localization and turns Draft/Published on at
+      // once would have this read a `_status` the old companion does not carry — into a `status`
+      // the main table has not been given yet, since a disable runs the companion transition
+      // before the shared ALTER. Omitted means do not touch status.
+      { restoreStatus: options.restoreStatus === true }
     )
   );
 

@@ -311,6 +311,14 @@ export function buildCompanionTransitionStatements(
     return {
       statements: buildLocalizationDownStatements(spec, {
         existingMainColumns: args.existingMainColumns,
+        // The PHYSICAL shape, not the desired one. `status` describes what the collection is being
+        // saved as, and a save that disables localization and enables Draft/Published at once
+        // would have this restore read a `_status` the old companion never had — and main receive
+        // it before the shared ALTER that adds `status`, because a disable deliberately runs the
+        // companion transition first. Both columns have to be there already.
+        restoreStatus:
+          args.companionHasStatus === true &&
+          (args.existingMainColumns?.includes("status") ?? false),
       }),
       needsArchive: true,
       companionDropped: true,
