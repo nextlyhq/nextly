@@ -58,16 +58,20 @@ describe("resolveVersionsConfig", () => {
     expect(resolveVersionsConfig({ maxPerDoc: false })?.maxPerDoc).toBe(false);
   });
 
-  it("status:true alone aliases to versions:{drafts:true}", () => {
-    expect(resolveVersionsConfig(undefined, true)).toEqual(
-      resolveVersionsConfig({ drafts: true })
-    );
+  it("status:true alone enables history-only versioning, not the working-draft split", () => {
+    const resolved = resolveVersionsConfig(undefined, true);
+    // Versioned (history is captured) but the draft/published split is OFF — the
+    // split is opt-in via an explicit versions:{drafts:true}.
+    expect(resolved?.enabled).toBe(true);
+    expect(resolved?.drafts.enabled).toBe(false);
+    expect(resolved).toEqual(resolveVersionsConfig({ drafts: false }));
   });
 
   it("an explicit versions option wins over status", () => {
     // status would enable, but versions:false disables.
     expect(resolveVersionsConfig(false, true)).toBeNull();
-    // versions:{drafts:false} (history-only) wins over status:true (drafts).
+    // An explicit versions:{drafts:false} resolves to history-only regardless of
+    // the status flag.
     expect(resolveVersionsConfig({ drafts: false }, true)?.drafts.enabled).toBe(
       false
     );

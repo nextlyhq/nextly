@@ -21,6 +21,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
@@ -95,6 +96,13 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import {
+  buildRestorePayload,
+  type ComponentSchemas,
+} from "../../versions/restore-snapshot";
+import { resolveComponentSchemas } from "../../versions/restore-version";
+import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
+import { VersionsRepository } from "../../versions/versions-repository";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -2021,6 +2029,17 @@ export class CollectionQueryService extends BaseService {
      * copy). Undefined for session/system callers.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Whether the caller is an editor asking to SEE the working draft (pending
+     * unpublished edits) in place of the live row. Opt-in on purpose: a
+     * status-less read is the default for many internal callers (duplicate,
+     * reference labels), and they must keep seeing the published row, so draft
+     * visibility follows an explicit editor-view intent rather than every
+     * status-less read. Still gated by trust below (overrideAccess, or an actual
+     * update-capability decision against the loaded row), so setting it does not
+     * expose a draft to a caller who cannot edit the document.
+     */
+    includeWorkingDraft?: boolean;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -2089,8 +2108,28 @@ export class CollectionQueryService extends BaseService {
       const ownerCondition = ownerConstraint
         ? eq(schema[ownerConstraint.field], ownerConstraint.value)
         : null;
+      // An explicit `status: "draft"` view that opts into the working draft must
+      // not filter the live row to draft-only: the split keeps the main row
+      // published, so that predicate would 404 before the overlay below can
+      // surface the pending draft. Drop it for a drafts-enabled collection when
+      // `includeWorkingDraft` is set; the overlay returns the draft (or the live
+      // row when none exists). Every other status filter is applied as usual.
+      const suppressDraftStatusFilter =
+        params.includeWorkingDraft === true &&
+        statusFilter?.value === "draft" &&
+        // Only in the split's own domain: a non-localized status collection with
+        // drafts on. Outside it (a localized collection, or one with no status
+        // column) the normal draft predicate must stand, so a draft-status read
+        // still filters correctly and the no-draft 404 below does not apply.
+        (collectionForStatus as { status?: boolean }).status === true &&
+        (collectionForStatus as { localized?: boolean }).localized !== true &&
+        (
+          collectionForStatus as {
+            versions?: { drafts?: { enabled?: boolean } };
+          }
+        ).versions?.drafts?.enabled === true;
       const statusCondition =
-        statusFilter && schema.status
+        statusFilter && schema.status && !suppressDraftStatusFilter
           ? eq(schema.status, statusFilter.value)
           : null;
       const whereParts = [idCondition, ownerCondition, statusCondition].filter(
@@ -2228,6 +2267,239 @@ export class CollectionQueryService extends BaseService {
         });
       }
 
+      // On a trusted draft-view read, surface the working draft
+      // (pending edits to a published document) in place of the live row, when
+      // one exists. Placed AFTER the live assembly above so re-reading LIVE
+      // relations/components/localized values by the shared entry id cannot
+      // clobber the draft's values, and BEFORE the redaction/shaping below so
+      // the snapshot's owner column, password values, and field-level read
+      // access are stripped and enforced like any other read. Never surfaced for
+      // a published-only or untrusted read: `statusFilter === null` excludes the
+      // published default and `?status=published`, and `overrideAccess ||
+      // routeAuthorized` excludes an anonymous caller passing `?status=all`.
+      const draftEligible =
+        (collectionForStatus as { status?: boolean }).status === true &&
+        // The working-draft split is non-localized-only (the write path stores
+        // no draft for a localized collection), so skip the lookup there rather
+        // than issue a read that can only miss.
+        (collectionForStatus as { localized?: boolean }).localized !== true &&
+        // Only when drafts are still enabled. If the collection turned drafts
+        // off after a working draft was written, the write path no longer
+        // promotes or deletes it, so surfacing it here would shadow the live
+        // document with a sidecar nothing can ever consume.
+        (
+          collectionForStatus as {
+            versions?: { drafts?: { enabled?: boolean } };
+          }
+        ).versions?.drafts?.enabled === true &&
+        // The caller explicitly asked to see the working draft (an editor
+        // opening the document to edit). This is opt-in on purpose: many
+        // internal callers issue a status-less read (duplicate, reference
+        // labels) and must keep seeing the published row, so draft visibility
+        // follows an explicit editor intent, not every status-less read.
+        params.includeWorkingDraft === true &&
+        // An explicit published view still suppresses the draft.
+        params.status !== "published";
+      // Even with the opt-in, a pending draft is surfaced only to a caller
+      // trusted to EDIT the document. `overrideAccess` attests that directly.
+      // `routeAuthorized` is NOT trusted: on this read path the REST dispatcher
+      // sets it from `!!user` after authorizing the READ, so it attests read, not
+      // update — trusting it would leak drafts to a read-only authenticated
+      // caller. Every non-override authenticated caller is instead judged by an
+      // actual update-capability probe against the LOADED row, so an owner-only
+      // update rule (which the coarse check passes pending a row-level predicate)
+      // does not treat a non-owner reader as an editor.
+      let draftView = false;
+      // Set once a working draft is actually surfaced. When the draft predicate
+      // was suppressed but nothing is overlaid, the loaded row is the published
+      // one, which an explicit draft filter must not return (see the 404 below).
+      let draftOverlaid = false;
+      if (draftEligible) {
+        if (params.overrideAccess === true) {
+          draftView = true;
+        } else if (params.user !== undefined) {
+          const updateDenied = await this.accessService.checkCollectionAccess(
+            params.collectionName,
+            "update",
+            params.user,
+            entryId,
+            entry as Record<string, unknown>,
+            params.overrideAccess,
+            // The route attested a read, never an update, so the update grant is
+            // checked rather than assumed from `routeAuthorized`.
+            false,
+            params.authenticatedScope
+          );
+          draftView = !updateDenied;
+        }
+      }
+      if (draftView) {
+        const workingDraft = await new VersionsRepository(
+          this.adapter
+        ).findWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId,
+          },
+          // Non-localized split: the draft is keyed under the unlocalized
+          // `locale IS NULL` slot, matching the store and promote, so it is
+          // found regardless of the request locale.
+          null
+        );
+        // Mirror the write gate's eligibility check before overlaying: a
+        // component that turned localized or unresolvable after this draft was
+        // written — or a password field that appeared on the collection or a
+        // reachable component — makes the sidecar unpromotable by any write, so
+        // the live row must not be shadowed by a draft nothing can complete.
+        // Resolved only once a draft actually exists, to keep the registry reads
+        // off the common read path; the schemas double as the prune filter below.
+        const draftComponentSchemas = workingDraft
+          ? await resolveComponentSchemas(fields as FieldConfig[])
+          : null;
+        const draftIneligible = draftComponentSchemas
+          ? hasPasswordField(fields) ||
+            [...draftComponentSchemas.values()].some(
+              schema =>
+                schema.localized ||
+                !schema.resolved ||
+                hasPasswordField(schema.fields)
+            )
+          : false;
+        if (workingDraft && !draftIneligible) {
+          const rawSnapshot = workingDraft.snapshot as Record<string, unknown>;
+          // Shape the snapshot to the current schema before exposing it. A field
+          // removed or renamed while the draft was pending leaves a key the
+          // snapshot still carries; the password strip and field read-access
+          // below inspect only currently declared fields, so an obsolete value
+          // would otherwise reach the afterRead hooks and the response even
+          // though a live read of the same document no longer returns it. The
+          // same schema-aware prune the promote path applies is reused, then the
+          // identity and timestamp columns it holds back (a restore must not
+          // resubmit them, a read carries them) are copied back from the snapshot.
+          // Which system columns the row actually has, mirroring the promote and
+          // restore paths: a plugin collection gets no synthesized slug/title, so
+          // telling the prune those columns exist would keep an obsolete snapshot
+          // key the current schema no longer declares. `status` is present because
+          // the draft eligibility above required it.
+          const declaredFields = fields as FieldConfig[];
+          const isPluginCollection =
+            (collection as { admin?: { isPlugin?: boolean } }).admin
+              ?.isPlugin === true;
+          const { payload: shapedDraft } = buildRestorePayload(
+            rawSnapshot,
+            declaredFields,
+            {
+              hasStatus: true,
+              hasSlug:
+                !isPluginCollection ||
+                declaredFields.some(f => f.name === "slug"),
+              hasTitle:
+                !isPluginCollection ||
+                declaredFields.some(f => f.name === "title"),
+              componentSchemas: draftComponentSchemas ?? undefined,
+              documentLocalized: false,
+              localeUnknown: false,
+            }
+          );
+          for (const key of [
+            "id",
+            "createdAt",
+            "created_at",
+            "updatedAt",
+            "updated_at",
+          ]) {
+            if (key in rawSnapshot) shapedDraft[key] = rawSnapshot[key];
+          }
+          let draftEntry = shapedDraft;
+          // The snapshot stores top-level relations as ids (captured at depth 0),
+          // so expand them at the requested depth to match a live read. The live
+          // assembly forwards `params.depth` unconditionally and
+          // `expandRelationships` applies its own default when it is undefined,
+          // so guard only the explicit `depth === 0` (ids-only) case — otherwise
+          // a draft read that omits depth would return bare ids while the live
+          // read for the same request expands. Only relationship expansion runs
+          // here, never component population: the snapshot already carries the
+          // draft's own component values, and re-reading components from their
+          // tables would replace the pending edits with live content.
+          if (params.depth !== 0) {
+            const expandOptions: Parameters<
+              CollectionRelationshipService["expandRelationships"]
+            >[3] = {
+              depth: params.depth,
+              enforceFieldAccess: true,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
+              locale: localeChain?.[0],
+              status:
+                params.status === "all" || params.overrideAccess === true
+                  ? "all"
+                  : undefined,
+            };
+            draftEntry = await this.relationshipService.expandRelationships(
+              draftEntry,
+              params.collectionName,
+              fields,
+              expandOptions
+            );
+            // The parent-schema expansion above does not traverse component
+            // fields, so a relationship inside a draft component would stay an id
+            // while a live read populates it through the component data service.
+            // Expand those relations on the snapshot's own component values, so a
+            // draft read matches a live read at depth > 0 without re-reading the
+            // live component rows (which would replace the pending edits).
+            draftEntry = await this.expandDraftComponentRelations(
+              draftEntry,
+              fields as FieldConfig[],
+              draftComponentSchemas,
+              expandOptions
+            );
+          }
+          // Snapshot serialization turned Date values into ISO strings, but an
+          // ordinary live read hands the afterRead hooks Drizzle-decoded Date
+          // objects, so a hook that calls date methods would fail only for a
+          // drafted entry. Rehydrate the system timestamps and every declared
+          // date field — including those nested inside components — to Date
+          // before the read pipeline runs below.
+          for (const key of ["createdAt", "updatedAt"]) {
+            const value = draftEntry[key];
+            if (typeof value === "string") {
+              const parsed = new Date(value);
+              if (!Number.isNaN(parsed.getTime())) draftEntry[key] = parsed;
+            }
+          }
+          rehydrateSnapshotDates(
+            draftEntry,
+            declaredFields,
+            draftComponentSchemas
+          );
+          expandedEntry = draftEntry;
+          draftOverlaid = true;
+        }
+      }
+
+      // An explicit `status: "draft"` read that opted into the working draft
+      // dropped the draft predicate above so the published main row could be
+      // loaded for the overlay. When no draft was surfaced (none exists, it turned
+      // ineligible, or the caller is not trusted to edit) AND the loaded row is not
+      // itself a draft, the row is the published one the draft filter would never
+      // have matched, so 404 rather than hand back content the caller did not ask
+      // for. A never-published entry whose main row IS `draft` matches the filter
+      // directly and is returned as loaded.
+      if (
+        suppressDraftStatusFilter &&
+        !draftOverlaid &&
+        (expandedEntry as { status?: unknown }).status !== statusFilter?.value
+      ) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
+      }
+
       // Redact password hashes BEFORE any afterRead hook runs (a hook could
       // copy the hash elsewhere); the final redaction below is defense in
       // depth.
@@ -2351,6 +2623,95 @@ export class CollectionQueryService extends BaseService {
   // ============================================================
   // PRIVATE HELPER METHODS
   // ============================================================
+
+  /**
+   * Expand relationship fields nested inside a working draft's component values,
+   * using each component's own schema and WITHOUT re-reading the component rows.
+   *
+   * The parent-schema `expandRelationships` does not traverse component fields,
+   * so a relationship inside a draft component would otherwise stay an id on a
+   * draft read while a live read populates it. The draft snapshot already carries
+   * the component values (re-reading them would replace the pending edits with
+   * live content), so this walks and expands them in place.
+   */
+  private async expandDraftComponentRelations(
+    entry: Record<string, unknown>,
+    parentFields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null,
+    options: Parameters<CollectionRelationshipService["expandRelationships"]>[3]
+  ): Promise<Record<string, unknown>> {
+    if (!componentSchemas) return entry;
+    const out = { ...entry };
+    for (const field of parentFields) {
+      if (!isFieldGroupField(field)) continue;
+      const name = (field as { name?: unknown }).name;
+      if (typeof name !== "string" || !(name in out)) continue;
+      out[name] = await this.expandComponentInstanceRelations(
+        out[name],
+        field,
+        componentSchemas,
+        options
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Expand one component value, or each element when the field is repeatable or a
+   * dynamic zone, resolving each instance against its own component schema.
+   */
+  private async expandComponentInstanceRelations(
+    value: unknown,
+    field: FieldConfig,
+    componentSchemas: ComponentSchemas,
+    options: Parameters<CollectionRelationshipService["expandRelationships"]>[3]
+  ): Promise<unknown> {
+    if (Array.isArray(value)) {
+      return Promise.all(
+        value.map(item =>
+          this.expandComponentInstanceRelations(
+            item,
+            field,
+            componentSchemas,
+            options
+          )
+        )
+      );
+    }
+    if (value === null || typeof value !== "object") return value;
+
+    const instance = value as Record<string, unknown>;
+    // A dynamic-zone row records the component it holds; a single-component field
+    // takes it from the field's declared slug.
+    const tagged = instance._componentType;
+    const declared = (field as { component?: unknown }).component;
+    const slug =
+      typeof tagged === "string"
+        ? tagged
+        : typeof declared === "string"
+          ? declared
+          : undefined;
+    if (slug === undefined) return instance;
+
+    const schema = componentSchemas.get(slug);
+    if (!schema || !schema.resolved) return instance;
+
+    // Expand this component's own relationship fields, then recurse into any
+    // component nested inside it.
+    let expanded = await this.relationshipService.expandRelationships(
+      instance,
+      slug,
+      schema.fields as unknown as FieldDefinition[],
+      options
+    );
+    expanded = await this.expandDraftComponentRelations(
+      expanded,
+      schema.fields,
+      componentSchemas,
+      options
+    );
+    return expanded;
+  }
 
   /**
    * Build WHERE condition for full-text search across multiple fields.

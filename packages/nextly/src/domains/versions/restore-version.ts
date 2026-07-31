@@ -117,12 +117,14 @@ async function describeEntity(
  * Child fields for every component the schema references, keyed by slug.
  *
  * A component field names its schema rather than carrying it, so the payload
- * filter cannot see inside one without this. A component that fails to load is
- * simply absent, which makes the filter treat that subtree as unknown and drop
- * it — the safe direction, since resubmitting a subtree it cannot inspect could
- * overwrite a nested credential.
+ * filter cannot see inside one without this. A component the registry reports
+ * as absent (no record) is marked unresolved, which makes the filter treat that
+ * subtree as unknown and drop it — the safe direction, since resubmitting a
+ * subtree it cannot inspect could overwrite a nested credential. A lookup that
+ * throws is the different case: it is not proof the component is gone, so the
+ * error propagates rather than being recorded as an absence.
  */
-async function resolveComponentSchemas(
+export async function resolveComponentSchemas(
   fields: FieldConfig[]
 ): Promise<ComponentSchemas> {
   const slugs = new Set<string>();
@@ -171,11 +173,19 @@ async function resolveComponentSchemas(
               (record as { localized?: unknown } | null)?.localized === true,
             resolved: record !== null && record !== undefined,
           });
-        } catch {
-          // Recorded as empty so the slug is not retried; an unresolved
-          // subtree is treated as unknown and dropped, which is the safe
-          // direction. See the note above.
-          resolved.set(slug, { fields: [], localized: false, resolved: false });
+        } catch (cause) {
+          // A missing component returns null above; a throw here is a lookup
+          // failure (registry or database), not a confirmed absence. Recording
+          // it as unresolved would let a transient error masquerade as a
+          // deleted component, and a caller that drops or publishes an unknown
+          // subtree would then silently discard or expose data. Propagate so
+          // the request fails and can be retried; a typed error is preserved.
+          throw cause instanceof NextlyError
+            ? cause
+            : NextlyError.internal({
+                cause: cause instanceof Error ? cause : undefined,
+                logContext: { component: slug },
+              });
         }
       })
     );
