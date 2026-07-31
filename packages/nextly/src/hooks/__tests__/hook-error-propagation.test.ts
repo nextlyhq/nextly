@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { HookRegistry } from "../hook-registry";
+import { normalizeHookError } from "../normalize-hook-error";
 import type { HookContext } from "../types";
 
 function contextFor(collection: string): HookContext {
@@ -173,6 +174,27 @@ describe("hook error propagation", () => {
       .catch((e: unknown) => e);
     expect(NextlyError.is(error)).toBe(true);
     expect((error as NextlyError).code).toBe("INTERNAL_ERROR");
+  });
+
+  it("preserves a typed error thrown by a stored hook", async () => {
+    // Stored hooks are the UI-configured path and had the same rebuild. A
+    // rejection means the same thing whichever way the hook was declared, so
+    // both paths share one classification.
+    const thrown = NextlyError.forbidden({});
+    const normalized = normalizeHookError(thrown, "beforeCreate", "docs");
+    expect(normalized).toBe(thrown);
+  });
+
+  it("records which stored hook failed", async () => {
+    const normalized = normalizeHookError(
+      new Error("boom"),
+      "beforeCreate",
+      "docs",
+      { storedHookId: "hook-7" }
+    );
+    expect(
+      (normalized as { logContext?: Record<string, unknown> }).logContext
+    ).toMatchObject({ storedHookId: "hook-7", collection: "docs" });
   });
 
   it("still runs later hooks when no one throws", async () => {

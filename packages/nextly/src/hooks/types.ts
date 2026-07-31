@@ -514,10 +514,12 @@ export interface BeforeOperationContext<T = any> {
  *   return context.args;
  * };
  *
- * // Abort operation (throw error)
+ * // Abort the operation. A NextlyError, not a plain one: a plain Error is
+ * // indistinguishable from a crash, so its message and status are replaced
+ * // with a generic server fault before the caller sees them.
  * const rateLimit: BeforeOperationHandler = async (context) => {
  *   if (await isRateLimited(context.user?.id)) {
- *     throw new Error('Rate limit exceeded');
+ *     throw NextlyError.rateLimited({});
  *   }
  * };
  * ```

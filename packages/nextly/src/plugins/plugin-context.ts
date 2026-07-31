@@ -178,7 +178,7 @@ export interface PluginActionRegistry {
  *
  * @example
  * ```typescript
- * import { definePlugin } from 'nextly';
+ * import { definePlugin, NextlyError } from 'nextly';
  *
  * export const myPlugin = definePlugin({
  *   name: 'my-plugin',
