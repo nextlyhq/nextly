@@ -54,20 +54,30 @@ function validationFromEnvelope(
         | { errors?: ServiceErrorEnvelope["errors"] }
         | undefined
     )?.errors;
-  return NextlyError.validation({
-    errors: errors?.length
-      ? errors.map(e => ({
-          path: e.path ?? e.field ?? "",
-          code: e.code ?? "INVALID",
-          message: e.message,
-        }))
-      : [
-          {
-            path: "request",
-            code: "INVALID",
-            message: "The submitted data is invalid.",
-          },
-        ],
+  const normalized = errors?.length
+    ? errors.map(e => ({
+        path: e.path ?? e.field ?? "",
+        code: e.code ?? "INVALID",
+        message: e.message,
+      }))
+    : [
+        {
+          path: "request",
+          code: "INVALID",
+          message: "The submitted data is invalid.",
+        },
+      ];
+
+  // Built directly rather than through `NextlyError.validation`, which hardcodes
+  // "Validation failed." and takes no message key -- so a localized validation
+  // error lost both on the way through, and a client selecting its text by key
+  // fell back to the default string.
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage: envelope.message ?? "Validation failed.",
+    statusCode: envelope.statusCode ?? 400,
+    messageKey: envelope.messageKey,
+    publicData: { errors: normalized },
     logContext,
   });
 }

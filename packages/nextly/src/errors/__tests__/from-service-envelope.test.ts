@@ -121,3 +121,33 @@ describe("validation issues reach the caller in either envelope shape", () => {
     ).toBe("request");
   });
 });
+
+describe("a localized validation error keeps its message and key", () => {
+  it("does not replace them with the factory's defaults", () => {
+    // `NextlyError.validation` hardcodes "Validation failed." and takes no
+    // message key, so rebuilding through it dropped both and a client selecting
+    // its text by key fell back to the default string.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      message: "Le formulaire est invalide.",
+      messageKey: "errors.form.invalid",
+      publicData: { errors: [{ path: "title", message: "Requis." }] },
+    });
+
+    expect(err.publicMessage).toBe("Le formulaire est invalide.");
+    expect(err.messageKey).toBe("errors.form.invalid");
+    // ...and the per-field issues still reach the admin.
+    expect((err.publicData as { errors: unknown[] }).errors).toEqual([
+      { path: "title", code: "INVALID", message: "Requis." },
+    ]);
+  });
+
+  it("still falls back to the canonical text when none was carried", () => {
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+    });
+    expect(err.publicMessage).toBe("Validation failed.");
+  });
+});

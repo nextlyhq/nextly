@@ -17,6 +17,7 @@
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import type { ValidatableField } from "../../../shared/lib/entry-validation";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
@@ -673,6 +674,10 @@ export function buildSingleErrorResult(
             })),
           }
         : {}),
+      // Without the code, a Single hook's `authRequired()` or `rateLimited()`
+      // took the boundary's status fallback and reached the caller as a
+      // generic 500, losing the rate-limit backoff with it.
+      ...typedErrorEnvelopeFields(error),
     };
   }
 
