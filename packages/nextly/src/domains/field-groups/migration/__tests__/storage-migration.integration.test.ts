@@ -65,9 +65,11 @@ import {
   LEGACY_STORAGE_VOCABULARY,
   assertLedgersSettled,
   settleLedgersStep,
+  settleRegistryDefinitionsStep,
 } from "../data-steps";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
+import { getFieldGroupRegistryAliases } from "../../storage/registry-schemas";
 import {
   resolveRegistryNameFromCatalog,
   resolveTypeColumns,
@@ -187,6 +189,31 @@ function insertRow(
       insert(t: string, v: Record<string, unknown>): Promise<unknown>;
     }
   ).insert(table, values);
+}
+
+/**
+ * Update through the adapter's typed CRUD, narrowed for the same reason.
+ *
+ * A registry's `fields` column is `jsonb` on Postgres, `json` on MySQL and
+ * text-with-a-json-mode on SQLite. Going through the adapter is what makes one
+ * call correct on all three, where a hand-written statement would need three
+ * spellings and would encode the document differently from the code under test.
+ */
+function updateRow(
+  adapter: unknown,
+  table: string,
+  values: Record<string, unknown>,
+  where: unknown
+): Promise<unknown> {
+  return (
+    adapter as {
+      update(
+        t: string,
+        v: Record<string, unknown>,
+        w: unknown
+      ): Promise<unknown>;
+    }
+  ).update(table, values, where);
 }
 
 /** The kinds of core operation that name a given table, for an exact assertion. */
@@ -464,6 +491,34 @@ for (const entry of DIALECTS) {
       );
     }
 
+    /**
+     * The registry settlement step, built the way the plan builds it.
+     *
+     * The resolver is the production one rather than a fixed name, so these
+     * cases exercise the resolution itself: the step has to find the registry
+     * the run just renamed, from the catalog, with no help from the fixture.
+     */
+    function registrySettleStep() {
+      return settleRegistryDefinitionsStep({
+        from: LEGACY_STORAGE_VOCABULARY,
+        to: FIELD_GROUP_STORAGE_VOCABULARY,
+        resolveRegistryTable: () =>
+          resolveRegistryNameFromCatalog(adapter as never),
+      });
+    }
+
+    /** Whether the registries hold nothing left to rewrite. */
+    async function registrySettled(): Promise<boolean> {
+      return withMigrationSession(
+        {
+          adapter: adapter as never,
+          dialect: entry.dialect as MigrationDialect,
+          label: "registry-settlement-probe",
+        },
+        session => registrySettleStep().verify(session)
+      );
+    }
+
     async function migrate(direction: "up" | "down") {
       return runFieldGroupMigration({
         adapter: adapter as never,
@@ -517,7 +572,18 @@ for (const entry of DIALECTS) {
       // does not declare, so without them the registry service cannot read
       // `dynamic_components` at all — and the read path swallows that as "no
       // component data" rather than surfacing it.
-      registry.registerStaticSchemas(systemTablesFor(entry.dialect));
+      //
+      // 🔴 The aliases are added HERE and not to `systemTablesFor`, which is the
+      // same split production draws. That set also generates this fixture's DDL,
+      // and the migrated registry belongs in a schema REGISTRY but never in a
+      // schema PUSH: creating it up front would hand the migration a rename
+      // target that already exists. Every production site that builds a registry
+      // registers both spellings, so a fixture registering one would refuse a
+      // read production serves.
+      registry.registerStaticSchemas({
+        ...systemTablesFor(entry.dialect),
+        ...getFieldGroupRegistryAliases(entry.dialect),
+      });
       adapter.setTableResolver(registry);
 
       await dropEverything();
@@ -843,6 +909,65 @@ for (const entry of DIALECTS) {
       );
 
       await expect(settlementResidue()).resolves.toBeUndefined();
+    });
+
+    /**
+     * 🔴 The surface the ledger check cannot reach, and the reason this step
+     * resolves a name rather than being handed one.
+     *
+     * Going up, the registry has been RENAMED by the time settlement runs, so
+     * the name the plan was assembled with does not exist any more. A definition
+     * written back to the legacy vocabulary after its data step verified sits in
+     * a table only the resolved name can address — and against a real server,
+     * addressing it by the other one does not report residue, it fails outright.
+     * That is the failure the first attempt at this check shipped with, and only
+     * a real database on the real ordering exposes it.
+     */
+    it("sees a legacy definition left in the renamed registry", async () => {
+      await migrate("up");
+      // The control, and it is not optional: the assertion below passes against
+      // a check that reports every registry as unsettled.
+      await expect(registrySettled()).resolves.toBe(true);
+
+      // Exactly what a registry write landing during the renames leaves behind:
+      // one group's definitions back in the vocabulary the run moved away from.
+      await updateRow(
+        adapter,
+        MIGRATION_TARGET.registryTable,
+        { fields: outerFields },
+        { and: [{ column: "slug", op: "=", value: outerSlug }] }
+      );
+
+      await expect(registrySettled()).resolves.toBe(false);
+    });
+
+    /**
+     * The same convergence property the ledger step has, on this surface.
+     *
+     * The step re-runs the registry rewrite before it checks it, so a straggler
+     * is rewritten rather than refused forever. This is what an operator's
+     * re-run does, and what a post-hoc assertion could never offer.
+     */
+    it("rewrites a straggling definition rather than refusing forever", async () => {
+      await migrate("up");
+      await updateRow(
+        adapter,
+        MIGRATION_TARGET.registryTable,
+        { fields: outerFields },
+        { and: [{ column: "slug", op: "=", value: outerSlug }] }
+      );
+      await expect(registrySettled()).resolves.toBe(false);
+
+      await withMigrationSession(
+        {
+          adapter: adapter as never,
+          dialect: entry.dialect as MigrationDialect,
+          label: "registry-settle-retry",
+        },
+        session => registrySettleStep().run(session)
+      );
+
+      await expect(registrySettled()).resolves.toBe(true);
     });
 
     it("reports a second run as already migrated", async () => {

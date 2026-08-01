@@ -44,10 +44,19 @@ export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
  * than persisted — so nothing in a version 2 marker's bytes reveals that
  * position N now addresses different work. This constant is what does.
  *
+ * Version 4 appends a second settlement check and stops recording either of
+ * them: they are gates, re-entered by every invocation, so a marker no longer
+ * points past the last rename. A version 3 marker CAN point past it, at a
+ * settlement position this build does not record — and a resume computed from
+ * that position would begin after the ledger check and never re-enter it,
+ * letting a legacy write committed during the interruption settle unseen.
+ * Nothing in the marker's bytes distinguishes the two meanings, which is
+ * exactly what this constant is for.
+ *
  * Bumping this does **not** invalidate a settled marker's recorded plan; see
  * `MIN_READABLE_MANIFEST_VERSION`, which tracks the entry format separately.
  */
-export const MIGRATION_MARKER_VERSION = 3;
+export const MIGRATION_MARKER_VERSION = 4;
 
 /**
  * Oldest marker version whose recorded plan this build can still execute.
@@ -89,8 +98,22 @@ export const MIN_READABLE_MANIFEST_VERSION = 2;
  * Raise this whenever a version adds work to a run — never merely because the
  * marker version moved. A build that only reorders or renumbers steps leaves
  * what a settled marker claims untouched.
+ *
+ * Version 4 qualifies. A version 3 run settled without ever re-examining the
+ * registries, so a definition saved while that run was in flight could land
+ * behind the rewrite that had already passed and be recorded as complete. The
+ * `already-migrated` path checks structure and parent pointers, neither of which
+ * can see stored vocabulary, so accepting such a marker would report success
+ * over legacy field definitions nothing would revisit. What a version 3 marker
+ * claims is therefore weaker than what this build means by settled, which is the
+ * one thing this constant exists to say.
+ *
+ * Refusing costs nothing an operator can feel: the migration has no caller, so
+ * no database holds a marker of any version, and the refusal names the remedy.
+ * A repair path for a state that cannot exist would be dead code carrying a
+ * maintenance cost for the life of the project.
  */
-export const MIN_COMPLETE_MARKER_VERSION = 3;
+export const MIN_COMPLETE_MARKER_VERSION = 4;
 
 /**
  * Whether a marker's recorded plan is in a format this build can execute.

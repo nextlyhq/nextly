@@ -24,7 +24,7 @@ vi.mock("../../../schema/pipeline/diff/introspect-live", () => ({
 }));
 
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
-import { FIELD_GROUP_MIGRATION_KEY } from "../state";
+import { FIELD_GROUP_MIGRATION_KEY, MIGRATION_MARKER_VERSION } from "../state";
 
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
 
@@ -277,10 +277,18 @@ const logger: Logger = {
   debug: vi.fn(),
 };
 
-/** A marker recording a completed upward run. */
-function settledAtV2() {
+/**
+ * A marker recording an upward run this build considers complete.
+ *
+ * Versioned from the constant rather than a literal, because these cases are
+ * about lock ordering and parent pointers rather than about what a version
+ * means. A literal here silently becomes a stale marker on the next bump, and
+ * the suite then reports a completeness refusal as though it were the behaviour
+ * under test. Cases that ARE about a version pin their own literal.
+ */
+function settledRun() {
   return {
-    version: 3,
+    version: MIGRATION_MARKER_VERSION,
     status: "settled",
     generation: "field-groups-v2",
   };
@@ -298,7 +306,7 @@ describe("runFieldGroupMigration", () => {
   // overwrite a settled marker with a fresh in-flight one.
   it("reads the marker only after taking the lock", async () => {
     const { adapter, trace } = createRunWorld({
-      marker: settledAtV2(),
+      marker: settledRun(),
       tables: [TARGET_REGISTRY, "fg_hero"],
       registryRows: [{ id: "1", slug: "hero", table_name: "fg_hero" }],
     });
@@ -318,7 +326,7 @@ describe("runFieldGroupMigration", () => {
   // later invocation into a report of success over storage nothing can serve.
   it("refuses a settled marker the catalog contradicts", async () => {
     const { adapter } = createRunWorld({
-      marker: settledAtV2(),
+      marker: settledRun(),
       // The marker says the migration finished, but the migrated registry is
       // not there and the legacy one is.
       tables: [LEGACY_REGISTRY, "comp_hero"],
@@ -340,7 +348,7 @@ describe("runFieldGroupMigration", () => {
   // serve blank content while the marker reported success.
   it("refuses a settled marker whose data table is missing", async () => {
     const { adapter } = createRunWorld({
-      marker: settledAtV2(),
+      marker: settledRun(),
       tables: [TARGET_REGISTRY],
       registryRows: [{ id: "1", slug: "hero", table_name: "fg_hero" }],
     });
@@ -358,7 +366,7 @@ describe("runFieldGroupMigration", () => {
   // legacy discriminator has not been migrated, whatever the marker says.
   it("refuses a settled marker whose discriminator was not renamed", async () => {
     const { adapter } = createRunWorld({
-      marker: settledAtV2(),
+      marker: settledRun(),
       tables: [TARGET_REGISTRY, "fg_hero"],
       columns: {
         fg_hero: ["id", "_parent_id", "_parent_table", "_component_type"],
@@ -379,7 +387,7 @@ describe("runFieldGroupMigration", () => {
   // property of the database says which `fg_*` names this migration created.
   it("refuses a rollback with no recorded plan", async () => {
     const { adapter } = createRunWorld({
-      marker: settledAtV2(),
+      marker: settledRun(),
       tables: [TARGET_REGISTRY, "fg_hero"],
       registryRows: [{ id: "1", slug: "hero", table_name: "fg_hero" }],
     });
@@ -492,6 +500,36 @@ describe("a settled marker older than this build's work", () => {
     }
   });
 
+  // 🔴 Version 3 settled without ever re-examining the registries, so a
+  // definition saved while that run was in flight could land behind the rewrite
+  // that had already passed and still be recorded as complete. Structure and
+  // parent pointers cannot see stored vocabulary, so accepting the marker would
+  // report success over legacy field definitions nothing would revisit. Pinned
+  // to the literal 3: an offset from the current constant moves with it.
+  it("refuses a settled marker from the build with no registry check", async () => {
+    const { adapter } = createRunWorld({
+      marker: { version: 3, status: "settled", generation: "field-groups-v2" },
+      tables: [TARGET_REGISTRY, "fg_hero"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: 0 },
+      ],
+    });
+
+    const error = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+    }).catch((caught: unknown) => caught);
+
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toBe(
+        "settled marker predates work this build performs"
+      );
+      expect(error.logContext?.recordedVersion).toBe(3);
+    }
+  });
+
   // A `legacy` marker claims no work was done, which is the same claim in every
   // build. Refusing there would strand a rollback that has nothing left to undo.
   it("accepts a legacy marker whatever version wrote it", async () => {
@@ -510,9 +548,15 @@ describe("a settled marker older than this build's work", () => {
 });
 
 describe("a settled marker over content that was restored", () => {
-  /** A completed run, with the plan it applied. */
+  /**
+   * A completed run, with the plan it applied.
+   *
+   * Versioned from the constant for the same reason {@link settledRun} is:
+   * these cases are about content that disagrees with a current marker, so a
+   * stale version would turn them into completeness-refusal cases instead.
+   */
   const settledWithPlan = {
-    version: 3,
+    version: MIGRATION_MARKER_VERSION,
     status: "settled",
     generation: "field-groups-v2",
     appliedManifest: [

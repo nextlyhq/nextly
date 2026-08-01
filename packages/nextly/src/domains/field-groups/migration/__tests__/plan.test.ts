@@ -46,7 +46,7 @@ const meta = {} as unknown as MetaService;
  * build. The builder no longer inverts internally, because the caller has to
  * reconcile the directed entries against the catalog before executing them.
  */
-function plan(direction: "up" | "down"): string[] {
+function planSteps(direction: "up" | "down") {
   return buildMigrationPlan({
     direction,
     ownedDataTables: [],
@@ -55,7 +55,12 @@ function plan(direction: "up" | "down"): string[] {
     observer,
     meta,
     migrationId: "run-1",
-  }).map(step => step.id);
+    resolveRegistryTable: async () => "dynamic_field_groups",
+  });
+}
+
+function plan(direction: "up" | "down"): string[] {
+  return planSteps(direction).map(step => step.id);
 }
 
 describe("assembling the steps one run executes", () => {
@@ -93,6 +98,7 @@ describe("assembling the steps one run executes", () => {
       "registry:dynamic_components->dynamic_field_groups",
       // Last, so a write landing during the renames above is still caught.
       "data:settle-ledgers",
+      "data:settle-registry-definitions",
     ]);
   });
 
@@ -107,14 +113,16 @@ describe("assembling the steps one run executes", () => {
     // Same work, mirrored: each down id is its up counterpart with the rename
     // reversed, so comparing the ordering of KINDS is the honest check.
     const kind = (id: string): string => id.split(":")[0] ?? "";
-    // The settle step is appended to BOTH plans and is not mirrored work: it is
-    // the same check asked at the end of whichever direction ran. The reversal
-    // property describes the work, so it is asserted over the work.
+    // The settle steps are appended to BOTH plans and are not mirrored work:
+    // they are the same checks asked at the end of whichever direction ran. The
+    // reversal property describes the work, so it is asserted over the work.
+    const SETTLE = ["data:settle-ledgers", "data:settle-registry-definitions"];
     const work = (ids: string[]): string[] =>
-      ids.filter(id => id !== "data:settle-ledgers");
+      ids.filter(id => !SETTLE.includes(id));
     expect(work(down).map(kind)).toEqual([...work(up).map(kind)].reverse());
-    expect(up.at(-1)).toBe("data:settle-ledgers");
-    expect(down.at(-1)).toBe("data:settle-ledgers");
+    // In the same order at the end of both, rather than mirrored with the work.
+    expect(up.slice(-SETTLE.length)).toEqual(SETTLE);
+    expect(down.slice(-SETTLE.length)).toEqual(SETTLE);
   });
 
   it("reverses each rename rather than reissuing it", () => {
@@ -126,8 +134,9 @@ describe("assembling the steps one run executes", () => {
       "data:nextly_versions.snapshot",
       "data:schema-event-scope",
       "data:registry-definitions",
-      // Appended to both directions, so it closes the rollback too.
+      // Appended to both directions, so they close the rollback too.
       "data:settle-ledgers",
+      "data:settle-registry-definitions",
     ]);
   });
 
@@ -243,5 +252,42 @@ describe("assembling the steps one run executes", () => {
         offset: 4,
       })
     ).toEqual({ recorded: false });
+  });
+});
+
+describe("which steps a marker remembers", () => {
+  const settleSteps = () =>
+    planSteps("up").filter(step => step.id.startsWith("data:settle-"));
+  const workSteps = () =>
+    planSteps("up").filter(step => !step.id.startsWith("data:settle-"));
+
+  // 🔴 The settlement checks are gates, not work. A recorded position is what
+  // lets a later run step over something, so recording these would let the very
+  // resume they exist to protect skip them and settle on whatever the database
+  // looked like before the interruption.
+  it("declines to record the settlement checks", () => {
+    const settle = settleSteps();
+    expect(settle).toHaveLength(2);
+    expect(settle.every(step => step.recordsProgress === false)).toBe(true);
+  });
+
+  // The control: everything else does record, so the assertion above cannot be
+  // satisfied by a plan whose every step declines.
+  it("records every step that is actual work", () => {
+    const work = workSteps();
+    expect(work).not.toHaveLength(0);
+    expect(work.every(step => step.recordsProgress !== false)).toBe(true);
+  });
+
+  // The gates have to be the LAST steps: a recorded position counts positions
+  // in the plan, so a gate in the middle leaves a gap the next recording step
+  // cannot advance across.
+  it("puts every gate at the end of the plan", () => {
+    for (const direction of ["up", "down"] as const) {
+      const flags = planSteps(direction).map(
+        step => step.recordsProgress !== false
+      );
+      expect(flags).toEqual([...flags].sort((a, b) => Number(b) - Number(a)));
+    }
   });
 });
