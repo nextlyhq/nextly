@@ -36,6 +36,34 @@ function resolvePointer(root: unknown, path: string): unknown {
   return current;
 }
 
+describe("validation leaves the document alone", () => {
+  it("does not mangle or drop hostile prop content", () => {
+    // The corpus fixture asserts that such a document produces no issues, which
+    // is acceptance and not the guarantee that matters: props are opaque to the
+    // engine and escaping them belongs to the renderer, so validation must hand
+    // back exactly what it was given.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/paragraph",
+          version: 1,
+          props: {
+            text: "</style><script>alert(1)</script>",
+            href: "javascript:alert(1)",
+            data: "}; body { display: none }",
+          },
+        },
+      ],
+    });
+    const before = structuredClone(doc);
+    validate(doc, { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" });
+    expect(doc).toEqual(before);
+  });
+});
+
 describe("validation fixture corpus", () => {
   for (const fixture of VALIDATION_FIXTURES) {
     it(fixture.name, () => {
