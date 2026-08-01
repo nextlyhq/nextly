@@ -12,6 +12,8 @@
 import { readFileSync } from "node:fs";
 
 import { getColumns } from "drizzle-orm";
+
+import { buildDesiredTableFromFields } from "../../domains/schema/pipeline/diff/build-from-fields";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
@@ -1305,6 +1307,10 @@ describe("reloadNextlyConfig", () => {
       const registry = getHookRegistry();
       registry.clearCollection(SLUG);
       registry.clearCollection(SINGLE_KEY);
+      registry.clearCollection("posts");
+      // Suspension is registry-wide, so it leaks between tests exactly as the
+      // handler maps would.
+      registry.setSuspendedOwners([]);
       settleIntrospect();
     });
 
@@ -1582,50 +1588,152 @@ describe("reloadNextlyConfig", () => {
       }
     });
 
-    it("abandons on every early return that is not a deliberate landing", () => {
-      // Past this point a reload has two ways out: land, and commit the staged
-      // hook work, or abandon, and put the field-type registry back. An early
-      // return doing neither leaves the process in whichever half-state it had
-      // reached -- which is how two i18n aborts came to leave a rejected save's
-      // field types installed under the retained config.
+    it("commits on the no-DDL landing, which is the hook-only edit's path", async () => {
+      // The path a save that changes ONLY a hook takes: the live table already
+      // matches, so there is no diff, no apply, and the reload returns from the
+      // no-changes branch. That branch published nothing, so the edit staged a
+      // replacement and never applied it -- the central case of this change,
+      // silently not working.
       //
-      // Checked against the source because those branches need a failed content
-      // copy mid-migration to reach, and the regression is not one abort but
-      // the next one somebody adds.
+      // Reaching it needs the collection to be KNOWN to the registry; a slug the
+      // resolver has never seen reads as new and takes the apply path instead,
+      // which is why the tests above did not cover this.
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const fields = [{ name: "body", type: "text" }];
+      const noDiff = (hook: () => undefined) => ({
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields,
+            hooks: { afterRead: [hook] },
+          },
+        ],
+      });
+      // Built with the same builder the reload uses, rather than hand-listing
+      // the system columns. A hand-written list drifts the moment a system
+      // column is added -- which is exactly why the neighbouring no-change
+      // fixtures are currently red -- and a stale one silently turns this into
+      // an apply-path test again.
+      introspectSpy.mockResolvedValue({
+        tables: [
+          buildDesiredTableFromFields("dc_posts", fields, "sqlite", {
+            hasStatus: false,
+            localized: false,
+          }),
+        ],
+      } as NextlySchemaSnapshot);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({ config: noDiff(original) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(registry.getHookCount("afterRead", "posts")).toBe(1);
+
+      pipelineApplySpy.mockClear();
+      loadConfigSpy.mockResolvedValue({ config: noDiff(edited) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The control that this is the branch under test: no DDL was applied, so
+      // a commit that only ran after an apply would not have run at all.
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+
+      expect(registry.getHookCount("afterRead", "posts")).toBe(1);
+      await registry.execute("afterRead", {
+        collection: "posts",
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(edited).toHaveBeenCalledTimes(1);
+      expect(original).not.toHaveBeenCalled();
+    });
+
+    it("stops a plugin deleted from the config, and does not resume a disabled one", async () => {
+      // Deleting a plugin is not the same edit as disabling it, and the config
+      // cannot describe what it no longer contains: a suspension set derived
+      // from the new plugin list alone can never name a deleted plugin, so it
+      // would keep running -- and deleting one that was already disabled would
+      // actively bring it back.
+      const registry = getHookRegistry();
+      const fromPlugin = vi.fn(() => undefined);
+      const ctx = createPluginContext(stubServices, registry, PLUGIN);
+      ctx.hooks.on("afterRead", SLUG, fromPlugin);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      const withPlugins = (plugins: unknown[]) => ({
+        plugins,
+        collections: [settledCollection()],
+      });
+      const read = async () =>
+        registry.execute("afterRead", {
+          collection: SLUG,
+          operation: "read",
+          data: {},
+          context: {},
+        });
+
+      loadConfigSpy.mockResolvedValue({
+        config: withPlugins([{ name: PLUGIN.name, enabled: true }]),
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      await read();
+      // The control: it runs while the plugin is there.
+      expect(fromPlugin).toHaveBeenCalledTimes(1);
+
+      // Disabled, then deleted outright. The second edit must not undo the
+      // first.
+      loadConfigSpy.mockResolvedValue({
+        config: withPlugins([{ name: PLUGIN.name, enabled: false }]),
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      loadConfigSpy.mockResolvedValue({ config: withPlugins([]) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      fromPlugin.mockClear();
+      await read();
+      expect(fromPlugin).not.toHaveBeenCalled();
+    });
+
+    it("leaves plugin owners alone when the config declares no plugin list", async () => {
+      // An absent `plugins` key is no information. Reading it as "every plugin
+      // is gone" would suspend the lot on any config that simply does not
+      // mention them, which is a far worse failure than the one above.
+      const registry = getHookRegistry();
+      const fromPlugin = vi.fn(() => undefined);
+      const ctx = createPluginContext(stubServices, registry, PLUGIN);
+      ctx.hooks.on("afterRead", SLUG, fromPlugin);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection()] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(fromPlugin).toHaveBeenCalledTimes(1);
+    });
+
+    it("has exactly the landing points its paths need", () => {
+      // A count rather than a proof. The scan this replaces looked for a
+      // resolution in the lines before each early return, and passed while the
+      // no-DDL landing had none -- it was reading an `abandonReload()` that
+      // belonged to the sibling branch. Line proximity cannot tell those apart,
+      // so the paths are covered by the behaviour tests above instead and this
+      // only stops a fourth landing appearing unnoticed.
       const source = readFileSync(
         new URL("../reload-config.ts", import.meta.url),
         "utf8"
-      ).split("\n");
-      const start = source.findIndex(line =>
-        line.includes("stageConfigHooks(newConfig)")
       );
-      const end = source.findIndex(line =>
-        line.startsWith("// Decides whether a collection")
-      );
-      expect(start).toBeGreaterThan(0);
-      expect(end).toBeGreaterThan(start);
-
-      const unguarded = [];
-      for (let i = start; i < end; i++) {
-        if (!/^\s+return;\s*$/.test(source[i] ?? "")) continue;
-        const preceding = source.slice(Math.max(start, i - 8), i).join("\n");
-        const resolves =
-          preceding.includes("abandonReload()") ||
-          preceding.includes("commitReload()");
-        if (!resolves) unguarded.push(i + 1);
-      }
-
-      // Every one of them resolves. The single commit-not-abandon case is the
-      // empty-target path, where nothing was managed and the new config IS the
-      // live one, so its handlers belong in place with no schema to wait for.
-      expect(unguarded).toEqual([]);
-      const commits = [];
-      for (let i = start; i < end; i++) {
-        if (!/^\s+return;\s*$/.test(source[i] ?? "")) continue;
-        const preceding = source.slice(Math.max(start, i - 8), i).join("\n");
-        if (preceding.includes("commitReload()")) commits.push(i + 1);
-      }
-      expect(commits).toHaveLength(1);
+      const commits = source.match(/^\s*commitReload\(\);$/gm) ?? [];
+      // Empty targets, the no-DDL branch, and after a successful apply.
+      expect(commits).toHaveLength(3);
     });
 
     it("keeps a late app hook behind the config's, across a reload", async () => {
