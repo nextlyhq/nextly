@@ -21,9 +21,16 @@ import { validate } from "./validation";
  *
  * What actually matters is the regression that hurts — an accidental quadratic
  * in a traversal. Doubling the input doubles the time for linear work and
- * quadruples it for quadratic work, so the RATIO separates them, and a ratio is
- * independent of how fast the machine is. Absolute budgets still exist for
- * humans, reported by the benchmark suite in `performance.bench.ts`.
+ * quadruples it for quadratic work, so the RATIO separates them where an
+ * absolute time does not. Absolute budgets still exist for humans, reported by
+ * the benchmark suite in `performance.bench.ts`.
+ *
+ * A ratio is far steadier across machines than a duration, but it is NOT
+ * independent of them. Linear work measures 4.05x–4.16x on a quiet developer
+ * machine, against a theoretical 4.0, and 6.36x–6.77x on a shared CI runner:
+ * the larger document is four times the memory, and collection cost does not
+ * grow linearly with it. The threshold has to clear the noisier environment,
+ * which is what bounds how tight it can be.
  *
  * Measurements take the fastest of several runs. Noise can only ever add time,
  * so the minimum is the closest estimate of the real cost.
@@ -93,16 +100,21 @@ const LARGE_NODES = 4000;
  * against a 3x limit: near enough to slip through. Four times the size
  * separates the two shapes properly, at 4x against 16x.
  *
- * Where to sit between them was measured rather than reasoned, because a
- * quadratic in part of the work moves the ratio by less than a quadratic in all
- * of it. Over repeated runs: unchanged code 4.05x–4.16x, a quadratic confined
- * to the id-tracking step 6.96x–7.08x, and one dominating the traversal 10.16x.
- * A limit of 6 sits in the gap, far enough above the linear band that noise
- * would have to inflate one side by half, and below a regression that accounts
- * for only a fraction of the total. Interleaving the two measurements is what
- * keeps the linear band that tight, so the two belong together.
+ * Where to sit between them is bounded from BELOW by the noisiest environment
+ * the gate runs in, not by the cleanest. Measured over repeated runs:
+ *
+ * | shape                            | developer machine | CI runner |
+ * | unchanged code                   | 4.05x–4.16x       | 6.36x–6.77x |
+ * | quadratic in the id-tracking step| 6.96x–7.08x       | — |
+ * | quadratic dominating the walk    | 10.16x            | — |
+ *
+ * The CI band is what makes anything under 8 unusable: a limit of 6 sits below
+ * where unchanged code already lands there, so it fails clean work, and a gate
+ * that cries wolf gets muted. 8 clears the CI band and still catches a
+ * regression that dominates the walk in either environment — a partial one is
+ * knowingly out of reach, and the benchmark report is what covers it.
  */
-const MAX_GROWTH_FACTOR = 6;
+const MAX_GROWTH_FACTOR = 8;
 
 /**
  * A ceiling that no working implementation approaches, present only to catch a
