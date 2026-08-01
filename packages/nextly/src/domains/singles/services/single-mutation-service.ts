@@ -1592,6 +1592,11 @@ export class SingleMutationService extends BaseService {
                   fields: fieldConfigs,
                   data: attemptComponentData,
                   locale: options.locale,
+                  // A component instance is validated by its own pass inside the
+                  // field-group service, so the request has to travel with it for a
+                  // field rule nested in a field group to see the same `user` a
+                  // top-level field rule sees.
+                  req: options.user ? { user: options.user } : {},
                 }
               );
             }

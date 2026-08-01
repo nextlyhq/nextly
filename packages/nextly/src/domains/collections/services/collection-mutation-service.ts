@@ -2863,6 +2863,10 @@ export class CollectionMutationService extends BaseService {
             // i18n: thread the write locale so an embedded localized component writes
             // translatable fields to its companion within the same transaction.
             locale: params.locale,
+            // A component instance is validated by its own pass inside the field-group
+            // service, so the request has to travel with it for a field rule nested in
+            // a field group to see the same `user` a top-level field rule sees.
+            req: params.user ? { user: params.user } : {},
           });
         }
 
@@ -5407,6 +5411,10 @@ export class CollectionMutationService extends BaseService {
                 // i18n: thread the write locale so an embedded localized component writes
                 // translatable fields to its companion within the same transaction.
                 locale: params.locale,
+                // A component instance is validated by its own pass inside the field-group
+                // service, so the request has to travel with it for a field rule nested in
+                // a field group to see the same `user` a top-level field rule sees.
+                req: params.user ? { user: params.user } : {},
               }
             );
           }
