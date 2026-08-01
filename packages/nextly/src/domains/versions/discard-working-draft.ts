@@ -40,21 +40,15 @@ export interface DiscardWorkingDraftArgs {
 export async function discardWorkingDraft(
   args: DiscardWorkingDraftArgs
 ): Promise<unknown> {
-  // Remove the sidecar through the collections handler, which deletes it under
-  // the same parent-row lock a draft save takes: a save committing between this
-  // request's authorization checks and the delete would otherwise have its
-  // brand-new draft removed with both requests reporting success. The split
-  // stores the working draft under the null locale key (it applies only to
-  // non-localized collections). Deleting when none exists is a no-op, not an
-  // error.
-  await getService("collectionsHandler").discardWorkingDraft({
-    collectionName: args.slug,
-    entryId: args.entryId,
-  });
-
-  // Re-read the now-authoritative published row through the full read pipeline
-  // (hooks, redaction, field-level access), without the working-draft overlay,
-  // so the response is the live document the editor resets to.
+  // Read the live published row FIRST, through the full read pipeline (hooks,
+  // redaction, field-level access) and WITHOUT the working-draft overlay, so it
+  // is the live document the editor resets to. The delete below never touches
+  // the live row — it only clears the sidecar — so this pre-read is the same
+  // document a post-delete read would return. Reading first is what makes the
+  // discard effectively atomic: a read failure surfaces before anything is
+  // removed, leaving the pending draft intact rather than deleting it and then
+  // reporting a failure the admin treats as a no-op (which would keep the stale
+  // draft on screen and let a later Publish push its values straight to live).
   const result = await getService("collectionsHandler").getEntry({
     collectionName: args.slug,
     entryId: args.entryId,
@@ -66,11 +60,10 @@ export async function discardWorkingDraft(
     status: "all",
   });
 
-  // The sidecar removal succeeded, but the re-read can still fail — the live row
-  // may have been deleted concurrently, or an after-read hook or database call
-  // may throw. Returning the failure envelope's null `data` as-is would answer
-  // HTTP 200 and reset the editor from an empty item; rebuild the error the
-  // envelope carries so the caller gets the real status and code instead.
+  // A failed read (a concurrent delete, or an after-read hook or database error)
+  // is propagated as the error it carries rather than returned as a successful
+  // discard of an empty document — and because nothing has been deleted yet, the
+  // draft is left intact for a retry.
   if (!result.success) {
     throw errorFromServiceEnvelope({
       statusCode: result.statusCode,
@@ -81,5 +74,18 @@ export async function discardWorkingDraft(
       errors: result.errors,
     });
   }
+
+  // Now remove the sidecar through the collections handler, which deletes it
+  // under the same parent-row lock a draft save takes: a save committing between
+  // this request's authorization checks and the delete would otherwise have its
+  // brand-new draft removed with both requests reporting success. The split
+  // stores the working draft under the null locale key (it applies only to
+  // non-localized collections). Deleting when none exists is a no-op, not an
+  // error.
+  await getService("collectionsHandler").discardWorkingDraft({
+    collectionName: args.slug,
+    entryId: args.entryId,
+  });
+
   return result.data;
 }
