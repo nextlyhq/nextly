@@ -39,7 +39,10 @@ import type {
 } from "../../../services/collections/related-row-read-context";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  runFieldHooks,
+} from "../../../shared/lib/field-level-registry";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -50,6 +53,7 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
+import { decodeJsonFieldValues } from "./collection-utils";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -69,6 +73,91 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  * Maximum allowed depth to prevent performance issues.
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
+
+/** Carried across one read's nested-hook pass. */
+interface NestedHookStateBase {
+  /**
+   * Rows already visited. Batch expansion hands the same object to every parent
+   * that references it, so this is what keeps a transform from compounding
+   * with the reference count; it also breaks a reference cycle.
+   */
+  visited: Set<Record<string, unknown>>;
+  /** One schema read per collection per read, rather than per row per depth. */
+  fields: Map<string, FieldDefinition[]>;
+  /**
+   * Label field per target, keyed by collection AND the field's declared
+   * override, since two relationships can point at one collection and name
+   * different labels. Resolving it costs a metadata read, and the label is
+   * rebuilt for every related row.
+   */
+  labelFields: Map<string, Promise<string>>;
+  /**
+   * Every related row the pass reached, in visit order, with what is needed to
+   * finish it.
+   *
+   * Masking and hiding cannot be interleaved per row. The walk descends deepest
+   * first, so hiding a child's fields as it is finished removes exactly the
+   * evidence its PARENT's masking rule is about to read -- reproducing, one
+   * level down, the defect the reordering exists to fix. So the rows are
+   * collected here and hidden only once every hook in the document has run.
+   */
+  pending: Array<{
+    row: Record<string, unknown>;
+    collection: string;
+    field: FieldDefinition;
+  }>;
+}
+
+/** The state the walk carries; named separately so the interface reads first. */
+type NestedHookState = NestedHookStateBase;
+
+function createNestedHookState(): NestedHookState {
+  return {
+    visited: new Set(),
+    fields: new Map(),
+    labelFields: new Map(),
+    pending: [],
+  };
+}
+
+/**
+ * The collection a nested value belongs to, and the row itself.
+ *
+ * A polymorphic relationship is expanded as `{ relationTo, value }`, so the
+ * target is knowable per VALUE even though the field declares several. The
+ * discriminator is validated against what the field declares, so a stored value
+ * naming a collection the field never pointed at cannot direct another
+ * collection's hooks at this row.
+ */
+function resolveNestedTarget(
+  row: Record<string, unknown>,
+  field: FieldDefinition
+): { collection: string; row: Record<string, unknown> } | null {
+  // The same resolver expansion uses, so a Schema Builder relationship -- whose
+  // target lives in `options.target` with no `relationTo` at all -- is walked
+  // rather than skipped.
+  const targets = declaredTargets(field);
+  if (targets.length === 0) return null;
+
+  // Whether a value is discriminated is a property of the FIELD: only a field
+  // declaring several targets stores `{ relationTo, value }`, because an id
+  // alone would not say which table it belongs to. Reading it off the row
+  // instead would mistake a target that legitimately has its own string
+  // `relationTo` field for a wrapper, and skip its hooks entirely.
+  if (targets.length > 1) {
+    const named = row.relationTo;
+    const inner = row.value;
+    if (typeof named !== "string") return null;
+    if (typeof inner !== "object" || inner === null) return null;
+    // Validated against what the field declares: nothing checks the stored
+    // slug on the way in, so an unvalidated one would let a writer aim another
+    // collection's hooks at this row.
+    if (!targets.includes(named)) return null;
+    return { collection: named, row: inner as Record<string, unknown> };
+  }
+
+  return { collection: targets[0], row };
+}
 
 /**
  * The caller a related row is redacted for.
@@ -136,6 +225,14 @@ export interface RelationshipExpansionOptions {
    * is off. See {@link RelatedRowAccess.enforceCollectionAccess}.
    */
   enforceCollectionAccess?: boolean;
+
+  /**
+   * Defer the target's field read rules to the post-assembly pass. Only a
+   * caller that runs {@link CollectionRelationshipService.applyNestedFieldHooks}
+   * over the finished document may set this. See
+   * {@link RelatedRowAccess.fieldAccessStage}.
+   */
+  fieldAccessStage?: "fetch" | "assembled";
 
   /**
    * Collects the ids withheld because a target collection refused the caller,
@@ -1742,6 +1839,7 @@ export class CollectionRelationshipService extends BaseService {
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
       enforceCollectionAccess: options.enforceCollectionAccess,
+      fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
@@ -2333,6 +2431,7 @@ export class CollectionRelationshipService extends BaseService {
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
       enforceCollectionAccess: options.enforceCollectionAccess,
+      fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
@@ -2836,7 +2935,323 @@ export class CollectionRelationshipService extends BaseService {
         stripPasswordFieldValues(row, targetFields);
       }
     }
-    await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+    // Secrets above are unconditional and stay here. The target's FIELD rules
+    // are the caller's to place: a read that finishes with the post-assembly
+    // pass defers them there so the row's own masking hooks are judged on a
+    // whole row, which is the order a direct read uses. Every other caller
+    // applies them now, because nothing later will.
+    if (access.fieldAccessStage !== "assembled") {
+      await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+    }
+  }
+
+  /**
+   * Apply each nested related row's OWN collection field `afterRead` hooks,
+   * once the document is fully assembled.
+   *
+   * A field hook is the transforming half of a field's read protections -- the
+   * half that masks a value on the way out. Running it at fetch time would be
+   * wrong: related rows are read BEFORE the recursion that expands their own
+   * relationships, so a hook masking on `data.organization.classification`
+   * would see a raw id. A direct read expands first and runs field hooks last,
+   * and expansion may be stricter than the target's own endpoint but never
+   * looser.
+   *
+   * So this runs once, from the read path, over the finished document.
+   *
+   * `state` is shared across every entry in one read. Batch expansion hands the
+   * SAME row object to every parent that references it, so a per-entry
+   * traversal would run that row's hooks once per reference and compound any
+   * transform that is not idempotent. It also carries the schema cache: without
+   * it a hundred-row listing re-reads the same two collections' fields on every
+   * row, one metadata query at a time.
+   */
+  /** A state a caller can share across every entry in one read. */
+  createNestedHookState(): NestedHookState {
+    return createNestedHookState();
+  }
+
+  async applyNestedFieldHooks(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess,
+    state?: NestedHookState
+  ): Promise<void> {
+    // Only a real read applies these. A caller clearing the flag is assembling
+    // the evidence a document-dependent rule is judged on and wants the row
+    // unredacted -- the same reason the access pass is gated on it.
+    if (!access.enforceFieldAccess) return;
+
+    // A caller that shares a state across a listing finishes the rows itself,
+    // once every entry has been walked. One that does not is a single document,
+    // so its walk is already complete here.
+    const shared = state ?? createNestedHookState();
+    await this.walkNestedRows(entry, collectionName, access, shared, 0);
+    if (!state) await this.finalizeRelatedRows(shared, access);
+  }
+
+  /**
+   * Hide denied fields on every related row the walk reached, then rebuild the
+   * labels.
+   *
+   * Separated from the walk because the two orders are not the same order. A
+   * field hook masks; a field rule hides; and the hooks of a row's PARENT run
+   * after the row itself is finished, so hiding as each row completes takes the
+   * evidence away from a rule that has not run yet. Masking the whole document
+   * first, then hiding it, is the order a direct read has always used -- one
+   * document, not one row at a time.
+   *
+   * Labels come last of all, from the values that survived: a label copies a
+   * field under another key, so one built earlier outlives the removal of its
+   * own source field.
+   */
+  async finalizeRelatedRows(
+    state: NestedHookState,
+    access: RelatedRowAccess
+  ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
+    for (const { row, collection } of state.pending) {
+      await this.applyRelatedRowReadAccess(collection, [row], access);
+    }
+    for (const { row, collection, field } of state.pending) {
+      await this.refreshRelatedRowLabel(row, field, { collection }, state);
+    }
+    state.pending.length = 0;
+  }
+
+  /**
+   * The collection's fields, read once per collection per read.
+   *
+   * A target whose schema will not load runs no hooks, and the read continues.
+   *
+   * That is weaker than a read protection deserves, and it is the only answer
+   * the registry supports: it reports "this is not a registered collection" and
+   * "the lookup failed" the same way, so a relationship pointing at a built-in
+   * entity is indistinguishable from a real failure. Refusing on it would deny
+   * ordinary reads. The failure is logged rather than swallowed.
+   *
+   * Refusing becomes correct once the registry can answer whether a slug IS a
+   * collection separately from what its fields are.
+   */
+  private async fieldsForNestedWalk(
+    collectionName: string,
+    state: NestedHookState
+  ): Promise<FieldDefinition[]> {
+    const cached = state.fields.get(collectionName);
+    if (cached) return cached;
+
+    // A system entity has no dynamic-collection record and registers no field
+    // hooks, so there is nothing to look up.
+    if (isSystemEntity(collectionName)) {
+      state.fields.set(collectionName, []);
+      return [];
+    }
+
+    let fields: FieldDefinition[] = [];
+    try {
+      const collection =
+        await this.collectionService.getCollection(collectionName);
+      const raw =
+        (
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields ?? (collection as Record<string, unknown>).fields;
+      fields = Array.isArray(raw) ? (raw as FieldDefinition[]) : [];
+    } catch (error: unknown) {
+      // A relationship can point at something that is not a registered
+      // collection -- `users` behind an author field -- and the lookup reports
+      // that as an untyped "not found", the same shape a genuine failure takes.
+      // Since the two cannot be told apart here, refusing would deny ordinary
+      // reads, so this logs and leaves the target's hooks unrun.
+      console.error(
+        `Nested field hooks skipped for "${collectionName}": its schema could not be read.`,
+        error
+      );
+    }
+
+    state.fields.set(collectionName, fields);
+    return fields;
+  }
+
+  /**
+   * One level of {@link applyNestedFieldHooks}.
+   *
+   * Rows are claimed in {@link walkFieldValue} rather than here, so the claim
+   * covers running a row's hooks as well as descending into it. The depth cap
+   * mirrors the expansion's own maximum.
+   */
+  private async walkNestedRows(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (depth > MAX_RELATIONSHIP_DEPTH) return;
+
+    const fields = await this.fieldsForNestedWalk(collectionName, state);
+    for (const field of fields) {
+      await this.walkFieldValue(entry[field.name], field, access, state, depth);
+    }
+  }
+
+  /**
+   * Visit one field's value, whatever shape it takes.
+   *
+   * A relationship can sit directly on the collection or inside a `group` or
+   * `repeater`, and `expandRelationships` populates it either way, so a walk
+   * that only looked at top-level `relationTo` fields left everything inside a
+   * container unmasked.
+   */
+  private async walkFieldValue(
+    value: unknown,
+    field: FieldDefinition,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (value === null || value === undefined) return;
+
+    const rows = (Array.isArray(value) ? value : [value]).filter(
+      (row): row is Record<string, unknown> =>
+        typeof row === "object" && row !== null
+    );
+    if (rows.length === 0) return;
+
+    const nested = getNestedFields(field);
+    if (nested.length > 0) {
+      // A container: its rows belong to THIS collection, so they carry no
+      // hooks of their own -- only the relationships inside them do.
+      for (const row of rows) {
+        for (const inner of nested) {
+          await this.walkFieldValue(
+            row[inner.name],
+            inner,
+            access,
+            state,
+            depth
+          );
+        }
+      }
+      return;
+    }
+
+    // An upload points at the built-in media entity, which is not a registered
+    // collection and registers no field hooks. Resolving it would spend a
+    // metadata query per row to be told so, and log the failure, on reads that
+    // are otherwise fine -- and uploads are close to universal.
+    if (isUploadField(field)) return;
+
+    for (const row of rows) {
+      // A discriminated value names its own collection, so a polymorphic
+      // relationship is knowable per value rather than unknowable per field.
+      const resolved = resolveNestedTarget(row, field);
+      if (!resolved) continue;
+
+      // Claimed before anything runs, and the claim covers the hooks as well as
+      // the descent. Guarding only the descent still let a row shared by
+      // several parents be transformed once per parent, which compounds any
+      // transform that is not idempotent.
+      if (state.visited.has(resolved.row)) continue;
+      state.visited.add(resolved.row);
+
+      await this.walkNestedRows(
+        resolved.row,
+        resolved.collection,
+        access,
+        state,
+        depth + 1
+      );
+      // Decoded with the TARGET's schema. The read path decodes using the
+      // source collection's fields, which say nothing about a related row's
+      // own JSON columns, so on SQLite a hook inspecting one would be handed
+      // the storage string.
+      decodeJsonFieldValues(
+        [resolved.row],
+        await this.fieldsForNestedWalk(resolved.collection, state)
+      );
+      // Deepest first, so a hook reading into its own relations sees them
+      // already transformed rather than half-processed.
+      await runFieldHooks({
+        kind: "collection",
+        slug: resolved.collection,
+        phase: "afterRead",
+        data: resolved.row,
+        operation: "read",
+        user: access.user,
+      });
+
+      // Queued, not applied. Hiding this row's denied fields now would remove
+      // the evidence its PARENT's masking rule reads a moment later, because
+      // this walk finishes a child before its parent's hooks run.
+      state.pending.push({
+        row: resolved.row,
+        collection: resolved.collection,
+        field,
+      });
+
+      // Secrets are stripped from a related row when it is fetched, but a hook
+      // on a sibling field can write one back -- deliberately or by copying the
+      // row -- and the response-level defenses sanitize only the ROOT row,
+      // using the source collection's schema, so they would never look at this
+      // one. Stripped again here for the same reason a direct read strips after
+      // its own hooks.
+      const targetFields = await this.fieldsForNestedWalk(
+        resolved.collection,
+        state
+      );
+      if (hasPasswordField(targetFields)) {
+        stripPasswordFieldValues(resolved.row, targetFields);
+      }
+      stripSystemOwnerField(resolved.row);
+    }
+  }
+
+  /**
+   * Rebuild a related row's display label from the fields that survived.
+   *
+   * The label copies a field's value under another key, so one derived at fetch
+   * outlives the removal of its own source field: a caller denied `internalName`
+   * would still read it as `label`. Rebuilt here, after the hooks and the field
+   * rules, it can only be made of values this caller may see.
+   *
+   * Falls back to the id, which is what the fetch-time derivation does when the
+   * source field is absent, so a row stays identifiable rather than losing its
+   * label entirely.
+   *
+   * Only rows that carry a label are touched. Expansion attaches one; a row
+   * reached some other way has no label to keep honest.
+   */
+  private async refreshRelatedRowLabel(
+    row: Record<string, unknown>,
+    field: FieldDefinition,
+    resolved: { collection: string },
+    state: NestedHookState
+  ): Promise<void> {
+    if (!("label" in row)) return;
+
+    // Read from both shapes expansion supports. A relationship storing the
+    // override at the field root would otherwise have its label rebuilt from an
+    // auto-selected field, so the same row came back labelled differently only
+    // because this pass ran.
+    const override =
+      field.options?.targetLabelField ??
+      (field as Record<string, unknown>).targetLabelField;
+    const declared = typeof override === "string" ? override : "";
+    const cacheKey = `${resolved.collection}:${declared}`;
+    let pending = state.labelFields.get(cacheKey);
+    if (!pending) {
+      pending = isSystemEntity(resolved.collection)
+        ? Promise.resolve(
+            resolveSystemEntityLabelField(resolved.collection, declared)
+          )
+        : this.getBestLabelField(resolved.collection, declared || undefined);
+      state.labelFields.set(cacheKey, pending);
+    }
+
+    const labelField = await pending;
+    row.label = row[labelField] || row.id;
   }
 
   /**

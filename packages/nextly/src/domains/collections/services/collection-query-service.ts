@@ -1396,6 +1396,10 @@ export class CollectionQueryService extends BaseService {
             // collection's field rules say nothing about another collection's
             // fields — so the caller has to reach the related row's own rules.
             enforceFieldAccess: true,
+            // This path finishes with the post-assembly pass, so the target's
+            // field rules run there, after its masking hooks have seen a whole
+            // row.
+            fieldAccessStage: "assembled" as const,
             user: params.user,
             overrideAccess: params.overrideAccess,
             authenticatedScope: params.authenticatedScope,
@@ -1522,6 +1526,53 @@ export class CollectionQueryService extends BaseService {
       // configured value, and on SQLite these columns are strings, so decoding
       // after the hooks handed every one of them the storage encoding instead.
       decodeJsonFieldValues(expandedEntries, fields, params.locale);
+
+      // A related row's own field hooks run BEFORE this collection's afterRead
+      // hooks can observe it, and before field selection narrows it.
+      //
+      // Before the collection's hooks, because one of them can copy a related
+      // row's value onto a root property of its own; the traversal masks the
+      // nested field it walked, never the copy, so a hook handed an unmasked
+      // target could publish it under a key nothing sanitizes. That is the same
+      // reason password hashes are stripped above rather than after.
+      //
+      // Before selection, because selection rebuilds each related row as a fresh
+      // object holding only the projected paths, so a hook masking on a sibling
+      // -- `select: { "author.secret": true }` while the rule reads
+      // `organization.classification` -- would be handed a row with its evidence
+      // missing and fall open.
+      //
+      // Every populated related row is walked, including one under a
+      // relationship the projection drops. Skipping those would leave them on
+      // the document unmasked for the hooks below to read and copy elsewhere,
+      // and the skip could not be honoured coherently in any case: batch
+      // expansion shares one row object between parents, so a row reachable
+      // through both a kept and a dropped relationship would end up masked or
+      // not depending on which reference the traversal happened to meet first.
+      //
+      // One state for the whole listing, for that same sharing: a per-entry pass
+      // would run a shared row's hooks once per reference.
+      const nestedHookState = this.relationshipService.createNestedHookState();
+      const nestedAccess = {
+        enforceFieldAccess: true,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      };
+      for (const entry of expandedEntries) {
+        await this.relationshipService.applyNestedFieldHooks(
+          entry,
+          params.collectionName,
+          nestedAccess,
+          nestedHookState
+        );
+      }
+      // Once, after the whole listing: hiding a row as it is finished would take
+      // the evidence away from a rule on a row walked later.
+      await this.relationshipService.finalizeRelatedRows(
+        nestedHookState,
+        nestedAccess
+      );
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -2403,6 +2454,8 @@ export class CollectionQueryService extends BaseService {
           // Same reasoning as the list path: a related row is redacted by its
           // own collection's field rules, for this caller.
           enforceFieldAccess: true,
+          // Same deferral as the list path; this path runs the same pass.
+          fieldAccessStage: "assembled" as const,
           user: params.user,
           overrideAccess: params.overrideAccess,
           authenticatedScope: params.authenticatedScope,
@@ -2619,6 +2672,11 @@ export class CollectionQueryService extends BaseService {
             >[3] = {
               depth: params.depth,
               enforceFieldAccess: true,
+              // The overlaid draft is the document the post-assembly pass runs
+              // over, so its related rows defer field rules for the same reason
+              // the live read does. Without this a draft read hides a denied
+              // sibling before the rule that masks on it has run.
+              fieldAccessStage: "assembled" as const,
               user: params.user,
               overrideAccess: params.overrideAccess,
               authenticatedScope: params.authenticatedScope,
@@ -2705,6 +2763,22 @@ export class CollectionQueryService extends BaseService {
       // path: a hook is documented against the configured value, not the
       // storage encoding SQLite hands back.
       decodeJsonFieldValues([expandedEntry], fields, params.locale);
+
+      // Same placement as the list path: a related row's own field hooks run
+      // before this collection's afterRead hooks can copy an unmasked value onto
+      // a root property, and before selection rebuilds the row without the
+      // siblings a masking rule judges on. Every populated related row is
+      // walked, including one the projection drops.
+      await this.relationshipService.applyNestedFieldHooks(
+        expandedEntry,
+        params.collectionName,
+        {
+          enforceFieldAccess: true,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          authenticatedScope: params.authenticatedScope,
+        }
+      );
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
