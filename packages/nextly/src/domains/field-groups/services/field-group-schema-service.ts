@@ -146,6 +146,22 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
   sqlite: "DEFAULT (strftime('%s', 'now'))",
 };
 
+/**
+ * What `generateRuntimeSchema` needs beyond the fields.
+ *
+ * `typeColumn` is required rather than defaulted. The storage migration renames
+ * the discriminator, so the right physical name is a property of the database in
+ * front of us, and a default would let a call site that never learned to resolve
+ * it compile and then silently project a column that is not there. Required
+ * makes the type checker the completeness proof. Callers supply either the
+ * resolved name from the catalog or, for a table this process just created,
+ * `STORAGE_FORMAT.columns.type` — the same constant the DDL just wrote.
+ */
+export interface RuntimeSchemaOptions {
+  localized?: boolean;
+  typeColumn: string;
+}
+
 export class FieldGroupSchemaService {
   private readonly dialect: SupportedDialect;
   private readonly q: string;
@@ -480,7 +496,7 @@ export class FieldGroupSchemaService {
   generateRuntimeSchema(
     tableName: string,
     fields: FieldConfig[],
-    options: { localized?: boolean } = {}
+    options: RuntimeSchemaOptions
   ): unknown {
     // i18n: when the component is localized, its translatable fields live in the
     // companion `comp_<slug>_locales` table and are omitted from the main runtime
@@ -500,13 +516,14 @@ export class FieldGroupSchemaService {
       const name = "name" in f ? (f as { name?: string }).name : undefined;
       return !name || !localizedNames.has(name);
     });
+    const typeColumn = options.typeColumn;
     switch (this.dialect) {
       case "postgresql":
-        return this.generatePostgresSchema(tableName, mainFields);
+        return this.generatePostgresSchema(tableName, mainFields, typeColumn);
       case "mysql":
-        return this.generateMySQLSchema(tableName, mainFields);
+        return this.generateMySQLSchema(tableName, mainFields, typeColumn);
       case "sqlite":
-        return this.generateSQLiteSchema(tableName, mainFields);
+        return this.generateSQLiteSchema(tableName, mainFields, typeColumn);
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
@@ -514,7 +531,8 @@ export class FieldGroupSchemaService {
 
   private generatePostgresSchema(
     tableName: string,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    typeColumn: string
   ): unknown {
     // Required by Drizzle: pgTable() expects a `Record<string, PgColumnBuilderBase>`
     // but the column builders returned by helpers (pgText, pgInteger, ...) have
@@ -530,7 +548,13 @@ export class FieldGroupSchemaService {
         length: 255,
       }).notNull(),
       _order: pgInteger(STORAGE_FORMAT.columns.order).default(0),
-      _component_type: pgVarchar(STORAGE_FORMAT.columns.type, { length: 255 }),
+      // 🔴 The Drizzle property key stays `STORAGE_FORMAT.columns.type` while the
+      // physical name is resolved. The adapter addresses columns by property key
+      // everywhere — rows come back keyed by it, `buildDrizzleWhere` and
+      // `orderBy` look columns up by it — so every consumer downstream reads the
+      // same key whichever spelling the storage carries, and keeps reading it
+      // when the constant itself moves.
+      [STORAGE_FORMAT.columns.type]: pgVarchar(typeColumn, { length: 255 }),
       created_at: pgTimestamp("created_at").defaultNow().notNull(),
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
@@ -564,7 +588,8 @@ export class FieldGroupSchemaService {
 
   private generateMySQLSchema(
     tableName: string,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    typeColumn: string
   ): unknown {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
@@ -578,7 +603,7 @@ export class FieldGroupSchemaService {
         length: 255,
       }).notNull(),
       _order: mysqlInt(STORAGE_FORMAT.columns.order).default(0),
-      _component_type: mysqlVarchar(STORAGE_FORMAT.columns.type, {
+      [STORAGE_FORMAT.columns.type]: mysqlVarchar(typeColumn, {
         length: 255,
       }),
       created_at: mysqlTimestamp("created_at").defaultNow().notNull(),
@@ -610,7 +635,8 @@ export class FieldGroupSchemaService {
 
   private generateSQLiteSchema(
     tableName: string,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    typeColumn: string
   ): unknown {
     const columns: Record<string, unknown> = {
       id: sqliteText("id").primaryKey(),
@@ -618,7 +644,7 @@ export class FieldGroupSchemaService {
       _parent_table: sqliteText(STORAGE_FORMAT.columns.parentTable).notNull(),
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
       _order: sqliteInteger(STORAGE_FORMAT.columns.order).default(0),
-      _component_type: sqliteText(STORAGE_FORMAT.columns.type),
+      [STORAGE_FORMAT.columns.type]: sqliteText(typeColumn),
       created_at: sqliteInteger("created_at", { mode: "timestamp" })
         .notNull()
         .$defaultFn(() => new Date()),

@@ -13,6 +13,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
+import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import {
   bindTransitionRecorder,
@@ -764,7 +765,10 @@ async function handleRemovedComponents(
       });
 
       // Delete registry entry directly
-      await adapter.delete(STORAGE_FORMAT.registryTable, {
+      // Resolved: this delete runs AFTER the nested instances and localized
+      // data are torn down, so addressing a registry that is not there fails
+      // once the dependent content is already gone.
+      await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
         and: [{ column: "slug", op: "=", value: slug }],
       });
 

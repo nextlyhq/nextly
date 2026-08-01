@@ -83,168 +83,190 @@ import type { FieldGroupSource, FieldGroupMigrationStatus } from "./types";
  *   .where(eq(dynamicFieldGroupsPg.migrationStatus, 'pending'));
  * ```
  */
-export const dynamicFieldGroupsPg = pgTable(
-  STORAGE_FORMAT.registryTable,
-  {
-    // --------------------------------------------------------
-    // Primary Key
-    // --------------------------------------------------------
+export function buildDynamicFieldGroupsPg(tableName: string) {
+  return pgTable(
+    tableName,
+    {
+      // --------------------------------------------------------
+      // Primary Key
+      // --------------------------------------------------------
 
-    /** Unique identifier (UUID v4, auto-generated) */
-    id: uuid("id").primaryKey().defaultRandom(),
+      /** Unique identifier (UUID v4, auto-generated) */
+      id: uuid("id").primaryKey().defaultRandom(),
 
-    // --------------------------------------------------------
-    // Component Identity
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Component Identity
+      // --------------------------------------------------------
 
-    /**
-     * Unique slug identifier for the Component.
-     * Used in component field references and API operations.
-     * Must be unique across all Components, Collections, AND Singles.
-     */
-    slug: varchar("slug", { length: 255 }).unique().notNull(),
+      /**
+       * Unique slug identifier for the Component.
+       * Used in component field references and API operations.
+       * Must be unique across all Components, Collections, AND Singles.
+       */
+      slug: varchar("slug", { length: 255 }).unique().notNull(),
 
-    /**
-     * Display label for the Admin UI.
-     * Components only need a singular label.
-     *
-     * @example 'SEO Metadata', 'Hero Section', 'Call To Action'
-     */
-    label: varchar("label", { length: 255 }).notNull(),
+      /**
+       * Display label for the Admin UI.
+       * Components only need a singular label.
+       *
+       * @example 'SEO Metadata', 'Hero Section', 'Call To Action'
+       */
+      label: varchar("label", { length: 255 }).notNull(),
 
-    /**
-     * Database table name for this Component's data.
-     * Must be unique across all tables.
-     * Convention: prefix with `comp_` (e.g., 'comp_seo').
-     */
-    tableName: varchar("table_name", { length: 255 }).unique().notNull(),
+      /**
+       * Database table name for this Component's data.
+       * Must be unique across all tables.
+       * Convention: prefix with `comp_` (e.g., 'comp_seo').
+       */
+      tableName: varchar("table_name", { length: 255 }).unique().notNull(),
 
-    /** Optional description of the Component's purpose */
-    description: text("description"),
+      /** Optional description of the Component's purpose */
+      description: text("description"),
 
-    // --------------------------------------------------------
-    // Schema Definition
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Schema Definition
+      // --------------------------------------------------------
 
-    /**
-     * Field configurations defining the Component's structure.
-     * Supports all field types including nested component fields.
-     */
-    fields: jsonb("fields").$type<FieldConfig[]>().notNull(),
+      /**
+       * Field configurations defining the Component's structure.
+       * Supports all field types including nested component fields.
+       */
+      fields: jsonb("fields").$type<FieldConfig[]>().notNull(),
 
-    /**
-     * Admin UI configuration options.
-     * Controls category grouping, icon, visibility, etc.
-     */
-    admin: jsonb("admin").$type<FieldGroupAdminOptions>(),
+      /**
+       * Admin UI configuration options.
+       * Controls category grouping, icon, visibility, etc.
+       */
+      admin: jsonb("admin").$type<FieldGroupAdminOptions>(),
 
-    // --------------------------------------------------------
-    // Unified Model Fields
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Unified Model Fields
+      // --------------------------------------------------------
 
-    /**
-     * Where the Component was defined.
-     * - 'code': defineFieldGroup() in a config file
-     * - 'ui': Visual Component Builder
-     */
-    source: varchar("source", { length: 255 })
-      .$type<FieldGroupSource>()
-      .default("ui")
-      .notNull(),
+      /**
+       * Where the Component was defined.
+       * - 'code': defineFieldGroup() in a config file
+       * - 'ui': Visual Component Builder
+       */
+      source: varchar("source", { length: 255 })
+        .$type<FieldGroupSource>()
+        .default("ui")
+        .notNull(),
 
-    /**
-     * If true, the Component cannot be modified via the Admin UI.
-     * Code-first Components are locked by default.
-     */
-    locked: boolean("locked").default(false).notNull(),
+      /**
+       * If true, the Component cannot be modified via the Admin UI.
+       * Code-first Components are locked by default.
+       */
+      locked: boolean("locked").default(false).notNull(),
 
-    /**
-     * i18n: whether the component is localized. When true, translatable fields live in
-     * the companion `comp_<slug>_locales` table and embedded instances resolve/write them
-     * per language (mirrors `dynamic_collections.localized` / `dynamic_singles.localized`).
-     */
-    localized: boolean("localized").default(false).notNull(),
+      /**
+       * i18n: whether the component is localized. When true, translatable fields live in
+       * the companion `comp_<slug>_locales` table and embedded instances resolve/write them
+       * per language (mirrors `dynamic_collections.localized` / `dynamic_singles.localized`).
+       */
+      localized: boolean("localized").default(false).notNull(),
 
-    /**
-     * Path to the config file (code-first Components only).
-     * Used for syncing and displaying source location.
-     * @example "src/components/seo.ts"
-     */
-    configPath: varchar("config_path", { length: 500 }),
+      /**
+       * Path to the config file (code-first Components only).
+       * Used for syncing and displaying source location.
+       * @example "src/components/seo.ts"
+       */
+      configPath: varchar("config_path", { length: 500 }),
 
-    // --------------------------------------------------------
-    // Migration & Versioning
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Migration & Versioning
+      // --------------------------------------------------------
 
-    /**
-     * SHA-256 hash of the fields definition.
-     * Used for change detection during sync operations.
-     */
-    schemaHash: varchar("schema_hash", { length: 64 }).notNull(),
+      /**
+       * SHA-256 hash of the fields definition.
+       * Used for change detection during sync operations.
+       */
+      schemaHash: varchar("schema_hash", { length: 64 }).notNull(),
 
-    /**
-     * Schema version number, incremented on each change.
-     * Starts at 1 for new Components.
-     */
-    schemaVersion: integer("schema_version").default(1).notNull(),
+      /**
+       * Schema version number, incremented on each change.
+       * Starts at 1 for new Components.
+       */
+      schemaVersion: integer("schema_version").default(1).notNull(),
 
-    /**
-     * Current migration status.
-     * - 'synced': Schema matches database
-     * - 'pending': Changes detected, migration needed
-     * - 'generated': Migration file created
-     * - 'applied': Migration applied to database
-     */
-    migrationStatus: varchar("migration_status", { length: 20 })
-      .$type<FieldGroupMigrationStatus>()
-      .default("pending")
-      .notNull(),
+      /**
+       * Current migration status.
+       * - 'synced': Schema matches database
+       * - 'pending': Changes detected, migration needed
+       * - 'generated': Migration file created
+       * - 'applied': Migration applied to database
+       */
+      migrationStatus: varchar("migration_status", { length: 20 })
+        .$type<FieldGroupMigrationStatus>()
+        .default("pending")
+        .notNull(),
 
-    /**
-     * Reference to the last applied migration ID.
-     * Null for Components that haven't been migrated yet.
-     */
-    lastMigrationId: uuid("last_migration_id"),
+      /**
+       * Reference to the last applied migration ID.
+       * Null for Components that haven't been migrated yet.
+       */
+      lastMigrationId: uuid("last_migration_id"),
 
-    // --------------------------------------------------------
-    // Metadata
-    // --------------------------------------------------------
+      // --------------------------------------------------------
+      // Metadata
+      // --------------------------------------------------------
 
-    /** User ID who created the Component (optional) */
-    createdBy: uuid("created_by"),
+      /** User ID who created the Component (optional) */
+      createdBy: uuid("created_by"),
 
-    /** When the Component was created */
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
+      /** When the Component was created */
+      createdAt: timestamp("created_at", { withTimezone: false })
+        .defaultNow()
+        .notNull(),
 
-    /** When the Component was last updated */
-    updatedAt: timestamp("updated_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  table => [
-    // --------------------------------------------------------
-    // Indexes for Query Performance
-    // --------------------------------------------------------
+      /** When the Component was last updated */
+      updatedAt: timestamp("updated_at", { withTimezone: false })
+        .defaultNow()
+        .notNull(),
+    },
+    table => [
+      // --------------------------------------------------------
+      // Indexes for Query Performance
+      // --------------------------------------------------------
 
-    /** Index for filtering Components by source (code, ui) */
-    index(`${STORAGE_FORMAT.registryTable}_source_idx`).on(table.source),
+      /** Index for filtering Components by source (code, ui) */
+      index(`${STORAGE_FORMAT.registryTable}_source_idx`).on(table.source),
 
-    /** Index for finding Components needing migration */
-    index(`${STORAGE_FORMAT.registryTable}_migration_status_idx`).on(
-      table.migrationStatus
-    ),
+      /** Index for finding Components needing migration */
+      index(`${STORAGE_FORMAT.registryTable}_migration_status_idx`).on(
+        table.migrationStatus
+      ),
 
-    /** Index for filtering by creator */
-    index(`${STORAGE_FORMAT.registryTable}_created_by_idx`).on(table.createdBy),
+      /** Index for filtering by creator */
+      index(`${STORAGE_FORMAT.registryTable}_created_by_idx`).on(
+        table.createdBy
+      ),
 
-    /** Index for sorting by creation date */
-    index(`${STORAGE_FORMAT.registryTable}_created_at_idx`).on(table.createdAt),
+      /** Index for sorting by creation date */
+      index(`${STORAGE_FORMAT.registryTable}_created_at_idx`).on(
+        table.createdAt
+      ),
 
-    /** Index for sorting by last modified date */
-    index(`${STORAGE_FORMAT.registryTable}_updated_at_idx`).on(table.updatedAt),
-  ]
+      /** Index for sorting by last modified date */
+      index(`${STORAGE_FORMAT.registryTable}_updated_at_idx`).on(
+        table.updatedAt
+      ),
+    ]
+  );
+}
+
+/**
+ * The registry under the name this release's DDL creates.
+ *
+ * The factory exists because the storage migration renames this table, and a
+ * Drizzle object carries its physical name: addressing the renamed table needs
+ * an object built under that name. Index names are derived from the legacy
+ * constant in both instances on purpose — the migration renames the table and
+ * its type discriminator and nothing else, so a renamed table keeps the index
+ * names it was created with on every dialect.
+ */
+export const dynamicFieldGroupsPg = buildDynamicFieldGroupsPg(
+  STORAGE_FORMAT.registryTable
 );
 
 // ============================================================

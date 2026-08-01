@@ -31,6 +31,7 @@ import {
   resolveCatalogName,
   type IdentifierCaseRules,
 } from "../../schema/utils/resolve-catalog-name";
+import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
 import { resolveStorageVerdict } from "./guard";
 import {
@@ -298,40 +299,51 @@ export async function runFieldGroupMigration(
       });
 
       const fromStep = state.status === "migrating" ? state.step + 1 : 1;
-      await runMigrationSteps({
-        session,
-        meta,
-        migrationId,
-        steps,
-        fromStep,
-      });
+      // 🔴 Invalidated whenever the steps may have RUN, not only when the run
+      // reports success. A rename can commit and `assertStorageComplete` or
+      // `settleMigration` can then throw — at which point the memoized registry
+      // name in this process points at a table that no longer exists, and every
+      // recovery attempt addresses the wrong one. The memo is a schema fact;
+      // the moment storage may have moved, the honest answer is "I no longer
+      // know", and one extra catalog read is the whole cost of saying so.
+      try {
+        await runMigrationSteps({
+          session,
+          meta,
+          migrationId,
+          steps,
+          fromStep,
+        });
 
-      // Asked of the database rather than inferred from the steps having run.
-      // A step reports its own postcondition; this asks whether the storage as
-      // a whole is now what the generation claims, which is the question a
-      // settled marker will be believed on afterwards.
-      await assertStorageComplete({
-        adapter,
-        dialect,
-        rows: await readRegistryRows(adapter, dialect, identifierCase),
-        identifierCase,
-        // Every name this run renamed away. A row still addressing one of them
-        // is content the read path would return nothing for, and it is asked
-        // about here rather than per step because the failure worth catching is
-        // a data table no step ever observed.
-        renamedAway: directed
-          .filter(entry => entry.kind === "table")
-          .map(entry => entry.from),
-        owned,
-        generation,
-      });
+        // Asked of the database rather than inferred from the steps having run.
+        // A step reports its own postcondition; this asks whether the storage as
+        // a whole is now what the generation claims, which is the question a
+        // settled marker will be believed on afterwards.
+        await assertStorageComplete({
+          adapter,
+          dialect,
+          rows: await readRegistryRows(adapter, dialect, identifierCase),
+          identifierCase,
+          // Every name this run renamed away. A row still addressing one of them
+          // is content the read path would return nothing for, and it is asked
+          // about here rather than per step because the failure worth catching is
+          // a data table no step ever observed.
+          renamedAway: directed
+            .filter(entry => entry.kind === "table")
+            .map(entry => entry.from),
+          owned,
+          generation,
+        });
 
-      await settleMigration(
-        meta,
-        generation === "field-groups-v2"
-          ? { generation, appliedManifest: entries }
-          : { generation }
-      );
+        await settleMigration(
+          meta,
+          generation === "field-groups-v2"
+            ? { generation, appliedManifest: entries }
+            : { generation }
+        );
+      } finally {
+        forgetFieldGroupStorageNames(adapter);
+      }
 
       logger.info(
         `Field group storage migrated ${direction} (${String(steps.length)} steps).`

@@ -26,6 +26,10 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import {
+  resolveFieldGroupRegistryName,
+  resolveTypeColumns,
+} from "../../domains/field-groups/storage/resolve-storage-names";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { localizedColumnsOnMain } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
@@ -135,11 +139,33 @@ async function executeMigrationStatements(
 
 // Refresh the cached Drizzle table so the next entry query joining this
 // component uses the new column layout without a server restart.
+/**
+ * The discriminator a component table carries, resolved BEFORE its DDL runs.
+ *
+ * 🔴 Deliberately not inside `registerComponentRuntimeSchema`. That function's
+ * `catch` is a cache-refresh failsafe — it suppresses so a refresh problem does
+ * not fail a request whose schema change already committed — and a catalog
+ * probe inside it inherits that policy, letting a handler report success while
+ * leaving the runtime table unregistered or holding obsolete columns.
+ *
+ * Resolving first is equivalent and safer: the schema change only ever alters
+ * user columns, so the discriminator is the same before and after, and a probe
+ * that cannot answer now fails the request before anything is committed.
+ */
+async function resolveComponentTypeColumn(
+  adapter: DrizzleAdapter,
+  tableName: string
+): Promise<string> {
+  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
+  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
+}
+
 function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
   tableName: string,
   fields: FieldConfig[],
+  typeColumn: string,
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
   localized = false
@@ -151,7 +177,7 @@ function registerComponentRuntimeSchema(
     const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
       tableName,
       fields,
-      { localized }
+      { localized, typeColumn }
     );
     const companion = localized
       ? buildCompanionRuntimeTable({
@@ -389,6 +415,24 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
               dialect,
               tableName,
               b.fields,
+              // 🔴 The constant, NOT a probe — and this is the one path where
+              // that inference is sound, so the reason is worth stating.
+              //
+              // This is the CREATE path for a new slug, and the statement
+              // executed above is the DDL generator's own, which writes
+              // `STORAGE_FORMAT.columns.type`. The storage migration cannot
+              // have moved a table that did not exist a moment ago, and a
+              // migrated table would carry the migrated PREFIX, so it could not
+              // be addressed by this name at all.
+              //
+              // Probing here can only hurt: a transient introspection failure
+              // is caught below, records the registry row as `failed`, and
+              // still returns 201 — leaving a created table with no runtime
+              // schema and its CRUD unavailable until a restart. Contrast the
+              // code-first sync path, where `CREATE TABLE IF NOT EXISTS` may
+              // no-op over a table that is years old; there the probe is
+              // required, and assuming the constant was a real defect.
+              STORAGE_FORMAT.columns.type,
               // i18n: main runtime table omits translatable columns for a localized component.
               isLocalized
             );
@@ -542,6 +586,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             adapter.getCapabilities().dialect,
             existing.tableName,
             newFields,
+            await resolveComponentTypeColumn(adapter, existing.tableName),
             // i18n: main runtime table omits translatable columns when localized.
             isLocalized
           );
@@ -711,6 +756,17 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const adapter = getAdapterFromDI();
       if (!adapter) throw new Error("Database adapter not initialized");
+      // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
+      // handler suppresses its own failures by design, so a probe placed there
+      // could let the handler report success over an unregistered or stale
+      // table. The apply only alters user columns, so this answer is the same
+      // either side of it — and asking now means a probe that cannot answer
+      // fails the request before anything commits.
+      const componentTypeColumn = await resolveComponentTypeColumn(
+        adapter,
+        tableName
+      );
+
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
       const databaseName =
@@ -802,7 +858,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       let versionPersisted = true;
       try {
         await adapter.update(
-          STORAGE_FORMAT.registryTable,
+          // The registry this database holds. The failure is otherwise silent
+          // in the worst way: the DDL has already committed, this write is
+          // treated as non-fatal, and the stale row rebuilds the pre-change
+          // runtime schema on the next restart.
+          await resolveFieldGroupRegistryName(adapter),
           {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
@@ -833,6 +893,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         dialect,
         tableName,
         fields as FieldConfig[],
+        componentTypeColumn,
         isLocalized
       );
 

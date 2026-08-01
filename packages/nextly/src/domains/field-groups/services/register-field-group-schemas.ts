@@ -16,8 +16,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { SchemaRegistry } from "../../../database/schema-registry";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
+import { resolveTypeColumns } from "../storage/resolve-storage-names";
 
 import { FieldGroupRegistryService } from "./field-group-registry-service";
 import { FieldGroupSchemaService } from "./field-group-schema-service";
@@ -47,6 +49,15 @@ export async function registerComponentSchemas(
 
   const components = await componentRegistry.getAllComponents();
 
+  // One catalog read for the whole set. Resolved per table rather than once for
+  // the database: the storage migration renames the registry LAST, so between a
+  // table's rename and the registry's the two generations coexist, and a table
+  // an author named itself is never renamed while its column always is.
+  const typeColumns = await resolveTypeColumns(
+    adapter,
+    components.map(component => component.tableName)
+  );
+
   for (const component of components) {
     const localized = component.localized === true;
     const fields = component.fields ?? [];
@@ -55,6 +66,8 @@ export async function registerComponentSchemas(
       component.tableName,
       schemaService.generateRuntimeSchema(component.tableName, fields, {
         localized,
+        typeColumn:
+          typeColumns.get(component.tableName) ?? STORAGE_FORMAT.columns.type,
       })
     );
 

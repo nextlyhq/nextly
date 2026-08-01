@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
@@ -7,6 +7,7 @@ import type { CollectedPermission } from "../../../plugins/permissions/collect-p
 import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
 import { PermissionService } from "./permission-service";
 import { RolePermissionService } from "./role-permission-service";
@@ -900,14 +901,30 @@ export class PermissionSeedService extends BaseService {
     return rows.map((row: { slug: string }) => String(row.slug));
   }
 
+  /**
+   * Every field-group slug the registry knows about.
+   *
+   * 🔴 Addressed by the resolved name rather than through
+   * `getDialectTables().dynamicFieldGroups`, whose Drizzle object carries the
+   * legacy table name. On a database whose storage migration has run, that
+   * object names a table that is gone; the missing-table error is caught by
+   * `cleanupOrphanedPermissions`, which then reports no removals while every
+   * field-group permission is silently treated as orphaned.
+   *
+   * Issued as a statement rather than through the query builder for the same
+   * reason the migration reads the registry that way: the builder resolves a
+   * table through the schema registry, and the name to address here is the one
+   * the catalog reports.
+   */
   private async getAllComponentSlugs(): Promise<string[]> {
     if (!this.tables?.dynamicFieldGroups) return [];
 
-    const rows = await this.db
-      .select({ slug: this.tables.dynamicFieldGroups.slug })
-      .from(this.tables.dynamicFieldGroups);
+    const registryTable = await resolveRegistryTableName(this.adapter);
+    const rows = await this.adapter.queryStatement<{ slug: string }>(
+      sql`SELECT ${sql.identifier("slug")} FROM ${sql.identifier(registryTable)}`
+    );
 
-    return rows.map((row: { slug: string }) => String(row.slug));
+    return rows.map(row => String(row.slug));
   }
 
   private slugToLabel(slug: string): string {

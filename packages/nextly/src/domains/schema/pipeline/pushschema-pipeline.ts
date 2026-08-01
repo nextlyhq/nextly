@@ -32,6 +32,7 @@ import {
 } from "../../../init/schema-snapshot-cache";
 import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
 import type { MigrationScope } from "../../../runtime/notifications/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
@@ -1253,7 +1254,14 @@ export class PushSchemaPipeline {
       const componentTable = fieldGroupSchemaService.generateRuntimeSchema(
         c.tableName,
         c.fields,
-        { localized: (c as { localized?: boolean }).localized === true }
+        {
+          localized: (c as { localized?: boolean }).localized === true,
+          // The DESIRED schema, handed to drizzle-kit to diff against the live
+          // one — so it names the discriminator this release's DDL creates, not
+          // whatever the database currently holds. Resolving here would make the
+          // desired shape follow the live shape and the diff always empty.
+          typeColumn: STORAGE_FORMAT.columns.type,
+        }
       );
       out[c.tableName] = componentTable;
     }

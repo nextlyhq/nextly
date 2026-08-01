@@ -22,6 +22,7 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
@@ -186,7 +187,12 @@ export async function runPruneCommand(
     const drizzleAdapter = adapter as unknown as DrizzleAdapter;
     const { dialect } = drizzleAdapter.getCapabilities();
     const schemaRegistry = new SchemaRegistry(dialect);
-    schemaRegistry.registerStaticSchemas(getDialectTables(dialect));
+    // Both spellings of the field-group registry: a database whose storage
+    // migration has run has no handle for its registry otherwise.
+    schemaRegistry.registerStaticSchemas({
+      ...getDialectTables(dialect),
+      ...getFieldGroupRegistryAliases(dialect),
+    });
     drizzleAdapter.setTableResolver(schemaRegistry);
     await registerComponentSchemas({
       adapter: drizzleAdapter,

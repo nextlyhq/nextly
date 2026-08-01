@@ -64,6 +64,7 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -261,8 +262,13 @@ export async function runDbSync(
     const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
       .dialect;
     schemaRegistry = new SchemaRegistry(dialect);
-    const staticSchemas = getDialectTables(dialect);
-    schemaRegistry.registerStaticSchemas(staticSchemas);
+    // Both spellings of the field-group registry: the schema registry keys a
+    // table by the physical name its Drizzle object carries, so a database
+    // whose storage migration has run has no handle for its registry otherwise.
+    schemaRegistry.registerStaticSchemas({
+      ...getDialectTables(dialect),
+      ...getFieldGroupRegistryAliases(dialect),
+    });
     (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry);
     logger.debug("Schema registry initialized with static tables");
   } catch (error) {
