@@ -197,8 +197,12 @@ function leafIssues(
     }
     case "number": {
       // A later state or breakpoint needs these to reset an earlier value, and
-      // they are legal wherever a value is.
-      if (typeof value === "string" && isCssWideKeyword(value)) return [];
+      // they are legal wherever a value is. Trimmed first, as the keyword,
+      // dimension and colour leaves all are: whichever leaf kind a property
+      // happens to use should not decide whether stored whitespace is fatal.
+      if (typeof value === "string" && isCssWideKeyword(value.trim())) {
+        return [];
+      }
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return [invalid(path, `${describeValue(value)} is not a number.`)];
       }

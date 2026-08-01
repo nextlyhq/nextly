@@ -1091,3 +1091,54 @@ describe("functions that belong to one kind of property", () => {
     ]);
   });
 });
+
+describe("length-producing functions beyond the four arithmetic ones", () => {
+  it("accepts a hypotenuse, which is a length when its arguments are", () => {
+    expect(codes({ width: "hypot(3px, 4px)" })).toEqual([]);
+    expect(codes({ width: "hypot(3px)" })).toEqual([]);
+    expect(codes({ width: "calc(hypot(3px, 4px) + 1px)" })).toEqual([]);
+  });
+
+  it("still holds it to having an argument", () => {
+    expect(codes({ width: "hypot()" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("grouping parentheses", () => {
+  it("are refused standing alone, where they are not value syntax", () => {
+    for (const value of ["(1px)", "((1px))", "(1px + 2px)"]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("are still accepted inside a math expression", () => {
+    expect(codes({ width: "calc((1px + 2px) * 3)" })).toEqual([]);
+    expect(codes({ width: "calc(2 * (1px + 2em))" })).toEqual([]);
+    expect(codes({ width: "min((1px + 1px), 3px)" })).toEqual([]);
+  });
+});
+
+describe("surrounding whitespace on a numeric property", () => {
+  it("does not hide a CSS-wide keyword, as it does not on other leaf kinds", () => {
+    expect(codes({ opacity: " inherit " })).toEqual([]);
+    expect(codes({ opacity: " REVERT-LAYER " })).toEqual([]);
+    expect(codes({ position: { zIndex: " inherit " } })).toEqual([]);
+  });
+
+  it("does not turn a non-keyword string into a number", () => {
+    expect(codes({ opacity: " nope " })).toEqual(["invalid-style-value"]);
+    expect(codes({ opacity: " 0.5 " })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("a math expression whose result type is not knowable here", () => {
+  it("is accepted, because refusing it would refuse valid CSS elsewhere", () => {
+    // `line-height` takes a bare number, so `calc(2)` is a real declaration on
+    // it. A rule that refused unitless arithmetic on length properties would
+    // have to know that, and being wrong about it rejects working CSS rather
+    // than merely passing a value the browser drops.
+    expect(codes({ lineHeight: "calc(2)" })).toEqual([]);
+    expect(codes({ width: "calc(2 * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(var(--x) * 2)" })).toEqual([]);
+  });
+});

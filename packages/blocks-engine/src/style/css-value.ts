@@ -194,33 +194,15 @@ const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "mod",
   "rem",
   "abs",
+  "hypot",
   "var",
   "env",
   "anchor-size",
 ]);
 
 /**
- * The subset whose arguments are an arithmetic expression, where operands and
- * operators alternate. Only these get their argument structure checked: the
- * rest produce a length by their name alone and carry their own grammars,
- * which move faster than anything knowable here. `anchor-size(--hero width)`
- * names an anchor and then an axis, so an arithmetic reading of it refuses a
- * value the browser honours.
- */
-const MATH_FUNCTIONS: ReadonlySet<string> = new Set([
-  "calc",
-  "min",
-  "max",
-  "clamp",
-  "round",
-  "mod",
-  "rem",
-  "abs",
-]);
-
-/**
- * How many comma-separated arguments each math function takes. `null` is one or
- * more, which is what `min()` and `max()` accept.
+ * The math functions, and how many comma-separated arguments each one takes.
+ * `null` is one or more, which is what `min()`, `max()` and `hypot()` accept.
  *
  * Arity is listed rather than inferred because a comma and a `+` are both
  * `Operator` nodes, and reading them as interchangeable accepts `calc(1px, 2px)`
@@ -234,12 +216,28 @@ const MATH_FUNCTION_ARITY: ReadonlyMap<string, readonly number[] | null> =
     ["abs", [1]],
     ["min", null],
     ["max", null],
+    // The square root of the sum of squares, over as many terms as given.
+    ["hypot", null],
     ["clamp", [3]],
     ["mod", [2]],
     ["rem", [2]],
     // A rounding strategy is optional, so two arguments or three.
     ["round", [2, 3]],
   ]);
+
+/**
+ * The functions whose arguments are an arithmetic expression, where operands
+ * and operators alternate. Derived from the arity map rather than listed beside
+ * it, so the two cannot disagree about which functions those are: a function
+ * missing from the map would otherwise be treated as arithmetic while having no
+ * arity to check against.
+ *
+ * Everything else produces a length by its name alone and carries a grammar of
+ * its own, which moves faster than anything knowable here.
+ * `anchor-size(--hero width)` names an anchor and then an axis, so an
+ * arithmetic reading of it refuses a value the browser honours.
+ */
+const MATH_FUNCTIONS: ReadonlySet<string> = new Set(MATH_FUNCTION_ARITY.keys());
 
 /** Split a function's children on its top-level commas. */
 function splitArguments(children: Iterable<CssNode>): CssNode[][] {
@@ -552,14 +550,9 @@ function measurementRejection(
       if (!MATH_FUNCTIONS.has(name)) return null;
       const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
       const args = splitArguments(node.children);
-      const arity = MATH_FUNCTION_ARITY.get(name);
-      // `undefined` would mean a math function with no arity recorded, which
-      // the map above covers exhaustively; `null` is the open-ended pair.
-      if (
-        arity !== undefined &&
-        arity !== null &&
-        !arity.includes(args.length)
-      ) {
+      // Present for every math function, since the set is the map's own keys.
+      const arity = MATH_FUNCTION_ARITY.get(name) ?? null;
+      if (arity !== null && !arity.includes(args.length)) {
         return "not-a-length";
       }
       for (const arg of args) {
@@ -577,8 +570,11 @@ function measurementRejection(
       return null;
     }
     case "Parentheses":
-      // An explicitly grouped term is an operand whose contents follow the same
+      // Grouping is part of math-expression syntax, not of a value: `(1px)`
+      // standing alone is discarded by the browser, while inside a function an
+      // explicitly grouped term is an operand whose contents follow the same
       // rules, so `calc((1px + 2px) * 3)` is a length like its ungrouped form.
+      if (!insideFunction) return "not-a-length";
       return alternationRejection([...node.children], keywords, limits);
     default:
       return "not-a-length";
