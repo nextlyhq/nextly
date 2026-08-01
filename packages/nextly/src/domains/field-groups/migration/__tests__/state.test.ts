@@ -724,10 +724,12 @@ describe("field-group migration marker", () => {
     }
   });
 
-  // A settled version 3 marker is still accepted: version 4 adds a check over
-  // the storage a version 3 run produced rather than more rewriting, so refusing
-  // it would strand a complete installation with no way forward.
-  it("still accepts a settled marker from that build", async () => {
+  // A settled marker is READ whatever wrote it, including one this build will go
+  // on to refuse as incomplete. The two questions are deliberately separate: the
+  // read layer reports what the marker says and hands over its version, and the
+  // run decides what that version is worth. Collapsing them would strip the
+  // recorded rollback plan from markers a later build could still reverse.
+  it("still reads a settled marker from that build, version and all", async () => {
     const { meta } = createMeta({
       version: 3,
       status: "settled",
@@ -736,6 +738,7 @@ describe("field-group migration marker", () => {
 
     const state = await readMigrationState(meta);
     expect(state.status).toBe("settled");
+    expect((state as { version?: number }).version).toBe(3);
   });
 
   it("refuses a marker written by a different version of Nextly", async () => {
