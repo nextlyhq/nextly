@@ -162,6 +162,10 @@ export async function runMigrateResolve(
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
         introspectLive: async () => {
           const live = await safeListTables(adapter);
+          // Managed main tables only. A localized companion is
+          // migration-owned and never appears in a `migrate:create` snapshot,
+          // so including one here can never match the file this is compared
+          // against and the equivalence check refuses the command.
           const managed = live.filter(isSnapshotComparableTable);
           return introspectLiveSnapshot(db, dialect, managed);
         },

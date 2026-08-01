@@ -643,6 +643,9 @@ export async function runFileMigrations(args: {
     // Capturing it once before the loop left it empty on a fresh DB, so the
     // 2nd+ migration saw its tables as "absent" and aborted with false drift.
     const liveTables = await safeListTables(adapter);
+    // Managed main tables only, for the same reason `migrate:resolve` uses
+    // this predicate: a localized companion never appears in the snapshot this
+    // is diffed against, so including one reports drift that is not there.
     const managed = liveTables.filter(isSnapshotComparableTable);
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
