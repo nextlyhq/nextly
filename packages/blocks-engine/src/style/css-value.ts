@@ -222,9 +222,9 @@ const MATH_FUNCTION_ARITY: ReadonlyMap<string, readonly number[] | null> =
     ["clamp", [3]],
     ["mod", [2]],
     ["rem", [2]],
-    // The strategy is optional and so is the interval, so anywhere from one
-    // argument to three.
-    ["round", [1, 2, 3]],
+    // A value to round and an optional interval. The strategy is stripped
+    // before this is consulted, so it is not counted here.
+    ["round", [1, 2]],
   ]);
 
 /**
@@ -317,6 +317,39 @@ export function trimCssWhitespace(value: string): string {
 export function splitCssWhitespace(value: string): string[] {
   const trimmed = trimCssWhitespace(value);
   return trimmed === "" ? [] : trimmed.split(CSS_WHITESPACE);
+}
+
+/** One CSS escape: a hex sequence with its optional terminator, or a literal. */
+const CSS_ESCAPE = /^\\(?:[0-9a-fA-F]{1,6}(?:\r\n|[ \t\r\n\f])?|[\s\S])/;
+
+/**
+ * Split a value into the tokens CSS reads, leaving escapes intact.
+ *
+ * Decoding before splitting turns an escaped space into a separator, so
+ * `hidden\ auto` reads as two keywords when it is one identifier containing a
+ * space — a value the browser discards. Splitting first and decoding each token
+ * keeps the boundary where CSS puts it.
+ */
+export function splitCssTokens(value: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\\") {
+      const escape = CSS_ESCAPE.exec(value.slice(index))?.[0] ?? "\\";
+      current += escape;
+      index += escape.length - 1;
+      continue;
+    }
+    if (character !== undefined && " \t\r\n\f".includes(character)) {
+      if (current !== "") tokens.push(current);
+      current = "";
+      continue;
+    }
+    current += character ?? "";
+  }
+  if (current !== "") tokens.push(current);
+  return tokens;
 }
 
 /**
@@ -954,7 +987,7 @@ function measurementRejection(
       const operands = strategy ? args.slice(1) : args;
       // Present for every math function, since the set is the map's own keys.
       const arity = MATH_FUNCTION_ARITY.get(name) ?? null;
-      if (arity !== null && !arity.includes(args.length)) {
+      if (arity !== null && !arity.includes(operands.length)) {
         return "not-a-length";
       }
       for (const arg of operands) {

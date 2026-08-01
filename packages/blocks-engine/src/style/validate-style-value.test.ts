@@ -2155,3 +2155,62 @@ describe("values only these vocabularies can express", () => {
     expect(codes({ textAlign: "justify" })).toEqual([]);
   });
 });
+
+describe("how many operands a rounding call takes", () => {
+  it("refuses a third operand where no strategy was given", () => {
+    // The strategy is what makes three arguments legal, so without one the
+    // third is an operand CSS does not accept.
+    expect(codes({ width: "round(1px, 2px, 3px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "round(up, 1px, 2px, 3px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("accepts every form that really has one or two operands", () => {
+    for (const value of [
+      "round(1px)",
+      "round(10px, 1px)",
+      "round(up, 10px)",
+      "round(up, 10px, 1px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("whitespace written as an escape", () => {
+  it("stays inside its identifier rather than separating two", () => {
+    // `hidden\ auto` is one identifier containing a space, which is not a
+    // keyword; splitting the decoded text would read it as two that are.
+    expect(codes({ overflow: "hidden\\ auto" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ background: { repeat: "repeat\\ no-repeat" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("leaves real whitespace separating tokens", () => {
+    expect(codes({ overflow: "hidden auto" })).toEqual([]);
+    expect(codes({ background: { repeat: "repeat no-repeat" } })).toEqual([]);
+    expect(codes({ gridAutoFlow: "row dense" })).toEqual([]);
+    expect(codes({ textTransform: "uppercase full-width" })).toEqual([]);
+  });
+
+  it("still decodes an escape that is not whitespace", () => {
+    expect(codes({ display: "bl\\6f ck" })).toEqual([]);
+  });
+});
+
+describe("a url leaf's keywords spelled with escapes", () => {
+  it("are the keywords CSS reads", () => {
+    expect(codes({ background: { url: "n\\6f ne" } })).toEqual([]);
+    expect(codes({ background: { url: "in\\68 erit" } })).toEqual([]);
+  });
+
+  it("leaves an ordinary path a path", () => {
+    expect(codes({ background: { url: "a.png" } })).toEqual([]);
+  });
+});

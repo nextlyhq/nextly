@@ -23,7 +23,7 @@ import {
   decodeIdentifier,
   isCssWideKeyword,
   isOverlongValue,
-  splitCssWhitespace,
+  splitCssTokens,
   trimCssWhitespace,
 } from "./css-value";
 import type { CssValueRejection } from "./css-value";
@@ -189,9 +189,11 @@ function leafIssues(
         // string match a short keyword, and every copy made along the way is
         // work bought with a value that should never have been read.
         if (isOverlongValue(value)) return rejected(path, value, "too-long");
-        // Decoded first: an escape is how a stored value spells a character,
-        // and `bl\6f ck` is the identifier `block` to everything downstream.
-        const parts = splitCssWhitespace(asciiLower(decodeIdentifier(value)));
+        // Split before decoding: an escape can spell a space, and that space
+        // belongs INSIDE its identifier rather than separating two of them.
+        const parts = splitCssTokens(value).map(token =>
+          asciiLower(decodeIdentifier(token))
+        );
         // Collapsed rather than compared raw, so that a vocabulary entry
         // written as two words — `grid-auto-flow: row dense` is one value, not
         // two — still matches however the stored string was spaced.
@@ -292,7 +294,7 @@ function leafIssues(
       // A keyword stands in for the whole URL, so it is matched before the URL
       // rules rather than beside them: a value the property accepts as a
       // keyword is not a path and must not be judged as one.
-      const written = asciiLower(trimCssWhitespace(value));
+      const written = asciiLower(decodeIdentifier(trimCssWhitespace(value)));
       const keywords = leaf.keywords ?? [];
       if (
         isCssWideKeyword(written) ||
