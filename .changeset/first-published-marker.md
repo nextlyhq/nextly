@@ -1,5 +1,4 @@
 ---
-
 "nextly": patch
 "create-nextly-app": patch
 "@nextlyhq/admin": patch
@@ -20,7 +19,8 @@
 "@nextlyhq/eslint-config": patch
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
-"@nextlyhq/tsconfig": patch---
+"@nextlyhq/tsconfig": patch
+---
 
 Collections with Draft/Published now record when an entry first went live, in a new `firstPublishedAt` timestamp.
 
