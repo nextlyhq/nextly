@@ -346,6 +346,24 @@ describe("where a first-time config hook goes", () => {
     expect(ownersOf(registry)).toEqual(["app", "plugin:seo", "code"]);
   });
 
+  it("ignores a pre-boot entry that has since been unregistered", () => {
+    // The boundary cannot be a count. An app hook registered before boot and
+    // later removed would still be counted as preceding the config, so a
+    // first-time config handler would land behind whatever was registered
+    // after boot -- while a restart, where the removed hook never exists, puts
+    // the config first.
+    const registry = new HookRegistry();
+    const early: HookHandler = c => c.data;
+    registry.register("afterRead", SLUG, early, "app");
+    registry.markConfigRegistrationPoint();
+    registry.unregister("afterRead", SLUG, early, "app");
+    registry.register("afterRead", SLUG, c => c.data, "app");
+
+    registry.replaceCollectionOwnedBy(SLUG, "code", config());
+
+    expect(ownersOf(registry)).toEqual(["code", "app"]);
+  });
+
   it("appends any owner other than the config", () => {
     // The plugin anchor is the CONFIG's, because boot is what puts the config
     // there. Nothing fixes where a first-time app or plugin registration goes,
