@@ -37,3 +37,10 @@ config reload) and any registered imperatively through `registerHook()` (nothing
 re-runs those at all). Unregistering is likewise scoped to the caller's own
 registrations, so a plugin removing a handler it shares with the config no
 longer removes the config's instead.
+
+A save that changes a hook and a schema at once is handled as one unit: when the
+schema change is refused, the previous hooks come back with the previous schema,
+so a handler written against a field the refused edit added is never left running
+against a database that does not have it. Switching a plugin to `enabled: false`
+now also stops the hooks its collections and singles declared, instead of leaving
+them running until the next restart.
