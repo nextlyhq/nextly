@@ -990,3 +990,104 @@ describe("an unbounded key from the document", () => {
     expect(check({ nope: "1px" })[0]?.path).toBe("/styles/nope");
   });
 });
+
+describe("escaped and quoted brackets in the nesting count", () => {
+  it("refuses a value whose real depth hides behind escaped closers", () => {
+    // An escaped `)` closes nothing, so counting it as a closer undercounts the
+    // depth and lets a value through that then exhausts the stack while being
+    // walked. Refusing is the point; not throwing is the larger point.
+    const hidden = `${"f(\\)".repeat(1500)}1${")".repeat(1500)}`;
+    expect(hidden.length).toBeLessThan(8192);
+    expect(checkCssValue(hidden)).toBe("too-deeply-nested");
+    expect(codes({ backgroundGradient: hidden })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("does not count brackets inside a quoted string as nesting", () => {
+    // Past the depth cap on a raw count, so this passes only because the
+    // brackets are recognised as text rather than as nesting.
+    const quoted = `url("a${"(".repeat(40)}b")`;
+    expect(checkCssValue(quoted)).toBeNull();
+  });
+
+  it("still refuses genuinely deep nesting", () => {
+    const deep = `${"calc(".repeat(40)}1px${")".repeat(40)}`;
+    expect(checkCssValue(deep)).toBe("too-deeply-nested");
+  });
+});
+
+describe("how many arguments a math function takes", () => {
+  it("refuses a count or separator the function does not accept", () => {
+    for (const value of [
+      "calc(1px, 2px)",
+      "clamp(1px)",
+      "clamp(1px, 2px)",
+      "abs(1px, 2px)",
+      "mod(1px)",
+      "round(1px)",
+      "min()",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("accepts every arity those functions really have", () => {
+    for (const value of [
+      "clamp(1rem, 2vw, 3rem)",
+      "min(1px)",
+      "min(1px, 2px, 3px)",
+      "max(1px,2px)",
+      "abs(1px)",
+      "mod(4px, 3px)",
+      "rem(4px, 3px)",
+      "round(up, 10px, 1px)",
+      "round(10px, 1px)",
+      "calc(1px + 2px)",
+      "calc((1px + 2px) * 3)",
+      "clamp(1rem, calc(1vw + 1px), 3rem)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("surrounding whitespace on a keyword value", () => {
+  it("is accepted, as it already is on a length or a color", () => {
+    expect(codes({ display: " block " })).toEqual([]);
+    expect(codes({ gridAutoFlow: " row dense " })).toEqual([]);
+    expect(codes({ textAlign: " start " })).toEqual([]);
+    expect(codes({ display: "inherit " })).toEqual([]);
+  });
+
+  it("does not turn whitespace alone into a value", () => {
+    expect(codes({ display: "   " })).toEqual(["invalid-style-value"]);
+    expect(codes({ display: " nope " })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("functions that belong to one kind of property", () => {
+  it("accepts a sizing function on the properties that take a size", () => {
+    for (const property of [
+      "width",
+      "height",
+      "minWidth",
+      "minHeight",
+      "maxWidth",
+      "maxHeight",
+    ]) {
+      expect(codes({ [property]: "fit-content(10px)" }), property).toEqual([]);
+    }
+  });
+
+  it("refuses it where a browser would discard the declaration", () => {
+    for (const property of ["gap", "borderRadius", "fontSize", "lineHeight"]) {
+      expect(codes({ [property]: "fit-content(10px)" }), property).toEqual([
+        "invalid-style-value",
+      ]);
+    }
+    expect(codes({ padding: { blockStart: "fit-content(10px)" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});

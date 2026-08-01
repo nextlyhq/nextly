@@ -128,6 +128,13 @@ export interface DimensionLeaf extends StyleLeafBase {
   allowNegative?: boolean;
   /** Whether a percentage resolves against anything for this property. */
   allowPercentage?: boolean;
+  /**
+   * Functions this property accepts beyond the ones legal wherever a length
+   * is. Declared per property for the same reason the keywords are: a sizing
+   * function such as `fit-content()` is a width, not a length, so a browser
+   * honours it on `width` and discards it on `gap` or a corner radius.
+   */
+  functions?: readonly string[];
 }
 
 /** A unitless number, optionally bounded. */

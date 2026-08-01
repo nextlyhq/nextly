@@ -180,6 +180,10 @@ const LENGTH_UNITS: ReadonlySet<string> = new Set([
  * width. `sign()` is deliberately absent — it always yields a number, whatever
  * it is given. `var()` and `env()` are included because what they resolve to is
  * not knowable here, and refusing them would break token references.
+ *
+ * A function legal on only some properties is not listed here but declared by
+ * the catalog entry, exactly as a keyword is: `fit-content()` is a size, so a
+ * browser honours it on `width` and discards it on `gap`.
  */
 const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "calc",
@@ -192,7 +196,6 @@ const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "abs",
   "var",
   "env",
-  "fit-content",
   "anchor-size",
 ]);
 
@@ -214,6 +217,45 @@ const MATH_FUNCTIONS: ReadonlySet<string> = new Set([
   "rem",
   "abs",
 ]);
+
+/**
+ * How many comma-separated arguments each math function takes. `null` is one or
+ * more, which is what `min()` and `max()` accept.
+ *
+ * Arity is listed rather than inferred because a comma and a `+` are both
+ * `Operator` nodes, and reading them as interchangeable accepts `calc(1px, 2px)`
+ * and `clamp(1px)` — declarations a browser discards. This is a narrow enough
+ * fact to state: the arity of the math functions is settled, unlike the
+ * argument grammars the module deliberately declines to model.
+ */
+const MATH_FUNCTION_ARITY: ReadonlyMap<string, readonly number[] | null> =
+  new Map([
+    ["calc", [1]],
+    ["abs", [1]],
+    ["min", null],
+    ["max", null],
+    ["clamp", [3]],
+    ["mod", [2]],
+    ["rem", [2]],
+    // A rounding strategy is optional, so two arguments or three.
+    ["round", [2, 3]],
+  ]);
+
+/** Split a function's children on its top-level commas. */
+function splitArguments(children: Iterable<CssNode>): CssNode[][] {
+  const args: CssNode[][] = [[]];
+  for (const child of children) {
+    // Only a comma separates arguments. An arithmetic operator carries its
+    // surrounding whitespace in the same node, which is why this compares the
+    // trimmed text rather than the raw value.
+    if (child.type === "Operator" && child.value.trim() === ",") {
+      args.push([]);
+      continue;
+    }
+    args[args.length - 1]?.push(child);
+  }
+  return args;
+}
 
 /** True when a value is one of the keywords legal on every CSS property. */
 export function isCssWideKeyword(value: string): boolean {
@@ -258,8 +300,24 @@ const URL_STRING_FUNCTIONS: ReadonlySet<string> = new Set([
   "src",
 ]);
 
-/** The first refused URL anywhere in a parsed value, or `null`. */
+/**
+ * The first refused URL anywhere in a parsed value, or `null`.
+ *
+ * The walk is recursive, so it is wrapped: the depth cap ahead of it is what
+ * keeps the recursion bounded, and if a value ever gets past that cap the
+ * honest answer is to refuse it rather than let an exception escape a
+ * validator. Failing closed costs a value that was already at the limit; the
+ * alternative turns a document write into a server error.
+ */
 function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
+  try {
+    return walkForUrlRejection(ast);
+  } catch {
+    return "too-deeply-nested";
+  }
+}
+
+function walkForUrlRejection(ast: CssNode): CssValueRejection | null {
   let rejection: CssValueRejection | null = null;
   walk(ast, {
     enter(node: CssNode) {
@@ -297,11 +355,36 @@ const MAX_VALUE_NESTING = 32;
  */
 const MAX_VALUE_LENGTH = 8192;
 
-/** Deepest bracket nesting in a value. */
+/**
+ * Deepest bracket nesting in a value.
+ *
+ * Counted the way the parser reads the text, not by tallying raw characters. A
+ * backslash escapes whatever follows it, so `\)` is an ordinary character
+ * inside an identifier and closes nothing; a bracket inside a quoted string is
+ * likewise just text. A counter blind to either reads a closer that is not
+ * there, undercounts the depth, and lets a value through that then exhausts the
+ * stack while being walked — which is a crash rather than a rejection, on
+ * input a stranger can write.
+ */
 function nestingDepth(value: string): number {
   let depth = 0;
   let deepest = 0;
-  for (const character of value) {
+  let quote: string | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\\") {
+      // Skip the escaped character itself, whatever it is.
+      index += 1;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
     // Square brackets nest the parser and walker exactly as parentheses do —
     // counting only one of them leaves the other free to exhaust the stack.
     if (character === "(" || character === "[") {
@@ -353,6 +436,8 @@ export interface DimensionRules {
   allowNegative?: boolean;
   /** Whether a percentage resolves against anything for this property. */
   allowPercentage?: boolean;
+  /** Functions this property accepts beyond the universally legal ones. */
+  functions?: readonly string[];
 }
 
 export function checkDimensionValue(
@@ -364,12 +449,16 @@ export function checkDimensionValue(
     maxParts = 1,
     allowNegative = false,
     allowPercentage = false,
+    functions = [],
   } = rules;
   const rejection = checkCssValue(value);
   if (rejection !== null) return rejection;
   const ast = parseValue(value);
   if (ast === null || ast.type !== "Value") return "not-a-length";
   const allowed = new Set(keywords.map(keyword => keyword.toLowerCase()));
+  const allowedFunctions = new Set(
+    functions.map(fnName => fnName.toLowerCase())
+  );
   let parts = 0;
   let cssWideKeyword = false;
   for (const child of ast.children) {
@@ -380,6 +469,7 @@ export function checkDimensionValue(
     const childRejection = measurementRejection(child, false, allowed, {
       allowNegative,
       allowPercentage,
+      functions: allowedFunctions,
     });
     if (childRejection !== null) return childRejection;
     if (child.type === "Identifier" && isCssWideKeyword(child.name)) {
@@ -402,11 +492,18 @@ export function checkDimensionValue(
  * bare-number rule, because a plain number is a legal multiplier inside a math
  * function (`calc(2 * 1px)`) while meaning nothing on its own.
  */
+interface MeasurementLimits {
+  allowNegative: boolean;
+  allowPercentage: boolean;
+  /** Functions the property accepts beyond the universally legal ones. */
+  functions?: ReadonlySet<string>;
+}
+
 function measurementRejection(
   node: CssNode,
   insideFunction: boolean,
   keywords: ReadonlySet<string>,
-  limits: { allowNegative: boolean; allowPercentage: boolean } = {
+  limits: MeasurementLimits = {
     allowNegative: true,
     allowPercentage: true,
   }
@@ -440,7 +537,12 @@ function measurementRejection(
       return null;
     case "Function": {
       const name = node.name.toLowerCase();
-      if (!DIMENSION_FUNCTIONS.has(name)) return "not-a-length";
+      if (
+        !DIMENSION_FUNCTIONS.has(name) &&
+        limits.functions?.has(name) !== true
+      ) {
+        return "not-a-length";
+      }
       // Outside the math functions the name is the whole signal. What `var()`
       // and `env()` resolve to is not knowable here and their arguments carry
       // an arbitrary fallback; `anchor-size()` and `fit-content()` have
@@ -449,34 +551,48 @@ function measurementRejection(
       // dangerous were already refused for the value as a whole.
       if (!MATH_FUNCTIONS.has(name)) return null;
       const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
-      // Operands and operators must alternate, starting and ending on an
-      // operand. css-tree will happily build a tree for `calc(1px,)`,
-      // `calc(/ 1px)`, `calc(1px 2px)` and `calc()`; a browser discards them
-      // all. A lone argument such as `abs(1px)` is valid alternation.
-      const terms = [...node.children];
-      for (let index = 0; index < terms.length; index += 1) {
-        const expectingOperator = index % 2 === 1;
-        if ((terms[index]?.type === "Operator") !== expectingOperator) {
-          return "not-a-length";
-        }
+      const args = splitArguments(node.children);
+      const arity = MATH_FUNCTION_ARITY.get(name);
+      // `undefined` would mean a math function with no arity recorded, which
+      // the map above covers exhaustively; `null` is the open-ended pair.
+      if (
+        arity !== undefined &&
+        arity !== null &&
+        !arity.includes(args.length)
+      ) {
+        return "not-a-length";
       }
-      // An even count means either an empty function or a trailing operator.
-      if (terms.length % 2 === 0) return "not-a-length";
-      for (const child of node.children) {
-        // Inside a math function the sign of any one term says nothing about
-        // the sign of the result, so the non-negative rule does not apply. The
-        // property's keywords are dropped: `auto` is a whole value, not an
-        // operand, and `calc(auto)` is discarded by the browser.
-        const childRejection = measurementRejection(
-          child,
-          true,
-          ownIdentifiers,
-          {
-            allowNegative: true,
-            allowPercentage: limits.allowPercentage,
+      for (const arg of args) {
+        // Within one argument, operands and operators alternate, starting and
+        // ending on an operand. css-tree will happily build a tree for
+        // `calc(1px,)`, `calc(/ 1px)`, `calc(1px 2px)` and `calc()`; a browser
+        // discards them all. An even count is an empty argument or a trailing
+        // operator, and a lone operand such as `abs(1px)` is valid alternation.
+        if (arg.length === 0 || arg.length % 2 === 0) return "not-a-length";
+        for (let index = 0; index < arg.length; index += 1) {
+          const expectingOperator = index % 2 === 1;
+          const term = arg[index];
+          if (term === undefined) return "not-a-length";
+          if ((term.type === "Operator") !== expectingOperator) {
+            return "not-a-length";
           }
-        );
-        if (childRejection !== null) return childRejection;
+          if (expectingOperator) continue;
+          // Inside a math function the sign of any one term says nothing about
+          // the sign of the result, so the non-negative rule does not apply.
+          // The property's keywords are dropped: `auto` is a whole value, not
+          // an operand, and `calc(auto)` is discarded by the browser.
+          const childRejection = measurementRejection(
+            term,
+            true,
+            ownIdentifiers,
+            {
+              allowNegative: true,
+              allowPercentage: limits.allowPercentage,
+              functions: limits.functions,
+            }
+          );
+          if (childRejection !== null) return childRejection;
+        }
       }
       return null;
     }

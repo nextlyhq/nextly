@@ -37,6 +37,7 @@ interface DimensionOptions {
   maxParts?: number;
   allowNegative?: boolean;
   allowPercentage?: boolean;
+  functions?: readonly string[];
 }
 
 function dimension(
@@ -51,8 +52,16 @@ function dimension(
     maxParts: options.maxParts ?? 1,
     allowNegative: options.allowNegative ?? false,
     allowPercentage: options.allowPercentage ?? false,
+    functions: options.functions ?? [],
   };
 }
+
+/**
+ * Functions that produce a size rather than a length. Legal on the properties
+ * that take a size and discarded elsewhere, which is why they travel with the
+ * sizing keywords instead of being allowed wherever a measurement is.
+ */
+const SIZING_FUNCTIONS = ["fit-content"];
 
 /** Keyword sets shared by several length-valued properties. */
 const SIZING_KEYWORDS = [
@@ -317,6 +326,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "dimensions",
     shape: dimension("width", {
       keywords: SIZING_KEYWORDS,
+      functions: SIZING_FUNCTIONS,
       allowPercentage: true,
     }),
     summary: "Element width.",
@@ -326,6 +336,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "dimensions",
     shape: dimension("height", {
       keywords: SIZING_KEYWORDS,
+      functions: SIZING_FUNCTIONS,
       allowPercentage: true,
     }),
     summary: "Element height.",
@@ -335,6 +346,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "dimensions",
     shape: dimension("min-width", {
       keywords: SIZING_KEYWORDS,
+      functions: SIZING_FUNCTIONS,
       allowPercentage: true,
     }),
     summary: "Lower bound on width.",
@@ -344,6 +356,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "dimensions",
     shape: dimension("min-height", {
       keywords: SIZING_KEYWORDS,
+      functions: SIZING_FUNCTIONS,
       allowPercentage: true,
     }),
     summary: "Lower bound on height.",
@@ -353,6 +366,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "dimensions",
     shape: dimension("max-width", {
       keywords: MAX_SIZING_KEYWORDS,
+      functions: SIZING_FUNCTIONS,
       allowPercentage: true,
     }),
     summary: "Upper bound on width.",
@@ -362,6 +376,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "dimensions",
     shape: dimension("max-height", {
       keywords: MAX_SIZING_KEYWORDS,
+      functions: SIZING_FUNCTIONS,
       allowPercentage: true,
     }),
     summary: "Upper bound on height.",

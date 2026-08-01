@@ -173,12 +173,16 @@ function leafIssues(
       // The CSS-wide keywords are legal wherever a value is, so a keyword leaf
       // accepts them alongside its own vocabulary, as lengths and colors do.
       // CSS keywords are ASCII case-insensitive, so a document storing
-      // "Start" is valid and must not fail where "start" passes.
+      // "Start" is valid and must not fail where "start" passes. Surrounding
+      // whitespace goes the same way: a length or a color carrying it is
+      // accepted, because parsing discards it, and the declaration a keyword
+      // emits is just as valid — refusing it here would be this leaf kind
+      // alone being strict about something no other one minds.
       if (typeof value === "string") {
-        const written = value.toLowerCase();
+        const written = value.trim().toLowerCase();
         if (
           leaf.values.some(allowed => allowed.toLowerCase() === written) ||
-          isCssWideKeyword(value)
+          isCssWideKeyword(written)
         ) {
           return [];
         }
@@ -228,6 +232,7 @@ function leafIssues(
         maxParts: leaf.maxParts,
         allowNegative: leaf.allowNegative,
         allowPercentage: leaf.allowPercentage,
+        functions: leaf.functions,
       });
       return rejection === null ? [] : rejected(path, value, rejection);
     }
