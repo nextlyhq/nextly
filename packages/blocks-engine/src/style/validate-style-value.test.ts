@@ -1404,3 +1404,26 @@ describe("a dimension taken from an attribute", () => {
     expect(codes({ width: "attr(data-width px)" })).toEqual([]);
   });
 });
+
+describe("alignment keywords that resolve against the flex direction", () => {
+  it("are accepted, being direction-relative rather than physical", () => {
+    for (const property of ["justifyContent", "alignItems", "alignContent"]) {
+      for (const value of ["flex-start", "flex-end"]) {
+        expect(codes({ [property]: value }), `${property}: ${value}`).toEqual(
+          []
+        );
+      }
+    }
+  });
+
+  it("does not admit the physical ones alongside them", () => {
+    for (const property of ["justifyContent", "alignItems", "alignContent"]) {
+      expect(codes({ [property]: "left" }), property).toEqual([
+        "invalid-style-value",
+      ]);
+      expect(codes({ [property]: "right" }), property).toEqual([
+        "invalid-style-value",
+      ]);
+    }
+  });
+});

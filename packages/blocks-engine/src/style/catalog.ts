@@ -246,6 +246,10 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "start",
       "center",
       "end",
+      // Flex-relative rather than physical: these resolve against
+      // `flex-direction` and flip with it, which `left` and `right` do not.
+      "flex-start",
+      "flex-end",
       "space-between",
       "space-around",
       "space-evenly",
@@ -260,6 +264,8 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "start",
       "center",
       "end",
+      "flex-start",
+      "flex-end",
       "stretch",
       "baseline",
     ]),
@@ -272,6 +278,8 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "start",
       "center",
       "end",
+      "flex-start",
+      "flex-end",
       "space-between",
       "space-around",
       "space-evenly",

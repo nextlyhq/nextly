@@ -1050,3 +1050,29 @@ describe("style keys inherited from a prototype", () => {
     ).toEqual([]);
   });
 });
+
+describe("a malformed styles field is charged to the budget", () => {
+  it("bounds a document where every node has a non-object styles", () => {
+    // One issue per node is bounded only by the node count, and the cap is
+    // document-wide; without charging it a large forest reports thousands of
+    // style issues and never says it stopped.
+    const nodes = Array.from({ length: 500 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: "not an object",
+    }));
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }
+    );
+    expect(issues.length).toBeLessThan(300);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});

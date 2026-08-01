@@ -768,12 +768,20 @@ function validateStyleEnvelope(
   state: NodeCheckState
 ): void {
   if (!isPlainObject(styles)) {
+    // Charged like every other style issue, and checked first: one per node
+    // sounds bounded until a document carries thousands of nodes, and the cap
+    // is document-wide rather than per node.
+    if (state.styleBudget.remaining <= 0) {
+      state.issues.push(...styleBudgetExhausted(state, stylesPath));
+      return;
+    }
     state.issues.push({
       path: stylesPath,
       code: "invalid-style-values",
       severity: "error",
       message: "A styles field must be an object.",
     });
+    state.styleBudget.remaining -= 1;
     return;
   }
   // Enumerated lazily: `Object.entries` would build a pair for every state name
