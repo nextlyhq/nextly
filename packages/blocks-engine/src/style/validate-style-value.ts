@@ -436,7 +436,8 @@ export function validateStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
   mode: ValidationMode,
-  budget?: StyleIssueBudget
+  budget?: StyleIssueBudget,
+  skipValueParsing = false
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   // Lazily enumerated for the same reason the composite walk is: a style map
@@ -466,7 +467,12 @@ export function validateStyleValues(
       if (budget !== undefined) budget.remaining -= issues.length - before;
       continue;
     }
-    issues.push(...shapeIssues(entry.shape, value, path, budget));
+    // A document that already failed the byte cap is rejected whatever its
+    // values say, and parsing each one builds an AST apiece. The property is
+    // still recognised, which is cheap; reading its value is not.
+    if (!skipValueParsing) {
+      issues.push(...shapeIssues(entry.shape, value, path, budget));
+    }
     if (budget !== undefined) budget.remaining -= issues.length - before;
   }
   return issues;

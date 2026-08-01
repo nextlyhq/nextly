@@ -1239,3 +1239,81 @@ describe("what the budget stops, and what it lets through", () => {
     );
   });
 });
+
+describe("a document past the byte cap stops paying to read its values", () => {
+  function styledNodes(count: number, terms: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: {
+        base: {
+          base: {
+            fontFamily: Array.from({ length: terms }, (_, t) => `f${t}`).join(
+              ", "
+            ),
+          },
+        },
+      },
+    }));
+  }
+
+  it("reports the size and stops parsing every value", () => {
+    // The document is rejected whatever those values say, and parsing each one
+    // builds an AST apiece, so the byte cap would otherwise bound the document
+    // without bounding the work spent reading it.
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: styledNodes(1200, 700),
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues.some(issue => issue.code === "document-too-large")).toBe(
+      true
+    );
+  });
+
+  it("does not report on values it declined to read", () => {
+    // The trade this makes: a document past the cap is told it is too large
+    // and not also told what its values say, because reading them is the cost
+    // being avoided and the document is rejected either way.
+    const nodes = styledNodes(1200, 700);
+    const first = nodes[0];
+    if (first !== undefined) {
+      first.styles = { base: { base: { width: "red" } } };
+    }
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues.some(issue => issue.code === "document-too-large")).toBe(
+      true
+    );
+    expect(issues.map(issue => issue.code)).not.toContain(
+      "invalid-style-value"
+    );
+  });
+
+  it("still reads every value in a document within the cap", () => {
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/box",
+            version: 1,
+            props: {},
+            styles: { base: { base: { width: "red" } } },
+          },
+        ],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues.map(issue => issue.code)).toContain("invalid-style-value");
+  });
+});

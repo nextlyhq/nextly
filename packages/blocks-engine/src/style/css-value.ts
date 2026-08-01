@@ -987,6 +987,17 @@ function measurementRejection(
         }
         return null;
       }
+      if (name === "var" || name === "env") {
+        // The fallback stays unread, but the head is required: `var()` names a
+        // custom property and `env()` an environment variable, and a function
+        // missing its name produces nothing at all.
+        const head = splitArguments(node.children)[0]?.[0];
+        if (head?.type !== "Identifier") return "not-a-length";
+        if (name === "var" && !decodeIdentifier(head.name).startsWith("--")) {
+          return "not-a-length";
+        }
+        return null;
+      }
       if (!MATH_FUNCTIONS.has(name)) return null;
       const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
       const args = splitArguments(node.children);
@@ -1095,7 +1106,25 @@ function alternationRejection(
       // property at all, so this is decidable from the operands without
       // modelling what the whole expression resolves to. Asked only of
       // literals on both sides; anything computed abstains.
-      if (term.value.trim() === "*") {
+      const symbol = term.value.trim();
+      if (symbol === "+" || symbol === "-") {
+        // A length cannot be added to a number in any context, so this is
+        // decidable from the operands. A percentage counts as the length it
+        // resolves to, and anything computed abstains.
+        const before = terms[index - 1];
+        const after = terms[index + 1];
+        const asLength = (node: CssNode | undefined): string | null => {
+          if (node === undefined) return null;
+          const category = literalCategory([node]);
+          return category === "percentage" ? "length" : category;
+        };
+        const left = asLength(before);
+        const right = asLength(after);
+        if (left !== null && right !== null && left !== right) {
+          return "not-a-length";
+        }
+      }
+      if (symbol === "*") {
         const before = terms[index - 1];
         const after = terms[index + 1];
         const left = before === undefined ? null : literalCategory([before]);

@@ -204,7 +204,11 @@ export function validate(
     return issues;
   }
 
+  const beforeLimits = issues.length;
   checkLimits(doc, limits, issues);
+  const oversized = issues
+    .slice(beforeLimits)
+    .some(issue => issue.code === "document-too-large");
 
   const nodeState: NodeCheckState = {
     ctx,
@@ -213,6 +217,7 @@ export function validate(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
+    skipValueParsing: oversized,
     styleBudget: newStyleIssueBudget(),
   };
 
@@ -491,6 +496,14 @@ interface NodeCheckState {
   seenDomIds: Map<string, string>;
   /** Shared across the whole document, so the limit is not per node. */
   styleBudget: StyleIssueBudget;
+  /**
+   * Set when the document already failed the byte cap. Its style values are
+   * still walked for shape, which is cheap, but not PARSED: parsing every
+   * value builds an AST apiece, and a document this size is rejected whatever
+   * those values turn out to be, so the byte cap would otherwise bound the
+   * document without bounding the work spent reading it.
+   */
+  skipValueParsing: boolean;
 }
 
 function validateNode(
@@ -899,7 +912,8 @@ function validateStyleEnvelope(
           values,
           bpPath,
           state.ctx.mode,
-          state.styleBudget
+          state.styleBudget,
+          state.skipValueParsing
         )
       );
     }

@@ -2372,3 +2372,34 @@ describe("a block-level ruby box", () => {
     expect(codes({ display: "ruby" })).toEqual([]);
   });
 });
+
+describe("addition relates two quantities of the same kind", () => {
+  it("refuses a length added to or subtracted from a number", () => {
+    for (const value of ["calc(1px + 2)", "calc(1px - 2)", "calc(2 + 1px)"]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("accepts a percentage, which resolves to the length", () => {
+    expect(codes({ width: "calc(1px + 50%)" })).toEqual([]);
+    expect(codes({ width: "calc(1px - 2em)" })).toEqual([]);
+  });
+
+  it("asks nothing of operands it cannot read", () => {
+    expect(codes({ width: "calc(1px + var(--x))" })).toEqual([]);
+    expect(codes({ width: "calc((1px + 2px) * 3)" })).toEqual([]);
+  });
+});
+
+describe("a deferred value still needs its name", () => {
+  it("refuses one whose head is missing or not a name", () => {
+    expect(codes({ width: "var(red)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "env()" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("leaves the well-formed ones unread beyond the head", () => {
+    expect(codes({ width: "var(--x)" })).toEqual([]);
+    expect(codes({ width: "var(--x, 1px)" })).toEqual([]);
+    expect(codes({ width: "env(safe-area-inset-top)" })).toEqual([]);
+  });
+});
