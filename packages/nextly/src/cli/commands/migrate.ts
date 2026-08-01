@@ -55,9 +55,8 @@ import {
   forceUnlock,
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
-import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { isSnapshotComparableTable } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
-import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -644,14 +643,7 @@ export async function runFileMigrations(args: {
     // Capturing it once before the loop left it empty on a fresh DB, so the
     // 2nd+ migration saw its tables as "absent" and aborted with false drift.
     const liveTables = await safeListTables(adapter);
-    const managed = liveTables.filter(
-      t =>
-        CORE_TABLE_PREFIXES.some(p => t.startsWith(p)) &&
-        // Localized companion tables are migration-owned (Option B) and never
-        // appear in a migrate:create snapshot; excluding them here prevents a
-        // false "extraneous table" drift on snapshot-paired migrations.
-        !isCompanionTable(t)
-    );
+    const managed = liveTables.filter(isSnapshotComparableTable);
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
       file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },

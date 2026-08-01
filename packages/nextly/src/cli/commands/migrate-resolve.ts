@@ -25,8 +25,8 @@ import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import { isSnapshotComparableTable } from "../../domains/schema/pipeline/managed-tables";
 import { describeError } from "../../errors/index";
-import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -162,9 +162,7 @@ export async function runMigrateResolve(
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
         introspectLive: async () => {
           const live = await safeListTables(adapter);
-          const managed = live.filter(t =>
-            CORE_TABLE_PREFIXES.some(p => t.startsWith(p))
-          );
+          const managed = live.filter(isSnapshotComparableTable);
           return introspectLiveSnapshot(db, dialect, managed);
         },
       })

@@ -4,6 +4,7 @@ import {
   MANAGED_TABLE_PREFIXES,
   isCompanionTable,
   isManagedTable,
+  isSnapshotComparableTable,
 } from "./managed-tables";
 
 describe("isCompanionTable", () => {
@@ -58,5 +59,32 @@ describe("isManagedTable", () => {
     for (const prefix of MANAGED_TABLE_PREFIXES) {
       expect(isManagedTable(`${prefix}thing`)).toBe(true);
     }
+  });
+});
+
+/**
+ * 🔴 One predicate, because the two callers had written it twice and drifted.
+ *
+ * `nextly migrate`'s drift check excluded localized companions; `migrate:resolve
+ * --applied` did not. A companion is migration-owned and never appears in a
+ * `migrate:create` snapshot, so a live snapshot containing one can never match
+ * the file it is compared against — which made the recovery command report
+ * drift and refuse to run on any database with a localized entity.
+ */
+describe("isSnapshotComparableTable", () => {
+  it("includes managed main tables under both storage generations", () => {
+    expect(isSnapshotComparableTable("dc_pages")).toBe(true);
+    expect(isSnapshotComparableTable("comp_hero")).toBe(true);
+    expect(isSnapshotComparableTable("fg_hero")).toBe(true);
+  });
+
+  it("excludes localized companions under both storage generations", () => {
+    expect(isSnapshotComparableTable("dc_pages_locales")).toBe(false);
+    expect(isSnapshotComparableTable("comp_hero_locales")).toBe(false);
+    expect(isSnapshotComparableTable("fg_hero_locales")).toBe(false);
+  });
+
+  it("excludes tables Nextly does not manage", () => {
+    expect(isSnapshotComparableTable("users")).toBe(false);
   });
 });

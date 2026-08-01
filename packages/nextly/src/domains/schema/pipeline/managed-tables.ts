@@ -54,3 +54,17 @@ const COMPANION_TABLE_REGEX = new RegExp(
 export function isCompanionTable(name: string): boolean {
   return COMPANION_TABLE_REGEX.test(name);
 }
+
+/**
+ * Whether a live table belongs in a snapshot paired against a migration's own.
+ *
+ * 🔴 One predicate because the two callers had written it twice and drifted:
+ * `nextly migrate`'s drift check excluded localized companions, `migrate:resolve
+ * --applied` did not, so the recovery command reported drift on any database
+ * with a localized entity and refused to run. Companions are migration-owned
+ * and never appear in a `migrate:create` snapshot, so a snapshot that contains
+ * one can never match the file it is compared against.
+ */
+export function isSnapshotComparableTable(name: string): boolean {
+  return isManagedTable(name) && !isCompanionTable(name);
+}
