@@ -814,6 +814,47 @@ describe("CSS-wide keywords on numeric properties", () => {
   });
 });
 
+describe("system colors", () => {
+  it("are accepted, since forced-colors modes are expressed with them", () => {
+    for (const value of [
+      "Canvas",
+      "CanvasText",
+      "LinkText",
+      "ButtonFace",
+      "AccentColor",
+      "Highlight",
+    ]) {
+      expect(codes({ color: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("identifiers a math function's own grammar requires", () => {
+  it("are accepted for the function that defines them", () => {
+    expect(codes({ width: "round(up, 10px, 1px)" })).toEqual([]);
+    expect(codes({ width: "round(nearest, 10px, 1px)" })).toEqual([]);
+    expect(codes({ width: "anchor-size(width)" })).toEqual([]);
+  });
+
+  it("do not leak into functions that do not define them", () => {
+    expect(codes({ width: "calc(up)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "min(width, 2px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("operands and operators alternate", () => {
+  it("refuses two operands with nothing between them", () => {
+    expect(codes({ width: "calc(1px 2px)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "min(1px 2px)" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("refuses a function with no argument at all", () => {
+    expect(codes({ width: "calc()" })).toEqual(["invalid-style-value"]);
+  });
+});
+
 describe("issue codes", () => {
   it("are all declared in the shared code table", () => {
     const emitted = [

@@ -740,6 +740,28 @@ function validateStyles(
  * Shared by node styles and document-level `settings.styles`, which use the
  * same shape.
  */
+/**
+ * The truncation marker for the envelope walk, emitted once per run. It shares
+ * the budget's flag with the property walk, so a document that stops early says
+ * so exactly once, wherever it stopped.
+ */
+function styleBudgetExhausted(
+  state: NodeCheckState,
+  path: string
+): ValidationIssue[] {
+  if (state.styleBudget.truncated) return [];
+  state.styleBudget.truncated = true;
+  return [
+    {
+      path,
+      code: "style-issues-truncated",
+      severity: "error",
+      message:
+        "There are more style problems than are reported here, so the rest of this document was not checked.",
+    },
+  ];
+}
+
 function validateStyleEnvelope(
   styles: unknown,
   stylesPath: string,
@@ -755,6 +777,13 @@ function validateStyleEnvelope(
     return;
   }
   for (const [stateKey, byBreakpoint] of Object.entries(styles)) {
+    // The envelope's own keys are as unbounded as the values inside it: a
+    // document can carry a hundred thousand unknown state names. The budget
+    // therefore governs the whole style walk, not only the property level.
+    if (state.styleBudget.remaining <= 0) {
+      state.issues.push(...styleBudgetExhausted(state, stylesPath));
+      return;
+    }
     const statePath = pointer(stylesPath, stateKey);
     if (!STYLE_STATES.includes(stateKey as (typeof STYLE_STATES)[number])) {
       state.issues.push({
@@ -764,6 +793,7 @@ function validateStyleEnvelope(
         message: `"${describeValue(stateKey)}" is not a known style state.`,
         suggestion: `Use one of: ${STYLE_STATES.join(", ")}.`,
       });
+      state.styleBudget.remaining -= 1;
       continue;
     }
     if (!isPlainObject(byBreakpoint)) {
@@ -776,6 +806,10 @@ function validateStyleEnvelope(
       continue;
     }
     for (const [breakpointId, values] of Object.entries(byBreakpoint)) {
+      if (state.styleBudget.remaining <= 0) {
+        state.issues.push(...styleBudgetExhausted(state, statePath));
+        return;
+      }
       const bpPath = pointer(statePath, breakpointId);
       if (!state.knownBreakpoints.has(breakpointId)) {
         state.issues.push({
@@ -784,6 +818,7 @@ function validateStyleEnvelope(
           severity: state.unknownSeverity,
           message: `Breakpoint "${describeValue(breakpointId)}" is not defined for this site.`,
         });
+        state.styleBudget.remaining -= 1;
       }
       if (!isPlainObject(values)) {
         state.issues.push({
@@ -798,6 +833,7 @@ function validateStyleEnvelope(
       // the properties inside it have to be ones the catalog defines, holding
       // values of the shape it declares. Checking them here is what puts unsafe
       // values in front of the same gate every other document defect passes.
+      const before = state.issues.length;
       state.issues.push(
         ...validateStyleValues(
           values,
@@ -806,6 +842,7 @@ function validateStyleEnvelope(
           state.styleBudget
         )
       );
+      state.styleBudget.remaining -= state.issues.length - before;
     }
   }
 }

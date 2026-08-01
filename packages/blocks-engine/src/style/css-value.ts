@@ -191,6 +191,27 @@ export function isCssWideKeyword(value: string): boolean {
   return CSS_WIDE_KEYWORDS.has(value.toLowerCase());
 }
 
+/**
+ * Identifiers that belong to a specific function's grammar. `round(up, …)` and
+ * `anchor-size(width)` are lengths, and their keyword is an argument rather than
+ * a property value, which is why they are listed per function instead of being
+ * allowed everywhere or nowhere.
+ */
+const FUNCTION_IDENTIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["round", new Set(["up", "down", "to-zero", "nearest"])],
+  [
+    "anchor-size",
+    new Set([
+      "width",
+      "height",
+      "block",
+      "inline",
+      "self-block",
+      "self-inline",
+    ]),
+  ],
+]);
+
 /** Parse a CSS value, or `null` when it is not one. */
 function parseValue(value: string): CssNode | null {
   try {
@@ -377,9 +398,12 @@ function measurementRejection(
     case "Number":
       return insideFunction || Number(node.value) === 0 ? null : "not-a-length";
     case "Identifier": {
-      // No identifier is a legal math operand: a keyword is a complete property
-      // value, and `calc(inherit)` is discarded like `calc(auto)`.
-      if (insideFunction) return "not-a-length";
+      // Inside a function only that function's own grammar keywords are legal;
+      // a property keyword is a complete value, so `calc(auto)` and
+      // `calc(inherit)` are discarded while `round(up, 10px, 1px)` is not.
+      if (insideFunction) {
+        return keywords.has(node.name.toLowerCase()) ? null : "not-a-length";
+      }
       const name = node.name.toLowerCase();
       return CSS_WIDE_KEYWORDS.has(name) || keywords.has(name)
         ? null
@@ -394,27 +418,34 @@ function measurementRejection(
       // knowable here, and their arguments include an arbitrary fallback, so
       // their contents are not inspected.
       if (name === "var" || name === "env") return null;
-      // An operator has to separate two operands. css-tree will happily build a
-      // tree for `calc(1px,)` or `calc(/ 1px)`; the browser discards both.
+      const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
+      // Operands and operators must alternate, starting and ending on an
+      // operand. css-tree will happily build a tree for `calc(1px,)`,
+      // `calc(/ 1px)`, `calc(1px 2px)` and `calc()`; a browser discards them
+      // all. A lone argument such as `anchor-size(width)` is valid alternation.
       const terms = [...node.children];
-      const isOperator = (index: number): boolean =>
-        terms[index]?.type === "Operator";
       for (let index = 0; index < terms.length; index += 1) {
-        if (!isOperator(index)) continue;
-        const danglingEnd = index === 0 || index === terms.length - 1;
-        if (danglingEnd || isOperator(index - 1) || isOperator(index + 1)) {
+        const expectingOperator = index % 2 === 1;
+        if ((terms[index]?.type === "Operator") !== expectingOperator) {
           return "not-a-length";
         }
       }
+      // An even count means either an empty function or a trailing operator.
+      if (terms.length % 2 === 0) return "not-a-length";
       for (const child of node.children) {
         // Inside a math function the sign of any one term says nothing about
         // the sign of the result, so the non-negative rule does not apply. The
         // property's keywords are dropped: `auto` is a whole value, not an
         // operand, and `calc(auto)` is discarded by the browser.
-        const childRejection = measurementRejection(child, true, NO_KEYWORDS, {
-          allowNegative: true,
-          allowPercentage: limits.allowPercentage,
-        });
+        const childRejection = measurementRejection(
+          child,
+          true,
+          ownIdentifiers,
+          {
+            allowNegative: true,
+            allowPercentage: limits.allowPercentage,
+          }
+        );
         if (childRejection !== null) return childRejection;
       }
       return null;
@@ -457,6 +488,17 @@ const COLOR_KEYWORDS: ReadonlySet<string> = new Set(
 
 /** A hex colour: three, four, six, or eight hexadecimal digits after the `#`. */
 const HEX_COLOR = /^(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/**
+ * System colours, which resolve to the platform's own palette. They matter more
+ * than their rarity suggests: forced-colors mode and high-contrast themes are
+ * expressed with them, so refusing them would refuse the accessible option.
+ */
+const SYSTEM_COLORS: ReadonlySet<string> = new Set(
+  `accentcolor accentcolortext activetext buttonborder buttonface buttontext
+   canvas canvastext field fieldtext graytext highlight highlighttext linktext
+   mark marktext selecteditem selecteditemtext visitedtext`.split(/\s+/)
+);
 
 /** Functions that produce a colour. */
 const COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
@@ -501,8 +543,12 @@ export function checkColorValue(value: string): CssValueRejection | null {
     // the length are checked here rather than assumed.
     case "Hash":
       return HEX_COLOR.test(node.value) ? null : "not-a-color";
-    case "Identifier":
-      return COLOR_KEYWORDS.has(node.name.toLowerCase()) ? null : "not-a-color";
+    case "Identifier": {
+      const name = node.name.toLowerCase();
+      return COLOR_KEYWORDS.has(name) || SYSTEM_COLORS.has(name)
+        ? null
+        : "not-a-color";
+    }
     case "Function":
       return COLOR_FUNCTIONS.has(node.name.toLowerCase())
         ? null
