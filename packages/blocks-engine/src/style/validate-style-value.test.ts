@@ -2214,3 +2214,59 @@ describe("a url leaf's keywords spelled with escapes", () => {
     expect(codes({ background: { url: "a.png" } })).toEqual([]);
   });
 });
+
+describe("identifiers read as CSS reads them, wherever they appear", () => {
+  it("sees an escaped CSS-wide keyword beside another value", () => {
+    expect(codes({ gap: "in\\68 erit 1px" })).toEqual(["invalid-style-value"]);
+    expect(codes({ gap: "1px un\\73 et" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("still accepts one standing alone, however spelled", () => {
+    expect(codes({ gap: "in\\68 erit" })).toEqual([]);
+    expect(codes({ gap: "inherit" })).toEqual([]);
+    expect(codes({ gap: "1px 2px" })).toEqual([]);
+  });
+
+  it("accepts a unit written with an escape", () => {
+    // A unit is an identifier too, so it carries escapes like any other.
+    expect(codes({ width: "1p\\78" })).toEqual([]);
+    expect(codes({ width: "calc(sin(1de\\67) * 1px)" })).toEqual([]);
+  });
+});
+
+describe("grouping does not hide what kind of value something is", () => {
+  it("refuses two grouped measurements multiplied", () => {
+    for (const value of [
+      "calc((1px) * 1px)",
+      "calc(1px * (1px))",
+      "calc((1px) * (1px))",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("leaves a grouped measurement scaled by a number alone", () => {
+    expect(codes({ width: "calc((1px) * 2)" })).toEqual([]);
+    expect(codes({ width: "calc(2 * (1px))" })).toEqual([]);
+    expect(codes({ width: "calc((1px + 2px) * 3)" })).toEqual([]);
+  });
+});
+
+describe("a design token reference carries nothing else", () => {
+  it("refuses fields beside the reference itself", () => {
+    // A reader keying on `$token` would use the reference and discard the
+    // rest in silence, which is worse than being told the shape is wrong.
+    const issues = check({
+      backgroundColor: { $token: "color.primary", fallback: "#fff" },
+    });
+    expect(issues[0]?.code).toBe("invalid-style-value");
+    expect(issues[0]?.message).toContain("fallback");
+  });
+
+  it("leaves a plain reference working, nested or not", () => {
+    expect(codes({ backgroundColor: { $token: "color.primary" } })).toEqual([]);
+    expect(codes({ padding: { blockStart: { $token: "space.4" } } })).toEqual(
+      []
+    );
+  });
+});

@@ -160,6 +160,19 @@ function leafIssues(
   // Which token a name resolves to is a site-level question answered where the
   // token table is available, not here.
   if (isTokenRef(value)) {
+    // A reference stands in for the whole value, so it carries nothing else.
+    // Anything beside `$token` is data a reader would discard in silence,
+    // which is worse than being told the shape is wrong.
+    const extra = Object.keys(value).filter(key => key !== "$token");
+    if (extra.length > 0) {
+      return [
+        invalid(
+          path,
+          `A design token reference carries only "$token", not ${describeValue(extra[0])}.`,
+          "Remove the extra fields, or store a literal value instead."
+        ),
+      ];
+    }
     if (leaf.tokenKinds.length === 0) {
       return [
         {

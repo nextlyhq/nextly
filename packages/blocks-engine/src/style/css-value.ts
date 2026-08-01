@@ -275,7 +275,7 @@ function attrProducesDimension(
   if (declared === undefined) return false;
   // `type(<syntax>)` names a syntax this module does not model; abstaining is
   // the same answer it gives everywhere else it cannot read a grammar.
-  if (declared.type === "Function") return functionName(declared) === "type";
+  if (declared.type === "Function") return identifierOf(declared) === "type";
   return (
     declared.type === "Identifier" &&
     LENGTH_UNITS.has(asciiLower(declared.name))
@@ -456,7 +456,7 @@ const NUMBER_FUNCTION_DOMAIN: ReadonlyMap<string, NumericDomain> = new Map([
  * category is answered with `null`, which abstains rather than guesses.
  */
 function unitCategory(unit: string): string | null {
-  const folded = asciiLower(unit);
+  const folded = asciiLower(decodeIdentifier(unit));
   if (LENGTH_UNITS.has(folded)) return "length";
   if (ANGLE_UNITS.has(folded)) return "angle";
   if (TIME_UNITS.has(folded)) return "time";
@@ -485,9 +485,12 @@ function literalCategory(terms: readonly CssNode[]): string | null {
   if (terms.length !== 1) return null;
   const term = terms[0];
   if (term === undefined) return null;
+  // Parentheses group a value without changing what kind it is, so a grouped
+  // literal answers the same as a bare one.
+  if (term.type === "Parentheses") return literalCategory([...term.children]);
   if (term.type === "Number") return "number";
   if (term.type === "Percentage") return "percentage";
-  if (term.type === "Dimension") return unitCategory(term.unit);
+  if (term.type === "Dimension") return unitCategory(unitOf(term));
   return null;
 }
 
@@ -564,9 +567,18 @@ export function decodeIdentifier(name: string): string {
   );
 }
 
-/** A function's name as CSS reads it, folded for comparison. */
-function functionName(node: { name: string }): string {
+/** An identifier as CSS reads it, folded for comparison. */
+function identifierOf(node: { name: string }): string {
   return asciiLower(decodeIdentifier(node.name));
+}
+
+/**
+ * A dimension's unit as CSS reads it. Units are identifiers, so they carry
+ * escapes like any other: `1p\78` is `1px`, and comparing the raw spelling
+ * against the unit sets refuses a measurement the browser accepts.
+ */
+function unitOf(node: { unit: string }): string {
+  return asciiLower(decodeIdentifier(node.unit));
 }
 
 /**
@@ -598,7 +610,7 @@ function unquotedUrlText(children: Iterable<CssNode>): string | null {
         text += String(child.value);
         break;
       case "Dimension":
-        text += `${String(child.value)}${child.unit}`;
+        text += `${String(child.value)}${decodeIdentifier(child.unit)}`;
         break;
       case "Percentage":
         text += `${String(child.value)}%`;
@@ -650,7 +662,7 @@ function walkForUrlRejection(
         return;
       }
       if (node.type !== "Function") return;
-      const name = functionName(node);
+      const name = identifierOf(node);
       if (!URL_STRING_FUNCTIONS.has(name)) return;
       let sawString = false;
       for (const child of node.children) {
@@ -822,7 +834,7 @@ export function checkDimensionValue(
       functions: allowedFunctions,
     });
     if (childRejection !== null) return childRejection;
-    if (child.type === "Identifier" && isCssWideKeyword(child.name)) {
+    if (child.type === "Identifier" && isCssWideKeyword(identifierOf(child))) {
       cssWideKeyword = true;
     }
     parts += 1;
@@ -865,7 +877,7 @@ function measurementRejection(
 ): CssValueRejection | null {
   switch (node.type) {
     case "Dimension": {
-      const unit = asciiLower(node.unit);
+      const unit = unitOf(node);
       if (limits.domain === "number") return "not-a-length";
       if (limits.domain === "angleOrNumber") {
         return ANGLE_UNITS.has(unit) ? null : "not-a-length";
@@ -890,12 +902,12 @@ function measurementRejection(
       // a property keyword is a complete value, so `calc(auto)` and
       // `calc(inherit)` are discarded while `round(up, 10px, 1px)` is not.
       if (insideFunction) {
-        const inner = functionName(node);
+        const inner = identifierOf(node);
         return CALC_CONSTANTS.has(inner) || keywords.has(inner)
           ? null
           : "not-a-length";
       }
-      const name = functionName(node);
+      const name = identifierOf(node);
       return CSS_WIDE_KEYWORDS.has(name) || keywords.has(name)
         ? null
         : "not-a-length";
@@ -903,7 +915,7 @@ function measurementRejection(
     case "Operator":
       return null;
     case "Function": {
-      const name = functionName(node);
+      const name = identifierOf(node);
       if (
         !DIMENSION_FUNCTIONS.has(name) &&
         limits.functions?.has(name) !== true &&
@@ -983,7 +995,7 @@ function measurementRejection(
         leading !== undefined &&
         leading.length === 1 &&
         leading[0]?.type === "Identifier" &&
-        ownIdentifiers.has(functionName(leading[0]));
+        ownIdentifiers.has(identifierOf(leading[0]));
       const operands = strategy ? args.slice(1) : args;
       // Present for every math function, since the set is the map's own keys.
       const arity = MATH_FUNCTION_ARITY.get(name) ?? null;
@@ -1180,13 +1192,13 @@ export function checkColorValue(value: string): CssValueRejection | null {
     case "Hash":
       return HEX_COLOR.test(node.value) ? null : "not-a-color";
     case "Identifier": {
-      const name = functionName(node);
+      const name = identifierOf(node);
       return COLOR_KEYWORDS.has(name) || SYSTEM_COLORS.has(name)
         ? null
         : "not-a-color";
     }
     case "Function":
-      return COLOR_FUNCTIONS.has(functionName(node)) ? null : "not-a-color";
+      return COLOR_FUNCTIONS.has(identifierOf(node)) ? null : "not-a-color";
     default:
       return "not-a-color";
   }
