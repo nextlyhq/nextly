@@ -32,6 +32,11 @@ import { cn } from "@admin/lib/utils";
 
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 
+import {
+  effectiveEntryStatus,
+  isSlugPerLocale,
+  useHasPublicAddress,
+} from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
@@ -41,6 +46,7 @@ import { EntryFormToolbarSlots } from "./EntryFormToolbarSlots";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import {
   useEntryForm,
   getCollectionFields,
@@ -290,11 +296,30 @@ export function EntryForm({
   // slug-gen logic that used to live in TextInput never fired for the
   // configured title. Mounting the hook here closes that gap and follows the
   // configured title field name (not a hardcoded "title"/"name").
+  // Once an entry has a public address its slug stops following its title. That address is in
+  // links, feeds, sitemaps and search results, so re-deriving it from an edited title retires a URL
+  // the author never chose to change and the old one 404s. Editing the slug directly still works;
+  // this only stops the automatic rewrite.
+  // The auto-injected slug is shared across languages, so one address serves them all and any
+  // published language keeps it frozen. Only a slug the author opted into localizing belongs to
+  // the language in view.
+  const hasPublicAddress = useHasPublicAddress({
+    mode,
+    hasStatus,
+    entry,
+    locale,
+    slugLocalized: isSlugPerLocale(slugField, collection.localized === true),
+    collectionLocalized: collection.localized === true,
+    defaultLocale,
+    mutationPending: isSubmitting,
+  });
+
   useAutoSlug({
     form,
     titleFieldName: titleField?.name ?? "title",
     slugFieldName: slugField?.name ?? "slug",
     enabled: !!titleField && !!slugField,
+    frozen: hasPublicAddress,
   });
 
   // ---------------------------------------------------------------------------
@@ -329,6 +354,17 @@ export function EntryForm({
           <div className="space-y-6">
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
+            {/* This branch renders every collection field, the editable slug among them, but not
+                the meta strip that carries the notice in the standalone layout. Quick-edit from a
+                relationship picker lands here on existing entries, so without this the one place
+                the warning is skipped is also a place a live URL can be rewritten and saved. */}
+            {slugField && (
+              <PublicUrlChangeNotice
+                slugName={slugField.name ?? "slug"}
+                active={hasPublicAddress}
+                className="block"
+              />
+            )}
             {/* Forward the form mode so write-only password fields render
                 their edit-mode affordance: on edit a blank password input
                 means "keep the current password" (the stored hash never
@@ -417,8 +453,15 @@ export function EntryForm({
                 <EntryMetaStrip
                   slugField={slugField}
                   hasStatus={hasStatus}
-                  status={(entry?.status as string | undefined) ?? "draft"}
+                  // The pill reports the language being edited, matching the header's submit
+                  // affordances. Reading the main row instead would show "Published" beside a
+                  // Publish button whenever a translation lags its default language.
+                  status={
+                    effectiveEntryStatus(entry, locale, defaultLocale) ??
+                    "draft"
+                  }
                   isRailCollapsed={railCollapsed}
+                  hasPublicAddress={hasPublicAddress}
                 />
 
                 {mainFields.length > 0 && (

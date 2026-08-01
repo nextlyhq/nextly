@@ -24,6 +24,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { pruneWebhookData } from "../../domains/webhooks/prune";
 import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
@@ -88,7 +89,12 @@ export async function runWebhooksPruneCommand(
     const drizzleAdapter = adapter as unknown as DrizzleAdapter;
     const { dialect } = drizzleAdapter.getCapabilities();
     const schemaRegistry = new SchemaRegistry(dialect);
-    schemaRegistry.registerStaticSchemas(getDialectTables(dialect));
+    // Both spellings of the field-group registry: a database whose storage
+    // migration has run has no handle for its registry otherwise.
+    schemaRegistry.registerStaticSchemas({
+      ...getDialectTables(dialect),
+      ...getFieldGroupRegistryAliases(dialect),
+    });
     drizzleAdapter.setTableResolver(schemaRegistry);
 
     const dryRun = options.dryRun ?? false;

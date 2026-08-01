@@ -80,6 +80,7 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import {
   buildCompanionExists,
   buildLocalizedOrderExpr,
@@ -115,6 +116,91 @@ import {
   getMinSearchLength,
   decodeJsonFieldValues,
 } from "./collection-utils";
+
+/**
+ * One component-field predicate, as raw SQL against a named column.
+ *
+ * Extracted from the filter loop so it can be built once per component TABLE
+ * rather than once per filter: a `_componentType` filter over a dynamic zone
+ * spans several tables, and the storage migration can have moved the
+ * discriminator on some of them and not others.
+ */
+function buildComponentValueCondition(
+  filter: ComponentFieldFilter,
+  dbColumnName: string,
+  dialect: string
+): ReturnType<typeof sql> | undefined {
+  let valueCondition: ReturnType<typeof sql>;
+
+  switch (filter.operator) {
+    case "equals":
+      valueCondition = sql`${sql.identifier(dbColumnName)} = ${filter.value}`;
+      break;
+    case "not_equals":
+      valueCondition = sql`${sql.identifier(dbColumnName)} != ${filter.value}`;
+      break;
+    case "greater_than":
+      valueCondition = sql`${sql.identifier(dbColumnName)} > ${filter.value}`;
+      break;
+    case "greater_than_equal":
+      valueCondition = sql`${sql.identifier(dbColumnName)} >= ${filter.value}`;
+      break;
+    case "less_than":
+      valueCondition = sql`${sql.identifier(dbColumnName)} < ${filter.value}`;
+      break;
+    case "less_than_equal":
+      valueCondition = sql`${sql.identifier(dbColumnName)} <= ${filter.value}`;
+      break;
+    case "like":
+      valueCondition = sql`${sql.identifier(dbColumnName)} LIKE ${`%${String(filter.value)}%`}`;
+      break;
+    case "contains":
+    case "search":
+      // Use ILIKE for PostgreSQL, LIKE for others
+      if (dialect === "postgresql") {
+        valueCondition = sql`${sql.identifier(dbColumnName)} ILIKE ${`%${String(filter.value)}%`}`;
+      } else {
+        valueCondition = sql`LOWER(${sql.identifier(dbColumnName)}) LIKE LOWER(${`%${String(filter.value)}%`})`;
+      }
+      break;
+    case "in": {
+      const inValues = Array.isArray(filter.value)
+        ? filter.value
+        : [filter.value];
+      if (inValues.length === 0) return undefined;
+      const inPlaceholders = sql.join(
+        inValues.map(v => sql`${v}`),
+        sql`, `
+      );
+      valueCondition = sql`${sql.identifier(dbColumnName)} IN (${inPlaceholders})`;
+      break;
+    }
+    case "not_in": {
+      const notInValues = Array.isArray(filter.value)
+        ? filter.value
+        : [filter.value];
+      if (notInValues.length === 0) return undefined;
+      const notInPlaceholders = sql.join(
+        notInValues.map(v => sql`${v}`),
+        sql`, `
+      );
+      valueCondition = sql`${sql.identifier(dbColumnName)} NOT IN (${notInPlaceholders})`;
+      break;
+    }
+    case "exists":
+      if (filter.value === true || filter.value === "true") {
+        valueCondition = sql`${sql.identifier(dbColumnName)} IS NOT NULL`;
+      } else {
+        valueCondition = sql`${sql.identifier(dbColumnName)} IS NULL`;
+      }
+      break;
+    default:
+      // An operator this builder does not implement contributes no condition.
+      return undefined;
+  }
+
+  return valueCondition;
+}
 
 export class CollectionQueryService extends BaseService {
   constructor(
@@ -979,12 +1065,21 @@ export class CollectionQueryService extends BaseService {
       const tableName = getTableName(params.collectionName);
 
       // Build component field EXISTS conditions
+      const componentTables =
+        await this.resolveComponentTableNames(componentFilters);
+      // Kept so the count over these same filters can reuse them instead of
+      // repeating the registry lookup and the catalog introspection.
+      const componentTypeColumns = await this.resolveComponentTypeColumns(
+        componentFilters,
+        componentTables.values()
+      );
       const componentCondition = this.buildComponentFieldConditions(
         componentFilters,
         tableName,
         schema.id,
         dialect,
-        await this.resolveComponentTableNames(componentFilters)
+        componentTables,
+        componentTypeColumns
       );
 
       // Apply component field conditions to query
@@ -1177,6 +1272,9 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
+            // Resolved once for this request; see the parameter's own note.
+            resolvedComponentTables: componentTables,
+            resolvedComponentTypeColumns: componentTypeColumns,
             // Geo operators removed (the count cannot apply them), but component
             // predicates kept: `cleanedWhere` has BOTH stripped, and the count
             // builds its own EXISTS conditions from the ones it is given. Sending
@@ -1708,6 +1806,18 @@ export class CollectionQueryService extends BaseService {
      * would over-count.
      */
     translationFilter?: TranslationStatusFilter;
+    /**
+     * Component table names and discriminator columns, already resolved by the
+     * caller (listEntries) for this same request.
+     *
+     * The list path resolves both to build its page, then asks for a total over
+     * the same filters, so without this the count repeats a registry lookup per
+     * component slug and a catalog introspection per table: column and index
+     * reads on Postgres and MySQL, a PRAGMA each on SQLite. A standalone count
+     * omits them and resolves its own.
+     */
+    resolvedComponentTables?: Map<string, string>;
+    resolvedComponentTypeColumns?: Map<string, string>;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
@@ -1916,12 +2026,20 @@ export class CollectionQueryService extends BaseService {
         const tableName = getTableName(params.collectionName);
 
         // Build component field EXISTS conditions
+        const componentTables =
+          params.resolvedComponentTables ??
+          (await this.resolveComponentTableNames(componentFilters));
         const componentCondition = this.buildComponentFieldConditions(
           componentFilters,
           tableName,
           schema.id,
           dialect,
-          await this.resolveComponentTableNames(componentFilters)
+          componentTables,
+          params.resolvedComponentTypeColumns ??
+            (await this.resolveComponentTypeColumns(
+              componentFilters,
+              componentTables.values()
+            ))
         );
 
         if (componentCondition) {
@@ -2999,13 +3117,38 @@ export class CollectionQueryService extends BaseService {
     return resolved;
   }
 
+  /**
+   * The physical discriminator column each named component table carries.
+   *
+   * 🔴 This predicate is built as raw SQL rather than through the table object,
+   * so it does not get the runtime schema's stable property key: it emits the
+   * column name it is handed. A `_componentType` filter must therefore be given
+   * the name the table actually has, or it addresses a column the storage
+   * migration has moved and the query fails instead of matching documents.
+   */
+  private async resolveComponentTypeColumns(
+    filters: readonly ComponentFieldFilter[],
+    tableNames: Iterable<string>
+  ): Promise<Map<string, string>> {
+    // Only a `_componentType` filter addresses the discriminator. Every other
+    // component filter names a user column, so introspecting here would spend
+    // per-table catalog queries — column and index reads, or a PRAGMA each on
+    // SQLite — on a value nothing goes on to read.
+    if (!filters.some(filter => filter.isComponentTypeFilter)) return new Map();
+
+    const tables = [...new Set(tableNames)];
+    if (tables.length === 0) return new Map();
+    return resolveTypeColumns(this.adapter, tables);
+  }
+
   private buildComponentFieldConditions(
     componentFilters: ComponentFieldFilter[],
     parentTableName: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column reference
     parentIdColumn: any,
     dialect: string = "postgresql",
-    componentTableNames: Map<string, string> = new Map()
+    componentTableNames: Map<string, string> = new Map(),
+    componentTypeColumns: Map<string, string> = new Map()
   ): ReturnType<typeof and> | undefined {
     if (componentFilters.length === 0) {
       return undefined;
@@ -3018,80 +3161,12 @@ export class CollectionQueryService extends BaseService {
       // Convert component field path to snake_case for database column
       const columnName = toSnakeCase(filter.componentFieldPath);
 
-      // Handle _componentType filter specially (already snake_case)
-      const dbColumnName = filter.isComponentTypeFilter
-        ? STORAGE_FORMAT.columns.type
-        : columnName;
-
-      // Build the value condition based on operator
-      let valueCondition: ReturnType<typeof sql>;
-
-      switch (filter.operator) {
-        case "equals":
-          valueCondition = sql`${sql.identifier(dbColumnName)} = ${filter.value}`;
-          break;
-        case "not_equals":
-          valueCondition = sql`${sql.identifier(dbColumnName)} != ${filter.value}`;
-          break;
-        case "greater_than":
-          valueCondition = sql`${sql.identifier(dbColumnName)} > ${filter.value}`;
-          break;
-        case "greater_than_equal":
-          valueCondition = sql`${sql.identifier(dbColumnName)} >= ${filter.value}`;
-          break;
-        case "less_than":
-          valueCondition = sql`${sql.identifier(dbColumnName)} < ${filter.value}`;
-          break;
-        case "less_than_equal":
-          valueCondition = sql`${sql.identifier(dbColumnName)} <= ${filter.value}`;
-          break;
-        case "like":
-          valueCondition = sql`${sql.identifier(dbColumnName)} LIKE ${`%${String(filter.value)}%`}`;
-          break;
-        case "contains":
-        case "search":
-          // Use ILIKE for PostgreSQL, LIKE for others
-          if (dialect === "postgresql") {
-            valueCondition = sql`${sql.identifier(dbColumnName)} ILIKE ${`%${String(filter.value)}%`}`;
-          } else {
-            valueCondition = sql`LOWER(${sql.identifier(dbColumnName)}) LIKE LOWER(${`%${String(filter.value)}%`})`;
-          }
-          break;
-        case "in": {
-          const inValues = Array.isArray(filter.value)
-            ? filter.value
-            : [filter.value];
-          if (inValues.length === 0) continue;
-          const inPlaceholders = sql.join(
-            inValues.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${sql.identifier(dbColumnName)} IN (${inPlaceholders})`;
-          break;
-        }
-        case "not_in": {
-          const notInValues = Array.isArray(filter.value)
-            ? filter.value
-            : [filter.value];
-          if (notInValues.length === 0) continue;
-          const notInPlaceholders = sql.join(
-            notInValues.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${sql.identifier(dbColumnName)} NOT IN (${notInPlaceholders})`;
-          break;
-        }
-        case "exists":
-          if (filter.value === true || filter.value === "true") {
-            valueCondition = sql`${sql.identifier(dbColumnName)} IS NOT NULL`;
-          } else {
-            valueCondition = sql`${sql.identifier(dbColumnName)} IS NULL`;
-          }
-          break;
-        default:
-          // Unknown operator, skip
-          continue;
-      }
+      // 🔴 The discriminator's physical name is resolved PER TABLE, so the
+      // condition is built inside the per-table loop below rather than once for
+      // the filter. This predicate is raw SQL and does not go through the
+      // runtime table object, so it emits whatever column name it is handed —
+      // and a dynamic-zone filter can span several tables whose storage the
+      // migration has moved independently.
 
       // For _componentType filter on dynamic zone, we may need to query multiple tables
       // But the filter value tells us which specific component type to look for
@@ -3112,6 +3187,19 @@ export class CollectionQueryService extends BaseService {
         // fallback when the lookup was unavailable.
         const componentTableName =
           componentTableNames.get(slug) ?? resolveComponentTableName(slug);
+
+        const dbColumnName = filter.isComponentTypeFilter
+          ? (componentTypeColumns.get(componentTableName) ??
+            STORAGE_FORMAT.columns.type)
+          : columnName;
+        const valueCondition = buildComponentValueCondition(
+          filter,
+          dbColumnName,
+          dialect
+        );
+        // An operator with nothing to match — an empty `in` list, or one this
+        // builder does not implement — contributes no condition for this table.
+        if (valueCondition === undefined) continue;
 
         // Build EXISTS subquery:
         // EXISTS (SELECT 1 FROM comp_{slug}

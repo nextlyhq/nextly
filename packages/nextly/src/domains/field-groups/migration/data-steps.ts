@@ -187,13 +187,11 @@ function registryDefinitionsStep(
     id: "data:registry-definitions",
     async run(session) {
       const outcome = await session.inTransaction(async ctx => {
-        // Every patch is computed before any of them is issued. A refusal has
-        // to leave the transaction as a value rather than as an exception —
-        // the adapter reclassifies anything thrown out of a callback and
-        // discards the context naming what could not be read — and a value
-        // returned from the callback COMMITS. Staging first is what keeps that
-        // from committing the rows already rewritten and leaving exactly the
-        // mixed-vocabulary registry set this step exists to prevent.
+        // Every patch is computed before any of them is issued. A refusal
+        // leaves the transaction as a value rather than as an exception, and a
+        // value returned from the callback COMMITS. Staging first is what keeps
+        // that from committing the rows already rewritten and leaving exactly
+        // the mixed-vocabulary registry set this step exists to prevent.
         const staged: { table: string; id: string; patch: Patch }[] = [];
         for (const table of DEFINITION_TABLES) {
           for (const row of await readRegistryRows(ctx, table)) {

@@ -7,6 +7,8 @@ import { useFormContext } from "react-hook-form";
 import { Pencil } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
+
 // Why: thin metadata strip below the system header. Carries the slug (with
 // inline pencil-to-edit) and, when the rail is collapsed, the Draft/Published
 // status pill. When the rail is expanded the status pill renders inside the
@@ -27,6 +29,10 @@ export interface EntryMetaStripProps {
    *  as read-only text with no inline-edit affordance. Defaults to false so
    *  collection entry forms keep the editable slug. */
   lockSlug?: boolean;
+  /** Whether this entry's slug is already a public address, so editing it retires a live URL.
+   *  Resolved by the form via `useHasPublicAddress`, which knows about per-locale publishing and
+   *  collections that have no draft lifecycle at all. */
+  hasPublicAddress?: boolean;
 }
 
 export function EntryMetaStrip({
@@ -35,6 +41,7 @@ export function EntryMetaStrip({
   status,
   isRailCollapsed,
   lockSlug = false,
+  hasPublicAddress = false,
 }: EntryMetaStripProps) {
   const showStatusPill = hasStatus && isRailCollapsed && !!status;
   const showSlug = !!slugField;
@@ -45,7 +52,11 @@ export function EntryMetaStrip({
     <div className="px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground">
       {showStatusPill && <StatusPill status={status} />}
       {showSlug && (
-        <SlugInlineEditor slugField={slugField} readOnly={lockSlug} />
+        <SlugInlineEditor
+          slugField={slugField}
+          readOnly={lockSlug}
+          warnOnChange={hasPublicAddress}
+        />
       )}
     </div>
   );
@@ -73,9 +84,12 @@ function StatusPill({ status }: { status: string }) {
 function SlugInlineEditor({
   slugField,
   readOnly = false,
+  warnOnChange = false,
 }: {
   slugField: FieldConfig;
   readOnly?: boolean;
+  /** Whether this entry's slug is a live public address, so an edit here retires a URL. */
+  warnOnChange?: boolean;
 }) {
   const form = useFormContext();
   const slugName = "name" in slugField ? (slugField.name as string) : "slug";
@@ -164,6 +178,13 @@ function SlugInlineEditor({
         <span className="text-xs text-destructive-600 shrink-0" role="alert">
           {errorMsg}
         </span>
+      )}
+      {!errorMsg && (
+        <PublicUrlChangeNotice
+          slugName={slugName}
+          active={warnOnChange}
+          className="shrink-0"
+        />
       )}
     </div>
   );

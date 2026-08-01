@@ -27,6 +27,7 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
@@ -106,6 +107,19 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
+  }
+
+  /**
+   * The registry table this database actually holds.
+   *
+   * Unlike the collection and single registries, this one is renamed by the
+   * field-group storage migration, so the declared name above is what a
+   * database has *before* that runs and not a fact about the database in front
+   * of us. Resolved from the catalog and memoized per adapter, so the answer
+   * costs one catalog read per process rather than one per query.
+   */
+  protected override async resolveRegistryTableName(): Promise<string> {
+    return resolveRegistryTableName(this.adapter);
   }
 
   protected getSearchColumns(): string[] {
@@ -211,7 +225,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     try {
       const result = await this.adapter.insert<DynamicFieldGroupRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         record,
         { returning: "*" }
       );
@@ -236,7 +250,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     data: DynamicFieldGroupInsert
   ): Promise<DynamicFieldGroupRecord> {
     const existing = await tx.selectOne<DynamicFieldGroupRecord>(
-      this.registryTableName,
+      await this.resolveRegistryTableName(),
       {
         where: this.whereEq("slug", data.slug),
       }
@@ -276,7 +290,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     };
 
     const result = await tx.insert<DynamicFieldGroupRecord>(
-      this.registryTableName,
+      await this.resolveRegistryTableName(),
       record,
       { returning: "*" }
     );
@@ -359,7 +373,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     try {
       const results = await this.adapter.update<DynamicFieldGroupRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         updateData,
         this.whereEq("slug", slug),
         { returning: "*" }
@@ -442,7 +456,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
       // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
       await this.adapter.delete(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         this.whereEq("slug", slug)
       );
 
@@ -678,9 +692,18 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       });
     }
 
+    // Declared out here so the failure log can name it, ASSIGNED inside the
+    // try so a failed resolution is contained like any other read failure.
+    // This scan is best effort — it informs a reference check, and a catalog
+    // hiccup must not turn that into a hard failure — so the resolution has to
+    // sit inside the same boundary as the read it feeds. Its initial value is
+    // the name this release's DDL creates, which is what the message should say
+    // when resolution itself is what failed.
+    let registryTable: string = STORAGE_FORMAT.registryTable;
     try {
+      registryTable = await this.resolveRegistryTableName();
       const components = await this.adapter.select<Record<string, unknown>>(
-        this.registryTableName,
+        registryTable,
         { columns: ["slug", "fields"] }
       );
 
@@ -701,12 +724,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         }
       }
     } catch (error) {
-      this.logger.debug(
-        `Could not scan ${STORAGE_FORMAT.registryTable} for references`,
-        {
-          error: error instanceof Error ? error.message : String(error),
-        }
-      );
+      this.logger.debug(`Could not scan ${registryTable} for references`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     if (references.length > 0) {
@@ -783,7 +803,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     try {
       const results = await this.adapter.select<DynamicFieldGroupRecord>(
-        this.registryTableName,
+        await this.resolveRegistryTableName(),
         {
           where: {
             and: [

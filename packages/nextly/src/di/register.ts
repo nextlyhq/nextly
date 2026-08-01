@@ -43,6 +43,11 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import {
+  resolveFieldGroupRegistryName,
+  resolveKnownTypeColumns,
+  resolveTypeColumns,
+} from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
 import {
@@ -635,6 +640,11 @@ export async function registerServices(
         changed: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
         loaded: LoadedBuilderEntity[],
         persist: (slug: string, fields: FieldConfig[]) => Promise<unknown>,
+        // Returns the runtime table, or a promise of one: the field-group
+        // implementation resolves its discriminator from the catalog first,
+        // while the collection and single ones are synchronous. Typed as
+        // `unknown` because a `unknown | Promise<unknown>` union collapses to
+        // `unknown` anyway; the call site awaits, which is correct for both.
         makeRuntime: (
           tableName: string,
           fields: FieldConfig[],
@@ -657,7 +667,7 @@ export async function registerServices(
             if (schemaRegistry) {
               schemaRegistry.registerDynamicSchema(
                 before.tableName,
-                makeRuntime(before.tableName, fields, before.status)
+                await makeRuntime(before.tableName, fields, before.status)
               );
             }
           } catch (err) {
@@ -731,8 +741,13 @@ export async function registerServices(
           compChanged,
           builderEntities.components,
           (slug, fields) => reg.updateComponent(slug, { fields: fields }),
-          (tableName, fields) =>
-            compSchema.generateRuntimeSchema(tableName, fields)
+          async (tableName, fields) =>
+            compSchema.generateRuntimeSchema(tableName, fields, {
+              typeColumn:
+                (await resolveTypeColumns(adapter, [tableName])).get(
+                  tableName
+                ) ?? STORAGE_FORMAT.columns.type,
+            })
         );
       }
     }
@@ -1012,13 +1027,23 @@ async function initializeSchemaRegistry(
   try {
     const { SchemaRegistry } = await import("../database/schema-registry");
     const { getDialectTables } = await import("../database/index");
+    const { getFieldGroupRegistryAliases } = await import(
+      "../domains/field-groups/storage/registry-schemas"
+    );
     const dialect = adapter.getCapabilities().dialect;
     const registry = new SchemaRegistry(dialect);
 
     container.registerSingleton("schemaRegistry", () => registry);
 
-    // Step 1: Register static system tables.
-    registry.registerStaticSchemas(getDialectTables(dialect));
+    // Step 1: Register static system tables. The field-group registry is
+    // declared under both of its names so a database whose storage migration
+    // has run is addressable — the schema registry keys a table by the
+    // physical name its Drizzle object carries, so the renamed table has no
+    // handle otherwise. Kept out of the push bundle above deliberately.
+    registry.registerStaticSchemas({
+      ...getDialectTables(dialect),
+      ...getFieldGroupRegistryAliases(dialect),
+    });
     adapter.setTableResolver(registry);
 
     // Step 1.5 (F8 PR 6): first-run static-table push. Probes for
@@ -1154,51 +1179,114 @@ async function initializeSchemaRegistry(
     // Step 4: Dynamic components (comp_* tables). Components have no status
     // column, but a localized component omits its translatable columns from the
     // main comp_ table and registers/creates its companion `comp_<slug>_locales`.
+    // 🔴 Resolved, not assumed. `loadDynamicTables` swallows a failed read as
+    // the fresh-database case, so addressing a renamed registry by its legacy
+    // name does not raise — it registers nothing, and every field-group table
+    // is unaddressable until someone notices reads returning empty.
+    // Collected first, registered second. `introspectLiveSnapshot` issues
+    // separate column and index catalog queries — plus the identifier-case
+    // query on MySQL — so resolving inside the per-row callback would cost two
+    // or three metadata round trips PER field group at every boot. One pass
+    // over the rows makes it one batch for the whole set, which is what
+    // `registerComponentSchemas` already does.
+    const loadedFieldGroups: Array<{
+      tableName: string;
+      fields: FieldConfig[];
+      localized: boolean;
+    }> = [];
+    // Resolved inside the same best-effort boundary as the load it feeds. An
+    // `await` in the argument position rejects BEFORE `loadDynamicTables`
+    // enters its own `try`, so a transient catalog failure would escape to
+    // `initializeSchemaRegistry`'s outer catch — which returns `undefined` and
+    // skips config-table registration entirely, discarding a registry that was
+    // otherwise fine.
+    const fieldGroupRegistry = await resolveFieldGroupRegistryName(
+      adapter
+    ).catch(() => undefined);
     await loadDynamicTables(
       adapter,
-      STORAGE_FORMAT.registryTable,
-      async (tableName, fields, _hasStatus, localized) => {
-        const { FieldGroupSchemaService } = await import(
-          "../services/field-groups/field-group-schema-service"
-        );
-        const compSchemaService = new FieldGroupSchemaService(dialect);
-        const runtimeTable = compSchemaService.generateRuntimeSchema(
+      fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
+      (tableName, fields, _hasStatus, localized) => {
+        loadedFieldGroups.push({
           tableName,
-          fields as FieldConfig[],
-          { localized }
-        );
-        registry.registerDynamicSchema(tableName, runtimeTable);
-        if (localized) {
-          const { ensureCompanionTable } = await import(
-            "../domains/i18n/runtime/companion-io"
-          );
-          await ensureCompanionTable(adapter, {
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            status: false,
-          });
-          const { buildCompanionRuntimeTable } = await import(
-            "../domains/i18n/runtime/companion-registration"
-          );
-          const companion = buildCompanionRuntimeTable({
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            localized: true,
-            status: false,
-          });
-          if (companion) {
-            registry.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
-            );
-          }
-        }
+          fields: fields as FieldConfig[],
+          localized,
+        });
+        return Promise.resolve();
       }
     );
+    // Resolved per table even though it is one query: the migration renames the
+    // registry last, and a table an author named itself keeps its own name
+    // while its column still moves, so the two generations can be mixed across
+    // the very set being registered here.
+    // Never rejects, so this cannot reach `initializeSchemaRegistry`'s outer
+    // catch — which returns `undefined` and skips config-table registration
+    // entirely, discarding a boot that was otherwise fine over one metadata
+    // probe. A table it could not speak for is absent from the map.
+    const fieldGroupTypeColumns = await resolveKnownTypeColumns(
+      adapter,
+      loadedFieldGroups.map(entry => entry.tableName)
+    );
+    for (const { tableName, fields, localized } of loadedFieldGroups) {
+      const typeColumn = fieldGroupTypeColumns.get(tableName);
+      if (typeColumn === undefined) {
+        // 🔴 Left unregistered rather than registered on a guess.
+        //
+        // Both outcomes break this group's reads and writes until the next
+        // boot, so the choice is only in how. A guessed discriminator fails
+        // inside SQL, naming a column nobody wrote, and a dynamic-zone write
+        // would be aiming at that column; an absent registration fails as an
+        // unknown table, which says what actually happened. The same policy
+        // `loadDynamicTables` already applies to a row it cannot turn into a
+        // schema.
+        console.warn(
+          `[Nextly schema] Could not read the discriminator column of ` +
+            `'${tableName}'; leaving it unregistered rather than addressing ` +
+            `it by a name that was not verified. Field-group reads and writes ` +
+            `for it will fail until the next start.`
+        );
+        continue;
+      }
+      const { FieldGroupSchemaService } = await import(
+        "../services/field-groups/field-group-schema-service"
+      );
+      const compSchemaService = new FieldGroupSchemaService(dialect);
+      const runtimeTable = compSchemaService.generateRuntimeSchema(
+        tableName,
+        fields,
+        { localized, typeColumn }
+      );
+      registry.registerDynamicSchema(tableName, runtimeTable);
+      if (localized) {
+        const { ensureCompanionTable } = await import(
+          "../domains/i18n/runtime/companion-io"
+        );
+        await ensureCompanionTable(adapter, {
+          slug: tableName,
+          tableName,
+          fields: fields as { name: string; type: string }[],
+          dialect,
+          status: false,
+        });
+        const { buildCompanionRuntimeTable } = await import(
+          "../domains/i18n/runtime/companion-registration"
+        );
+        const companion = buildCompanionRuntimeTable({
+          slug: tableName,
+          tableName,
+          fields: fields as { name: string; type: string }[],
+          dialect,
+          localized: true,
+          status: false,
+        });
+        if (companion) {
+          registry.registerDynamicSchema(
+            companion.companionTableName,
+            companion.table
+          );
+        }
+      }
+    }
 
     return registry;
   } catch {
@@ -1925,10 +2013,24 @@ async function syncCodeFirstComponents(
           logger.info?.(`Created table ${tableName} for component ${slug}`);
 
           try {
+            // 🔴 Resolved, not assumed. The DDL above is
+            // `CREATE TABLE IF NOT EXISTS`, so a component whose *fields*
+            // changed reaches here with its table untouched — and this
+            // registration then overwrites the catalog-resolved one made during
+            // the boot pass. Hard-coding the creator's spelling here therefore
+            // does not describe a table this code just made; it describes a
+            // table that may have been migrated long ago.
+            const syncTypeColumns = await resolveTypeColumns(adapter, [
+              tableName,
+            ]);
             const compRuntimeTable = compSchemaService.generateRuntimeSchema(
               tableName,
               compConfig.fields,
-              { localized: compLocalized }
+              {
+                localized: compLocalized,
+                typeColumn:
+                  syncTypeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
+              }
             );
             const resolver = (
               adapter as unknown as {

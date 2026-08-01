@@ -23,8 +23,14 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { sql, type SQL } from "drizzle-orm";
 
+import { MIGRATION_TARGET } from "../domains/field-groups/migration/manifest";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
+import {
+  chooseTypeColumns,
+  resolveFieldGroupRegistryName,
+} from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
@@ -58,6 +64,12 @@ import type {
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
+import {
+  indexCatalog,
+  resolveCatalogName,
+} from "../domains/schema/utils/resolve-catalog-name";
+import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -79,6 +91,7 @@ import { NextlyError } from "../errors/nextly-error";
 import type { PluginFieldType } from "../plugins/contributions";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
 
@@ -104,6 +117,13 @@ type LoggerLike = {
 interface AdapterLike {
   readonly dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle<T = unknown>(): T;
+  // Needed to resolve which field-group registry this database holds: the
+  // storage migration renames it, so the name is read from the catalog rather
+  // than spelled here.
+  listTables(): Promise<string[]>;
+  // The registry read goes through the adapter's statement path so the driver
+  // envelopes are normalised in one place rather than per caller.
+  queryStatement<T = Record<string, unknown>>(statement: SQL): Promise<T[]>;
   // Needed to provision the localized companion below: creating the table and adding
   // columns to it are both DDL, and the status backfill that accompanies a new `_status`
   // column is a write.
@@ -992,6 +1012,105 @@ async function runReload(opts?: {
   }
 }
 
+/** What a reload knows about where its field groups are physically stored. */
+export interface StoredFieldGroupTables {
+  /** `slug` → the physical table name the registry records. */
+  tables: Map<string, string>;
+  /**
+   * Whether those names can be relied on.
+   *
+   * 🔴 The distinction this type exists for: a registry that is ABSENT means a
+   * fresh database, where deriving `comp_*` names is correct. A registry that
+   * is PRESENT but unreadable means the names are UNKNOWN, and deriving them
+   * addresses storage that is not there — which is how a reload creates an
+   * empty table beside the populated one it meant to edit. Only the first case
+   * may guess.
+   */
+  usable: boolean;
+  /**
+   * Why the read failed, when it did.
+   *
+   * Present only on the failure path, and carried so the caller's log can name
+   * the cause rather than only the symptom.
+   */
+  reason?: string;
+}
+
+/**
+ * The physical table name each field group is stored under.
+ *
+ * Read rather than derived: `resolveComponentTableName` answers what this
+ * release's creator WOULD name a table, while the registry records what it is
+ * actually called. They differ for an author-chosen `dbName`, and after the
+ * storage migration for every field group.
+ *
+ * Issued through the adapter's statement path so the three driver envelopes are
+ * normalised in one place, and so an unrecognised shape is refused rather than
+ * reported as no rows.
+ */
+export async function readStoredFieldGroupTables(
+  adapter: AdapterLike
+): Promise<StoredFieldGroupTables> {
+  const tables = new Map<string, string>();
+  try {
+    const registryTable = await resolveFieldGroupRegistryName(adapter);
+    const rows = await adapter.queryStatement<{
+      slug?: unknown;
+      table_name?: unknown;
+    }>(
+      sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")} FROM ${sql.identifier(registryTable)}`
+    );
+    for (const row of rows) {
+      if (typeof row.slug === "string" && typeof row.table_name === "string") {
+        tables.set(row.slug, row.table_name);
+      }
+    }
+    return { tables, usable: true };
+  } catch (error) {
+    // The reason travels with the verdict. Without it the caller can only say
+    // "could not read stored field-group table names", which tells an operator
+    // nothing about whether they are looking at a permission problem, a dropped
+    // connection, or a malformed row — and this is the failure that defers a
+    // whole reload, so it is the one worth diagnosing.
+    return {
+      tables,
+      usable: (await registryIsAbsent(adapter)) === true,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Whether the database genuinely has no field-group registry.
+ *
+ * The distinction that matters after a failed read: absent means a fresh
+ * database, where deriving names is correct; present-but-unreadable means the
+ * names are unknown, and deriving them would address storage that is not there.
+ * Answered `undefined` when even this cannot be established, which is treated
+ * as unreadable.
+ */
+async function registryIsAbsent(
+  adapter: AdapterLike
+): Promise<boolean | undefined> {
+  try {
+    // Matched under the server's own rules, not by exact spelling — the same
+    // way `chooseRegistryTable` matches. A folding server can report the
+    // registry as `DYNAMIC_FIELD_GROUPS`, and an exact comparison would call a
+    // present registry absent: the caller would then treat derived `comp_*`
+    // names as usable and let the reload build them beside the populated
+    // migrated tables, which is precisely the outcome this probe exists to
+    // prevent.
+    const rules = await readIdentifierCaseRules(adapter);
+    const catalog = indexCatalog(await adapter.listTables(), rules.tables);
+    return (
+      resolveCatalogName(catalog, STORAGE_FORMAT.registryTable) === undefined &&
+      resolveCatalogName(catalog, MIGRATION_TARGET.registryTable) === undefined
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 async function applyReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
@@ -1233,16 +1352,71 @@ async function applyReload(opts?: {
     fields: MinimalField[];
     localized?: boolean;
   }> = [];
+  // 🔴 The STORED physical name wins over the one derived from the slug.
+  //
+  // `resolveComponentTableName` answers what this release's creator WOULD name
+  // a table; the registry records what the table is actually called. Those
+  // differ for an author-chosen `dbName`, and — after the storage migration —
+  // for every field group. Deriving the name would make the reload diff against
+  // a table that is not there, decide the component is new, and create an empty
+  // one beside the populated one it meant to edit.
+  //
+  // Best effort by design: a registry that cannot be read leaves every name
+  // derived, which is exactly the behaviour of a database that has no registry
+  // yet.
+  const stored = await readStoredFieldGroupTables(adapter);
+  const storedComponentTables = stored.tables;
+  const storedNamesUsable = stored.usable;
+  /** Field groups left out of this reload because their storage is unknown. */
+  const skippedComponentSlugs = new Set<string>();
+  if (!storedNamesUsable) {
+    logger?.warn(
+      "[Nextly HMR] Could not read stored field-group table names" +
+        (stored.reason ? `: ${stored.reason}` : "") +
+        ". Deferring the field-group apply to the next reload."
+    );
+  }
+
   for (const c of newConfig.fieldGroups ?? []) {
     if (!c.slug) continue;
+    // Skipped entirely when the stored names could not be established: a
+    // derived name is a guess about physical storage, and guessing here is what
+    // creates the empty table.
+    if (!storedNamesUsable) {
+      skippedComponentSlugs.add(c.slug);
+      continue;
+    }
     componentTargets.push({
       slug: c.slug,
-      tableName: resolveComponentTableName(c.slug),
+      tableName:
+        storedComponentTables.get(c.slug) ?? resolveComponentTableName(c.slug),
       fields: (c.fields ?? []) as MinimalField[],
       // i18n: carry `localized` so the HMR diff omits translatable columns from the
       // component's main table and registers its companion.
       localized: (c as { localized?: boolean }).localized === true,
     });
+  }
+
+  // 🔴 Checked BEFORE the empty-target branch below. `loadConfig` has already
+  // replaced the process-global field-type registry, so returning without
+  // restoring it leaves the deferred config's validators and storage mappings
+  // live against a schema this reload chose not to touch. The empty-target
+  // branch is for a config that genuinely declares nothing; a config whose
+  // entities were all SKIPPED is a different state and must unwind.
+  if (
+    skippedComponentSlugs.size > 0 &&
+    componentTargets.length === 0 &&
+    targets.length === 0 &&
+    singleTargets.length === 0
+  ) {
+    // Only when NOTHING survives. A field-group deferral is not a reason to
+    // strand a collection or single whose storage this reload can address
+    // perfectly well — the registry read that failed says nothing about them.
+    logger?.warn(
+      "[Nextly HMR] Every target was deferred; abandoning this reload."
+    );
+    abandonReload();
+    return;
   }
 
   if (
@@ -1290,8 +1464,23 @@ async function applyReload(opts?: {
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
   let liveSnapshot: NextlySchemaSnapshot;
+  // 🔴 Both probes run HERE, before the apply, and both abort it on failure.
+  //
+  // The identifier rules are read alongside the snapshot rather than where they
+  // are used, because where they are used is *after* the DDL has committed —
+  // inside a block whose catch is documented "non-fatal" and skips every runtime
+  // schema refresh. A transient failure there would leave the registry metadata
+  // synchronized and this process still holding the pre-change Drizzle
+  // descriptors, so component reads and writes would address columns that no
+  // longer exist until another reload or a restart. Failing before anything
+  // commits is the only version of that failure a reload can recover from.
+  //
+  // Free on Postgres and SQLite, where the rules follow from the dialect alone;
+  // only MySQL issues a query, and only MySQL can fail here.
+  let identifierCase: IdentifierCaseRules;
   try {
     liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
+    identifierCase = await readIdentifierCaseRules(adapter);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -1326,11 +1515,17 @@ async function applyReload(opts?: {
   // registry's `fields` would disagree with the physical table, so the no-DDL
   // metadata-only sync below must be skipped rather than persist unmigrated
   // schema metadata; it retries on the next clean reload or restart.
-  let deferredSchemaChange = false;
+  let deferredSchemaChange = skippedComponentSlugs.size > 0;
   // Which entities were deferred, as `<kind>:<slug>`. The flag above answers "may the
   // metadata-only sync run at all"; this answers "may THIS entity be provisioned", which is a
   // per-entity question — see `ensureLocalizedCompanionsForReload`.
-  const deferredEntities = new Set<string>();
+  const deferredEntities = new Set<string>(
+    // `fieldGroup:` — the prefix every other producer and consumer of this set
+    // uses. A deferral recorded under a different key is not a deferral: the
+    // localization helper checks membership and would carry on deriving the
+    // obsolete name for an entity this reload deliberately skipped.
+    [...skippedComponentSlugs].map(slug => `fieldGroup:${slug}`)
+  );
 
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
@@ -1860,8 +2055,17 @@ async function applyReload(opts?: {
       const compReg = (await resolve(
         "fieldGroupRegistryService"
       )) as ComponentRegistrySurface;
+      // 🔴 Deferred groups are excluded here too, not only from the DDL.
+      //
+      // Skipping a group's schema change and then persisting its new `fields`
+      // is the worst of both: the registry would describe columns the table
+      // does not have, and the next restart would build a runtime schema from
+      // that description and fail every read and write for it. The metadata and
+      // the storage it describes move together or not at all.
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        newConfig.fieldGroups ?? []
+        (newConfig.fieldGroups ?? []).filter(
+          group => !skippedComponentSlugs.has(group.slug ?? "")
+        )
       );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
@@ -1963,6 +2167,20 @@ async function applyReload(opts?: {
       // breaking every component read (filter by _parent_id) and write (insert
       // _parent_*) after an HMR config reload.
       const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
+      // The discriminator each component table actually carries, taken from the
+      // batched snapshot this reload already read rather than probed again. That
+      // snapshot covers every managed table including the component ones, so a
+      // second introspection here would be a duplicate round trip on the HMR
+      // path — and `chooseTypeColumns` needs nothing the snapshot does not hold.
+      const componentTypeColumns = chooseTypeColumns(
+        liveSnapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        Object.values(desiredComponents).map(comp => comp.tableName),
+        // Read before the apply, not here: see the probe block above.
+        identifierCase
+      );
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
         // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
@@ -1970,7 +2188,12 @@ async function applyReload(opts?: {
         const table = fieldGroupSchemaService.generateRuntimeSchema(
           comp.tableName,
           comp.fields,
-          { localized }
+          {
+            localized,
+            typeColumn:
+              componentTypeColumns.get(comp.tableName) ??
+              STORAGE_FORMAT.columns.type,
+          }
         );
         componentFreshTables.set(comp.tableName, table);
         if (localized) {
