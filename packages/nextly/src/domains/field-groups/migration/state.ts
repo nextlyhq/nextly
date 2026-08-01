@@ -44,10 +44,19 @@ export const FIELD_GROUP_MIGRATION_KEY = "field_groups.storage_migration";
  * than persisted — so nothing in a version 2 marker's bytes reveals that
  * position N now addresses different work. This constant is what does.
  *
+ * Version 4 appends a second settlement check and stops recording either of
+ * them: they are gates, re-entered by every invocation, so a marker no longer
+ * points past the last rename. A version 3 marker CAN point past it, at a
+ * settlement position this build does not record — and a resume computed from
+ * that position would begin after the ledger check and never re-enter it,
+ * letting a legacy write committed during the interruption settle unseen.
+ * Nothing in the marker's bytes distinguishes the two meanings, which is
+ * exactly what this constant is for.
+ *
  * Bumping this does **not** invalidate a settled marker's recorded plan; see
  * `MIN_READABLE_MANIFEST_VERSION`, which tracks the entry format separately.
  */
-export const MIGRATION_MARKER_VERSION = 3;
+export const MIGRATION_MARKER_VERSION = 4;
 
 /**
  * Oldest marker version whose recorded plan this build can still execute.
@@ -89,6 +98,12 @@ export const MIN_READABLE_MANIFEST_VERSION = 2;
  * Raise this whenever a version adds work to a run — never merely because the
  * marker version moved. A build that only reorders or renumbers steps leaves
  * what a settled marker claims untouched.
+ *
+ * Deliberately left at 3 by version 4, which adds a settlement CHECK rather
+ * than additional rewriting: the storage a version 3 run produces is the storage
+ * a version 4 run produces, and the new check re-examines it rather than
+ * changing it. Raising it would refuse every version 3 installation on upgrade
+ * with no path forward, which is the wrong answer for storage that is complete.
  */
 export const MIN_COMPLETE_MARKER_VERSION = 3;
 
