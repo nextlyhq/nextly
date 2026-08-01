@@ -563,60 +563,59 @@ function measurementRejection(
         return "not-a-length";
       }
       for (const arg of args) {
-        // Within one argument, operands and operators alternate, starting and
-        // ending on an operand. css-tree will happily build a tree for
-        // `calc(1px,)`, `calc(/ 1px)`, `calc(1px 2px)` and `calc()`; a browser
-        // discards them all. An even count is an empty argument or a trailing
-        // operator, and a lone operand such as `abs(1px)` is valid alternation.
-        if (arg.length === 0 || arg.length % 2 === 0) return "not-a-length";
-        for (let index = 0; index < arg.length; index += 1) {
-          const expectingOperator = index % 2 === 1;
-          const term = arg[index];
-          if (term === undefined) return "not-a-length";
-          if ((term.type === "Operator") !== expectingOperator) {
-            return "not-a-length";
-          }
-          if (expectingOperator) continue;
-          // Inside a math function the sign of any one term says nothing about
-          // the sign of the result, so the non-negative rule does not apply.
-          // The property's keywords are dropped: `auto` is a whole value, not
-          // an operand, and `calc(auto)` is discarded by the browser.
-          const childRejection = measurementRejection(
-            term,
-            true,
-            ownIdentifiers,
-            {
-              allowNegative: true,
-              allowPercentage: limits.allowPercentage,
-              functions: limits.functions,
-            }
-          );
-          if (childRejection !== null) return childRejection;
-        }
-      }
-      return null;
-    }
-    case "Parentheses": {
-      // An explicitly grouped term is an operand whose contents follow the same
-      // rules, so `calc((1px + 2px) * 3)` is a length like its ungrouped form.
-      const inner = [...node.children];
-      if (inner.length === 0 || inner.length % 2 === 0) return "not-a-length";
-      for (let index = 0; index < inner.length; index += 1) {
-        const expectingOperator = index % 2 === 1;
-        const term = inner[index];
-        if (term === undefined) return "not-a-length";
-        if ((term.type === "Operator") !== expectingOperator) {
-          return "not-a-length";
-        }
-        if (expectingOperator) continue;
-        const rejection = measurementRejection(term, true, keywords, limits);
+        // Inside a math function the sign of any one term says nothing about
+        // the sign of the result, so the non-negative rule does not apply. The
+        // property's keywords are dropped: `auto` is a whole value, not an
+        // operand, and `calc(auto)` is discarded by the browser.
+        const rejection = alternationRejection(arg, ownIdentifiers, {
+          allowNegative: true,
+          allowPercentage: limits.allowPercentage,
+          functions: limits.functions,
+        });
         if (rejection !== null) return rejection;
       }
       return null;
     }
+    case "Parentheses":
+      // An explicitly grouped term is an operand whose contents follow the same
+      // rules, so `calc((1px + 2px) * 3)` is a length like its ungrouped form.
+      return alternationRejection([...node.children], keywords, limits);
     default:
       return "not-a-length";
   }
+}
+
+/**
+ * Whether one arithmetic expression alternates correctly: operands and
+ * operators in turn, starting and ending on an operand.
+ *
+ * css-tree will happily build a tree for `calc(1px,)`, `calc(/ 1px)`,
+ * `calc(1px 2px)` and `calc()`; a browser discards them all. An even count is an
+ * empty expression or a trailing operator, while a lone operand such as
+ * `abs(1px)` is valid alternation.
+ *
+ * One function for both callers because a math function's argument and a
+ * parenthesised group are the same thing grammatically, and a rule that lives
+ * in two places is a rule that will hold in one of them.
+ */
+function alternationRejection(
+  terms: readonly CssNode[],
+  keywords: ReadonlySet<string>,
+  limits: MeasurementLimits
+): CssValueRejection | null {
+  if (terms.length === 0 || terms.length % 2 === 0) return "not-a-length";
+  for (let index = 0; index < terms.length; index += 1) {
+    const expectingOperator = index % 2 === 1;
+    const term = terms[index];
+    if (term === undefined) return "not-a-length";
+    if ((term.type === "Operator") !== expectingOperator) {
+      return "not-a-length";
+    }
+    if (expectingOperator) continue;
+    const rejection = measurementRejection(term, true, keywords, limits);
+    if (rejection !== null) return rejection;
+  }
+  return null;
 }
 
 /**
