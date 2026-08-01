@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 
-import { isCompanionTable, isManagedTable } from "./managed-tables";
+import {
+  MANAGED_TABLE_PREFIXES,
+  isCompanionTable,
+  isManagedTable,
+} from "./managed-tables";
 
 describe("isCompanionTable", () => {
   it("detects localized companion tables", () => {
@@ -29,5 +33,30 @@ describe("isCompanionTable", () => {
     // They are prefixed dc_/single_ so tablesFilter still covers them — the
     // pipeline must additionally exclude them via isCompanionTable.
     expect(isManagedTable("dc_pages_locales")).toBe(true);
+  });
+});
+
+describe("isManagedTable", () => {
+  // This regex is drizzle-kit's `tablesFilter`, so a prefix missing from it is
+  // a table drizzle-kit never introspects — and a desired table it did not find
+  // is one it creates. After the storage migration a generated field-group
+  // table carries `fg_`, so every apply would propose creating one that exists.
+  it("manages field-group tables under both storage generations", () => {
+    expect(isManagedTable("comp_hero")).toBe(true);
+    expect(isManagedTable("fg_hero")).toBe(true);
+  });
+
+  it("leaves tables outside the managed prefixes alone", () => {
+    expect(isManagedTable("users")).toBe(false);
+    expect(isManagedTable("nextly_versions")).toBe(false);
+  });
+
+  // The CLI matches by `startsWith` against the exported list while the
+  // pipeline matches by regex. They named different prefix sets once; deriving
+  // one from the other is what stops that recurring.
+  it("exposes the same prefixes the regex matches", () => {
+    for (const prefix of MANAGED_TABLE_PREFIXES) {
+      expect(isManagedTable(`${prefix}thing`)).toBe(true);
+    }
   });
 });

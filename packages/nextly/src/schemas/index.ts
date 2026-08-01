@@ -20,6 +20,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { buildFieldGroupRegistryTable } from "../domains/field-groups/storage/registry-schemas";
 import type { NextlySchemaSnapshot } from "../domains/schema/pipeline/diff/types";
+import { MANAGED_TABLE_PREFIXES } from "../domains/schema/pipeline/managed-tables";
 
 import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
@@ -254,12 +255,15 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_webhook_deliveries",
 ] as const;
 
-/** Prefixes that identify managed user tables (dc_, single_, comp_). */
-export const CORE_TABLE_PREFIXES: readonly string[] = [
-  "dc_",
-  "single_",
-  STORAGE_FORMAT.tablePrefix,
-];
+/**
+ * Prefixes that identify managed user tables.
+ *
+ * Derived from the pipeline's own filter rather than restated, so the two
+ * cannot disagree about what Nextly manages. They did: this list named three
+ * prefixes while the filter named four, and a table the filter manages but this
+ * list does not is one the CLI treats as foreign.
+ */
+export const CORE_TABLE_PREFIXES: readonly string[] = MANAGED_TABLE_PREFIXES;
 
 // =============================================================================
 // Transitional re-exports — kept so existing consumers keep building during

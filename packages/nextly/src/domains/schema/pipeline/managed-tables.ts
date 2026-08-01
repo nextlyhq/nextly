@@ -8,8 +8,25 @@ import { MIGRATION_TARGET } from "../../field-groups/migration/manifest";
 // rely on this prefix list. Coordinate with plugin field types
 // (Gap 8 in the finalized plan) when extending.
 
+// 🔴 Both field-group generations. This regex is drizzle-kit's `tablesFilter`,
+// so a prefix missing from it is a table drizzle-kit never INTROSPECTS — and a
+// desired table it did not find in the live database is one it creates. After
+// the storage migration a generated field-group table carries `fg_`, so leaving
+// it out means every apply proposes creating a table that is already there.
+//
+// Widening this is a SemVer-visible change, and it is made BEFORE any database
+// can hold the migrated prefix rather than after: a filter that learns about a
+// table only once the table exists has already mis-diffed it once.
+/** The prefixes themselves, for callers that match by `startsWith`. */
+export const MANAGED_TABLE_PREFIXES: readonly string[] = [
+  "dc_",
+  "single_",
+  STORAGE_FORMAT.tablePrefix,
+  MIGRATION_TARGET.tablePrefix,
+];
+
 export const MANAGED_TABLE_PREFIXES_REGEX = new RegExp(
-  `^(dc_|single_|${STORAGE_FORMAT.tablePrefix})`
+  `^(dc_|single_|${STORAGE_FORMAT.tablePrefix}|${MIGRATION_TARGET.tablePrefix})`
 );
 
 export function isManagedTable(name: string): boolean {
