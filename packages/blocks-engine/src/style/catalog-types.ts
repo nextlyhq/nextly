@@ -105,6 +105,12 @@ interface StyleLeafBase {
 export interface KeywordLeaf extends StyleLeafBase {
   kind: "keyword";
   values: readonly string[];
+  /**
+   * How many keywords the property accepts, in order. One unless the property
+   * is a shorthand over two axes: `overflow: hidden auto` sets the inline and
+   * block axes separately, and there is no other way to express the second.
+   */
+  maxParts?: number;
 }
 
 /** A length, percentage, or other CSS dimension, stored as a string (or `0`). */

@@ -1142,3 +1142,88 @@ describe("a math expression whose result type is not knowable here", () => {
     expect(codes({ width: "calc(var(--x) * 2)" })).toEqual([]);
   });
 });
+
+describe("functions that belong to one family of properties", () => {
+  it("accepts an anchor on the properties an anchor positions", () => {
+    expect(
+      codes({ position: { inset: { blockStart: "anchor(--hero bottom)" } } })
+    ).toEqual([]);
+  });
+
+  it("accepts an intrinsic-size calculation where a size belongs", () => {
+    expect(codes({ width: "calc-size(auto, size + 1rem)" })).toEqual([]);
+    expect(codes({ maxHeight: "calc-size(auto, size + 1rem)" })).toEqual([]);
+  });
+
+  it("keeps each of them off the properties they mean nothing on", () => {
+    expect(codes({ gap: "anchor(--hero bottom)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ gap: "calc-size(auto, size + 1rem)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("a keyword property that takes one value per axis", () => {
+  it("accepts the two-keyword shorthand where the property has one", () => {
+    expect(codes({ overflow: "hidden auto" })).toEqual([]);
+    expect(codes({ overflow: "hidden" })).toEqual([]);
+  });
+
+  it("refuses more keywords than the property takes, or an unknown one", () => {
+    expect(codes({ overflow: "hidden auto clip" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ overflow: "hidden nope" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("does not let a single-value property take two", () => {
+    expect(codes({ display: "block flex" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("still reads a two-word vocabulary entry as the one value it is", () => {
+    expect(codes({ gridAutoFlow: "row dense" })).toEqual([]);
+    expect(codes({ gridAutoFlow: "  row   dense  " })).toEqual([]);
+  });
+
+  it("keeps a CSS-wide keyword standing alone", () => {
+    expect(codes({ overflow: "inherit" })).toEqual([]);
+    expect(codes({ overflow: "inherit hidden" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("the size cap applies before a value is normalised", () => {
+  it("refuses an oversized string that trimming would shrink to a keyword", () => {
+    const padded = `${" ".repeat(9000)}block`;
+    expect(codes({ display: padded })).toEqual(["invalid-style-value"]);
+    expect(codes({ opacity: `${" ".repeat(9000)}inherit` })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("still accepts the same keywords at a sane length", () => {
+    expect(codes({ display: "  block  " })).toEqual([]);
+    expect(codes({ opacity: "  inherit  " })).toEqual([]);
+  });
+});
+
+describe("percentages where the property's grammar has them", () => {
+  it("accepts a percentage word spacing", () => {
+    expect(codes({ wordSpacing: "10%" })).toEqual([]);
+    expect(codes({ wordSpacing: "1px" })).toEqual([]);
+  });
+
+  it("still refuses one where the property takes a length only", () => {
+    expect(codes({ letterSpacing: "10%" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("colors chosen by a function", () => {
+  it("accepts a contrast-derived color", () => {
+    expect(checkColorValue("contrast-color(red)")).toBeNull();
+    expect(codes({ color: "contrast-color(red)" })).toEqual([]);
+  });
+});

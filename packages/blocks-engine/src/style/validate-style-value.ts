@@ -20,6 +20,7 @@ import {
   checkDimensionValue,
   checkUrlValue,
   isCssWideKeyword,
+  isOverlongValue,
 } from "./css-value";
 import type { CssValueRejection } from "./css-value";
 
@@ -179,11 +180,24 @@ function leafIssues(
       // emits is just as valid — refusing it here would be this leaf kind
       // alone being strict about something no other one minds.
       if (typeof value === "string") {
-        const written = value.trim().toLowerCase();
-        if (
-          leaf.values.some(allowed => allowed.toLowerCase() === written) ||
-          isCssWideKeyword(written)
-        ) {
+        // The size cap comes before normalising, not after: trimming a value
+        // that is mostly whitespace would otherwise let an arbitrarily long
+        // string match a short keyword, and every copy made along the way is
+        // work bought with a value that should never have been read.
+        if (isOverlongValue(value)) return rejected(path, value, "too-long");
+        const parts = value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        // Collapsed rather than compared raw, so that a vocabulary entry
+        // written as two words — `grid-auto-flow: row dense` is one value, not
+        // two — still matches however the stored string was spaced.
+        const written = parts.join(" ");
+        const allowed = (part: string): boolean =>
+          leaf.values.some(entry => entry.toLowerCase() === part);
+        if (parts.length === 0) return rejected(path, value, "unparsable");
+        if (isCssWideKeyword(written) || allowed(written)) return [];
+        // Only a property declared as a shorthand reads its value as several
+        // keywords; for every other one the whole string is the value, which is
+        // what keeps a two-word entry from being mistaken for two entries.
+        if (parts.length <= (leaf.maxParts ?? 1) && parts.every(allowed)) {
           return [];
         }
       }
@@ -200,8 +214,10 @@ function leafIssues(
       // they are legal wherever a value is. Trimmed first, as the keyword,
       // dimension and colour leaves all are: whichever leaf kind a property
       // happens to use should not decide whether stored whitespace is fatal.
-      if (typeof value === "string" && isCssWideKeyword(value.trim())) {
-        return [];
+      if (typeof value === "string") {
+        // Bounded before normalising, for the same reason the keyword leaf is.
+        if (isOverlongValue(value)) return rejected(path, value, "too-long");
+        if (isCssWideKeyword(value.trim())) return [];
       }
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return [invalid(path, `${describeValue(value)} is not a number.`)];

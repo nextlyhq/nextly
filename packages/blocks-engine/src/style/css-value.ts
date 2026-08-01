@@ -346,6 +346,11 @@ function walkForUrlRejection(ast: CssNode): CssValueRejection | null {
  */
 const MAX_VALUE_NESTING = 32;
 
+/** True when a stored string is longer than any declaration should carry. */
+export function isOverlongValue(value: string): boolean {
+  return value.length > MAX_VALUE_LENGTH;
+}
+
 /**
  * Longest value that will be parsed. Nesting is not the only way to make an
  * expensive parse: a flat value of a few hundred thousand tokens builds an AST
@@ -673,6 +678,7 @@ const COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
   "color",
   "color-mix",
   "light-dark",
+  "contrast-color",
   "device-cmyk",
   "var",
   "env",

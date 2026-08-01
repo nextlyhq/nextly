@@ -61,7 +61,7 @@ function dimension(
  * that take a size and discarded elsewhere, which is why they travel with the
  * sizing keywords instead of being allowed wherever a measurement is.
  */
-const SIZING_FUNCTIONS = ["fit-content"];
+const SIZING_FUNCTIONS = ["fit-content", "calc-size"];
 
 /** Keyword sets shared by several length-valued properties. */
 const SIZING_KEYWORDS = [
@@ -91,8 +91,12 @@ const FONT_SIZE_KEYWORDS = [
   "larger",
 ];
 
-function keyword(cssProperty: string, values: readonly string[]): KeywordLeaf {
-  return { kind: "keyword", cssProperty, tokenKinds: [], values };
+function keyword(
+  cssProperty: string,
+  values: readonly string[],
+  maxParts = 1
+): KeywordLeaf {
+  return { kind: "keyword", cssProperty, tokenKinds: [], values, maxParts };
 }
 
 function color(cssProperty: string, descendant?: string): ColorLeaf {
@@ -402,7 +406,11 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "overflow",
     group: "dimensions",
-    shape: keyword("overflow", ["visible", "hidden", "clip", "scroll", "auto"]),
+    shape: keyword(
+      "overflow",
+      ["visible", "hidden", "clip", "scroll", "auto"],
+      2
+    ),
     summary: "How content exceeding the box is handled.",
   },
 
@@ -467,6 +475,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     shape: dimension("word-spacing", {
       keywords: ["normal"],
       allowNegative: true,
+      allowPercentage: true,
     }),
     summary: "Space between words.",
   },
@@ -689,6 +698,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
           keywords: ["auto"],
           allowNegative: true,
           allowPercentage: true,
+          functions: ["anchor"],
         }),
         zIndex: {
           kind: "union",
