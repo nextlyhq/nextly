@@ -280,14 +280,21 @@ function errorToServiceResult<T = unknown>(
 
 /**
  * System columns a client must never write: the primary key, the timestamps,
- * and the owner stamp (both the snake_case column name and the camelCase form a
- * client might send). They are not declared fields, so field validation passes
+ * the owner stamp, and the first-publication marker (both the snake_case column
+ * name and the camelCase form a client might send). They are not declared
+ * fields, so field validation passes
  * them through. Stripping them on BOTH create and update means the service
  * remains authoritative: on create the generated id / stamped `created_by` /
  * timestamps win (a stray `createdBy` alias can't survive the snake-case pass
  * and overwrite the stamp with an attacker-chosen owner), and on update an
  * authorized updater can't transfer a row to another user, forge `created_at`,
  * duplicate `updated_at`, or reassign `id`.
+ *
+ * `first_published_at` is here for a reason the others are not: it is meant to
+ * be written once and never moved, and a value taken from the request would
+ * make that guarantee decorative. A draft create could claim a publication that
+ * never happened, and any later update could reset a real one. The service's own
+ * stamps are applied AFTER this strip, so they still land.
  */
 const IMMUTABLE_SYSTEM_FIELDS = new Set([
   "id",
@@ -297,6 +304,8 @@ const IMMUTABLE_SYSTEM_FIELDS = new Set([
   "updatedAt",
   "created_by",
   "createdBy",
+  "first_published_at",
+  "firstPublishedAt",
 ]);
 
 function stripImmutableSystemFields(
@@ -3626,12 +3635,25 @@ export class CollectionMutationService extends BaseService {
           }
 
           if (hasMainStatus) {
-            // `COALESCE` rather than a read-then-write: this dates the FIRST publication, so it
-            // must not move on a republish, and expressing "only if absent" in the statement
-            // makes that true of concurrent publishes too. `nowExpr` keeps it dialect-correct
-            // without round-tripping a Date through a raw parameter.
+            // Only when this call actually moves the row into published. A row that is already
+            // published is not having a first publication now, and stamping one would be worst
+            // for the rows it would hit: those published before this column existed, whose marker
+            // is null precisely because their history was never recorded. Dating them today
+            // reports a publication that did not happen, which is the one thing a null was
+            // supposed to avoid claiming.
+            //
+            // `COALESCE` still, for the transition case: it dates the FIRST publication, and
+            // expressing "only if absent" in the statement keeps that true of concurrent
+            // publishes. `nowExpr` keeps it dialect-correct without round-tripping a Date through
+            // a raw parameter.
+            const marksFirstPublication =
+              resolvePublishTransition(lockedPreviousStatus, "published") ===
+              "publish";
+            const markerAssignment = marksFirstPublication
+              ? `, ${q("first_published_at")} = COALESCE(${q("first_published_at")}, ${nowExpr})`
+              : "";
             await tx.execute(
-              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr}, ${q("first_published_at")} = COALESCE(${q("first_published_at")}, ${nowExpr}) WHERE ${q("id")} = ${ph(2)}`,
+              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr}${markerAssignment} WHERE ${q("id")} = ${ph(2)}`,
               ["published", params.entryId]
             );
           }

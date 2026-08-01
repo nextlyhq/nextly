@@ -184,6 +184,111 @@ describe("first_published_at", () => {
     expect(Object.keys(row)).not.toContain("first_published_at");
   });
 
+  it("ignores a marker supplied by the client on create", async () => {
+    // The column is not a declared field, so field validation passes it straight through: without
+    // stripping, a draft create can invent a publication date for a document that has never been
+    // public. Both spellings, because the snake-case pass would otherwise let the camelCase alias
+    // through and land on the same column.
+    current = await createTestNextly({ collections: [posts()] });
+
+    const created = await handler(current).createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      {
+        title: "wip",
+        status: "draft",
+        firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
+        first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+      }
+    );
+    const id = (created.data as { id: string }).id;
+
+    expect((await storedRow(current, id)).first_published_at).toBeFalsy();
+  });
+
+  it("ignores a marker supplied by the client on update", async () => {
+    // The set-once guarantee is only worth as much as the write path's refusal to take a value
+    // from the request: an update that could reset it would make the marker report whatever the
+    // last caller chose.
+    current = await createTestNextly({ collections: [posts()] });
+    const h = handler(current);
+
+    const created = await h.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "live", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+    const stamped = String((await storedRow(current, id)).first_published_at);
+
+    await h.updateEntry(
+      { collectionName: "posts", entryId: id, overrideAccess: true },
+      {
+        title: "edited",
+        firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
+        first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+      }
+    );
+
+    expect(String((await storedRow(current, id)).first_published_at)).toBe(
+      stamped
+    );
+  });
+
+  it("does not date a first publication when publish-all changes nothing", async () => {
+    // The rows this would hit are the ones it would be most wrong about: published before this
+    // column existed, so their marker is null precisely because their history was never recorded.
+    // Stamping today reports a publication that did not happen, which is what a null exists to
+    // avoid claiming. Simulated by clearing the marker on an already-published row, since a
+    // genuinely legacy row cannot be created through the API.
+    current = await createTestNextly({ collections: [posts()] });
+    const h = handler(current);
+
+    const created = await h.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "live", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+    await current.adapter.update(
+      "dc_posts",
+      { first_published_at: null },
+      { and: [{ column: "id", op: "=", value: id }] }
+    );
+    expect((await storedRow(current, id)).first_published_at).toBeFalsy();
+
+    await h.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const after = await storedRow(current, id);
+    expect(after.status).toBe("published");
+    expect(after.first_published_at).toBeFalsy();
+  });
+
+  it("dates a first publication when publish-all does move the row", async () => {
+    // The other half of the same branch: publish-all on a draft IS a first publication, and
+    // gating the stamp on a real transition must not turn it off here.
+    current = await createTestNextly({ collections: [posts()] });
+    const h = handler(current);
+
+    const created = await h.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "wip", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    expect((await storedRow(current, id)).first_published_at).toBeFalsy();
+
+    await h.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    const after = await storedRow(current, id);
+    expect(after.status).toBe("published");
+    expect(after.first_published_at).toBeTruthy();
+  });
+
   it("records a Single's first publication, and reads still work", async () => {
     // This test used to assert the OPPOSITE. A Single's physical table was built by a generator
     // that restated the system columns by hand, so this column reached the runtime schema and not
