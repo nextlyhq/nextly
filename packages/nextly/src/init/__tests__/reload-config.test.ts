@@ -1793,6 +1793,56 @@ describe("reloadNextlyConfig", () => {
       expect(edited).not.toHaveBeenCalled();
     });
 
+    it("holds hooks back when a metadata-only sync fails", async () => {
+      // The no-DDL path has its own sync, and it keeps the prior snapshot for
+      // whatever it could not persist -- so those entities still validate and
+      // serialize against the old field tree, exactly as on the post-DDL path.
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const fields = [{ name: "body", type: "text" }];
+      const noDiff = (hook: () => undefined) => ({
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields,
+            hooks: { afterRead: [hook] },
+          },
+        ],
+      });
+      introspectSpy.mockResolvedValue({
+        tables: [
+          buildDesiredTableFromFields("dc_posts", fields, "sqlite", {
+            hasStatus: false,
+            localized: false,
+          }),
+        ],
+      } as NextlySchemaSnapshot);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({ config: noDiff(original) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(registry.getHookCount("afterRead", "posts")).toBe(1);
+
+      pipelineApplySpy.mockClear();
+      loadConfigSpy.mockResolvedValue({ config: noDiff(edited) });
+      await reloadNextlyConfig({
+        resolver: buildResolver({ failCollectionMetaSync: true }),
+      });
+      // The control that this is the no-DDL branch and not the apply one.
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+
+      await registry.execute("afterRead", {
+        collection: "posts",
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(original).toHaveBeenCalledTimes(1);
+      expect(edited).not.toHaveBeenCalled();
+    });
+
     it("has exactly the landing points its paths need", () => {
       // A count rather than a proof. The scan this replaces looked for a
       // resolution in the lines before each early return, and passed while the
@@ -1805,9 +1855,11 @@ describe("reloadNextlyConfig", () => {
         "utf8"
       );
       const commits = source.match(/^\s*commitReload\(/gm) ?? [];
-      // Empty targets, the no-DDL branch, the post-apply localization holdback,
-      // and after a successful apply.
-      expect(commits).toHaveLength(4);
+      // Empty targets, the no-DDL branch, and after a successful apply. The
+      // post-apply localization branch deliberately publishes nothing: it
+      // returns before the runtime-schema refresh, so anything committed there
+      // would not be backed by the runtime it describes.
+      expect(commits).toHaveLength(3);
     });
 
     it("keeps a late app hook behind the config's, across a reload", async () => {
