@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import type { Command } from "commander";
 import { sql } from "drizzle-orm";
 
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   mapJournalRow,
   mapMigrationsRow,
@@ -316,6 +317,13 @@ export async function runReconcileCore(
     await reconcile({
       db,
       dialect,
+      // Same reason as `nextly migrate`: the desired core shape must name the
+      // registry this database actually holds, or the reconcile creates the
+      // other one empty.
+      fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+        dialect,
+        getDrizzle: <T>() => db as T,
+      }),
       mode: "dev-loose",
       confirmDestructive: deps.confirmDestructive,
       logger: deps.logger,

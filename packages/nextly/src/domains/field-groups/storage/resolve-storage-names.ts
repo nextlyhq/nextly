@@ -342,6 +342,35 @@ export async function resolveKnownTypeColumns(
   }
 }
 
+/**
+ * The registry name for a caller that has a database handle but no table list.
+ *
+ * The CLI's adapter exposes a dialect and a Drizzle instance and nothing else,
+ * so the catalog is asked the narrow question instead of the broad one: describe
+ * these two candidate tables, and whichever comes back is the one that exists.
+ * The decision itself is {@link chooseRegistryTable}, unchanged — this only
+ * feeds it a listing gathered a different way, so the preference order and the
+ * folding rules cannot drift between callers.
+ *
+ * Not memoized, unlike {@link resolveFieldGroupRegistryTable}: a CLI command
+ * resolves once per run, and a migration command in particular must not read a
+ * name cached before it moved storage.
+ */
+export async function resolveRegistryNameFromCatalog(
+  adapter: CatalogReadAdapter
+): Promise<FieldGroupRegistryName> {
+  const rules = await readIdentifierCaseRules(adapter);
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [STORAGE_FORMAT.registryTable, MIGRATION_TARGET.registryTable]
+  );
+  return chooseRegistryTable(
+    snapshot.tables.map(table => table.name),
+    rules
+  ).name;
+}
+
 async function readRegistryTable(
   adapter: StorageNameAdapter
 ): Promise<FieldGroupRegistryTable> {

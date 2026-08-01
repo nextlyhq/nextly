@@ -23,14 +23,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql, type SQL } from "drizzle-orm";
+import { type SQL } from "drizzle-orm";
 
-import { MIGRATION_TARGET } from "../domains/field-groups/migration/manifest";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
-import {
-  chooseTypeColumns,
-  resolveFieldGroupRegistryName,
-} from "../domains/field-groups/storage/resolve-storage-names";
+import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
@@ -65,15 +61,8 @@ import type {
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
-import {
-  indexCatalog,
-  resolveCatalogName,
-} from "../domains/schema/utils/resolve-catalog-name";
 import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../domains/schema/utils/resolve-table-name";
+import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
@@ -95,6 +84,7 @@ import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
 
+import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
@@ -623,6 +613,17 @@ async function ensureLocalizedCompanionsForReload(
     fieldGroups?: unknown[];
     localization?: { defaultLocale?: string };
   },
+  /**
+   * Stored physical table name per field-group slug.
+   *
+   * 🔴 A companion is named after the table it belongs to, so deriving the main
+   * table's name here derives the companion's too — and after the storage
+   * migration that names `comp_<slug>_locales` beside a live `fg_<slug>`,
+   * provisioning an empty companion the entity's reads never consult while the
+   * real one is left to drift. The reload already resolved these once; this is
+   * that answer, not a second guess at it.
+   */
+  fieldGroupTables: ReadonlyMap<string, string>,
   // `<kind>:<slug>` for every entity whose schema change was classified unsafe (or whose diff
   // threw) this cycle, so it was NOT applied. Those must be skipped: creating a companion for
   // a transition that has not happened is worse than leaving it absent. The Schema Builder
@@ -714,7 +715,7 @@ async function ensureLocalizedCompanionsForReload(
     [
       "fieldGroup",
       (config.fieldGroups ?? []) as Localizable[],
-      e => resolveComponentTableName(e.slug!),
+      e => fieldGroupTables.get(e.slug!) ?? resolveComponentTableName(e.slug!),
     ],
   ];
 
@@ -1012,105 +1013,6 @@ async function runReload(opts?: {
   }
 }
 
-/** What a reload knows about where its field groups are physically stored. */
-export interface StoredFieldGroupTables {
-  /** `slug` → the physical table name the registry records. */
-  tables: Map<string, string>;
-  /**
-   * Whether those names can be relied on.
-   *
-   * 🔴 The distinction this type exists for: a registry that is ABSENT means a
-   * fresh database, where deriving `comp_*` names is correct. A registry that
-   * is PRESENT but unreadable means the names are UNKNOWN, and deriving them
-   * addresses storage that is not there — which is how a reload creates an
-   * empty table beside the populated one it meant to edit. Only the first case
-   * may guess.
-   */
-  usable: boolean;
-  /**
-   * Why the read failed, when it did.
-   *
-   * Present only on the failure path, and carried so the caller's log can name
-   * the cause rather than only the symptom.
-   */
-  reason?: string;
-}
-
-/**
- * The physical table name each field group is stored under.
- *
- * Read rather than derived: `resolveComponentTableName` answers what this
- * release's creator WOULD name a table, while the registry records what it is
- * actually called. They differ for an author-chosen `dbName`, and after the
- * storage migration for every field group.
- *
- * Issued through the adapter's statement path so the three driver envelopes are
- * normalised in one place, and so an unrecognised shape is refused rather than
- * reported as no rows.
- */
-export async function readStoredFieldGroupTables(
-  adapter: AdapterLike
-): Promise<StoredFieldGroupTables> {
-  const tables = new Map<string, string>();
-  try {
-    const registryTable = await resolveFieldGroupRegistryName(adapter);
-    const rows = await adapter.queryStatement<{
-      slug?: unknown;
-      table_name?: unknown;
-    }>(
-      sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")} FROM ${sql.identifier(registryTable)}`
-    );
-    for (const row of rows) {
-      if (typeof row.slug === "string" && typeof row.table_name === "string") {
-        tables.set(row.slug, row.table_name);
-      }
-    }
-    return { tables, usable: true };
-  } catch (error) {
-    // The reason travels with the verdict. Without it the caller can only say
-    // "could not read stored field-group table names", which tells an operator
-    // nothing about whether they are looking at a permission problem, a dropped
-    // connection, or a malformed row — and this is the failure that defers a
-    // whole reload, so it is the one worth diagnosing.
-    return {
-      tables,
-      usable: (await registryIsAbsent(adapter)) === true,
-      reason: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-/**
- * Whether the database genuinely has no field-group registry.
- *
- * The distinction that matters after a failed read: absent means a fresh
- * database, where deriving names is correct; present-but-unreadable means the
- * names are unknown, and deriving them would address storage that is not there.
- * Answered `undefined` when even this cannot be established, which is treated
- * as unreadable.
- */
-async function registryIsAbsent(
-  adapter: AdapterLike
-): Promise<boolean | undefined> {
-  try {
-    // Matched under the server's own rules, not by exact spelling — the same
-    // way `chooseRegistryTable` matches. A folding server can report the
-    // registry as `DYNAMIC_FIELD_GROUPS`, and an exact comparison would call a
-    // present registry absent: the caller would then treat derived `comp_*`
-    // names as usable and let the reload build them beside the populated
-    // migrated tables, which is precisely the outcome this probe exists to
-    // prevent.
-    const rules = await readIdentifierCaseRules(adapter);
-    const catalog = indexCatalog(await adapter.listTables(), rules.tables);
-    return (
-      resolveCatalogName(catalog, STORAGE_FORMAT.registryTable) === undefined &&
-      resolveCatalogName(catalog, MIGRATION_TARGET.registryTable) === undefined
-    );
-  } catch {
-    return undefined;
-  }
-}
-
 async function applyReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
@@ -1352,49 +1254,25 @@ async function applyReload(opts?: {
     fields: MinimalField[];
     localized?: boolean;
   }> = [];
-  // 🔴 The STORED physical name wins over the one derived from the slug.
-  //
-  // `resolveComponentTableName` answers what this release's creator WOULD name
-  // a table; the registry records what the table is actually called. Those
-  // differ for an author-chosen `dbName`, and — after the storage migration —
-  // for every field group. Deriving the name would make the reload diff against
-  // a table that is not there, decide the component is new, and create an empty
-  // one beside the populated one it meant to edit.
-  //
-  // Best effort by design: a registry that cannot be read leaves every name
-  // derived, which is exactly the behaviour of a database that has no registry
-  // yet.
-  const stored = await readStoredFieldGroupTables(adapter);
-  const storedComponentTables = stored.tables;
-  const storedNamesUsable = stored.usable;
+  // 🔴 The STORED physical name wins over the one derived from the slug, and
+  // that decision is made ONCE for the whole reload — see the plan module.
+  const fieldGroupPlan = await planFieldGroupReload(
+    adapter,
+    newConfig.fieldGroups ?? []
+  );
+  componentTargets.push(...fieldGroupPlan.targets);
   /** Field groups left out of this reload because their storage is unknown. */
-  const skippedComponentSlugs = new Set<string>();
-  if (!storedNamesUsable) {
+  const skippedComponentSlugs = fieldGroupPlan.skipped;
+  /** The same resolution, keyed for the companion provisioning below. */
+  const fieldGroupTables = new Map(
+    fieldGroupPlan.targets.map(target => [target.slug, target.tableName])
+  );
+  if (!fieldGroupPlan.usable) {
     logger?.warn(
       "[Nextly HMR] Could not read stored field-group table names" +
-        (stored.reason ? `: ${stored.reason}` : "") +
+        (fieldGroupPlan.reason ? `: ${fieldGroupPlan.reason}` : "") +
         ". Deferring the field-group apply to the next reload."
     );
-  }
-
-  for (const c of newConfig.fieldGroups ?? []) {
-    if (!c.slug) continue;
-    // Skipped entirely when the stored names could not be established: a
-    // derived name is a guess about physical storage, and guessing here is what
-    // creates the empty table.
-    if (!storedNamesUsable) {
-      skippedComponentSlugs.add(c.slug);
-      continue;
-    }
-    componentTargets.push({
-      slug: c.slug,
-      tableName:
-        storedComponentTables.get(c.slug) ?? resolveComponentTableName(c.slug),
-      fields: (c.fields ?? []) as MinimalField[],
-      // i18n: carry `localized` so the HMR diff omits translatable columns from the
-      // component's main table and registers its companion.
-      localized: (c as { localized?: boolean }).localized === true,
-    });
   }
 
   // 🔴 Checked BEFORE the empty-target branch below. `loadConfig` has already
@@ -1707,6 +1585,7 @@ async function applyReload(opts?: {
     const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
       adapter,
       newConfig,
+      fieldGroupTables,
       deferredEntities
     );
 
@@ -1902,6 +1781,7 @@ async function applyReload(opts?: {
   const preservation = await ensureLocalizedCompanionsForReload(
     adapter,
     newConfig,
+    fieldGroupTables,
     deferredEntities,
     "beforeApply"
   );
@@ -1944,6 +1824,7 @@ async function applyReload(opts?: {
     const postApply = await ensureLocalizedCompanionsForReload(
       adapter,
       newConfig,
+      fieldGroupTables,
       deferredEntities
     );
 
