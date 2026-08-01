@@ -416,7 +416,18 @@ async function syncCodeFirstMetadataOnly(
     fieldGroups?: ComponentDef[];
   },
   logger?: LoggerLike
-): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
+): Promise<{
+  collections: boolean;
+  singles: boolean;
+  components: boolean;
+  /**
+   * Singles whose metadata was refused individually. The sync keeps their prior
+   * snapshot rather than failing the whole scope, so the scope flag stays true
+   * while these particular entities still describe themselves the old way.
+   */
+  failedSingles: ReadonlySet<string>;
+}> {
+  let failedSingles: ReadonlySet<string> = new Set<string>();
   let collections = true;
   let singles = true;
   let components = true;
@@ -445,6 +456,7 @@ async function syncCodeFirstMetadataOnly(
         await singleReg.syncCodeFirstSingles(payload)
       );
     }
+    failedSingles = failedSlugs;
     // Refresh the live default source after the sync: successful singles adopt
     // the new config; a single whose sync failed keeps its prior snapshot so its
     // new fields never pair with stale serialized metadata.
@@ -476,7 +488,7 @@ async function syncCodeFirstMetadataOnly(
       }`
     );
   }
-  return { collections, singles, components };
+  return { collections, singles, components, failedSingles };
 }
 
 /**
@@ -1821,7 +1833,29 @@ async function applyReload(opts?: {
       // handlers to wait on. Without this the central case -- edit a hook, save
       // -- would stage the replacement and never apply it, which is the state
       // this whole change exists to end.
-      commitReload();
+      //
+      // A metadata-only save can still fail per scope or per single, and the
+      // sync deliberately keeps the prior snapshot for those -- so their
+      // validation and serialization still run against the old field tree, and
+      // a handler written for a field only the new tree has would have it
+      // ignored. Excluded on the same terms as the post-DDL path.
+      commitReload(
+        new Set([
+          ...(synced.collections
+            ? []
+            : (newConfig.collections ?? [])
+                .map(collection => collection.slug)
+                .filter((slug): slug is string => !!slug)
+                .map(slug => `collection:${slug}`)),
+          ...(synced.singles
+            ? []
+            : (newConfig.singles ?? [])
+                .map(single => single.slug)
+                .filter((slug): slug is string => !!slug)
+                .map(slug => `single:${slug}`)),
+          ...[...synced.failedSingles].map(slug => `single:${slug}`),
+        ])
+      );
     } else {
       // A real schema change was deferred (unsafe / needs review) or a diff
       // threw, so the field metadata must NOT be synced — the physical table
@@ -2041,27 +2075,19 @@ async function applyReload(opts?: {
           `could not be copied back out of the translations table. Fix the error above and save ` +
           `again — the content is intact where it is.`
       );
-      // NOT the same as the pre-apply failure: that one runs before the apply,
-      // this one after it succeeded. The tables have already changed, so the
-      // previous field types no longer describe them and putting them back
-      // would misdescribe live schema -- and holding every handler back would
-      // leave an entity whose columns were just renamed running the hook
-      // written for the old ones. Only the entities whose copy-back failed keep
-      // their previous handlers; the rest get the config that was reloaded.
+      // Deliberately publishes NOTHING. The DDL landed, so the previous field
+      // types are not restored either -- they describe tables that now exist.
+      // But this returns ahead of the metadata sync and the runtime-schema
+      // refresh below, so `SchemaRegistry` and `CollectionsHandler` still hold
+      // every entity's pre-change descriptor: a handler published here would
+      // reach for a column the runtime cannot see yet, which is the same
+      // mismatch one layer along from the one this branch exists to prevent.
       //
-      // The slugs arrive without their kind, so both namespaces are excluded.
-      // Over-excluding costs one entity its refreshed handlers until the next
-      // save; under-excluding runs a handler against content that is not where
-      // it expects.
-      commitReload(
-        new Set([
-          ...deferredEntities,
-          ...postApply.restoreFailed.flatMap(slug => [
-            `collection:${slug}`,
-            `single:${slug}`,
-          ]),
-        ])
-      );
+      // Leaving the handlers as they are keeps them in step with the runtime
+      // that is actually installed. Publishing per-entity here would mean
+      // refreshing per-entity first, and the surrounding i18n publish is
+      // all-or-nothing by design -- changing that belongs with that code, not
+      // with a hooks change.
       return;
     }
 
