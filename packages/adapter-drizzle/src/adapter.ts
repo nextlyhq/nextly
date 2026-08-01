@@ -170,11 +170,22 @@ export abstract class DrizzleAdapter {
    * The transaction is automatically committed on success or rolled back on error.
    * Supports nested transactions via savepoints on databases that support them.
    *
+   * Two kinds of error leave this method, and a caller has to be able to tell
+   * them apart. A failure of the transaction itself — the driver, the
+   * connection, a constraint — arrives as a `DatabaseError` with its kind
+   * classified. An error the CALLBACK raised arrives exactly as it was thrown,
+   * because that is the application refusing the write rather than the database
+   * failing to perform it, and rewriting it would discard the code and payload
+   * the caller is meant to act on.
+   *
+   * The rollback is the same either way.
+   *
    * @param callback - Function to execute within transaction
    * @param options - Transaction options
    * @returns Result from the callback
    *
-   * @throws {DatabaseError} If transaction fails
+   * @throws {DatabaseError} If the transaction itself fails
+   * @throws The callback's own error, unchanged, if the callback threw one
    */
   abstract transaction<T>(
     callback: (ctx: TransactionContext) => Promise<T>,

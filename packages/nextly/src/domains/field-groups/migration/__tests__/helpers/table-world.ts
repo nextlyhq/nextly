@@ -19,15 +19,17 @@
  * `buildCondition`). Raising a different error type here would test refusal
  * handling against errors the code will never actually meet.
  *
- * And it reclassifies whatever escapes a transaction callback, exactly as every
- * real adapter does: `classifyError` short-circuits only on an existing
- * `DatabaseError`, so a `NextlyError` thrown inside a transaction reaches the
- * caller rewrapped as an unknown database error with its `logContext` gone. A
- * double that let one through unchanged would certify refusal messages that no
- * operator ever sees.
+ * And it treats what escapes a transaction callback the way every real adapter
+ * does, which is to distinguish two things. An error the WORK raised is the
+ * application refusing the write, and reaches the caller as it was thrown, with
+ * the code and payload it chose. Anything else is a failure of the transaction
+ * and is classified. A double that rewrapped both would be stricter than
+ * production, and a test written against it would pass while the real path
+ * handed the caller a different error entirely.
  */
 import {
   createDatabaseError,
+  isApplicationError,
   isDatabaseError,
   type SelectOptions,
   type TransactionContext,
@@ -214,10 +216,13 @@ export function createTableWorld(
           const fixture = tables.get(name);
           if (fixture !== undefined) fixture.rows = rows;
         }
-        // Mirrors every adapter's transaction boundary: anything that is not
-        // already a DatabaseError is rewrapped as an unknown one, losing
-        // whatever structured context it carried.
-        if (isDatabaseError(error)) throw error;
+        // Mirrors every adapter's transaction boundary, which distinguishes two
+        // things: an error the WORK raised is the application refusing the
+        // write and reaches the caller as it was thrown, while anything else is
+        // a failure of the transaction and is classified. A double that
+        // rewrapped both would be stricter than production, and a test written
+        // against it would pass while the real path returned a different error.
+        if (isApplicationError(error) || isDatabaseError(error)) throw error;
         throw createDatabaseError({
           kind: "unknown",
           message: error instanceof Error ? error.message : String(error),

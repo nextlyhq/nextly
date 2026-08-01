@@ -563,11 +563,16 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Supports automatic retry for serialization failures (40001) and
    * deadlocks (40P01) when `retryCount` is specified in options.
    *
+   * An error the callback raised is neither retried nor classified: it is the
+   * application refusing the write, so it arrives at the caller as it was
+   * thrown. Only failures of the transaction itself are retried and mapped.
+   *
    * @param callback - Function to execute within the transaction
    * @param options - Transaction options (isolation level, timeout, retry)
    * @returns The result of the callback
    *
-   * @throws {DatabaseError} If transaction fails after all retries
+   * @throws {DatabaseError} If the transaction itself fails after all retries
+   * @throws The callback's own error, unchanged, if the callback threw one
    */
   async transaction<T>(
     callback: (ctx: TransactionContext) => Promise<T>,
