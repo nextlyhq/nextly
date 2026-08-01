@@ -124,23 +124,20 @@ export const GET = withErrorHandler(
     // the SAME shared predicate the mutation service gates on — a mismatch would
     // make the editor present a status-less save as a pending draft while the
     // server writes it live. Resolution runs over the ORIGINAL fields (not the
-    // enriched ones, which drop the component localized/resolved markers), and a
-    // registry failure leaves the split off rather than failing the read.
-    let draftsEnabled = false;
-    try {
-      draftsEnabled = await schemaDraftsEnabled({
-        status: (collection as { status?: boolean }).status,
-        versions: collection.versions,
-        localized: (collection as { localized?: boolean }).localized,
-        fields: collection.fields,
-      });
-    } catch (eligibilityError) {
-      getNextlyLogger().warn({
-        kind: "collection-drafts-eligibility-failed",
-        slug,
-        err: String(eligibilityError),
-      });
-    }
+    // enriched ones, which drop the component localized/resolved markers).
+    //
+    // A resolution failure is propagated, not defaulted to false: for a
+    // drafts-configured collection false is the destructive answer — the admin
+    // would send an explicit published save that overwrites the live row instead
+    // of storing a working draft — so this independently exported GET fails
+    // closed and is retryable, matching the dispatcher path and the fail-closed
+    // resolveComponentSchemas it calls into.
+    const draftsEnabled = await schemaDraftsEnabled({
+      status: (collection as { status?: boolean }).status,
+      versions: collection.versions,
+      localized: (collection as { localized?: boolean }).localized,
+      fields: collection.fields,
+    });
 
     return respondDoc({
       ...(collectionWithViews as unknown as typeof collection),
