@@ -1,7 +1,12 @@
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import { buildFieldGroupRegistryTable } from "../domains/field-groups/storage/registry-schemas";
 import { env } from "../lib/env";
+import type { CoreSchemaOptions } from "../schemas";
 import * as schemasMy from "../schemas/_dialect-bundles/mysql";
 import * as schemasPg from "../schemas/_dialect-bundles/postgres";
 import * as schemasSl from "../schemas/_dialect-bundles/sqlite";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 /**
  * Backwards-compatible `schema.postgres` / `schema.mysql` / `schema.sqlite`
@@ -57,4 +62,33 @@ export function getDialectTables(dialect?: string) {
   if (dbDialect === "mysql") return schema.mysql;
   if (dbDialect === "sqlite") return schema.sqlite;
   throw new Error(`Unsupported dialect: ${dbDialect}`);
+}
+
+/**
+ * The same bundle, with the field-group registry named as this database has it.
+ *
+ * Separate from {@link getDialectTables} on purpose. That one is read by a
+ * dozen callers for their precise table types (`tables.users.id`), and widening
+ * its return so one key can vary would cost every one of them their typing for
+ * a concern none of them have. This is for the push path alone, which hands the
+ * bundle to drizzle-kit as an untyped record.
+ *
+ * 🔴 SWAPPED, never added. This bundle is what `freshPushSchema` CREATES, so
+ * declaring both spellings would create an empty second registry on every
+ * database that has not migrated. Exactly one of the two exists in any
+ * database, and this names that one.
+ */
+export function getDialectTablesForPush(
+  dialect: SupportedDialect,
+  options?: CoreSchemaOptions
+): Record<string, unknown> {
+  const bundle: Record<string, unknown> = getDialectTables(dialect);
+  const name = options?.fieldGroupRegistryTable;
+  if (name === undefined || name === STORAGE_FORMAT.registryTable) {
+    return bundle;
+  }
+  return {
+    ...bundle,
+    dynamicFieldGroups: buildFieldGroupRegistryTable(dialect, name),
+  };
 }

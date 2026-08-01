@@ -36,6 +36,7 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
@@ -417,9 +418,18 @@ export async function migrateCore(
     deps.dialect,
     async () => {
       deps.logger.info("Phase 1: reconciling core schema...");
+      // Resolved here, where a failure can still fail the command cleanly. The
+      // core schema is a desired shape, so naming a registry the database does
+      // not have is an instruction to create it — and an empty legacy registry
+      // beside a populated migrated one is preferred by every reader.
+      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+        dialect: deps.dialect,
+        getDrizzle: <T>() => deps.db as T,
+      });
       const r = await reconcile({
         db: deps.db,
         dialect: deps.dialect,
+        fieldGroupRegistryTable,
         logger: {
           info: m => deps.logger.debug(m),
           warn: m => deps.logger.warn(m),
