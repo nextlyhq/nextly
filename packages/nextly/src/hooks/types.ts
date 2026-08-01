@@ -101,13 +101,20 @@ export type HookContextPhase = Exclude<HookType, "beforeOperation">;
  *
  * - `"code"` -- a declaration in the config. `registerCollectionHooks` and
  *   `registerSingleHooks` rebuild these from the config on boot AND on every
- *   config reload, so a reload may remove them freely.
- * - `"app"` -- an imperative `registerHook()` call somewhere in the app.
- *   Nothing re-runs it: the module holding it is evaluated once, and a config
- *   reload never revisits it, so removing one is permanent.
+ *   config reload, so a reload may remove them freely. Those two registrars are
+ *   the only callers entitled to claim it, and they pass it explicitly.
+ * - `"app"` -- an imperative registration, whether through `registerHook()` or
+ *   straight into the registry the public API hands out. Nothing re-runs it:
+ *   the module holding the call is evaluated once and a config reload never
+ *   revisits it, so removing one is permanent.
  * - `"plugin:<name>"` -- registered through `ctx.hooks.on` during a plugin's
  *   `init`, which re-runs only on a full service registration and not on a
  *   config reload.
+ *
+ * `"app"` is the DEFAULT, so an unannotated registration survives a reload. The
+ * two failure modes are not symmetric: defaulting to `"code"` costs a handler
+ * that silently disappears for good, while defaulting to `"app"` costs at worst
+ * a stale handler that a restart clears.
  *
  * `"code"` and `"plugin:<name>"` follow the vocabulary the webhook recording
  * provenance already uses, so one concept does not get two spellings.

@@ -81,7 +81,11 @@ import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
-import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
+import {
+  getActiveHookRegistry,
+  getHookRegistry,
+  setActiveHookRegistry,
+} from "../hooks/hook-registry";
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
@@ -355,7 +359,6 @@ const globalForReg = globalThis as unknown as {
    * supply its own, and clearing the process-global one would leave that
    * instance's handlers in place for the next registration to append to.
    */
-  __nextly_activeHookRegistry?: HookRegistry;
 };
 
 // ============================================================
@@ -477,9 +480,10 @@ export async function registerServices(
   // "executeBeforeOperation is not a function" in production. Defaulting here
   // also ensures sanitization + activity-log "*" hooks register on every boot.
   const hookRegistry = providedHookRegistry ?? getHookRegistry();
-  // Remembered so shutdown clears the registry that was written to, not
-  // whichever one happens to be global at the time.
-  globalForReg.__nextly_activeHookRegistry = hookRegistry;
+  // Remembered so anything that later clears or replaces these registrations --
+  // shutdown, and the config reload -- reaches the instance they went into
+  // rather than whichever one happens to be global at the time.
+  setActiveHookRegistry(hookRegistry);
 
   const resolvedLogger = logger ?? consoleLogger;
   const resolvedBasePath = basePath ?? process.cwd();
@@ -2609,13 +2613,8 @@ export function isServicesRegistered(): boolean {
  * registration to append to.
  */
 function clearActiveHookRegistry(): void {
-  const active = globalForReg.__nextly_activeHookRegistry;
-  if (active) {
-    active.clear();
-    globalForReg.__nextly_activeHookRegistry = undefined;
-    return;
-  }
-  resetHookRegistry();
+  getActiveHookRegistry().clear();
+  setActiveHookRegistry(undefined);
 }
 
 export async function shutdownServices(): Promise<void> {

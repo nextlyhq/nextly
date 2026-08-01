@@ -188,7 +188,11 @@ export function registerCollectionHooks(
     const beforeOperationHandlers = collection.hooks.beforeOperation;
     if (beforeOperationHandlers?.length) {
       for (const handler of beforeOperationHandlers) {
-        registry.registerBeforeOperation(collection.slug, handler);
+        // Claimed as the config's, which is what makes a reload entitled to
+        // replace it: this registrar reads the config, so it can rebuild
+        // whatever it removes. Registrations that arrive any other way cannot
+        // be rebuilt and keep the registry's own default.
+        registry.registerBeforeOperation(collection.slug, handler, "code");
         collectionHookCount++;
       }
 
@@ -209,7 +213,7 @@ export function registerCollectionHooks(
       // Register handlers for each mapped hook type
       for (const hookType of hookTypes) {
         for (const handler of handlers) {
-          registry.register(hookType, collection.slug, handler);
+          registry.register(hookType, collection.slug, handler, "code");
           collectionHookCount++;
         }
       }

@@ -38,7 +38,7 @@ describe("hook provenance", () => {
     const fromConfig: HookHandler = ctx => ctx.data;
     const fromPlugin: HookHandler = ctx => ctx.data;
 
-    registry.register("afterRead", SLUG, fromConfig);
+    registry.register("afterRead", SLUG, fromConfig, "code");
     registry.register("afterRead", SLUG, fromPlugin, "plugin:form-builder");
 
     // The control: both are registered, so "one left" below cannot be mistaken
@@ -52,12 +52,29 @@ describe("hook provenance", () => {
     expect(registry.getAll().get(`afterRead:${SLUG}`)).toEqual([fromPlugin]);
   });
 
-  it("defaults an unannotated registration to the app's own config", () => {
-    // Every existing caller registers without naming an owner, and those are
-    // the app's declarations — so the default has to be the one a reload
-    // replaces, or a reload would silently stop replacing anything.
+  it("defaults an unannotated registration to the app, not to its config", () => {
+    // `HookRegistry` and `getHookRegistry()` are exported, and this class's own
+    // documentation tells an app to call `register` directly. Such a handler is
+    // not in the config, so re-registration cannot rebuild it -- defaulting it
+    // to the config's ownership would let a reload delete it for good. The two
+    // failure modes are not symmetric: a stale handler survives until restart,
+    // a deleted one never comes back.
     const registry = new HookRegistry();
     registry.register("beforeCreate", SLUG, ctx => ctx.data);
+    registry.registerBeforeOperation(SLUG, ctx => ctx.args);
+
+    registry.clearCollectionOwnedBy(SLUG, "code");
+
+    expect(registry.getHookCount("beforeCreate", SLUG)).toBe(1);
+    expect(registry.getHookCount("beforeOperation", SLUG)).toBe(1);
+  });
+
+  it("still lets the config's own registrar claim its handlers", () => {
+    // The counter-test to the default above: if nothing could claim `"code"`,
+    // a reload would stop replacing anything at all and the default would look
+    // correct while making the feature inert.
+    const registry = new HookRegistry();
+    registry.register("beforeCreate", SLUG, ctx => ctx.data, "code");
 
     registry.clearCollectionOwnedBy(SLUG, "code");
 
@@ -71,7 +88,7 @@ describe("hook provenance", () => {
     const fromConfig: BeforeOperationHandler = ctx => ctx.args;
     const fromPlugin: BeforeOperationHandler = ctx => ctx.args;
 
-    registry.registerBeforeOperation(SLUG, fromConfig);
+    registry.registerBeforeOperation(SLUG, fromConfig, "code");
     registry.registerBeforeOperation(SLUG, fromPlugin, "plugin:seo");
     expect(registry.getHookCount("beforeOperation", SLUG)).toBe(2);
 
@@ -86,7 +103,7 @@ describe("hook provenance", () => {
     // leave a handler that is present and never called.
     const registry = new HookRegistry();
     const pluginRan = vi.fn();
-    registry.register("beforeCreate", SLUG, ctx => ctx.data);
+    registry.register("beforeCreate", SLUG, ctx => ctx.data, "code");
     registry.register(
       "beforeCreate",
       SLUG,
@@ -115,8 +132,8 @@ describe("hook provenance", () => {
     const registry = new HookRegistry();
     const shared: HookHandler = ctx => ctx.data;
 
-    registry.register("beforeCreate", SLUG, shared);
-    registry.register("beforeCreate", SLUG, shared);
+    registry.register("beforeCreate", SLUG, shared, "code");
+    registry.register("beforeCreate", SLUG, shared, "code");
     expect(registry.getHookCount("beforeCreate", SLUG)).toBe(2);
 
     registry.clearCollectionOwnedBy(SLUG, "code");
@@ -167,9 +184,14 @@ describe("hook provenance through the registering seam", () => {
     expect(registry.getHookCount("beforeOperation", SLUG)).toBe(1);
   });
 
-  it("still clears a context that belongs to no plugin", () => {
-    // The counter-test. Without it, the two above would pass just as well if
-    // a clear had stopped removing anything at all.
+  it("does not hand a context with no plugin the config's ownership", () => {
+    // A context can be built without a plugin, and then there is no name to
+    // attribute to. What it must NOT fall back to is the config's ownership:
+    // nothing about such a registration is rebuildable from the config, so a
+    // reload would delete it with no way to put it back.
+    //
+    // The proof that a clear still removes anything at all lives in "still lets
+    // the config's own registrar claim its handlers" above.
     const registry = new HookRegistry();
     const ctx = createPluginContext(stubServices, registry);
 
@@ -178,7 +200,7 @@ describe("hook provenance through the registering seam", () => {
 
     registry.clearCollectionOwnedBy(SLUG, "code");
 
-    expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+    expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
   });
 
   it("keeps a handler registered through the public registerHook", () => {
@@ -211,7 +233,7 @@ describe("hook provenance through the registering seam", () => {
     const shared: HookHandler = c => c.data;
     const ctx = createPluginContext(stubServices, registry, pluginDefinition);
 
-    registry.register("beforeCreate", SLUG, shared);
+    registry.register("beforeCreate", SLUG, shared, "code");
     ctx.hooks.on("beforeCreate", SLUG, shared);
     expect(registry.getHookCount("beforeCreate", SLUG)).toBe(2);
 

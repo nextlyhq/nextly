@@ -43,4 +43,11 @@ schema change is refused, the previous hooks come back with the previous schema,
 so a handler written against a field the refused edit added is never left running
 against a database that does not have it. Switching a plugin to `enabled: false`
 now also stops the hooks its collections and singles declared, instead of leaving
-them running until the next restart.
+them running until the next restart, and so does deleting or renaming a
+collection: a removed entity's table is kept until `nextly prune`, so it stayed
+addressable and went on running hooks its config no longer declared.
+
+Registering straight into the registry that `getHookRegistry()` hands out now
+marks the handler as the app's, matching `registerHook()`. Only the registrars
+that read the config claim ownership a reload may replace, so a handler nothing
+can rebuild is never removed by one.
