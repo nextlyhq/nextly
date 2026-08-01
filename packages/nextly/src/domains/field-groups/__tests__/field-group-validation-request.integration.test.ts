@@ -103,20 +103,28 @@ describe("a field group's validators and the parent write's request", () => {
   it("refuses the same create when nobody is signed in", async () => {
     // The control: without it a passing case above could be a validator that
     // never ran rather than one that was given the user.
-    //
-    // Matched on the message rather than the code: a refusal raised inside a
-    // collection write's transaction is reclassified on the way out of the
-    // callback, so the code and the issue list do not survive that boundary.
-    // The single case below asserts the full issue, on the path that keeps it.
     current = await boot();
 
-    await expect(
-      current.nextly.create({
+    const error = await current.nextly
+      .create({
         collection: "pages",
         data: { title: "About", badge: { badge: "gold" } },
         overrideAccess: true,
       })
-    ).rejects.toThrow(/Validation failed/);
+      .catch((e: unknown) => e);
+
+    expect(error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "badge",
+            code: "CUSTOM",
+            message: "Only a signed-in user may set a badge.",
+          },
+        ],
+      },
+    });
   });
 
   it("a collection update forwards its user", async () => {
@@ -156,9 +164,7 @@ describe("a field group's validators and the parent write's request", () => {
   });
 
   it("refuses the same single update when nobody is signed in", async () => {
-    // The single path hands the refusal back intact, so this is where the
-    // validator's own issue can be read: the field it is about and the code
-    // the client keys its handling on, not just a sentence.
+    // The same refusal on the singles path, which reports it the same way.
     current = await boot();
 
     const error = await current.nextly

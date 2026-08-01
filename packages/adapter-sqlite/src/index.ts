@@ -59,6 +59,7 @@ import {
   type DatabaseErrorKind,
   type BaseAdapterConfig,
   type AdapterLogger,
+  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
@@ -539,6 +540,12 @@ export class SqliteAdapter extends DrizzleAdapter {
         throw error;
       }
     } catch (error) {
+      // Work inside a transaction may throw to roll the write back — a refused
+      // value, a denied permission — and that is the application's verdict, not
+      // the driver's failure. Classifying it would replace its code and payload
+      // with a generic database error, so a caller that asked for a refusal is
+      // handed an unexplained failure and the per-field detail never arrives.
+      if (isApplicationError(error)) throw error;
       throw this.classifyError(error);
     }
   }

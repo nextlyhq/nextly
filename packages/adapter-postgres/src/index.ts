@@ -89,6 +89,7 @@ import type {
 import {
   createDatabaseError,
   isDatabaseError,
+  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
@@ -610,6 +611,14 @@ export class PostgresAdapter extends DrizzleAdapter {
         await client.query("ROLLBACK").catch(() => {});
 
         lastError = error;
+
+        // Work inside a transaction may throw to roll the write back — a
+        // refused value, a denied permission — and that is the application's
+        // verdict, not the driver's failure. Rethrown before the retry check as
+        // well as before classification: a refusal re-run is the same refusal,
+        // and the caller must receive the code and payload it raised rather
+        // than a generic database error with the detail stripped out.
+        if (isApplicationError(error)) throw error;
 
         // Check if error is retryable
         const pgError = error as { code?: string };
