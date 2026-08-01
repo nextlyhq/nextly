@@ -1822,3 +1822,75 @@ describe("the issue budget spans nested composites", () => {
     expect(budget.remaining).toBe(MAX_STYLE_ISSUES);
   });
 });
+
+describe("an unquoted url argument is read as CSS reads it", () => {
+  it("refuses a scheme hidden behind an escaped colon", () => {
+    // Neither the function name nor the argument is a token this recognised
+    // before: an escaped name never becomes a Url node, and an unquoted
+    // argument is a run of identifiers rather than a string.
+    expect(checkCssValue("u\\72l(data\\3a image/png,AAAA)")).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue("url(data\\3a image/png,AAAA)")).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue("u\\72l(javascript\\3a alert(1))")).not.toBeNull();
+  });
+
+  it("leaves ordinary unquoted urls alone", () => {
+    expect(checkCssValue("url(a.png)")).toBeNull();
+    expect(checkCssValue("url(/media/a.png)")).toBeNull();
+    expect(checkCssValue("url(https://x/a.png)")).toBeNull();
+  });
+});
+
+describe("a functional attribute type", () => {
+  it("is only the one CSS defines", () => {
+    expect(codes({ width: "attr(data-width foo())" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "attr(data-width var(--x))" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("still accepts a declared unit", () => {
+    expect(codes({ width: "attr(data-width px)" })).toEqual([]);
+  });
+});
+
+describe("arithmetic operators are written as CSS requires", () => {
+  it("refuses a comma where an operator belongs", () => {
+    expect(codes({ width: "calc((1px, 2px))" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("requires whitespace on both sides of plus and minus", () => {
+    for (const value of [
+      "calc(1px+ 2px)",
+      "calc(1px +2px)",
+      "calc(1px+2px)",
+      "calc(1px- 2px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("does not require it of multiplication or division", () => {
+    expect(codes({ width: "calc(1px*2)" })).toEqual([]);
+    expect(codes({ width: "calc(1px/2)" })).toEqual([]);
+  });
+
+  it("leaves the well-spaced expressions working", () => {
+    for (const value of [
+      "calc(1px + 2px)",
+      "calc(1px - 2px)",
+      "calc((1px + 2px) * 3)",
+      "clamp(1rem, 2vw, 3rem)",
+      "round(up, 10px, 1px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+});

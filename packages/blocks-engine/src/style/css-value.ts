@@ -255,7 +255,7 @@ function attrProducesDimension(node: CssNode): boolean {
   if (declared === undefined) return false;
   // `type(<syntax>)` names a syntax this module does not model; abstaining is
   // the same answer it gives everywhere else it cannot read a grammar.
-  if (declared.type === "Function") return true;
+  if (declared.type === "Function") return functionName(declared) === "type";
   return (
     declared.type === "Identifier" &&
     LENGTH_UNITS.has(asciiLower(declared.name))
@@ -468,6 +468,50 @@ function functionName(node: { name: string }): string {
 }
 
 /**
+ * The text of an unquoted `url()` argument, with its escapes resolved.
+ *
+ * An escaped function name never becomes a `Url` node, so an escaped
+ * `url(data\3a …)` arrives as a function whose argument is a run of ordinary
+ * tokens rather than a string, and the colon that makes it a scheme is hidden
+ * inside an identifier. Rendering the tokens back is what lets the scheme
+ * check see what the browser will see.
+ *
+ * `null` means the argument held something this cannot render, which on this
+ * path is answered by refusing rather than by guessing.
+ */
+function unquotedUrlText(children: Iterable<CssNode>): string | null {
+  let text = "";
+  for (const child of children) {
+    switch (child.type) {
+      case "Identifier":
+        text += decodeIdentifier(child.name);
+        break;
+      case "Operator":
+        text += child.value;
+        break;
+      case "String":
+        text += child.value;
+        break;
+      case "Number":
+        text += String(child.value);
+        break;
+      case "Dimension":
+        text += `${String(child.value)}${child.unit}`;
+        break;
+      case "Percentage":
+        text += `${String(child.value)}%`;
+        break;
+      case "Hash":
+        text += `#${child.value}`;
+        break;
+      default:
+        return null;
+    }
+  }
+  return text;
+}
+
+/**
  * The first refused URL anywhere in a parsed value, or `null`.
  *
  * The walk is recursive, so it is wrapped: the depth cap ahead of it is what
@@ -503,15 +547,25 @@ function walkForUrlRejection(
         raws.push(node.value);
         return;
       }
-      if (
-        node.type !== "Function" ||
-        !URL_STRING_FUNCTIONS.has(functionName(node))
-      ) {
-        return;
-      }
+      if (node.type !== "Function") return;
+      const name = functionName(node);
+      if (!URL_STRING_FUNCTIONS.has(name)) return;
+      let sawString = false;
       for (const child of node.children) {
         if (child.type !== "String") continue;
+        sawString = true;
         rejection ??= checkUrlValue(child.value, "quoted");
+      }
+      // Only `url()` takes an unquoted argument, and only by an escaped
+      // spelling does one reach here as a function: a run of tokens rather
+      // than a string, with the colon that names the scheme hidden inside an
+      // identifier. The image functions take a string or a nested `url()`,
+      // both of which are already covered, so reading their tokens back would
+      // refuse values the walk has in hand.
+      if (!sawString && name === "url") {
+        const text = unquotedUrlText(node.children);
+        rejection ??=
+          text === null ? "unsafe-url-characters" : checkUrlValue(text, "raw");
       }
     },
   });
@@ -860,6 +914,23 @@ function measurementRejection(
  * parenthesised group are the same thing grammatically, and a rule that lives
  * in two places is a rule that will hold in one of them.
  */
+/**
+ * Whether an arithmetic operator is written the way CSS requires.
+ *
+ * Only the four arithmetic operators appear inside a math expression — a comma
+ * separates arguments and is split off before this, so one reaching here is
+ * inside a parenthesised group where it means nothing. `+` and `-` additionally
+ * need whitespace on both sides, because without it the sign binds to the
+ * number and `1px+ 2px` becomes two values rather than a sum.
+ */
+function operatorRejection(value: string): CssValueRejection | null {
+  const symbol = value.trim();
+  if (symbol === "*" || symbol === "/") return null;
+  if (symbol !== "+" && symbol !== "-") return "not-a-length";
+  const spaced = /^[ \t\r\n\f]/.test(value) && /[ \t\r\n\f]$/.test(value);
+  return spaced ? null : "not-a-length";
+}
+
 function alternationRejection(
   terms: readonly CssNode[],
   keywords: ReadonlySet<string>,
@@ -873,7 +944,12 @@ function alternationRejection(
     if ((term.type === "Operator") !== expectingOperator) {
       return "not-a-length";
     }
-    if (expectingOperator) continue;
+    if (expectingOperator) {
+      if (term.type !== "Operator") return "not-a-length";
+      const bad = operatorRejection(term.value);
+      if (bad !== null) return bad;
+      continue;
+    }
     const rejection = measurementRejection(term, true, keywords, limits);
     if (rejection !== null) return rejection;
   }
