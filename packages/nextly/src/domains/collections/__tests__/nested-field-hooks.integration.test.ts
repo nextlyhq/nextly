@@ -129,6 +129,27 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // Copies the org's denied `classification` value onto an allowed field
+          // of its own. Only reachable when the parent's hook is handed the child
+          // with that field still present, so it is the exfiltration a nested
+          // read must not allow.
+          text({
+            name: "stolen",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  const org = (data as { organization?: unknown }).organization;
+                  const classification =
+                    typeof org === "object" && org !== null
+                      ? (org as { classification?: unknown }).classification
+                      : undefined;
+                  return typeof classification === "string"
+                    ? classification
+                    : value;
+                },
+              ],
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -421,14 +442,21 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(tokenHookRuns).toBeGreaterThan(0);
   });
 
-  it("judges a masking rule before the denied sibling it reads is removed", async () => {
-    // `classification` denies read, and the author's `secret` rule masks on it.
-    // Removing denied fields as a row is fetched hands that rule a row its
-    // evidence has already been cut out of: it reads `undefined`, declines to
-    // mask, and the value it guards goes out. Masking has to run first.
+  it("hands a parent's hooks a nested child with its denied fields already removed", async () => {
+    // `classification` denies read. A parent hook that reads it — to copy it out
+    // (`stolen`) or to mask a sibling on it (`secret`) — must be handed the child
+    // with that field already gone, or the copy leaks it under an allowed key and
+    // outlives the child's own redaction. Applying each child's field access
+    // before its parent's hooks is what a direct read does; the nested walk now
+    // matches it.
     //
-    // Read WITHOUT overrideAccess: field rules are skipped for a trusted read,
-    // so an overriding caller cannot show this either way.
+    // The deliberate trade-off: a hook can no longer mask on a caller-denied
+    // field, because it can no longer see one. A value that must stay hidden
+    // needs an access rule keyed on the caller, not a hook reading data the
+    // caller cannot see.
+    //
+    // Read WITHOUT overrideAccess: field rules are skipped for a trusted read, so
+    // an overriding caller is handed the complete row either way.
     const t = await boot();
     const postId = await seed(t);
 
@@ -440,13 +468,16 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     const author = expanded.data!.author as Record<string, unknown>;
     expect(author).toBeTruthy();
-    // Masked, because the rule saw the classification.
-    expect(author.secret).toBe("REDACTED");
-
-    // And the evidence is still withheld from the response: deferring WHEN the
-    // rules run must not change WHETHER they run.
+    // The exfiltration is closed: the copy hook was handed a child whose denied
+    // field had already been removed, so it copied nothing.
+    expect(author.stolen).not.toBe("private");
+    // The denied field is absent from the response itself.
     const org = author.organization as Record<string, unknown> | undefined;
     if (org) expect(org.classification).toBeUndefined();
+    // Same cause, visible from the other hook: it could not read the classification
+    // either, so it did not mask — the value it tried to guard on that basis is
+    // returned unchanged. Masking must not depend on data the caller cannot see.
+    expect(author.secret).toBe("TOP_SECRET");
   });
 
   it("masks a dropped relationship before a source hook can copy out of it", async () => {

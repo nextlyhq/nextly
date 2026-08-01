@@ -2991,28 +2991,19 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Hide denied fields on every related row the walk reached, then rebuild the
-   * labels.
+   * Rebuild the labels of every related row the walk reached.
    *
-   * Separated from the walk because the two orders are not the same order. A
-   * field hook masks; a field rule hides; and the hooks of a row's PARENT run
-   * after the row itself is finished, so hiding as each row completes takes the
-   * evidence away from a rule that has not run yet. Masking the whole document
-   * first, then hiding it, is the order a direct read has always used -- one
-   * document, not one row at a time.
-   *
-   * Labels come last of all, from the values that survived: a label copies a
-   * field under another key, so one built earlier outlives the removal of its
-   * own source field.
+   * Field access is applied during the walk now (each row right after its own
+   * hooks, before its parent's), so this no longer hides anything -- it only
+   * refreshes labels. Labels come last of all, from the values that survived
+   * redaction: a label copies a field under another key, so one rebuilt earlier
+   * would outlive the removal of its own source field.
    */
   async finalizeRelatedRows(
     state: NestedHookState,
     access: RelatedRowAccess
   ): Promise<void> {
     if (!access.enforceFieldAccess) return;
-    for (const { row, collection } of state.pending) {
-      await this.applyRelatedRowReadAccess(collection, [row], access);
-    }
     for (const { row, collection, field } of state.pending) {
       await this.refreshRelatedRowLabel(row, field, { collection }, state);
     }
@@ -3182,9 +3173,25 @@ export class CollectionRelationshipService extends BaseService {
         user: access.user,
       });
 
-      // Queued, not applied. Hiding this row's denied fields now would remove
-      // the evidence its PARENT's masking rule reads a moment later, because
-      // this walk finishes a child before its parent's hooks run.
+      // Apply THIS row's field access now, before returning to its parent —
+      // whose afterRead hooks run next up the stack. Deferring it (as this once
+      // did) let a parent hook read a child field the caller may not see, and
+      // copy it under an allowed parent key where it outlived the child's own
+      // redaction. The row's own hooks above already ran against its complete
+      // values, and a direct read redacts a nested row before the parent
+      // collection's field hooks for the same reason, so applying it here keeps
+      // the nested path consistent with the direct one. Under `overrideAccess`
+      // this is a no-op, leaving trusted assembly untouched.
+      await this.applyRelatedRowReadAccess(
+        resolved.collection,
+        [resolved.row],
+        access
+      );
+
+      // Still queued for the label refresh, which runs last of all (in
+      // `finalizeRelatedRows`) from the values that survived redaction: a label
+      // copies a field under another key, so one rebuilt earlier would outlive
+      // the removal of its own source field.
       state.pending.push({
         row: resolved.row,
         collection: resolved.collection,
