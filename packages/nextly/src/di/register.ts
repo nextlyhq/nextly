@@ -81,12 +81,17 @@ import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
-import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
+import {
+  getActiveHookRegistry,
+  getHookRegistry,
+  setActiveHookRegistry,
+} from "../hooks/hook-registry";
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
+import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import type {
   PluginContext,
@@ -355,7 +360,6 @@ const globalForReg = globalThis as unknown as {
    * supply its own, and clearing the process-global one would leave that
    * instance's handlers in place for the next registration to append to.
    */
-  __nextly_activeHookRegistry?: HookRegistry;
 };
 
 // ============================================================
@@ -477,9 +481,10 @@ export async function registerServices(
   // "executeBeforeOperation is not a function" in production. Defaulting here
   // also ensures sanitization + activity-log "*" hooks register on every boot.
   const hookRegistry = providedHookRegistry ?? getHookRegistry();
-  // Remembered so shutdown clears the registry that was written to, not
-  // whichever one happens to be global at the time.
-  globalForReg.__nextly_activeHookRegistry = hookRegistry;
+  // Remembered so anything that later clears or replaces these registrations --
+  // shutdown, and the config reload -- reaches the instance they went into
+  // rather than whichever one happens to be global at the time.
+  setActiveHookRegistry(hookRegistry);
 
   const resolvedLogger = logger ?? consoleLogger;
   const resolvedBasePath = basePath ?? process.cwd();
@@ -872,11 +877,18 @@ export async function registerServices(
   // ----------------------------------------
   // Stash the resolved plugins + their contexts so shutdownServices can run
   // destroy() in reverse order (D4).
+  // Recorded at the call site rather than inside `initializePlugins`, which
+  // returns early when the config declares no plugins -- a record written after
+  // that return is skipped exactly when the answer is "none", leaving the
+  // previous registration's names in place for a reload to believe.
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
     adapterDrizzleDb,
     resolvedLogger,
     hookRegistry
+  );
+  setInitializedPlugins(
+    globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin.name)
   );
 
   // ----------------------------------------
@@ -900,6 +912,11 @@ export async function registerServices(
     // registration returns -- registering earlier would hand a hook an API that
     // is not there yet. The consequence is that a plugin's `init` writing
     // through the managed services does so before these hooks exist.
+    // Noted before the config's own handlers go in, so a handler it declares
+    // for the first time during a later reload lands where this boot would have
+    // put it rather than wherever appending happens to leave it.
+    hookRegistry.markConfigRegistrationPoint();
+
     if (
       transformedConfig.collections &&
       transformedConfig.collections.length > 0
@@ -2458,39 +2475,6 @@ async function initializePlugins(
     }
   };
 
-  const hookBridge = {
-    register: (
-      hookType: Parameters<typeof pluginHookRegistry.register>[0],
-      collection: string,
-      handler: Parameters<typeof pluginHookRegistry.register>[2]
-    ) => {
-      pluginHookRegistry.register(hookType, collection, handler);
-    },
-    unregister: (
-      hookType: Parameters<typeof pluginHookRegistry.unregister>[0],
-      collection: string,
-      handler: Parameters<typeof pluginHookRegistry.unregister>[2]
-    ) => {
-      pluginHookRegistry.unregister(hookType, collection, handler);
-    },
-    // `beforeOperation` handlers take the operation's args rather than a
-    // document, so they bridge through their own pair rather than the one above.
-    registerBeforeOperation: (
-      collection: string,
-      handler: Parameters<typeof pluginHookRegistry.registerBeforeOperation>[1]
-    ) => {
-      pluginHookRegistry.registerBeforeOperation(collection, handler);
-    },
-    unregisterBeforeOperation: (
-      collection: string,
-      handler: Parameters<
-        typeof pluginHookRegistry.unregisterBeforeOperation
-      >[1]
-    ) => {
-      pluginHookRegistry.unregisterBeforeOperation(collection, handler);
-    },
-  };
-
   // HMR/re-registration safety (B2): drop every plugin's prior event/hook
   // subscriptions before plugins re-subscribe in init(), so the globalThis
   // EventBus + HookRegistry never accumulate duplicates across module
@@ -2522,9 +2506,16 @@ async function initializePlugins(
     // Build a per-plugin context so `ctx.self` resolves to this plugin's own
     // entities (D54). Built for every enabled plugin (even without `init`) so
     // `destroy` has a context at shutdown.
+    // The registry goes in directly, as it does everywhere else a context is
+    // built. A hand-written pass-through wrapper used to sit here, and because
+    // it re-declared each signature it silently dropped the `owner` argument the
+    // context supplies -- recording every plugin's handler as the config's own.
+    // `createPluginContext` still constrains what a context may reach: its
+    // parameter names the four methods, so passing the whole registry widens
+    // nothing.
     const pluginContext = createPluginContext(
       getServiceForPlugin as Parameters<typeof createPluginContext>[0],
-      hookBridge,
+      pluginHookRegistry,
       plugin
     );
     teardown.push({ plugin, context: pluginContext });
@@ -2635,13 +2626,11 @@ export function isServicesRegistered(): boolean {
  * registration to append to.
  */
 function clearActiveHookRegistry(): void {
-  const active = globalForReg.__nextly_activeHookRegistry;
-  if (active) {
-    active.clear();
-    globalForReg.__nextly_activeHookRegistry = undefined;
-    return;
-  }
-  resetHookRegistry();
+  getActiveHookRegistry().clear();
+  setActiveHookRegistry(undefined);
+  // Nothing is initialized in a process whose services have been cleared, and a
+  // stale list would let the next reload treat a plugin as started.
+  setInitializedPlugins([]);
 }
 
 export async function shutdownServices(): Promise<void> {

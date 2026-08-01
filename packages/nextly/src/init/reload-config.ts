@@ -25,6 +25,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { type SQL } from "drizzle-orm";
 
+import type { CollectionHooks } from "../collections/config/define-collection";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -77,12 +78,20 @@ import { collectPluginContributedSlugs } from "../domains/webhooks/recording-pro
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import { describeError } from "../errors/index";
 import { NextlyError } from "../errors/nextly-error";
-import type { PluginFieldType } from "../plugins/contributions";
+import { getActiveHookRegistry } from "../hooks/hook-registry";
+import { reregisterCollectionHooks } from "../hooks/register-collection-hooks";
+import {
+  reregisterSingleHooks,
+  singleHookNamespace,
+} from "../hooks/register-single-hooks";
+import type { HookOwner } from "../hooks/types";
+import { getInitializedPlugins } from "../plugins/initialized-plugins";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
+import type { SingleHooks } from "../singles/config/types";
 
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
@@ -124,6 +133,8 @@ type CollectionDef = {
   slug?: string;
   tableName?: string;
   fields?: unknown[];
+  /** Declared lifecycle hooks; re-registered from the reloaded config. */
+  hooks?: CollectionHooks;
   labels?: { singular?: string; plural?: string };
   description?: string;
   timestamps?: boolean;
@@ -143,6 +154,8 @@ type CollectionDef = {
 type SingleDef = {
   slug?: string;
   fields?: unknown[];
+  /** Declared lifecycle hooks; re-registered from the reloaded config. */
+  hooks?: SingleHooks;
   label?: { singular?: string } | string;
   description?: string;
   admin?: unknown;
@@ -404,7 +417,18 @@ async function syncCodeFirstMetadataOnly(
     fieldGroups?: ComponentDef[];
   },
   logger?: LoggerLike
-): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
+): Promise<{
+  collections: boolean;
+  singles: boolean;
+  components: boolean;
+  /**
+   * Singles whose metadata was refused individually. The sync keeps their prior
+   * snapshot rather than failing the whole scope, so the scope flag stays true
+   * while these particular entities still describe themselves the old way.
+   */
+  failedSingles: ReadonlySet<string>;
+}> {
+  let failedSingles: ReadonlySet<string> = new Set<string>();
   let collections = true;
   let singles = true;
   let components = true;
@@ -433,6 +457,7 @@ async function syncCodeFirstMetadataOnly(
         await singleReg.syncCodeFirstSingles(payload)
       );
     }
+    failedSingles = failedSlugs;
     // Refresh the live default source after the sync: successful singles adopt
     // the new config; a single whose sync failed keeps its prior snapshot so its
     // new fields never pair with stale serialized metadata.
@@ -464,7 +489,7 @@ async function syncCodeFirstMetadataOnly(
       }`
     );
   }
-  return { collections, singles, components };
+  return { collections, singles, components, failedSingles };
 }
 
 /**
@@ -585,6 +610,174 @@ function republishRecordingPolicies(
     pluginSingles,
     scopes.singles
   );
+}
+
+/**
+ * Build the hook work a reloaded config implies, WITHOUT applying any of it.
+ *
+ * Returned as a thunk the caller runs only once the reload has landed. Applying
+ * it up front would publish a handler before the schema it was written against
+ * exists: peer requests keep being served from the cached instance while a
+ * reload is in flight, so one of them can run the new hook against the old
+ * table -- reading a field the save has only just added, say -- and no later
+ * rollback can undo a request that has already been answered. Deferring shrinks
+ * that window to the gap between the DDL landing and this thunk running.
+ *
+ * Nothing here is optimistic, so an abandoned reload needs no undo: it simply
+ * never calls the thunk.
+ */
+function stageConfigHooks(newConfig: {
+  collections?: CollectionDef[];
+  singles?: SingleDef[];
+  plugins?: unknown[];
+}): (deferredEntities: ReadonlySet<string>) => void {
+  const disabledPlugins = (newConfig.plugins ?? []).filter(
+    plugin => (plugin as { enabled?: boolean }).enabled === false
+  );
+
+  // A slug is what the registry keys on, so an entity without one cannot have
+  // had hooks registered for it and has nothing to replace.
+  // `init` does not re-run on a reload, so a plugin switched from disabled to
+  // enabled has no services and no subscriptions -- registering the hooks its
+  // collections declare would put handlers live that depend on both. Enabled in
+  // the config is not the same as running in this process, and only the second
+  // makes its hooks safe. An unknown set (registration has not happened yet)
+  // means no basis to exclude anyone.
+  // Only reconciled when the config actually carries a plugin list. An absent
+  // key is no information, and treating it as "every plugin is gone" would
+  // suspend the lot -- a far worse failure than the one being fixed. An EMPTY
+  // list is information, and does mean they are all gone.
+  const declaredPlugins = Array.isArray(newConfig.plugins)
+    ? newConfig.plugins
+    : undefined;
+
+  const initialized = getInitializedPlugins();
+  const runningNames = declaredPlugins
+    ? declaredPlugins
+        .filter(plugin => (plugin as { enabled?: boolean }).enabled !== false)
+        .map(plugin => (plugin as { name?: string }).name)
+        .filter((name): name is string => !!name)
+        .filter(name => initialized?.has(name) ?? true)
+    : undefined;
+  const stillRunning = runningNames
+    ? new Set(runningNames.map((name): HookOwner => `plugin:${name}`))
+    : undefined;
+  // Entities contributed by a plugin the config enables but the process never
+  // started are left out too, alongside the ones it disables.
+  const notRunning = declaredPlugins
+    ? declaredPlugins.filter(plugin => {
+        const name = (plugin as { name?: string }).name;
+        if (!name) return false;
+        return !runningNames?.includes(name);
+      })
+    : [];
+
+  const disabledCollections = collectPluginContributedSlugs(
+    notRunning.length > 0 ? notRunning : disabledPlugins,
+    "collections"
+  );
+  const collections = (newConfig.collections ?? []).filter(
+    (collection): collection is CollectionDef & { slug: string } =>
+      !!collection.slug && !disabledCollections.has(collection.slug)
+  );
+
+  const disabledSingles = collectPluginContributedSlugs(
+    notRunning.length > 0 ? notRunning : disabledPlugins,
+    "singles"
+  );
+  const singles = (newConfig.singles ?? []).filter(
+    (single): single is SingleDef & { slug: string } =>
+      !!single.slug && !disabledSingles.has(single.slug)
+  );
+
+  // A plugin that is no longer running must stop running EVERYTHING it
+  // contributed. Its declarations are handled by leaving them out of the
+  // rebuild below. Its `ctx.hooks.on` registrations cannot be: `init` does not
+  // re-run on a config reload, so removing them would leave re-enabling the
+  // plugin in the same session short of its handlers until a restart. They are
+  // suspended instead, so both directions work without one.
+  //
+  // Which plugins are still running is decided by the new config; WHICH OWNERS
+  // EXIST is not, and cannot be. A plugin deleted from the config outright is
+  // absent from it entirely, so a set derived from the config alone could never
+  // name it and it would keep running -- and, worse, deleting a plugin that was
+  // previously disabled would actively resume it. So the candidates come from
+  // the registry and the config only says which of them survive.
+
+  return (deferredEntities: ReadonlySet<string>) => {
+    // An entity whose schema change was deferred still has its PREVIOUS table,
+    // so its edited handler would run against columns the save has not added or
+    // renamed yet. A batch can succeed for one entity while another defers, so
+    // this cannot be decided for the reload as a whole -- those entities keep
+    // the handlers that match the schema they still have, and a later clean
+    // reload picks them up.
+    const landed = <T extends { slug: string }>(
+      entities: T[],
+      kind: "collection" | "single"
+    ): T[] =>
+      entities.filter(
+        entity => !deferredEntities.has(`${kind}:${entity.slug}`)
+      );
+    const landedCollections = landed(collections, "collection");
+    const landedSingles = landed(singles, "single");
+
+    // The registry service registration actually bound its handlers to, which
+    // is not always the process-global singleton: a caller may supply its own,
+    // and replacing handlers anywhere else would leave the live registry
+    // running the ones it was supposed to lose while the edited ones sit where
+    // nothing reads them. Resolved at commit time, so a registration that
+    // happened during the reload is still the one that gets written to.
+    const registry = getActiveHookRegistry();
+
+    // What the re-registration below is going to rebuild.
+    // A deferred entity is NOT rebuilt, and must not be swept either: its
+    // handlers are the ones that match its table.
+    const rebuilt = new Set<string>([
+      ...collections.map(collection => collection.slug),
+      ...singles.map(single => singleHookNamespace(single.slug)),
+    ]);
+
+    // Everything else the config currently owns handlers for, which the
+    // re-registration will NOT put back and so has to remove.
+    //
+    // Two ways a namespace lands here. An entity deleted or renamed in the
+    // config keeps its handlers, and its table is deliberately retained rather
+    // than dropped -- `nextly prune` is what removes an orphan -- so it stays
+    // addressable and would go on running hooks the config no longer declares.
+    // A plugin switched to `enabled: false` is the same shape: its declarations
+    // registered under the config's ownership while it was enabled, and merely
+    // leaving it out of the rebuild removes nothing.
+    for (const namespace of registry.collectionsOwnedBy("code")) {
+      if (!rebuilt.has(namespace)) {
+        registry.clearCollectionOwnedBy(namespace, "code");
+      }
+    }
+
+    reregisterCollectionHooks(landedCollections, registry);
+    reregisterSingleHooks(landedSingles, registry);
+
+    // Recomputed whole rather than mutated, so an owner that is running again
+    // resumes by simply not appearing -- nothing has to remember what a
+    // previous reload suspended, and the set cannot drift.
+    if (stillRunning) {
+      // Two sources, because neither alone is complete. The registry names
+      // owners that hold registrations, which is what catches a plugin deleted
+      // from the config entirely. The initialized list names plugins that ran
+      // `init`, which is what catches one whose FIRST `ctx.hooks.on` call has
+      // not happened yet -- a plugin registering lazily from a route or a timer
+      // would otherwise be absent here and its later handler would run despite
+      // being switched off.
+      const candidates = new Set<HookOwner>([
+        ...registry
+          .registeredOwners()
+          .filter((owner): owner is HookOwner => owner.startsWith("plugin:")),
+        ...[...(initialized ?? [])].map((name): HookOwner => `plugin:${name}`),
+      ]);
+      registry.setSuspendedOwners(
+        [...candidates].filter(owner => !stillRunning.has(owner))
+      );
+    }
+  };
 }
 
 /**
@@ -1035,12 +1228,22 @@ async function applyReload(opts?: {
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
         localization?: { defaultLocale?: string };
+        /**
+         * The resolved plugin list. Needed to tell a plugin's contribution
+         * apart from the app's own, since the loader folds contributed
+         * collections and singles into the lists above.
+         */
+        plugins?: unknown[];
       }
     | undefined;
-  let previousFieldTypes: PluginFieldType[] | undefined;
-  let restoreFieldTypes: (() => void) | undefined;
   /**
-   * Put the field-type registry back when a reload does not take effect.
+   * Undo steps for work a reload applies before it knows whether it will land,
+   * registered as that work happens and run together on abandonment.
+   */
+  const reloadUndo: Array<() => void> = [];
+  /**
+   * Put the field-type registry and the config's hooks back when a reload does
+   * not take effect.
    *
    * `loadConfig` swaps the process-global registry as it reads the new config,
    * but a reload can still be abandoned after that — DI not ready, the live
@@ -1049,11 +1252,18 @@ async function applyReload(opts?: {
    * the abandoned reload's `validate`, storage mapping and `validateOptions`
    * against a schema that never changed.
    *
+   * The config's hooks are applied on the same optimistic terms and come back
+   * the same way. A save can carry a hook edit AND a schema change, and when the
+   * schema change is refused the previous schema is what the database still has:
+   * a handler written against a field that was renamed or added in the refused
+   * edit would read something that is not there. Restoring them together is what
+   * keeps the two from ever disagreeing about which config is in effect.
+   *
    * Not called on the paths that simply had nothing to do: there the new config
-   * IS the live one, and its types belong in the registry.
+   * IS the live one, and its types and handlers belong in place.
    */
   const abandonReload = (): void => {
-    restoreFieldTypes?.();
+    for (const undo of reloadUndo) undo();
   };
   try {
     const { loadConfig, clearConfigCache } = await import(
@@ -1067,13 +1277,13 @@ async function applyReload(opts?: {
     // definitions installed under the retained config — writes would run the
     // refused reload's `validate` and storage mapping until the next good one.
     // The previous set is captured here and put back if anything below fails.
-    previousFieldTypes = allFieldTypes();
-    restoreFieldTypes = () => {
+    const previousFieldTypes = allFieldTypes();
+    reloadUndo.push(() => {
       clearFieldTypes();
-      for (const fieldType of previousFieldTypes ?? []) {
+      for (const fieldType of previousFieldTypes) {
         registerFieldType(fieldType);
       }
-    };
+    });
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (
@@ -1083,6 +1293,7 @@ async function applyReload(opts?: {
           singles?: SingleDef[];
           fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
+          plugins?: unknown[];
         };
       }
     ).config;
@@ -1148,6 +1359,20 @@ async function applyReload(opts?: {
   // process-global flag that reads no field tree, so — like a recording opt-out
   // — it is safe to apply immediately, before the schema diff is synced.
   setWebhookAuditEnabled(newConfig.webhookAuditEnabled ?? false);
+
+  // Worked out here and applied only where the reload lands, by `commitReload`.
+  // A hook edit changes no table, so the reload it triggers often finds no diff
+  // and returns early -- which is why the commit has to sit on the no-change
+  // paths as well as after a successful apply, not on the apply alone.
+  const commitConfigHooks = stageConfigHooks(newConfig);
+  let committed = false;
+  const commitReload = (
+    deferredEntities: ReadonlySet<string> = new Set()
+  ): void => {
+    if (committed) return;
+    committed = true;
+    commitConfigHooks(deferredEntities);
+  };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
   // other service from DI in this path — the new gate gets prior-state
@@ -1313,6 +1538,11 @@ async function applyReload(opts?: {
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
     // The live default snapshot was already pruned to the (now empty) present
     // set above, so a removed single's stale defaults are gone by here.
+    //
+    // Nothing was managed, so there is no schema change to wait for and the new
+    // config IS the live one -- this is a landing, and its hooks belong in
+    // place.
+    commitReload();
     return;
   }
 
@@ -1626,6 +1856,35 @@ async function applyReload(opts?: {
         collections: synced.collections && synced.components,
         singles: synced.singles && synced.components,
       });
+
+      // A landing, and the one a hook-only edit takes: nothing about the tables
+      // changed, so the new config IS the live one and there is no DDL for the
+      // handlers to wait on. Without this the central case -- edit a hook, save
+      // -- would stage the replacement and never apply it, which is the state
+      // this whole change exists to end.
+      //
+      // A metadata-only save can still fail per scope or per single, and the
+      // sync deliberately keeps the prior snapshot for those -- so their
+      // validation and serialization still run against the old field tree, and
+      // a handler written for a field only the new tree has would have it
+      // ignored. Excluded on the same terms as the post-DDL path.
+      commitReload(
+        new Set([
+          ...(synced.collections && synced.components
+            ? []
+            : (newConfig.collections ?? [])
+                .map(collection => collection.slug)
+                .filter((slug): slug is string => !!slug)
+                .map(slug => `collection:${slug}`)),
+          ...(synced.singles && synced.components
+            ? []
+            : (newConfig.singles ?? [])
+                .map(single => single.slug)
+                .filter((slug): slug is string => !!slug)
+                .map(slug => `single:${slug}`)),
+          ...[...synced.failedSingles].map(slug => `single:${slug}`),
+        ])
+      );
     } else {
       // A real schema change was deferred (unsafe / needs review) or a diff
       // threw, so the field metadata must NOT be synced — the physical table
@@ -1641,6 +1900,16 @@ async function applyReload(opts?: {
       // The physical tables still match the PREVIOUS config, so the previous
       // field types are the ones that describe them.
       abandonReload();
+
+      // Publishes NOTHING, deliberately, and not per entity. This branch skips
+      // `syncCodeFirstMetadataOnly` for EVERY entity, not just the deferred
+      // one, so nobody's field tree was refreshed -- an unaffected collection's
+      // edited handler would run against its old serialized metadata, which is
+      // the same mismatch the deferred entity is being protected from. Holding
+      // one entity's hooks back while publishing another's would need the
+      // sync to run per entity first, and this branch does not run it at all.
+      //
+      // Their edits land on the next clean reload, which is one save away.
     }
     return;
   }
@@ -1799,6 +2068,10 @@ async function applyReload(opts?: {
         `translations table for ${names}. Applying now would drop the columns holding that ` +
         `content. Fix the error above and save again.`
     );
+    // The schema and metadata never landed, so the previous config is still the
+    // one describing the database, and the work applied ahead of the schema
+    // pass has to come back with it.
+    abandonReload();
     return;
   }
 
@@ -1841,6 +2114,19 @@ async function applyReload(opts?: {
           `could not be copied back out of the translations table. Fix the error above and save ` +
           `again — the content is intact where it is.`
       );
+      // Deliberately publishes NOTHING. The DDL landed, so the previous field
+      // types are not restored either -- they describe tables that now exist.
+      // But this returns ahead of the metadata sync and the runtime-schema
+      // refresh below, so `SchemaRegistry` and `CollectionsHandler` still hold
+      // every entity's pre-change descriptor: a handler published here would
+      // reach for a column the runtime cannot see yet, which is the same
+      // mismatch one layer along from the one this branch exists to prevent.
+      //
+      // Leaving the handlers as they are keeps them in step with the runtime
+      // that is actually installed. Publishing per-entity here would mean
+      // refreshing per-entity first, and the surrounding i18n publish is
+      // all-or-nothing by design -- changing that belongs with that code, not
+      // with a hooks change.
       return;
     }
 
@@ -1852,6 +2138,9 @@ async function applyReload(opts?: {
     // singles fail) does not block the committed scope's decisions.
     let collectionSynced = true;
     let singleSynced = true;
+    // The singles sync reports per-slug failures rather than rejecting, and
+    // those entities keep serialising against their previous field tree.
+    let failedSingleMetadata = new Set<string>();
     let componentSynced = true;
     // Sync dynamic_collections metadata so the fields JSON reflects the
     // new config. The pipeline above only applies DDL to dc_<slug>; without
@@ -1903,6 +2192,7 @@ async function applyReload(opts?: {
         failedSlugs = failedSingleSlugs(
           await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs)
         );
+        failedSingleMetadata = failedSlugs;
 
         // registerSingle defaults migration_status to 'pending'. The
         // pipeline above just created any missing physical tables, so
@@ -2149,6 +2439,40 @@ async function applyReload(opts?: {
     } catch {
       // Non-fatal.
     }
+
+    // The schema, the metadata and the runtime schema are all in step by here,
+    // so the handlers written against them can go in. Also the path a save that
+    // changes only a hook takes: its diff is empty, the apply has nothing to do
+    // and reports success, and the commit still happens.
+    //
+    // A batch can succeed while individual entities were held back, so the
+    // deferred set travels with it: those keep the handlers matching the table
+    // they still have.
+    //
+    // A failed metadata sync is the same problem one layer up: the DDL landed,
+    // but the mutation services still read the previous serialized fields, so a
+    // handler supplying a newly added field would have it ignored. Those
+    // entities keep their previous handlers too, until a later reload repairs
+    // the sync. A collection sync THROWS rather than reporting per slug, so a
+    // failure there holds every collection back.
+    commitReload(
+      new Set([
+        ...deferredEntities,
+        ...(collectionSynced && componentSynced
+          ? []
+          : (newConfig.collections ?? [])
+              .map(collection => collection.slug)
+              .filter((slug): slug is string => !!slug)
+              .map(slug => `collection:${slug}`)),
+        ...(singleSynced && componentSynced
+          ? []
+          : (newConfig.singles ?? [])
+              .map(single => single.slug)
+              .filter((slug): slug is string => !!slug)
+              .map(slug => `single:${slug}`)),
+        ...[...failedSingleMetadata].map(slug => `single:${slug}`),
+      ])
+    );
   }
 
   if (!applyResult.success) {

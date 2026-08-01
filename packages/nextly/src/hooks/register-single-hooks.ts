@@ -15,10 +15,26 @@
  * @module hooks/register-single-hooks
  */
 
-import type { SingleConfig, SingleHooks } from "../singles/config/types";
+import type { SingleHooks } from "../singles/config/types";
 
-import { getHookRegistry, type HookRegistry } from "./hook-registry";
+import {
+  getHookRegistry,
+  type HookRegistry,
+  type OwnedHookSet,
+} from "./hook-registry";
 import type { HookContextPhase, HookHandler } from "./types";
+
+/**
+ * The part of a single this module reads, the twin of `HookedCollection`.
+ *
+ * Narrower than `SingleConfig` for the same reason: registration needs a slug
+ * and a hooks block, and the config reload holds the loader's sanitized config
+ * rather than `defineSingle()` objects. Every `SingleConfig` still satisfies it.
+ */
+export interface HookedSingle {
+  slug: string;
+  hooks?: SingleHooks;
+}
 
 /** Result of registering single hooks. */
 export interface RegisterSingleHooksResult {
@@ -39,7 +55,7 @@ export interface RegisterSingleHooksResult {
  * hooks up under this same `single:<slug>` namespace. Inlined here rather than
  * imported to keep the hooks module free of a dependency on the singles domain.
  */
-function singleHookNamespace(slug: string): string {
+export function singleHookNamespace(slug: string): string {
   return `single:${slug}`;
 }
 
@@ -72,7 +88,7 @@ const HOOK_TYPE_MAPPINGS: Record<keyof SingleHooks, HookContextPhase[]> = {
  * @returns Registration statistics
  */
 export function registerSingleHooks(
-  singles: SingleConfig[],
+  singles: HookedSingle[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterSingleHooksResult {
   const result: RegisterSingleHooksResult = {
@@ -107,10 +123,14 @@ export function registerSingleHooks(
       // response stays equal to the stored Single without wrapping here.
       for (const hookType of hookTypes) {
         for (const handler of handlers) {
+          // Claimed as the config's, the twin of the collection registrar: this
+          // reads the config and can rebuild what a reload removes, so it is
+          // the one caller entitled to that ownership.
           registry.register(
             hookType,
             singleHookNamespace(single.slug),
-            handler as HookHandler
+            handler as HookHandler,
+            "code"
           );
           singleHookCount++;
         }
@@ -152,11 +172,55 @@ export function clearSingleHooks(
  * @returns Registration statistics
  */
 export function reregisterSingleHooks(
-  singles: SingleConfig[],
+  singles: HookedSingle[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterSingleHooksResult {
+  const result: RegisterSingleHooksResult = {
+    singles: [],
+    totalHooks: 0,
+    details: [],
+  };
+
   for (const single of singles) {
-    registry.clearCollection(singleHookNamespace(single.slug));
+    const set: OwnedHookSet = { byPhase: [], beforeOperation: [] };
+    const details: { type: string; count: number }[] = [];
+    let count = 0;
+
+    for (const [hookKey, handlers] of Object.entries(single.hooks ?? {})) {
+      if (!handlers || !Array.isArray(handlers) || handlers.length === 0) {
+        continue;
+      }
+      const hookTypes = HOOK_TYPE_MAPPINGS[hookKey as keyof SingleHooks];
+      if (!hookTypes) continue;
+
+      for (const hookType of hookTypes) {
+        const existing = set.byPhase.find(entry => entry.hookType === hookType);
+        const mapped = handlers as HookHandler[];
+        if (existing) existing.handlers.push(...mapped);
+        else set.byPhase.push({ hookType, handlers: [...mapped] });
+        count += handlers.length;
+      }
+
+      details.push({ type: hookKey, count: handlers.length });
+    }
+
+    // Replaced rather than cleared-and-re-added, the twin of the collection
+    // path: only the config's own handlers move, and they keep the position
+    // they held so a reload cannot reorder a chain it is not changing. A plugin
+    // registers into a single's namespace exactly as it can a collection's, and
+    // a wholesale clear would delete that with nothing able to put it back.
+    registry.replaceCollectionOwnedBy(
+      singleHookNamespace(single.slug),
+      "code",
+      set
+    );
+
+    if (count > 0) {
+      result.singles.push(single.slug);
+      result.totalHooks += count;
+      result.details.push({ single: single.slug, hooks: details });
+    }
   }
-  return registerSingleHooks(singles, registry);
+
+  return result;
 }
